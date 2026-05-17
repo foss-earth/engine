@@ -1,11 +1,15 @@
-import type { CameraController } from "../camera/cameraState";
-import { computeTwoPointGestureMetrics } from "../camera/cameraMath";
-import type { TwoPointGestureMetrics } from "../camera/cameraMath";
+import { classifyTwoPointGestureIntent, computeTwoPointGestureMetrics } from "../camera/cameraMath";
+import type { TwoPointGestureIntent, TwoPointGestureMetrics } from "../camera/cameraMath";
+import type { CameraInputTarget } from "./inertialCameraController";
 
 // ─── Constants ───────────────────────────────────────────────────────
 
 /** Degrees of orbit change per pixel of two-finger centroid movement. */
 const TOUCH_ORBIT_DEG_PER_PX = 0.15;
+/** Maximum accepted per-frame centroid delta. Larger values are treated as pointer churn, not intentional motion. */
+const TOUCH_MAX_DELTA_PX = 80;
+/** Minimum one-finger translation (px) before pan is applied. */
+const TOUCH_PAN_DEADZONE_PX = 0.5;
 /** Minimum centroid translation (px) before orbit is applied. */
 const TOUCH_ORBIT_DEADZONE_PX = 0.75;
 /** Minimum pinch distance change (px) before zoom is applied. */
@@ -18,29 +22,35 @@ interface ActiveTouch {
   y: number;
 }
 
-interface TouchSession {
-  previousMetrics: TwoPointGestureMetrics;
-}
+type TouchSession =
+  | { kind: "single"; pointerId: number; previousPoint: ActiveTouch }
+  | {
+    kind: "multi";
+    startMetrics: TwoPointGestureMetrics;
+    previousMetrics: TwoPointGestureMetrics;
+    intent: TwoPointGestureIntent;
+  };
 
 // ─── Controller ──────────────────────────────────────────────────────
 
 /**
  * Attach a two-finger touch gesture handler to the canvas.
  *
- * When two pointer-type=touch contacts are active the handler:
- *  - Applies orbit (heading/pitch) from centroid translation
- *  - Applies zoom from pinch distance change
+ * One-finger touch pans the camera.
  *
- * Single-finger touch falls through to Babylon's built-in camera handler.
+ * When two pointer-type=touch contacts are active the handler locks the gesture
+ * into one intent:
+ *  - Swipe/orbit from centroid translation
+ *  - Pinch/zoom from distance change
  *
- * Event propagation is stopped during active two-finger sessions so
- * Babylon's own pinch-zoom handler does not double-process the events.
+ * Event propagation is stopped during touch sessions so Babylon's own handlers
+ * do not also move the camera at gesture start/end.
  *
  * @returns Cleanup function that removes all registered listeners.
  */
 export function attachTouchController(
   canvas: HTMLCanvasElement,
-  camera: CameraController,
+  camera: CameraInputTarget,
 ): () => void {
   const activePointers = new Map<number, ActiveTouch>();
   let session: TouchSession | null = null;
@@ -58,18 +68,32 @@ export function attachTouchController(
     return pts ? computeTwoPointGestureMetrics(pts[0], pts[1]) : null;
   }
 
+  function stopTouchEvent(e: PointerEvent): void {
+    e.preventDefault();
+    e.stopImmediatePropagation();
+  }
+
+  function startSingleFingerSession(): void {
+    if (activePointers.size !== 1) return;
+    const [pointerId, point] = Array.from(activePointers.entries())[0];
+    session = { kind: "single", pointerId, previousPoint: { ...point } };
+  }
+
+  function startTwoFingerSession(): void {
+    const metrics = getCurrentMetrics();
+    session = metrics ? { kind: "multi", startMetrics: metrics, previousMetrics: metrics, intent: null } : null;
+  }
+
   function onPointerDown(e: PointerEvent): void {
     if (e.pointerType !== "touch") return;
+    stopTouchEvent(e);
     activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     canvas.setPointerCapture(e.pointerId);
 
-    if (activePointers.size === 2) {
-      const metrics = getCurrentMetrics();
-      if (metrics) {
-        session = { previousMetrics: metrics };
-        // Prevent Babylon from initiating its own two-finger gesture.
-        e.stopPropagation();
-      }
+    if (activePointers.size === 1) {
+      startSingleFingerSession();
+    } else if (activePointers.size === 2) {
+      startTwoFingerSession();
     } else if (activePointers.size > 2) {
       // More than two fingers — cancel our session and let Babylon decide.
       session = null;
@@ -78,13 +102,33 @@ export function attachTouchController(
 
   function onPointerMove(e: PointerEvent): void {
     if (e.pointerType !== "touch" || !activePointers.has(e.pointerId)) return;
+    stopTouchEvent(e);
     activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
-    if (!session || activePointers.size !== 2) return;
+    if (activePointers.size === 1) {
+      if (!session || session.kind !== "single" || session.pointerId !== e.pointerId) {
+        startSingleFingerSession();
+        return;
+      }
 
-    // Prevent Babylon from moving the camera while our gesture is active.
-    e.preventDefault();
-    e.stopPropagation();
+      const point = activePointers.get(e.pointerId);
+      if (!point) return;
+      const dx = point.x - session.previousPoint.x;
+      const dy = point.y - session.previousPoint.y;
+      const isReasonableDelta = Math.abs(dx) <= TOUCH_MAX_DELTA_PX && Math.abs(dy) <= TOUCH_MAX_DELTA_PX;
+      if (isReasonableDelta && (Math.abs(dx) >= TOUCH_PAN_DEADZONE_PX || Math.abs(dy) >= TOUCH_PAN_DEADZONE_PX)) {
+        camera.panBy(dx, dy, canvas.clientHeight);
+      }
+      session.previousPoint = { ...point };
+      return;
+    }
+
+    if (activePointers.size !== 2) return;
+
+    if (!session || session.kind !== "multi") {
+      startTwoFingerSession();
+      return;
+    }
 
     const metrics = getCurrentMetrics();
     if (!metrics) return;
@@ -92,14 +136,30 @@ export function attachTouchController(
     const dx = metrics.centroidX - session.previousMetrics.centroidX;
     const dy = metrics.centroidY - session.previousMetrics.centroidY;
     const distanceDeltaPx = metrics.distancePx - session.previousMetrics.distancePx;
+    const totalCentroidTranslationPx = Math.hypot(
+      metrics.centroidX - session.startMetrics.centroidX,
+      metrics.centroidY - session.startMetrics.centroidY,
+    );
+    const scaleRatio = session.startMetrics.distancePx > 0
+      ? metrics.distancePx / session.startMetrics.distancePx
+      : 1;
+    const isReasonableDelta = Math.abs(dx) <= TOUCH_MAX_DELTA_PX
+      && Math.abs(dy) <= TOUCH_MAX_DELTA_PX
+      && Math.abs(distanceDeltaPx) <= TOUCH_MAX_DELTA_PX;
 
-    // Two-finger swipe → orbit (heading + pitch)
-    if (Math.abs(dx) >= TOUCH_ORBIT_DEADZONE_PX || Math.abs(dy) >= TOUCH_ORBIT_DEADZONE_PX) {
+    if (!isReasonableDelta) {
+      session.previousMetrics = metrics;
+      return;
+    }
+
+    session.intent ??= classifyTwoPointGestureIntent(totalCentroidTranslationPx, scaleRatio);
+
+    if (session.intent === "swipe"
+      && (Math.abs(dx) >= TOUCH_ORBIT_DEADZONE_PX || Math.abs(dy) >= TOUCH_ORBIT_DEADZONE_PX)) {
       camera.orbitBy(dy * TOUCH_ORBIT_DEG_PER_PX, dx * TOUCH_ORBIT_DEG_PER_PX);
     }
 
-    // Pinch → zoom
-    if (Math.abs(distanceDeltaPx) >= TOUCH_PINCH_DEADZONE_PX) {
+    if (session.intent === "pinch" && Math.abs(distanceDeltaPx) >= TOUCH_PINCH_DEADZONE_PX) {
       const scaleDelta = metrics.distancePx / session.previousMetrics.distancePx;
       const factor = 1.5 - scaleDelta * 0.5;
       if (Math.abs(factor - 1) > 0.001) {
@@ -112,12 +172,19 @@ export function attachTouchController(
 
   function onPointerUp(e: PointerEvent): void {
     if (e.pointerType !== "touch") return;
+    if (activePointers.has(e.pointerId)) {
+      stopTouchEvent(e);
+    }
     activePointers.delete(e.pointerId);
     if (canvas.hasPointerCapture(e.pointerId)) {
       canvas.releasePointerCapture(e.pointerId);
     }
-    if (activePointers.size < 2) {
+    if (activePointers.size === 1) {
+      startSingleFingerSession();
+    } else if (activePointers.size === 0) {
       session = null;
+    } else if (activePointers.size === 2) {
+      startTwoFingerSession();
     }
   }
 

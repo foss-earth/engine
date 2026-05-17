@@ -1,14 +1,27 @@
 import { createBabylonRuntime, type BabylonRuntime } from "../engine/babylon/createBabylonRuntime";
 import type {
   GlobeHandle,
-  GlobeLayer,
   GlobeLayerContext,
   GlobeViewState,
 } from "../engine/types";
+import { createPoiTracking } from "../layers/poiTracking";
+import { createLayerRegistry } from "../layers/layerRegistry";
+import { MAX_PITCH_DEG } from "../camera/cameraState";
+import { createStatusHud, type StatusHudHandle } from "../hud/statusHud";
+import { createNorthButton, type NorthButtonHandle } from "../hud/northButton";
+import { createHelpModal, type HelpModalHandle } from "../hud/helpModal";
+import { createSettingsModal, type SettingsModalHandle } from "../hud/settingsModal";
+import { createOrbitCompass, type OrbitCompassHandle } from "../visualization/orbitCompass";
+import { createHemisphereCulling } from "../perf/culling";
+import { createPerformanceMetrics } from "../perf/metrics";
+import { createAnchorHeightResolver } from "../terrain/anchorHeight";
+import { createTileHeightProvider } from "../terrain/tileHeightProvider";
 
 export interface GlobeAppHandle extends GlobeHandle {
   runtime: BabylonRuntime;
 }
+
+const COMPASS_HEIGHT_OFFSET_METERS = 1_000;
 
 function getGoogleApiKeyFromUrl(): string | null {
   const searchParams = new URLSearchParams(window.location.search);
@@ -45,20 +58,75 @@ export async function createGlobeApp(rootElement: HTMLElement): Promise<GlobeApp
   rootElement.innerHTML = `
     <div class="globe-shell">
       <canvas id="globeCanvas" class="globe-canvas" aria-label="3D globe canvas"></canvas>
+
       <div class="boot-overlay">
-        <span id="rendererModePill" class="renderer-pill">Renderer: initializing...</span>
-        <span id="runtimeModePill" class="renderer-pill">Tiles: initializing...</span>
+        <span id="rendererModePill" class="renderer-pill">Renderer: initializing\u2026</span>
+        <span id="runtimeModePill" class="renderer-pill">Tiles: initializing\u2026</span>
+        <span id="perfMetricsPill" class="renderer-pill perf-pill">Perf: initializing\u2026</span>
       </div>
+
       <div id="runtimeNotice" class="runtime-notice" hidden>
         <strong id="runtimeNoticeTitle" class="runtime-notice-title"></strong>
         <p id="runtimeNoticeText" class="runtime-notice-text"></p>
         <button id="runtimeNoticeDismiss" class="runtime-notice-dismiss" type="button">Dismiss</button>
       </div>
-      <div class="camera-controls">
-        <button id="northUpBtn" class="camera-controls__north-up" type="button" title="Reset to north-up"
-          aria-label="Reset camera to north-up">
-          &#8593; N
+
+      <div class="hud-bar">
+        <span id="hudStatus" class="hud-status-text" aria-live="polite" aria-label="Camera status"></span>
+        <button id="northButton" class="hud-circle-button north-button" type="button"
+          title="Reset to north-up" aria-label="Reset camera to north-up">
+          <svg id="northButtonSvg" viewBox="0 0 36 36" width="36" height="36" aria-hidden="true">
+            <polygon points="18,5 14,14 22,14" fill="#ef4444"/>
+            <text x="18" y="27" text-anchor="middle"
+              fill="rgba(255,255,255,0.82)"
+              font-family="system-ui,-apple-system,sans-serif"
+              font-weight="700" font-size="13">N</text>
+          </svg>
         </button>
+        <button id="helpButton" class="hud-circle-button" type="button"
+          title="Controls help" aria-label="Controls help">?</button>
+        <button id="settingsButton" class="hud-circle-button settings-button" type="button"
+          title="Settings" aria-label="Settings">&#9881;</button>
+      </div>
+
+      <div id="helpModal" class="modal-overlay" hidden aria-modal="true" role="dialog"
+        aria-labelledby="helpModalTitle">
+        <div class="modal-card">
+          <h2 id="helpModalTitle" class="modal-title">Controls</h2>
+          <div class="help-axes">
+            <div class="help-axis">
+              <div class="help-axis-title">Pan</div>
+              <div class="help-axis-triggers">
+                <span class="help-trigger">Left drag</span>
+                <span class="help-trigger">2-finger swipe</span>
+                <span class="help-trigger">1-finger <small>(mobile)</small></span>
+              </div>
+              <div class="help-axis-note">Changes Lat\u202F/\u202FLon</div>
+            </div>
+            <div class="help-axis">
+              <div class="help-axis-title">Orbit</div>
+              <div class="help-axis-triggers">
+                <span class="help-trigger">Right drag</span>
+                <span class="help-trigger">\u21E7\u202F+\u202F2-finger swipe</span>
+                <span class="help-trigger">2-finger <small>(mobile)</small></span>
+              </div>
+              <div class="help-axis-note">Changes Heading\u202F/\u202FPitch</div>
+            </div>
+          </div>
+          <p class="help-zoom">Zoom \u2014 Scroll wheel\u00B7Pinch</p>
+          <button id="helpModalDismiss" class="modal-dismiss" type="button">Got it</button>
+        </div>
+      </div>
+
+      <div id="settingsModal" class="modal-overlay" hidden aria-modal="true" role="dialog"
+        aria-labelledby="settingsModalTitle">
+        <div class="modal-card">
+          <h2 id="settingsModalTitle" class="modal-title">Settings</h2>
+          <p class="settings-line">Camera model: state-driven orbit geometry.</p>
+          <p class="settings-line">Pitch: 0\u00B0\u202F=\u202Fhorizon, 90\u00B0\u202F=\u202Fstraight down.</p>
+          <p id="settingsRendererLine" class="settings-renderer-line"></p>
+          <button id="settingsModalDismiss" class="modal-dismiss" type="button">Close</button>
+        </div>
       </div>
     </div>
   `;
@@ -70,11 +138,11 @@ export async function createGlobeApp(rootElement: HTMLElement): Promise<GlobeApp
 
   const rendererModePill = rootElement.querySelector<HTMLElement>("#rendererModePill");
   const runtimeModePill = rootElement.querySelector<HTMLElement>("#runtimeModePill");
+  const perfMetricsPill = rootElement.querySelector<HTMLElement>("#perfMetricsPill");
   const runtimeNotice = rootElement.querySelector<HTMLElement>("#runtimeNotice");
   const runtimeNoticeTitle = rootElement.querySelector<HTMLElement>("#runtimeNoticeTitle");
   const runtimeNoticeText = rootElement.querySelector<HTMLElement>("#runtimeNoticeText");
   const runtimeNoticeDismiss = rootElement.querySelector<HTMLButtonElement>("#runtimeNoticeDismiss");
-  const northUpBtn = rootElement.querySelector<HTMLButtonElement>("#northUpBtn");
 
   let runtimeNoticeDismissed = false;
 
@@ -131,7 +199,20 @@ export async function createGlobeApp(rootElement: HTMLElement): Promise<GlobeApp
     scene: runtime.scene,
     engine: runtime.engine,
   };
-  const layers = new Map<string, GlobeLayer>();
+  const poiTracking = createPoiTracking(runtime.scene, () => runtime.geospatialCamera);
+  const culling = createHemisphereCulling(() => runtime.geospatialCamera?.globalPosition ?? null);
+  const anchorHeights = createAnchorHeightResolver({
+    provider: createTileHeightProvider(runtime.scene),
+    heightOffsetMeters: COMPASS_HEIGHT_OFFSET_METERS,
+  });
+  const registry = createLayerRegistry(layerContext, poiTracking, culling, anchorHeights);
+  const orbitCompass: OrbitCompassHandle = createOrbitCompass(runtime.scene);
+  const performanceMetrics = createPerformanceMetrics({
+    engine: runtime.engine,
+    scene: runtime.scene,
+    getTileMetrics: () => runtime.getTileMetrics(),
+    getCullingStats: () => culling.getStats(),
+  });
 
   if (rendererModePill) {
     rendererModePill.textContent = `Renderer: ${runtime.renderer.mode}`;
@@ -139,37 +220,56 @@ export async function createGlobeApp(rootElement: HTMLElement): Promise<GlobeApp
 
   applyRuntimeStatus(runtime.status);
 
-  northUpBtn?.addEventListener("click", () => {
-    runtime.setViewState({ headingDeg: 0 });
+  // ── HUD setup ────────────────────────────────────────────────────
+  const hudStatusEl = rootElement.querySelector<HTMLElement>("#hudStatus");
+  const northBtnEl = rootElement.querySelector<HTMLButtonElement>("#northButton");
+  const northBtnSvgEl = rootElement.querySelector<SVGElement>("#northButtonSvg");
+  const helpBtnEl = rootElement.querySelector<HTMLButtonElement>("#helpButton");
+  const helpModalEl = rootElement.querySelector<HTMLElement>("#helpModal");
+  const settingsBtnEl = rootElement.querySelector<HTMLButtonElement>("#settingsButton");
+  const settingsModalEl = rootElement.querySelector<HTMLElement>("#settingsModal");
+
+  const statusHud: StatusHudHandle | null = hudStatusEl ? createStatusHud(hudStatusEl) : null;
+  const northButton: NorthButtonHandle | null = northBtnSvgEl ? createNorthButton(northBtnSvgEl) : null;
+  const helpModal: HelpModalHandle | null = helpModalEl ? createHelpModal(helpModalEl) : null;
+  const settingsModal: SettingsModalHandle | null = settingsModalEl ? createSettingsModal(settingsModalEl) : null;
+
+  settingsModal?.setRendererMode(runtime.renderer.mode);
+
+  northBtnEl?.addEventListener("click", () => {
+    poiTracking.exitTracking();
+    runtime.setViewState({ headingDeg: 0, pitchDeg: MAX_PITCH_DEG });
+  });
+  helpBtnEl?.addEventListener("click", () => helpModal?.show());
+  settingsBtnEl?.addEventListener("click", () => settingsModal?.show());
+
+  // Update HUD every frame while the scene is running
+  let hudObserver: ReturnType<typeof runtime.scene.onBeforeRenderObservable.add> | null = null;
+  hudObserver = runtime.scene.onBeforeRenderObservable.add(() => {
+    const state = runtime.getViewState();
+    if (state) {
+      statusHud?.update(state);
+      northButton?.update(state.headingDeg);
+    }
+    const camera = runtime.geospatialCamera;
+    const poiCompassAnchor = poiTracking.getOrbitTarget();
+    const compassAnchor = anchorHeights.resolve(poiCompassAnchor ?? camera?.center ?? null);
+    orbitCompass.update(compassAnchor, state?.zoomMeters ?? camera?.radius ?? 0);
+    culling.update();
+    const perfSnapshot = performanceMetrics.update();
+    if (perfMetricsPill) {
+      perfMetricsPill.textContent = performanceMetrics.format(perfSnapshot);
+    }
   });
 
   console.info(
     `[app] runtime initialized renderer=${runtime.renderer.mode} mode=${runtime.status.mode} googleApiKeyProvided=${runtime.status.googleApiKeyProvided}`,
   );
 
-  function addLayer(layer: GlobeLayer): void {
-    if (layers.has(layer.id)) {
-      removeLayer(layer.id);
-    }
-
-    layer.setup(layerContext);
-    layers.set(layer.id, layer);
-  }
-
-  function removeLayer(layerId: string): void {
-    const layer = layers.get(layerId);
-    if (!layer) {
-      return;
-    }
-
-    layer.destroy(layerContext);
-    layers.delete(layerId);
-  }
-
   return {
     runtime,
-    addLayer,
-    removeLayer,
+    addLayer: registry.addLayer,
+    removeLayer: registry.removeLayer,
     getViewState(): GlobeViewState | null {
       return runtime.getViewState();
     },
@@ -177,10 +277,19 @@ export async function createGlobeApp(rootElement: HTMLElement): Promise<GlobeApp
       runtime.setViewState(partial);
     },
     destroy() {
-      for (const layer of layers.values()) {
-        layer.destroy(layerContext);
+      if (hudObserver) {
+        runtime.scene.onBeforeRenderObservable.remove(hudObserver);
+        hudObserver = null;
       }
-      layers.clear();
+      statusHud?.destroy();
+      northButton?.destroy();
+      helpModal?.destroy();
+      settingsModal?.destroy();
+
+      poiTracking.destroy();
+      registry.destroy();
+      culling.destroy();
+      orbitCompass.destroy();
 
       runtime.destroy();
       rootElement.replaceChildren();

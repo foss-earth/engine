@@ -1,4 +1,4 @@
-import type { CameraController } from "../camera/cameraState";
+import type { CameraInputTarget } from "./inertialCameraController";
 
 /**
  * Detect whether the current browser supports macOS Safari GestureEvents.
@@ -36,7 +36,7 @@ export function isSafariGestureSupported(): boolean {
  */
 export function attachSafariGestures(
   canvas: HTMLCanvasElement,
-  camera: CameraController,
+  camera: CameraInputTarget,
 ): () => void {
   let lastRotation = 0;
   let lastScale = 1;

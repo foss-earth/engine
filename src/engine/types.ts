@@ -14,6 +14,8 @@ export interface GlobeLayerContext {
 export interface GlobeLayerState {
   poiEntities?: unknown[];
   getPoiOrbitTarget?: () => unknown | null;
+  cullables?: unknown[];
+  anchorHeightSamples?: unknown[];
 }
 
 export interface GlobeLayer {

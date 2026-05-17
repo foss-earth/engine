@@ -19,13 +19,14 @@ import { createGoogleTilesRuntime, type GoogleTilesRuntime } from "./createTiles
 import { geodeticToEcef, DEG_TO_RAD } from "../../camera/cameraMath";
 import { CameraController } from "../../camera/cameraState";
 import { createInputController, type InputController } from "../../input/createInputController";
+import { createInertialCameraController, type InertialCameraController } from "../../input/inertialCameraController";
 import type { GlobeViewState } from "../types";
 
 const PLANET_RADIUS_METERS = 6_378_137;
 const DEFAULT_FALLBACK_BACKGROUND = new Color4(0.01, 0.02, 0.05, 1);
 const DEFAULT_GOOGLE_BACKGROUND = new Color4(0.04, 0.05, 0.07, 1);
-const DEFAULT_CAMERA_LAT_DEG = 40.782773;
-const DEFAULT_CAMERA_LON_DEG = -73.965363;
+const DEFAULT_CAMERA_LAT_DEG = 44.977753;
+const DEFAULT_CAMERA_LON_DEG = -93.265011;
 const DEFAULT_CAMERA_ALTITUDE_METERS = 600;
 const DEFAULT_CAMERA_YAW_RAD = -0.2513281792775774;
 const DEFAULT_CAMERA_PITCH_RAD = 1.167625429373872;
@@ -44,15 +45,27 @@ export interface BabylonRuntimeStatus {
   lastError: string | null;
 }
 
+export interface BabylonTileMetrics {
+  visibleTiles: number;
+  activeTiles: number;
+}
+
 export interface BabylonRuntime {
   engine: Engine | WebGPUEngine;
   scene: Scene;
   renderer: RendererSelection;
   status: BabylonRuntimeStatus;
+  /**
+   * The active GeospatialCamera, or null when the app is in fallback mode.
+   * Use this to wire POI tracking or other camera-direct integrations.
+   */
+  geospatialCamera: GeospatialCamera | null;
   /** Return the current camera state. Returns null in fallback mode. */
   getViewState(): GlobeViewState | null;
   /** Merge partial overrides into the current camera state. No-op in fallback mode. */
   setViewState(partial: Partial<GlobeViewState>): void;
+  /** Return current Google 3D tile counts, or null in fallback mode. */
+  getTileMetrics(): BabylonTileMetrics | null;
   destroy(): void;
 }
 
@@ -133,11 +146,14 @@ export async function createBabylonRuntime(
   let fallbackCamera: Camera | null = null;
   let googleLight: HemisphericLight | null = null;
   let cameraController: CameraController | null = null;
+  let inertialCameraController: InertialCameraController | null = null;
   let inputController: InputController | null = null;
 
   const status: BabylonRuntimeStatus = {
-    mode: "fallback",
-    message: "Fallback mode active.",
+    mode: hasGoogleApiKey ? "google-tiles" : "fallback",
+    message: hasGoogleApiKey
+      ? "Google Photorealistic 3D Tiles are initializing."
+      : "Fallback mode active.",
     googleApiKeyProvided: hasGoogleApiKey,
     lastError: null,
   };
@@ -205,7 +221,8 @@ export async function createBabylonRuntime(
       const geospatialCamera = createGeospatialCamera(scene);
       scene.activeCamera = geospatialCamera;
       cameraController = new CameraController(geospatialCamera);
-      inputController = createInputController(canvas, cameraController);
+      inertialCameraController = createInertialCameraController(cameraController);
+      inputController = createInputController(canvas, inertialCameraController);
 
       googleLight = new HemisphericLight("google-tiles-light", new Vector3(0, 1, 0), scene);
       googleLight.intensity = 1.0;
@@ -242,6 +259,7 @@ export async function createBabylonRuntime(
       tilesRuntime.tiles.checkCollisions = true;
 
       tilesUpdateObserver = scene.onBeforeRenderObservable.add(() => {
+        inertialCameraController?.update();
         tilesRuntime?.update();
       });
 
@@ -289,11 +307,24 @@ export async function createBabylonRuntime(
     scene,
     renderer,
     status,
+    get geospatialCamera(): GeospatialCamera | null {
+      return cameraController ? (scene.activeCamera as GeospatialCamera) : null;
+    },
     getViewState(): GlobeViewState | null {
       return cameraController?.getViewState() ?? null;
     },
     setViewState(partial: Partial<GlobeViewState>): void {
+      inertialCameraController?.cancel();
       cameraController?.setViewState(partial);
+    },
+    getTileMetrics(): BabylonTileMetrics | null {
+      if (!tilesRuntime) {
+        return null;
+      }
+      return {
+        visibleTiles: tilesRuntime.tiles.visibleTiles.size,
+        activeTiles: tilesRuntime.tiles.activeTiles.size,
+      };
     },
     destroy() {
       if (tilesUpdateObserver) {
@@ -308,6 +339,9 @@ export async function createBabylonRuntime(
 
       inputController?.destroy();
       inputController = null;
+
+      inertialCameraController?.cancel();
+      inertialCameraController = null;
 
       if (googleLight) {
         googleLight.dispose();

@@ -1,4 +1,39 @@
-import type { CameraController } from "../camera/cameraState";
+import type { CameraInputTarget } from "./inertialCameraController";
+
+type WheelGestureMode = "pan" | "pinchZoom" | "wheelZoom" | "orbit";
+
+const WHEEL_GESTURE_IDLE_MS = 180;
+const PIXEL_DELTA_MODE = 0;
+const MOUSE_WHEEL_MIN_STEP_PX = 80;
+const FRACTIONAL_DELTA_EPSILON = 0.001;
+
+interface WheelGestureSession {
+  mode: WheelGestureMode;
+  lastEventTimeMs: number;
+}
+
+function hasFractionalDelta(value: number): boolean {
+  return Math.abs(value - Math.round(value)) > FRACTIONAL_DELTA_EPSILON;
+}
+
+function isLikelyMouseWheel(e: WheelEvent): boolean {
+  if (e.deltaMode !== PIXEL_DELTA_MODE) return true;
+
+  const absDeltaX = Math.abs(e.deltaX);
+  const absDeltaY = Math.abs(e.deltaY);
+  const hasHorizontalDelta = absDeltaX > FRACTIONAL_DELTA_EPSILON;
+  const hasFineDelta = hasFractionalDelta(e.deltaX) || hasFractionalDelta(e.deltaY);
+  return !hasHorizontalDelta && !hasFineDelta && absDeltaY >= MOUSE_WHEEL_MIN_STEP_PX;
+}
+
+function classifyWheelGestureMode(
+  e: WheelEvent,
+  isSafariWithGestures: boolean,
+): WheelGestureMode {
+  if (e.shiftKey) return "orbit";
+  if (e.ctrlKey && !isSafariWithGestures) return "pinchZoom";
+  return isLikelyMouseWheel(e) ? "wheelZoom" : "pan";
+}
 
 /**
  * Attach a trackpad-aware wheel event handler to the canvas.
@@ -16,12 +51,11 @@ import type { CameraController } from "../camera/cameraState";
  */
 export function attachWheelController(
   canvas: HTMLCanvasElement,
-  camera: CameraController,
+  camera: CameraInputTarget,
   options: { isSafariWithGestures: boolean },
 ): () => void {
   const { isSafariWithGestures } = options;
-  let lastWheelTime = 0;
-  let isTrackpad = false;
+  let session: WheelGestureSession | null = null;
 
   function onWheel(e: WheelEvent): void {
     e.preventDefault();
@@ -29,35 +63,33 @@ export function attachWheelController(
     e.stopImmediatePropagation();
 
     const now = performance.now();
-    const dt = now - lastWheelTime;
-    lastWheelTime = now;
+    if (!session || now - session.lastEventTimeMs > WHEEL_GESTURE_IDLE_MS) {
+      session = {
+        mode: classifyWheelGestureMode(e, isSafariWithGestures),
+        lastEventTimeMs: now,
+      };
+    } else {
+      session.lastEventTimeMs = now;
+    }
 
-    // Heuristic: trackpad events arrive rapidly with small deltaY.
-    if (dt < 50 && Math.abs(e.deltaY) < 60) isTrackpad = true;
-    else if (dt > 300) isTrackpad = false;
-
-    // ── Ctrl+wheel = macOS trackpad pinch-to-zoom (non-Safari browsers) ──
-    if (e.ctrlKey) {
-      if (!isSafariWithGestures) {
-        // deltaY<0 = pinch open (zoom in) → factor < 1; deltaY>0 = pinch close → factor > 1
-        const factor = 1 + e.deltaY * 0.01;
-        camera.zoomBy(factor);
-      }
-      // On Safari, gesturechange handles pinch — skip here.
+    // ── Trackpad two-finger swipe = pan ──────────────────────────────────
+    if (session.mode === "pan") {
+      camera.panBy(e.deltaX, e.deltaY, canvas.clientHeight);
       return;
     }
 
     // ── Shift+wheel = orbit (heading + pitch) ────────────────────────────
-    if (e.shiftKey) {
+    if (session.mode === "orbit") {
       const pitchDeltaDeg = -e.deltaY * 0.15;
       const headingDeltaDeg = e.deltaX * 0.15;
       camera.orbitBy(pitchDeltaDeg, headingDeltaDeg);
       return;
     }
 
-    // ── Trackpad two-finger swipe = pan ──────────────────────────────────
-    if (isTrackpad) {
-      camera.panBy(e.deltaX, e.deltaY, canvas.clientHeight);
+    // ── Ctrl+wheel = macOS trackpad pinch-to-zoom (non-Safari browsers) ──
+    if (session.mode === "pinchZoom") {
+      const factor = 1 + e.deltaY * 0.01;
+      camera.zoomBy(factor);
       return;
     }
 

@@ -1,4 +1,4 @@
-import type { CameraController } from "../camera/cameraState";
+import type { CameraInputTarget } from "./inertialCameraController";
 import { attachWheelController } from "./wheelController";
 import { attachSafariGestures, isSafariGestureSupported } from "./safariGestures";
 import { attachTouchController } from "./touchController";
@@ -22,7 +22,7 @@ export interface InputController {
  */
 export function createInputController(
   canvas: HTMLCanvasElement,
-  camera: CameraController,
+  camera: CameraInputTarget,
 ): InputController {
   const hasSafariGestures = isSafariGestureSupported();
 
