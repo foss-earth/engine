@@ -22,6 +22,48 @@ export interface GlobeAppHandle extends GlobeHandle {
 }
 
 const COMPASS_HEIGHT_OFFSET_METERS = 1_000;
+const BUILD_TIME = __BUILD_TIME__;
+const SOURCE_VERSION = __SOURCE_VERSION__;
+const REPOSITORY_SLUG = __REPOSITORY_SLUG__;
+
+function getLoadedBundleName(): string {
+  const scripts = Array.from(document.querySelectorAll<HTMLScriptElement>("script[src]"));
+  const bundle = scripts
+    .map((script) => script.src)
+    .map((src) => new URL(src, window.location.href).pathname.split("/").pop() ?? "")
+    .find((name) => /^index-[\w-]+\.js$/.test(name));
+
+  return bundle ?? "dev";
+}
+
+async function getCurrentDeploySha(): Promise<string | null> {
+  if (!REPOSITORY_SLUG) {
+    return null;
+  }
+
+  try {
+    const response = await fetch(`https://api.github.com/repos/${REPOSITORY_SLUG}/git/ref/heads/gh-pages`, {
+      cache: "no-store",
+    });
+    if (!response.ok) {
+      return null;
+    }
+    const payload = await response.json() as { object?: { sha?: unknown } };
+    return typeof payload.object?.sha === "string" ? payload.object.sha : null;
+  } catch {
+    return null;
+  }
+}
+
+function hydrateDeployShaLine(line: HTMLElement | null): void {
+  if (!line) {
+    return;
+  }
+
+  void getCurrentDeploySha().then((sha) => {
+    line.textContent = sha ? `Deploy: ${sha.slice(0, 12)}` : "Deploy: unavailable";
+  });
+}
 
 function getGoogleApiKeyFromUrl(): string | null {
   const searchParams = new URLSearchParams(window.location.search);
@@ -125,6 +167,10 @@ export async function createGlobeApp(rootElement: HTMLElement): Promise<GlobeApp
           <p class="settings-line">Camera model: state-driven orbit geometry.</p>
           <p class="settings-line">Pitch: 0\u00B0\u202F=\u202Fhorizon, 90\u00B0\u202F=\u202Fstraight down.</p>
           <p id="settingsRendererLine" class="settings-renderer-line"></p>
+          <p id="settingsBuildLine" class="settings-line">Build: ${BUILD_TIME}</p>
+           <p id="settingsSourceLine" class="settings-line">Source: ${SOURCE_VERSION}</p>
+           <p id="settingsBundleLine" class="settings-line">Bundle: ${getLoadedBundleName()}</p>
+           <p id="settingsDeployLine" class="settings-line">Deploy: loading</p>
           <button id="settingsModalDismiss" class="modal-dismiss" type="button">Close</button>
         </div>
       </div>
@@ -143,6 +189,8 @@ export async function createGlobeApp(rootElement: HTMLElement): Promise<GlobeApp
   const runtimeNoticeTitle = rootElement.querySelector<HTMLElement>("#runtimeNoticeTitle");
   const runtimeNoticeText = rootElement.querySelector<HTMLElement>("#runtimeNoticeText");
   const runtimeNoticeDismiss = rootElement.querySelector<HTMLButtonElement>("#runtimeNoticeDismiss");
+  const settingsDeployLine = rootElement.querySelector<HTMLElement>("#settingsDeployLine");
+  hydrateDeployShaLine(settingsDeployLine);
 
   let runtimeNoticeDismissed = false;
 

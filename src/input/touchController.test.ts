@@ -29,6 +29,23 @@ beforeEach(() => {
 });
 
 describe("attachTouchController", () => {
+  it("uses inverted deltas for one-finger mobile pan", () => {
+    const canvas = createCanvas();
+    const camera = {
+      panBy: vi.fn(),
+      orbitBy: vi.fn(),
+      zoomBy: vi.fn(),
+    };
+    const cleanup = attachTouchController(canvas, camera);
+
+    canvas.dispatchEvent(createPointerEvent("pointerdown", { pointerId: 1, pointerType: "touch", clientX: 20, clientY: 30 }));
+    canvas.dispatchEvent(createPointerEvent("pointermove", { pointerId: 1, pointerType: "touch", clientX: 32, clientY: 48 }));
+
+    expect(camera.panBy).toHaveBeenCalledWith(-12, -18, 800);
+
+    cleanup();
+  });
+
   it("does not zoom during a two-finger vertical swipe with slight finger-spacing drift", () => {
     const canvas = createCanvas();
     const camera = {
@@ -45,6 +62,23 @@ describe("attachTouchController", () => {
 
     expect(camera.orbitBy).toHaveBeenCalled();
     expect(camera.zoomBy).not.toHaveBeenCalled();
+
+    cleanup();
+  });
+
+  it("cancels stale inertia when a new touch gesture starts", () => {
+    const canvas = createCanvas();
+    const camera = {
+      panBy: vi.fn(),
+      orbitBy: vi.fn(),
+      zoomBy: vi.fn(),
+      cancel: vi.fn(),
+    };
+    const cleanup = attachTouchController(canvas, camera);
+
+    canvas.dispatchEvent(createPointerEvent("pointerdown", { pointerId: 1, pointerType: "touch", clientX: 0, clientY: 0 }));
+
+    expect(camera.cancel).toHaveBeenCalledTimes(1);
 
     cleanup();
   });

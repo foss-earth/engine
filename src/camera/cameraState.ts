@@ -111,6 +111,10 @@ export class CameraController {
     return surfaceHeightMeters + this.orbitTargetOffsetMeters;
   }
 
+  private getCurrentCenterHeightMeters(): number {
+    return ecefToGeodetic(this.camera.center.x, this.camera.center.y, this.camera.center.z).altMeters;
+  }
+
   /**
    * Read the current `GlobeViewState` from the live camera properties.
    * This is the single source of truth — call this before every state mutation.
@@ -150,8 +154,9 @@ export class CameraController {
    * Write a complete `GlobeViewState` to the camera.
    * Clamps pitch and zoom to safe limits before applying.
    */
-  applyViewState(state: GlobeViewState): void {
-    const targetHeightMeters = this.resolveOrbitTargetHeightMeters(state.latDeg, state.lonDeg);
+  applyViewState(state: GlobeViewState, targetHeightOverrideMeters?: number): void {
+    const targetHeightMeters = targetHeightOverrideMeters
+      ?? this.resolveOrbitTargetHeightMeters(state.latDeg, state.lonDeg);
     const { x, y, z } = geodeticToEcef(state.latDeg * DEG_TO_RAD, state.lonDeg * DEG_TO_RAD, targetHeightMeters);
     this.camera.center = new Vector3(x, y, z);
     this.camera.yaw = normalizeHeadingDeg(state.headingDeg) * DEG_TO_RAD;
@@ -195,7 +200,7 @@ export class CameraController {
 
     const newLatDeg = Math.max(-89.999, Math.min(89.999, state.latDeg + latDeltaDeg));
     const newLonDeg = ((state.lonDeg + lonDeltaDeg + 180) % 360 + 360) % 360 - 180;
-    this.setViewState({ latDeg: newLatDeg, lonDeg: newLonDeg });
+    this.applyViewState({ ...state, latDeg: newLatDeg, lonDeg: newLonDeg }, this.getCurrentCenterHeightMeters());
   }
 
   /**
@@ -210,10 +215,14 @@ export class CameraController {
     const eh = Math.abs(headingDeltaDeg) >= DEADZONE_DEG ? headingDeltaDeg : 0;
     if (ep === 0 && eh === 0) return;
     const state = this.syncFromCamera();
-    this.setViewState({
-      pitchDeg: clampPitchDeg(state.pitchDeg + ep),
-      headingDeg: normalizeHeadingDeg(state.headingDeg + eh),
-    });
+    this.applyViewState(
+      {
+        ...state,
+        pitchDeg: clampPitchDeg(state.pitchDeg + ep),
+        headingDeg: normalizeHeadingDeg(state.headingDeg + eh),
+      },
+      this.getCurrentCenterHeightMeters(),
+    );
   }
 
   /**

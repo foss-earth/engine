@@ -52,4 +52,36 @@ describe("CameraController orbit target height", () => {
     expect(camera.radius).toBe(MIN_ZOOM_METERS);
     expect(centerHeight(camera)).toBeCloseTo(264, 1);
   });
+
+  it("preserves orbit center height while panning across changing city heights", () => {
+    let surfaceHeightMeters = 264;
+    const camera = createCamera(44.977753, -93.265011, 0, 80);
+    const controller = new CameraController(camera);
+    controller.configureOrbitTargetHeight({
+      resolveSurfaceHeightMeters: () => surfaceHeightMeters,
+      initialOffsetMeters: 1_000,
+    });
+    const initialHeight = centerHeight(camera);
+
+    surfaceHeightMeters = 420;
+    controller.panBy(12, 8, 800);
+
+    expect(centerHeight(camera)).toBeCloseTo(initialHeight, 1);
+  });
+
+  it("preserves orbit center height while orbiting", () => {
+    let surfaceHeightMeters = 264;
+    const camera = createCamera(44.977753, -93.265011, 0, 80);
+    const controller = new CameraController(camera);
+    controller.configureOrbitTargetHeight({
+      resolveSurfaceHeightMeters: () => surfaceHeightMeters,
+      initialOffsetMeters: 1_000,
+    });
+    const initialHeight = centerHeight(camera);
+
+    surfaceHeightMeters = 420;
+    controller.orbitBy(4, 7);
+
+    expect(centerHeight(camera)).toBeCloseTo(initialHeight, 1);
+  });
 });

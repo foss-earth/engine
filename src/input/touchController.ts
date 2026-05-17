@@ -87,6 +87,7 @@ export function attachTouchController(
   function onPointerDown(e: PointerEvent): void {
     if (e.pointerType !== "touch") return;
     stopTouchEvent(e);
+    camera.cancel?.();
     activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     canvas.setPointerCapture(e.pointerId);
 
@@ -117,7 +118,7 @@ export function attachTouchController(
       const dy = point.y - session.previousPoint.y;
       const isReasonableDelta = Math.abs(dx) <= TOUCH_MAX_DELTA_PX && Math.abs(dy) <= TOUCH_MAX_DELTA_PX;
       if (isReasonableDelta && (Math.abs(dx) >= TOUCH_PAN_DEADZONE_PX || Math.abs(dy) >= TOUCH_PAN_DEADZONE_PX)) {
-        camera.panBy(dx, dy, canvas.clientHeight);
+        camera.panBy(-dx, -dy, canvas.clientHeight);
       }
       session.previousPoint = { ...point };
       return;

@@ -2,6 +2,7 @@ export interface CameraInputTarget {
   panBy(screenDxPx: number, screenDyPx: number, canvasHeight: number): void;
   orbitBy(pitchDeltaDeg: number, headingDeltaDeg: number): void;
   zoomBy(factor: number): void;
+  cancel?(): void;
 }
 
 export interface InertialCameraController extends CameraInputTarget {
