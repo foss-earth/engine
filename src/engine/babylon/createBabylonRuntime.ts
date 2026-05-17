@@ -1,11 +1,10 @@
 import {
-  ArcRotateCamera,
-  Camera,
   Color3,
   Color4,
   Engine,
   GeospatialCamera,
   HemisphericLight,
+  type AbstractMesh,
   MeshBuilder,
   Scene,
   StandardMaterial,
@@ -56,13 +55,14 @@ export interface BabylonRuntime {
   renderer: RendererSelection;
   status: BabylonRuntimeStatus;
   /**
-   * The active GeospatialCamera, or null when the app is in fallback mode.
+    * The active GeospatialCamera. Fallback mode uses the same geospatial scale
+    * as Google mode so layers can render ECEF-positioned primitives in both modes.
    * Use this to wire POI tracking or other camera-direct integrations.
    */
   geospatialCamera: GeospatialCamera | null;
-  /** Return the current camera state. Returns null in fallback mode. */
-  getViewState(): GlobeViewState | null;
-  /** Merge partial overrides into the current camera state. No-op in fallback mode. */
+    /** Return the current camera state. */
+    getViewState(): GlobeViewState | null;
+    /** Merge partial overrides into the current camera state. */
   setViewState(partial: Partial<GlobeViewState>): void;
   /** Configure the surface height and starting offset used by the camera orbit target. */
   configureOrbitTargetHeight(options: OrbitTargetHeightOptions | null): void;
@@ -79,34 +79,30 @@ function getErrorMessage(error: unknown): string {
   return String(error);
 }
 
-function createFallbackExperience(scene: Scene): Camera {
-  scene.clearColor = DEFAULT_FALLBACK_BACKGROUND;
+interface FallbackExperience {
+  globeMesh: AbstractMesh;
+  light: HemisphericLight;
+}
 
-  const camera = new ArcRotateCamera(
-    "fallback-camera",
-    -Math.PI / 2,
-    Math.PI / 2.8,
-    18,
-    Vector3.Zero(),
-    scene,
-  );
-  camera.minZ = 0.1;
-  camera.attachControl(true);
+function createFallbackExperience(scene: Scene): FallbackExperience {
+  scene.clearColor = DEFAULT_FALLBACK_BACKGROUND;
 
   const light = new HemisphericLight("fallback-light", new Vector3(0, 1, 0), scene);
   light.intensity = 0.95;
 
   const globeMesh = MeshBuilder.CreateSphere(
     "fallback-globe",
-    { diameter: 10, segments: 64 },
+    { diameter: PLANET_RADIUS_METERS * 2, segments: 96 },
     scene,
   );
+  globeMesh.isPickable = false;
+
   const globeMaterial = new StandardMaterial("fallback-globe-material", scene);
   globeMaterial.diffuseColor = Color3.FromHexString("#355f8f");
   globeMaterial.specularColor = Color3.FromHexString("#1f2937");
   globeMesh.material = globeMaterial;
 
-  return camera;
+  return { globeMesh, light };
 }
 
 function createGeospatialCamera(scene: Scene): GeospatialCamera {
@@ -135,18 +131,20 @@ export async function createBabylonRuntime(
   canvas: HTMLCanvasElement,
   options: BabylonRuntimeOptions = {},
 ): Promise<BabylonRuntime> {
-  const renderer = await createRendererMode(canvas);
+  const normalizedApiKey = options.googleApiKey?.trim() ?? "";
+  const hasGoogleApiKey = normalizedApiKey.length > 0;
+  const renderer = await createRendererMode(canvas, { forceWebGl: hasGoogleApiKey });
   const scene = new Scene(renderer.engine);
   scene.useRightHandedSystem = true;
 
-  const normalizedApiKey = options.googleApiKey?.trim() ?? "";
-  const hasGoogleApiKey = normalizedApiKey.length > 0;
-
   let tilesRuntime: GoogleTilesRuntime | null = null;
   let tilesUpdateObserver: ReturnType<typeof scene.onBeforeRenderObservable.add> | null = null;
+  let inputUpdateObserver: ReturnType<typeof scene.onBeforeRenderObservable.add> | null = null;
   let googleTilesStartupWatchdog: number | null = null;
-  let fallbackCamera: Camera | null = null;
+  let fallbackExperienceCreated = false;
+  let fallbackExperience: FallbackExperience | null = null;
   let googleLight: HemisphericLight | null = null;
+  let geospatialCamera: GeospatialCamera | null = null;
   let cameraController: CameraController | null = null;
   let inertialCameraController: InertialCameraController | null = null;
   let inputController: InputController | null = null;
@@ -171,17 +169,43 @@ export async function createBabylonRuntime(
     }
   }
 
-  function ensureFallbackExperience(): Camera {
-    if (fallbackCamera) {
-      return fallbackCamera;
+  function ensureGeospatialCamera(): GeospatialCamera {
+    if (geospatialCamera) {
+      scene.activeCamera = geospatialCamera;
+      return geospatialCamera;
     }
 
-    fallbackCamera = createFallbackExperience(scene);
-    return fallbackCamera;
+    geospatialCamera = createGeospatialCamera(scene);
+    scene.activeCamera = geospatialCamera;
+    cameraController = new CameraController(geospatialCamera);
+    inertialCameraController = createInertialCameraController(cameraController);
+    inputController = createInputController(canvas, inertialCameraController);
+    inputUpdateObserver = scene.onBeforeRenderObservable.add(() => {
+      inertialCameraController?.update();
+    });
+
+    return geospatialCamera;
+  }
+
+  function ensureFallbackExperience(): void {
+    if (fallbackExperienceCreated) {
+      scene.clearColor = DEFAULT_FALLBACK_BACKGROUND;
+      fallbackExperience?.globeMesh.setEnabled(true);
+      fallbackExperience?.light.setEnabled(true);
+      return;
+    }
+
+    fallbackExperience = createFallbackExperience(scene);
+    fallbackExperienceCreated = true;
+  }
+
+  function hideFallbackExperience(): void {
+    fallbackExperience?.globeMesh.setEnabled(false);
+    fallbackExperience?.light.setEnabled(false);
   }
 
   function enableFallbackMode(reason: string): void {
-    if (status.mode === "fallback" && fallbackCamera) {
+    if (status.mode === "fallback" && fallbackExperienceCreated) {
       status.lastError = reason;
       status.message = "Fallback mode active due to Google tiles load failure.";
       emitStatus();
@@ -207,8 +231,8 @@ export async function createBabylonRuntime(
     status.lastError = reason;
     status.message = "Fallback mode active due to Google tiles load failure.";
 
-    scene.clearColor = DEFAULT_FALLBACK_BACKGROUND;
-    scene.activeCamera = ensureFallbackExperience();
+    ensureGeospatialCamera();
+    ensureFallbackExperience();
 
     console.warn("[runtime] Switching to fallback mode", { reason });
     emitStatus();
@@ -220,11 +244,9 @@ export async function createBabylonRuntime(
     try {
       scene.clearColor = DEFAULT_GOOGLE_BACKGROUND;
 
-      const geospatialCamera = createGeospatialCamera(scene);
-      scene.activeCamera = geospatialCamera;
-      cameraController = new CameraController(geospatialCamera);
-      inertialCameraController = createInertialCameraController(cameraController);
-      inputController = createInputController(canvas, inertialCameraController);
+      ensureGeospatialCamera();
+      ensureFallbackExperience();
+      scene.clearColor = DEFAULT_GOOGLE_BACKGROUND;
 
       googleLight = new HemisphericLight("google-tiles-light", new Vector3(0, 1, 0), scene);
       googleLight.intensity = 1.0;
@@ -253,6 +275,7 @@ export async function createBabylonRuntime(
           emitStatus();
 
           if (visibleTiles > 0) {
+            hideFallbackExperience();
             clearGoogleWatchdog();
           }
         },
@@ -261,7 +284,6 @@ export async function createBabylonRuntime(
       tilesRuntime.tiles.checkCollisions = true;
 
       tilesUpdateObserver = scene.onBeforeRenderObservable.add(() => {
-        inertialCameraController?.update();
         tilesRuntime?.update();
       });
 
@@ -288,7 +310,8 @@ export async function createBabylonRuntime(
       enableFallbackMode(getErrorMessage(error));
     }
   } else {
-    scene.activeCamera = ensureFallbackExperience();
+    ensureGeospatialCamera();
+    ensureFallbackExperience();
     status.message = "Fallback mode active: missing Google Maps API key.";
     emitStatus();
 
@@ -310,7 +333,7 @@ export async function createBabylonRuntime(
     renderer,
     status,
     get geospatialCamera(): GeospatialCamera | null {
-      return cameraController ? (scene.activeCamera as GeospatialCamera) : null;
+      return geospatialCamera;
     },
     getViewState(): GlobeViewState | null {
       return cameraController?.getViewState() ?? null;
@@ -336,6 +359,11 @@ export async function createBabylonRuntime(
       if (tilesUpdateObserver) {
         scene.onBeforeRenderObservable.remove(tilesUpdateObserver);
         tilesUpdateObserver = null;
+      }
+
+      if (inputUpdateObserver) {
+        scene.onBeforeRenderObservable.remove(inputUpdateObserver);
+        inputUpdateObserver = null;
       }
 
       clearGoogleWatchdog();

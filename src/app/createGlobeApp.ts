@@ -21,6 +21,10 @@ export interface GlobeAppHandle extends GlobeHandle {
   runtime: BabylonRuntime;
 }
 
+export interface GlobeAppOptions {
+  googleApiKey?: string | null;
+}
+
 const COMPASS_HEIGHT_OFFSET_METERS = 1_000;
 const BUILD_TIME = __BUILD_TIME__;
 const SOURCE_VERSION = __SOURCE_VERSION__;
@@ -96,7 +100,10 @@ function getGoogleWarningMessage(status: BabylonRuntime["status"]): string {
   return "Google mode is active, but tiles may still be loading.";
 }
 
-export async function createGlobeApp(rootElement: HTMLElement): Promise<GlobeAppHandle> {
+export async function createGlobeApp(
+  rootElement: HTMLElement,
+  options: GlobeAppOptions = {},
+): Promise<GlobeAppHandle> {
   rootElement.innerHTML = `
     <div class="globe-shell">
       <canvas id="globeCanvas" class="globe-canvas" aria-label="3D globe canvas"></canvas>
@@ -237,7 +244,7 @@ export async function createGlobeApp(rootElement: HTMLElement): Promise<GlobeApp
     }
   });
 
-  const googleApiKey = getGoogleApiKeyFromUrl();
+  const googleApiKey = options.googleApiKey ?? getGoogleApiKeyFromUrl();
 
   const runtime = await createBabylonRuntime(canvas, {
     googleApiKey,
