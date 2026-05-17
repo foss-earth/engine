@@ -28,6 +28,7 @@ function createCullingMock(): HemisphereCullingHandle {
 function createAnchorHeightsMock(): AnchorHeightResolver {
   return {
     resolve: vi.fn(() => null),
+    resolveHeight: vi.fn(() => 0),
     setSample: vi.fn(),
     getCachedHeight: vi.fn(() => null),
     clear: vi.fn(),

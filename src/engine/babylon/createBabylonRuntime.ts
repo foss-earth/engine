@@ -17,7 +17,7 @@ import { GeospatialClippingBehavior } from "@babylonjs/core/Behaviors/Cameras/ge
 import { createRendererMode, type RendererSelection } from "./createRendererMode";
 import { createGoogleTilesRuntime, type GoogleTilesRuntime } from "./createTilesRuntime";
 import { geodeticToEcef, DEG_TO_RAD } from "../../camera/cameraMath";
-import { CameraController } from "../../camera/cameraState";
+import { CameraController, type OrbitTargetHeightOptions } from "../../camera/cameraState";
 import { createInputController, type InputController } from "../../input/createInputController";
 import { createInertialCameraController, type InertialCameraController } from "../../input/inertialCameraController";
 import type { GlobeViewState } from "../types";
@@ -64,6 +64,8 @@ export interface BabylonRuntime {
   getViewState(): GlobeViewState | null;
   /** Merge partial overrides into the current camera state. No-op in fallback mode. */
   setViewState(partial: Partial<GlobeViewState>): void;
+  /** Configure the surface height and starting offset used by the camera orbit target. */
+  configureOrbitTargetHeight(options: OrbitTargetHeightOptions | null): void;
   /** Return current Google 3D tile counts, or null in fallback mode. */
   getTileMetrics(): BabylonTileMetrics | null;
   destroy(): void;
@@ -316,6 +318,10 @@ export async function createBabylonRuntime(
     setViewState(partial: Partial<GlobeViewState>): void {
       inertialCameraController?.cancel();
       cameraController?.setViewState(partial);
+    },
+    configureOrbitTargetHeight(options: OrbitTargetHeightOptions | null): void {
+      inertialCameraController?.cancel();
+      cameraController?.configureOrbitTargetHeight(options);
     },
     getTileMetrics(): BabylonTileMetrics | null {
       if (!tilesRuntime) {

@@ -20,6 +20,14 @@ export const MAX_PITCH_DEG = 89;
 export const MIN_ZOOM_METERS = 25;
 /** Maximum orbit radius (metres) — keeps the globe in frame. */
 export const MAX_ZOOM_METERS = 80_000_000;
+const ORBIT_TARGET_OFFSET_ZOOM_STEP_METERS = 750;
+const MAX_ORBIT_SURFACE_HEIGHT_SPEED_METERS_PER_SECOND = 160;
+const MAX_ORBIT_HEIGHT_SMOOTHING_DELTA_MS = 100;
+
+export interface OrbitTargetHeightOptions {
+  resolveSurfaceHeightMeters: (latDeg: number, lonDeg: number) => number | null;
+  initialOffsetMeters?: number;
+}
 
 // ─── Pitch Conversion ───────────────────────────────────────────────
 //
@@ -60,9 +68,47 @@ function clampZoomMeters(zoom: number): number {
  */
 export class CameraController {
   private readonly camera: GeospatialCamera;
+  private resolveSurfaceHeightMeters: ((latDeg: number, lonDeg: number) => number | null) | null = null;
+  private orbitTargetOffsetMeters = 0;
+  private smoothedSurfaceHeightMeters: number | null = null;
+  private lastSurfaceHeightResolveMs: number | null = null;
 
   constructor(camera: GeospatialCamera) {
     this.camera = camera;
+  }
+
+  configureOrbitTargetHeight(options: OrbitTargetHeightOptions | null): void {
+    this.resolveSurfaceHeightMeters = options?.resolveSurfaceHeightMeters ?? null;
+    this.orbitTargetOffsetMeters = Math.max(0, options?.initialOffsetMeters ?? 0);
+    this.smoothedSurfaceHeightMeters = null;
+    this.lastSurfaceHeightResolveMs = null;
+    this.applyViewState(this.syncFromCamera());
+  }
+
+  private smoothSurfaceHeightMeters(targetHeightMeters: number): number {
+    const now = performance.now();
+    if (this.smoothedSurfaceHeightMeters === null || this.lastSurfaceHeightResolveMs === null) {
+      this.smoothedSurfaceHeightMeters = targetHeightMeters;
+      this.lastSurfaceHeightResolveMs = now;
+      return targetHeightMeters;
+    }
+
+    const deltaMs = Math.max(0, Math.min(MAX_ORBIT_HEIGHT_SMOOTHING_DELTA_MS, now - this.lastSurfaceHeightResolveMs));
+    this.lastSurfaceHeightResolveMs = now;
+    const maxStep = MAX_ORBIT_SURFACE_HEIGHT_SPEED_METERS_PER_SECOND * (deltaMs / 1000);
+    const delta = targetHeightMeters - this.smoothedSurfaceHeightMeters;
+    if (Math.abs(delta) <= maxStep) {
+      this.smoothedSurfaceHeightMeters = targetHeightMeters;
+      return this.smoothedSurfaceHeightMeters;
+    }
+
+    this.smoothedSurfaceHeightMeters += Math.sign(delta) * maxStep;
+    return this.smoothedSurfaceHeightMeters;
+  }
+
+  private resolveOrbitTargetHeightMeters(latDeg: number, lonDeg: number): number {
+    const surfaceHeightMeters = this.smoothSurfaceHeightMeters(this.resolveSurfaceHeightMeters?.(latDeg, lonDeg) ?? 0);
+    return surfaceHeightMeters + this.orbitTargetOffsetMeters;
   }
 
   /**
@@ -105,7 +151,8 @@ export class CameraController {
    * Clamps pitch and zoom to safe limits before applying.
    */
   applyViewState(state: GlobeViewState): void {
-    const { x, y, z } = geodeticToEcef(state.latDeg * DEG_TO_RAD, state.lonDeg * DEG_TO_RAD, 0);
+    const targetHeightMeters = this.resolveOrbitTargetHeightMeters(state.latDeg, state.lonDeg);
+    const { x, y, z } = geodeticToEcef(state.latDeg * DEG_TO_RAD, state.lonDeg * DEG_TO_RAD, targetHeightMeters);
     this.camera.center = new Vector3(x, y, z);
     this.camera.yaw = normalizeHeadingDeg(state.headingDeg) * DEG_TO_RAD;
     this.camera.pitch = surfacePitchDegToBabylonPitch(clampPitchDeg(state.pitchDeg));
@@ -174,7 +221,20 @@ export class CameraController {
    * factor < 1 = zoom in (move closer), factor > 1 = zoom out (move farther).
    */
   zoomBy(factor: number): void {
+    if (!Number.isFinite(factor) || factor <= 0) {
+      return;
+    }
+
     const state = this.syncFromCamera();
-    this.setViewState({ zoomMeters: clampZoomMeters(state.zoomMeters * factor) });
+    const requestedZoomMeters = state.zoomMeters * factor;
+
+    if (requestedZoomMeters >= MIN_ZOOM_METERS || factor >= 1 || this.orbitTargetOffsetMeters <= 0) {
+      this.setViewState({ zoomMeters: clampZoomMeters(requestedZoomMeters) });
+      return;
+    }
+
+    const offsetStepMeters = Math.max(1, Math.abs(Math.log(factor)) * ORBIT_TARGET_OFFSET_ZOOM_STEP_METERS);
+    this.orbitTargetOffsetMeters = Math.max(0, this.orbitTargetOffsetMeters - offsetStepMeters);
+    this.applyViewState({ ...state, zoomMeters: MIN_ZOOM_METERS });
   }
 }

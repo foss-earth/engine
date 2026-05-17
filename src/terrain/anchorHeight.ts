@@ -30,6 +30,7 @@ export interface AnchorHeightResolverOptions {
 
 export interface AnchorHeightResolver {
   resolve(anchor: Vector3 | null): Vector3 | null;
+  resolveHeight(latDeg: number, lonDeg: number): number;
   setSample(sample: AnchorHeightSample): void;
   getCachedHeight(latDeg: number, lonDeg: number): number | null;
   clear(): void;
@@ -87,7 +88,7 @@ export function createAnchorHeightResolver(options: AnchorHeightResolverOptions 
     return heightCache.get(getCellKey(latDeg, lonDeg, cellSizeDeg)) ?? null;
   }
 
-  function resolveHeight(latDeg: number, lonDeg: number): number {
+  function resolveBaseHeight(latDeg: number, lonDeg: number): number {
     const key = getCellKey(latDeg, lonDeg, cellSizeDeg);
     const cached = heightCache.get(key);
     if (cached !== undefined) {
@@ -141,7 +142,7 @@ export function createAnchorHeightResolver(options: AnchorHeightResolverOptions 
       return null;
     }
     const { latRad, lonRad } = ecefToGeodetic(anchor.x, anchor.y, anchor.z);
-    const heightMeters = smoothHeight(resolveHeight(latRad * RAD_TO_DEG, lonRad * RAD_TO_DEG) + heightOffsetMeters);
+    const heightMeters = smoothHeight(resolveBaseHeight(latRad * RAD_TO_DEG, lonRad * RAD_TO_DEG) + heightOffsetMeters);
     return createAnchorAtHeight(anchor, heightMeters);
   }
 
@@ -155,7 +156,7 @@ export function createAnchorHeightResolver(options: AnchorHeightResolverOptions 
     }
   }
 
-  return { resolve, setSample, getCachedHeight, clear };
+  return { resolve, resolveHeight: resolveBaseHeight, setSample, getCachedHeight, clear };
 }
 
 export function sampleToAnchor(sample: AnchorHeightSample): Vector3 {

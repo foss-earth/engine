@@ -205,6 +205,10 @@ export async function createGlobeApp(rootElement: HTMLElement): Promise<GlobeApp
     provider: createTileHeightProvider(runtime.scene),
     heightOffsetMeters: COMPASS_HEIGHT_OFFSET_METERS,
   });
+  runtime.configureOrbitTargetHeight({
+    resolveSurfaceHeightMeters: anchorHeights.resolveHeight,
+    initialOffsetMeters: COMPASS_HEIGHT_OFFSET_METERS,
+  });
   const registry = createLayerRegistry(layerContext, poiTracking, culling, anchorHeights);
   const orbitCompass: OrbitCompassHandle = createOrbitCompass(runtime.scene);
   const performanceMetrics = createPerformanceMetrics({
@@ -252,8 +256,7 @@ export async function createGlobeApp(rootElement: HTMLElement): Promise<GlobeApp
       northButton?.update(state.headingDeg);
     }
     const camera = runtime.geospatialCamera;
-    const poiCompassAnchor = poiTracking.getOrbitTarget();
-    const compassAnchor = anchorHeights.resolve(poiCompassAnchor ?? camera?.center ?? null);
+    const compassAnchor = anchorHeights.resolve(poiTracking.getOrbitTarget() ?? camera?.center ?? null);
     orbitCompass.update(compassAnchor, state?.zoomMeters ?? camera?.radius ?? 0);
     culling.update();
     const perfSnapshot = performanceMetrics.update();
