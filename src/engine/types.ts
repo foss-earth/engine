@@ -1,0 +1,36 @@
+export interface GlobeViewState {
+  latDeg: number;
+  lonDeg: number;
+  headingDeg: number;
+  pitchDeg: number;
+  zoomMeters: number;
+}
+
+export interface GlobeLayerContext {
+  scene: unknown;
+  engine: unknown;
+}
+
+export interface GlobeLayerState {
+  poiEntities?: unknown[];
+  getPoiOrbitTarget?: () => unknown | null;
+}
+
+export interface GlobeLayer {
+  id: string;
+  setup(context: GlobeLayerContext): GlobeLayerState;
+  destroy(context: GlobeLayerContext): void;
+}
+
+export interface GlobeHandle {
+  addLayer(layer: GlobeLayer): void;
+  removeLayer(layerId: string): void;
+  destroy(): void;
+  /** Return the current camera state. Returns null in fallback mode. */
+  getViewState(): GlobeViewState | null;
+  /**
+   * Merge partial overrides into the current camera state.
+   * No-op in fallback mode.
+   */
+  setViewState(partial: Partial<GlobeViewState>): void;
+}
