@@ -2,6 +2,7 @@ import type { CameraInputTarget } from "./inertialCameraController";
 import { attachWheelController } from "./wheelController";
 import { attachSafariGestures, isSafariGestureSupported } from "./safariGestures";
 import { attachTouchController } from "./touchController";
+import { attachMouseController } from "./mouseController";
 
 export interface InputController {
   destroy(): void;
@@ -23,6 +24,7 @@ export interface InputController {
 export function createInputController(
   canvas: HTMLCanvasElement,
   camera: CameraInputTarget,
+  options: { isOrbitMode?: () => boolean } = {},
 ): InputController {
   const hasSafariGestures = isSafariGestureSupported();
 
@@ -42,15 +44,17 @@ export function createInputController(
   }
 
   // ── Canvas-level handlers ────────────────────────────────────────
-  const detachWheel = attachWheelController(canvas, camera, { isSafariWithGestures: hasSafariGestures });
+  const detachWheel = attachWheelController(canvas, camera, { isSafariWithGestures: hasSafariGestures, isOrbitMode: options.isOrbitMode });
   const detachSafari = hasSafariGestures ? attachSafariGestures(canvas, camera) : (): void => undefined;
   const detachTouch = attachTouchController(canvas, camera);
+  const detachMouse = attachMouseController(canvas, camera);
 
   return {
     destroy(): void {
       detachWheel();
       detachSafari();
       detachTouch();
+      detachMouse();
       document.removeEventListener("wheel", docWheelHandler);
       for (const cleanup of docGestureCleanup) cleanup();
     },

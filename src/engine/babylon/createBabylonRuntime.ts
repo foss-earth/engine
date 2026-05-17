@@ -68,6 +68,11 @@ export interface BabylonRuntime {
   configureOrbitTargetHeight(options: OrbitTargetHeightOptions | null): void;
   /** Return current Google 3D tile counts, or null in fallback mode. */
   getTileMetrics(): BabylonTileMetrics | null;
+  /**
+   * Tell the input system whether the camera is currently locked to a POI.
+   * When true, two-finger trackpad swipe orbits instead of panning.
+   */
+  setOrbitMode(active: boolean): void;
   destroy(): void;
 }
 
@@ -148,6 +153,7 @@ export async function createBabylonRuntime(
   let cameraController: CameraController | null = null;
   let inertialCameraController: InertialCameraController | null = null;
   let inputController: InputController | null = null;
+  let orbitModeActive = false;
 
   const status: BabylonRuntimeStatus = {
     mode: hasGoogleApiKey ? "google-tiles" : "fallback",
@@ -179,7 +185,7 @@ export async function createBabylonRuntime(
     scene.activeCamera = geospatialCamera;
     cameraController = new CameraController(geospatialCamera);
     inertialCameraController = createInertialCameraController(cameraController);
-    inputController = createInputController(canvas, inertialCameraController);
+    inputController = createInputController(canvas, inertialCameraController, { isOrbitMode: () => orbitModeActive });
     inputUpdateObserver = scene.onBeforeRenderObservable.add(() => {
       inertialCameraController?.update();
     });
@@ -354,6 +360,9 @@ export async function createBabylonRuntime(
         visibleTiles: tilesRuntime.tiles.visibleTiles.size,
         activeTiles: tilesRuntime.tiles.activeTiles.size,
       };
+    },
+    setOrbitMode(active: boolean): void {
+      orbitModeActive = active;
     },
     destroy() {
       if (tilesUpdateObserver) {

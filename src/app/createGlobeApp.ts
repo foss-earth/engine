@@ -1,3 +1,4 @@
+import { Matrix, Vector3 } from "@babylonjs/core";
 import { createBabylonRuntime, type BabylonRuntime } from "../engine/babylon/createBabylonRuntime";
 import type {
   GlobeHandle,
@@ -26,6 +27,8 @@ export interface GlobeAppOptions {
 }
 
 const COMPASS_HEIGHT_OFFSET_METERS = 1_000;
+/** Pixel offset from the projected sphere centre to the top-right exit button. */
+const POI_EXIT_BTN_OFFSET_PX = 22;
 const BUILD_TIME = __BUILD_TIME__;
 const SOURCE_VERSION = __SOURCE_VERSION__;
 const REPOSITORY_SLUG = __REPOSITORY_SLUG__;
@@ -181,6 +184,9 @@ export async function createGlobeApp(
           <button id="settingsModalDismiss" class="modal-dismiss" type="button">Close</button>
         </div>
       </div>
+
+      <button id="poiExitBtn" class="poi-exit-btn" hidden
+        type="button" aria-label="Exit point of interest view">&#x2715;</button>
     </div>
   `;
 
@@ -287,6 +293,7 @@ export async function createGlobeApp(
   const helpModalEl = rootElement.querySelector<HTMLElement>("#helpModal");
   const settingsBtnEl = rootElement.querySelector<HTMLButtonElement>("#settingsButton");
   const settingsModalEl = rootElement.querySelector<HTMLElement>("#settingsModal");
+  const poiExitBtnEl = rootElement.querySelector<HTMLButtonElement>("#poiExitBtn");
 
   const statusHud: StatusHudHandle | null = hudStatusEl ? createStatusHud(hudStatusEl) : null;
   const northButton: NorthButtonHandle | null = northBtnSvgEl ? createNorthButton(northBtnSvgEl) : null;
@@ -301,6 +308,10 @@ export async function createGlobeApp(
   });
   helpBtnEl?.addEventListener("click", () => helpModal?.show());
   settingsBtnEl?.addEventListener("click", () => settingsModal?.show());
+  poiExitBtnEl?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    poiTracking.exitTracking();
+  });
 
   // Update HUD every frame while the scene is running
   let hudObserver: ReturnType<typeof runtime.scene.onBeforeRenderObservable.add> | null = null;
@@ -314,6 +325,35 @@ export async function createGlobeApp(
     const compassAnchor = anchorHeights.resolve(poiTracking.getOrbitTarget() ?? camera?.center ?? null);
     orbitCompass.update(compassAnchor, state?.zoomMeters ?? camera?.radius ?? 0);
     culling.update();
+    runtime.setOrbitMode(poiTracking.isTracking());
+
+    // ── POI exit button: project orbit target to screen space ─────
+    if (poiExitBtnEl) {
+      const orbitTarget = poiTracking.getOrbitTarget();
+      const poiCamera = runtime.geospatialCamera;
+      const poiEngine = runtime.engine;
+      const poiCanvas = poiEngine.getRenderingCanvas();
+      if (orbitTarget && poiCamera && poiCanvas) {
+        const txMatrix = runtime.scene.getTransformMatrix();
+        const vp = poiCamera.viewport.toGlobal(
+          poiEngine.getRenderWidth(),
+          poiEngine.getRenderHeight(),
+        );
+        const sp = Vector3.Project(orbitTarget, Matrix.IdentityReadOnly, txMatrix, vp);
+        if (sp.z > 0 && sp.z < 1) {
+          const rect = poiCanvas.getBoundingClientRect();
+          const scaleX = rect.width / poiEngine.getRenderWidth();
+          const scaleY = rect.height / poiEngine.getRenderHeight();
+          poiExitBtnEl.hidden = false;
+          poiExitBtnEl.style.left = `${rect.left + sp.x * scaleX + POI_EXIT_BTN_OFFSET_PX}px`;
+          poiExitBtnEl.style.top = `${rect.top + sp.y * scaleY - POI_EXIT_BTN_OFFSET_PX}px`;
+        } else {
+          poiExitBtnEl.hidden = true;
+        }
+      } else {
+        poiExitBtnEl.hidden = true;
+      }
+    }
     const perfSnapshot = performanceMetrics.update();
     if (perfMetricsPill) {
       perfMetricsPill.textContent = performanceMetrics.format(perfSnapshot);

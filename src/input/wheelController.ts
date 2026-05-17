@@ -29,10 +29,14 @@ function isLikelyMouseWheel(e: WheelEvent): boolean {
 function classifyWheelGestureMode(
   e: WheelEvent,
   isSafariWithGestures: boolean,
+  isOrbitMode: boolean,
 ): WheelGestureMode {
   if (e.shiftKey) return "orbit";
   if (e.ctrlKey && !isSafariWithGestures) return "pinchZoom";
-  return isLikelyMouseWheel(e) ? "wheelZoom" : "pan";
+  if (isLikelyMouseWheel(e)) return "wheelZoom";
+  // When the camera is locked to a POI the user expects two-finger swipe to
+  // orbit around the selected point rather than pan away from it.
+  return isOrbitMode ? "orbit" : "pan";
 }
 
 /**
@@ -52,7 +56,7 @@ function classifyWheelGestureMode(
 export function attachWheelController(
   canvas: HTMLCanvasElement,
   camera: CameraInputTarget,
-  options: { isSafariWithGestures: boolean },
+  options: { isSafariWithGestures: boolean; isOrbitMode?: () => boolean },
 ): () => void {
   const { isSafariWithGestures } = options;
   let session: WheelGestureSession | null = null;
@@ -65,7 +69,7 @@ export function attachWheelController(
     const now = performance.now();
     if (!session || now - session.lastEventTimeMs > WHEEL_GESTURE_IDLE_MS) {
       session = {
-        mode: classifyWheelGestureMode(e, isSafariWithGestures),
+        mode: classifyWheelGestureMode(e, isSafariWithGestures, options.isOrbitMode?.() ?? false),
         lastEventTimeMs: now,
       };
     } else {
