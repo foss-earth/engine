@@ -160,9 +160,15 @@ export function attachTouchController(
       camera.orbitBy(dy * TOUCH_ORBIT_DEG_PER_PX, dx * TOUCH_ORBIT_DEG_PER_PX);
     }
 
-    if (session.intent === "pinch" && Math.abs(distanceDeltaPx) >= TOUCH_PINCH_DEADZONE_PX) {
-      const scaleDelta = metrics.distancePx / session.previousMetrics.distancePx;
-      const factor = 1.5 - scaleDelta * 0.5;
+    if (session.intent === "pinch"
+      && Math.abs(distanceDeltaPx) >= TOUCH_PINCH_DEADZONE_PX
+      && metrics.distancePx > 0
+      && session.previousMetrics.distancePx > 0) {
+      // zoomBy is multiplicative: factor < 1 zooms in, > 1 zooms out.
+      // Fingers spreading apart (distancePx grows) must zoom in, so factor = prev / current.
+      // Using the exact ratio keeps the gesture frame-rate independent (chained ratios
+      // compose to the total pinch scale change) — unlike a linear approximation.
+      const factor = session.previousMetrics.distancePx / metrics.distancePx;
       if (Math.abs(factor - 1) > 0.001) {
         camera.zoomBy(factor);
       }

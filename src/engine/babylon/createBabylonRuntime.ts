@@ -114,6 +114,13 @@ function createGeospatialCamera(scene: Scene): GeospatialCamera {
   const camera = new GeospatialCamera("geo-camera", scene, {
     planetRadius: PLANET_RADIUS_METERS,
   });
+  // Remove Babylon's built-in pointer + wheel inputs. We drive the camera entirely
+  // through our own InputController (wheel/touch/mouse/safariGestures); leaving
+  // Babylon's GeospatialCameraPointersInput and GeospatialCameraMouseWheelInput
+  // attached makes every gesture get processed twice (ours + Babylon's pinch/drag),
+  // producing the jumpy "camera moves in other ways while zooming" behavior on touch.
+  camera.inputs.removeByType("GeospatialCameraPointersInput");
+  camera.inputs.removeByType("GeospatialCameraMouseWheelInput");
   camera.attachControl(true);
   camera.addBehavior(new GeospatialClippingBehavior());
 
