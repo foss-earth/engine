@@ -1,10 +1,9 @@
 import type { CameraInputTarget } from "./inertialCameraController";
 
-type WheelGestureMode = "pan" | "pinchZoom" | "wheelZoom" | "orbit";
+type WheelGestureMode = "pan" | "pinchZoom" | "wheelZoom" | "orbit" | "ignore";
 
 const WHEEL_GESTURE_IDLE_MS = 180;
 const PIXEL_DELTA_MODE = 0;
-const MOUSE_WHEEL_MIN_STEP_PX = 80;
 const FRACTIONAL_DELTA_EPSILON = 0.001;
 
 interface WheelGestureSession {
@@ -16,14 +15,33 @@ function hasFractionalDelta(value: number): boolean {
   return Math.abs(value - Math.round(value)) > FRACTIONAL_DELTA_EPSILON;
 }
 
-function isLikelyMouseWheel(e: WheelEvent): boolean {
-  if (e.deltaMode !== PIXEL_DELTA_MODE) return true;
+function isLikelyVerticalMouseWheel(e: WheelEvent): boolean {
+  if (e.deltaMode !== PIXEL_DELTA_MODE) {
+    return Math.abs(e.deltaY) > FRACTIONAL_DELTA_EPSILON;
+  }
 
   const absDeltaX = Math.abs(e.deltaX);
   const absDeltaY = Math.abs(e.deltaY);
   const hasHorizontalDelta = absDeltaX > FRACTIONAL_DELTA_EPSILON;
   const hasFineDelta = hasFractionalDelta(e.deltaX) || hasFractionalDelta(e.deltaY);
-  return !hasHorizontalDelta && !hasFineDelta && absDeltaY >= MOUSE_WHEEL_MIN_STEP_PX;
+
+  // Smooth mouse wheels often report modest integer pixel deltas such as 40
+  // or 53. Treating those as trackpad pan moves lat/lon violently at high
+  // altitude, so vertical-only integer wheel deltas should zoom regardless
+  // of magnitude. Trackpad pans normally expose fractional deltas and/or a
+  // horizontal component.
+  return !hasHorizontalDelta && !hasFineDelta && absDeltaY > FRACTIONAL_DELTA_EPSILON;
+}
+
+function isLikelyHorizontalMouseWheel(e: WheelEvent): boolean {
+  const absDeltaX = Math.abs(e.deltaX);
+  const absDeltaY = Math.abs(e.deltaY);
+  if (e.deltaMode !== PIXEL_DELTA_MODE) {
+    return absDeltaX > FRACTIONAL_DELTA_EPSILON && absDeltaY <= FRACTIONAL_DELTA_EPSILON;
+  }
+
+  const hasFineDelta = hasFractionalDelta(e.deltaX) || hasFractionalDelta(e.deltaY);
+  return !hasFineDelta && absDeltaX > FRACTIONAL_DELTA_EPSILON && absDeltaY <= FRACTIONAL_DELTA_EPSILON;
 }
 
 function classifyWheelGestureMode(
@@ -33,7 +51,8 @@ function classifyWheelGestureMode(
 ): WheelGestureMode {
   if (e.shiftKey) return "orbit";
   if (e.ctrlKey && !isSafariWithGestures) return "pinchZoom";
-  if (isLikelyMouseWheel(e)) return "wheelZoom";
+  if (isLikelyVerticalMouseWheel(e)) return "wheelZoom";
+  if (isLikelyHorizontalMouseWheel(e)) return "ignore";
   // When the camera is locked to a POI the user expects two-finger swipe to
   // orbit around the selected point rather than pan away from it.
   return isOrbitMode ? "orbit" : "pan";
@@ -90,6 +109,10 @@ export function attachWheelController(
       return;
     }
 
+    if (session.mode === "ignore") {
+      return;
+    }
+
     // ── Ctrl+wheel = macOS trackpad pinch-to-zoom (non-Safari browsers) ──
     if (session.mode === "pinchZoom") {
       const factor = 1 + e.deltaY * 0.01;
@@ -99,6 +122,7 @@ export function attachWheelController(
 
     // ── Mouse wheel = coarser zoom ───────────────────────────────────────
     // Scroll down (deltaY>0) = zoom out; scroll up (deltaY<0) = zoom in.
+    if (Math.abs(e.deltaY) <= FRACTIONAL_DELTA_EPSILON) return;
     const factor = e.deltaY > 0 ? 1.08 : 0.92;
     camera.zoomBy(factor);
   }

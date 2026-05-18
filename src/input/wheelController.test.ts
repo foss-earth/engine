@@ -29,7 +29,7 @@ afterEach(() => {
 });
 
 describe("attachWheelController", () => {
-  it("pans the first fine pixel wheel event after an idle pause", () => {
+  it("pans the first fractional fine pixel wheel event after an idle pause", () => {
     vi.spyOn(performance, "now").mockReturnValue(1_000);
     const canvas = createCanvas();
     const camera = {
@@ -39,9 +39,64 @@ describe("attachWheelController", () => {
     };
     const cleanup = attachWheelController(canvas, camera, { isSafariWithGestures: false });
 
-    canvas.dispatchEvent(createWheelEvent({ deltaY: 12 }));
+    canvas.dispatchEvent(createWheelEvent({ deltaY: 12.25 }));
 
-    expect(camera.panBy).toHaveBeenCalledWith(0, 12, 800);
+    expect(camera.panBy).toHaveBeenCalledWith(0, 12.25, 800);
+    expect(camera.zoomBy).not.toHaveBeenCalled();
+
+    cleanup();
+  });
+
+  it("zooms vertical-only integer pixel wheel events instead of panning lat/lon", () => {
+    vi.spyOn(performance, "now").mockReturnValue(1_000);
+    const canvas = createCanvas();
+    const camera = {
+      panBy: vi.fn(),
+      orbitBy: vi.fn(),
+      zoomBy: vi.fn(),
+    };
+    const cleanup = attachWheelController(canvas, camera, { isSafariWithGestures: false });
+
+    canvas.dispatchEvent(createWheelEvent({ deltaY: 40 }));
+
+    expect(camera.zoomBy).toHaveBeenCalledWith(1.08);
+    expect(camera.panBy).not.toHaveBeenCalled();
+
+    cleanup();
+  });
+
+  it("ignores horizontal-only integer pixel wheel events instead of panning lat/lon", () => {
+    vi.spyOn(performance, "now").mockReturnValue(1_000);
+    const canvas = createCanvas();
+    const camera = {
+      panBy: vi.fn(),
+      orbitBy: vi.fn(),
+      zoomBy: vi.fn(),
+    };
+    const cleanup = attachWheelController(canvas, camera, { isSafariWithGestures: false });
+
+    canvas.dispatchEvent(createWheelEvent({ deltaX: 40, deltaY: 0 }));
+
+    expect(camera.panBy).not.toHaveBeenCalled();
+    expect(camera.zoomBy).not.toHaveBeenCalled();
+    expect(camera.orbitBy).not.toHaveBeenCalled();
+
+    cleanup();
+  });
+
+  it("keeps fractional horizontal trackpad wheel events as pan", () => {
+    vi.spyOn(performance, "now").mockReturnValue(1_000);
+    const canvas = createCanvas();
+    const camera = {
+      panBy: vi.fn(),
+      orbitBy: vi.fn(),
+      zoomBy: vi.fn(),
+    };
+    const cleanup = attachWheelController(canvas, camera, { isSafariWithGestures: false });
+
+    canvas.dispatchEvent(createWheelEvent({ deltaX: 12.25, deltaY: 0 }));
+
+    expect(camera.panBy).toHaveBeenCalledWith(12.25, 0, 800);
     expect(camera.zoomBy).not.toHaveBeenCalled();
 
     cleanup();

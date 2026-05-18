@@ -31,6 +31,7 @@ const DRAG_START_THRESHOLD_PX = 4;
 export function attachMouseController(
   canvas: HTMLCanvasElement,
   camera: CameraInputTarget,
+  options: { isOrbitMode?: () => boolean } = {},
 ): () => void {
   let activeButton: 0 | 2 | null = null;
   let isDragging = false;
@@ -69,7 +70,7 @@ export function attachMouseController(
     prevX = e.clientX;
     prevY = e.clientY;
 
-    if (activeButton === 0) {
+    if (activeButton === 0 && !(options.isOrbitMode?.() ?? false)) {
       camera.panBy(-dx, -dy, canvas.clientHeight);
     } else {
       camera.orbitBy(dy * MOUSE_ORBIT_DEG_PER_PX, dx * MOUSE_ORBIT_DEG_PER_PX);

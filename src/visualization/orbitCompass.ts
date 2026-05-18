@@ -18,6 +18,7 @@ const MIN_SURFACE_LIFT_METERS = 150;
 const MAX_SURFACE_LIFT_METERS = 16_000;
 const ANCHOR_EPSILON_METERS = 1;
 const RADIUS_EPSILON_METERS = 500;
+const COMPASS_OPACITY = 0.5;
 
 export interface OrbitCompassHandle {
   update(anchor: Vector3 | null, zoomDistance: number): void;
@@ -36,7 +37,7 @@ function createLine(name: string, color: Color3, scene: Scene, width = 1): Lines
     scene,
   );
   line.color = color;
-  line.alpha = color === Color3.White() ? 0.25 : 1;
+  line.alpha = (color === Color3.White() ? 0.25 : 1) * COMPASS_OPACITY;
   line.enableEdgesRendering();
   line.edgesWidth = width;
   line.isPickable = false;
@@ -55,6 +56,7 @@ function createLabel(text: string, color: string, scene: Scene): Mesh {
   material.emissiveColor = Color3.White();
   material.disableLighting = true;
   material.useAlphaFromDiffuseTexture = true;
+  material.alpha = COMPASS_OPACITY;
 
   const label = MeshBuilder.CreatePlane(`orbit-compass-label-${text}`, { size: 1 }, scene);
   label.material = material;
@@ -68,6 +70,7 @@ function createCenterPoint(scene: Scene): Mesh {
   const material = new StandardMaterial("orbit-compass-center-material", scene);
   material.diffuseColor = Color3.White();
   material.emissiveColor = Color3.White();
+  material.alpha = COMPASS_OPACITY;
 
   const mesh = MeshBuilder.CreateSphere("orbit-compass-center", { diameter: 1, segments: 12 }, scene);
   mesh.material = material;

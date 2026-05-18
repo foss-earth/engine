@@ -34,6 +34,7 @@ export interface AnchorHeightResolver {
   setSample(sample: AnchorHeightSample): void;
   getCachedHeight(latDeg: number, lonDeg: number): number | null;
   clear(): void;
+  setHeightOffset(meters: number): void;
 }
 
 const DEFAULT_CELL_SIZE_DEG = 0.002;
@@ -64,7 +65,7 @@ function createAnchorAtHeight(anchor: Vector3, heightMeters: number): Vector3 {
 export function createAnchorHeightResolver(options: AnchorHeightResolverOptions = {}): AnchorHeightResolver {
   const cellSizeDeg = options.cellSizeDeg ?? DEFAULT_CELL_SIZE_DEG;
   const fallbackHeightMeters = options.fallbackHeightMeters ?? DEFAULT_FALLBACK_HEIGHT_METERS;
-  const heightOffsetMeters = options.heightOffsetMeters ?? 0;
+  let heightOffsetMeters = options.heightOffsetMeters ?? 0;
   const providerMissRetryMs = options.providerMissRetryMs ?? DEFAULT_PROVIDER_MISS_RETRY_MS;
   const maxVerticalSpeedMetersPerSecond = options.maxVerticalSpeedMetersPerSecond
     ?? DEFAULT_MAX_VERTICAL_SPEED_METERS_PER_SECOND;
@@ -156,7 +157,11 @@ export function createAnchorHeightResolver(options: AnchorHeightResolverOptions 
     }
   }
 
-  return { resolve, resolveHeight: resolveBaseHeight, setSample, getCachedHeight, clear };
+  function setHeightOffset(meters: number): void {
+    heightOffsetMeters = meters;
+  }
+
+  return { resolve, resolveHeight: resolveBaseHeight, setSample, getCachedHeight, clear, setHeightOffset };
 }
 
 export function sampleToAnchor(sample: AnchorHeightSample): Vector3 {

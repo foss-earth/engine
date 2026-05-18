@@ -32,6 +32,7 @@ function createAnchorHeightsMock(): AnchorHeightResolver {
     setSample: vi.fn(),
     getCachedHeight: vi.fn(() => null),
     clear: vi.fn(),
+    setHeightOffset: vi.fn(),
   };
 }
 

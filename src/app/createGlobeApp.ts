@@ -14,9 +14,9 @@ import { createHelpModal, type HelpModalHandle } from "../hud/helpModal";
 import { createSettingsModal, type SettingsModalHandle } from "../hud/settingsModal";
 import { createOrbitCompass, type OrbitCompassHandle } from "../visualization/orbitCompass";
 import { createHemisphereCulling } from "../perf/culling";
-import { createPerformanceMetrics } from "../perf/metrics";
+import { createPerformanceMetrics, type PerformanceSnapshot } from "../perf/metrics";
 import { createAnchorHeightResolver } from "../terrain/anchorHeight";
-import { createTileHeightProvider } from "../terrain/tileHeightProvider";
+import { smoothSurfaceHeightMeters } from "../terrain/smoothElevation";
 
 export interface GlobeAppHandle extends GlobeHandle {
   runtime: BabylonRuntime;
@@ -26,12 +26,85 @@ export interface GlobeAppOptions {
   googleApiKey?: string | null;
 }
 
-const COMPASS_HEIGHT_OFFSET_METERS = 1_000;
+const COMPASS_HEIGHT_OFFSET_METERS = 0;
 /** Pixel offset from the projected sphere centre to the top-right exit button. */
 const POI_EXIT_BTN_OFFSET_PX = 22;
 const BUILD_TIME = __BUILD_TIME__;
 const SOURCE_VERSION = __SOURCE_VERSION__;
 const REPOSITORY_SLUG = __REPOSITORY_SLUG__;
+const PERFORMANCE_METRIC_VISIBILITY_STORAGE_KEY = "foss-earth.performanceMetricVisibility";
+const COMPASS_HEIGHT_STORAGE_KEY = "foss-earth.compassHeightOffsetMeters";
+
+type PerformanceMetricId = "fps" | "frame" | "p95" | "activeMeshes" | "drawCalls" | "tiles" | "culling" | "memory";
+
+interface PerformanceMetricDefinition {
+  id: PerformanceMetricId;
+  settingsLabel: string;
+  tooltip: string;
+  defaultVisible: boolean;
+  format(snapshot: PerformanceSnapshot): string | null;
+}
+
+const PERFORMANCE_METRIC_DEFINITIONS: readonly PerformanceMetricDefinition[] = [
+  {
+    id: "fps",
+    settingsLabel: "FPS",
+    tooltip: "Frames per second rendered by the map.",
+    defaultVisible: true,
+    format: (snapshot) => `${Math.round(snapshot.fps)}fps`,
+  },
+  {
+    id: "frame",
+    settingsLabel: "Frame time",
+    tooltip: "Average time spent rendering each frame.",
+    defaultVisible: true,
+    format: (snapshot) => `${snapshot.frameMs.toFixed(1)}ms`,
+  },
+  {
+    id: "p95",
+    settingsLabel: "P95 frame time",
+    tooltip: "95th percentile frame time over the recent sample window.",
+    defaultVisible: true,
+    format: (snapshot) => `p95 ${snapshot.p95FrameMs.toFixed(1)}ms`,
+  },
+  {
+    id: "activeMeshes",
+    settingsLabel: "Active meshes (#⬟)",
+    tooltip: "Babylon meshes currently active in the scene.",
+    defaultVisible: false,
+    format: (snapshot) => `${snapshot.activeMeshes}⬟`,
+  },
+  {
+    id: "drawCalls",
+    settingsLabel: "Draw calls",
+    tooltip: "GPU draw calls submitted for the current frame when the renderer exposes them.",
+    defaultVisible: true,
+    format: (snapshot) => snapshot.drawCalls === null ? null : `d${snapshot.drawCalls}`,
+  },
+  {
+    id: "tiles",
+    settingsLabel: "Map tiles (#/#t)",
+    tooltip: "Visible map tiles over active map tiles managed by the tile runtime.",
+    defaultVisible: false,
+    format: (snapshot) => snapshot.tiles ? `${snapshot.tiles.visibleTiles}/${snapshot.tiles.activeTiles}t` : null,
+  },
+  {
+    id: "culling",
+    settingsLabel: "Culling",
+    tooltip: "Visible tracked objects over total tracked objects after hemisphere culling.",
+    defaultVisible: true,
+    format: (snapshot) => snapshot.culling.total > 0 ? `c${snapshot.culling.visible}/${snapshot.culling.total}` : null,
+  },
+  {
+    id: "memory",
+    settingsLabel: "Memory",
+    tooltip: "Approximate JavaScript heap memory currently used by the page.",
+    defaultVisible: true,
+    format: (snapshot) => snapshot.memoryMb === null ? null : `${Math.round(snapshot.memoryMb)}MB`,
+  },
+];
+
+const PERFORMANCE_METRIC_IDS = new Set<PerformanceMetricId>(PERFORMANCE_METRIC_DEFINITIONS.map((metric) => metric.id));
 
 function getLoadedBundleName(): string {
   const scripts = Array.from(document.querySelectorAll<HTMLScriptElement>("script[src]"));
@@ -83,6 +156,113 @@ function getGoogleApiKeyFromUrl(): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+function getMapSourcePreferenceFromUrl(): "google" | "fallback" | null {
+  const searchParams = new URLSearchParams(window.location.search);
+  const value = (searchParams.get("mapSource") ?? searchParams.get("tiles") ?? "").trim().toLowerCase();
+  if (value === "google" || value === "google-3d-tiles") return "google";
+  if (value === "fallback" || value === "fallback-globe") return "fallback";
+  return null;
+}
+
+function setMapSourcePreference(source: "google" | "fallback"): void {
+  const url = new URL(window.location.href);
+  url.searchParams.set("mapSource", source);
+  window.location.assign(url.toString());
+}
+
+function getRendererApiLabel(runtime: BabylonRuntime): string {
+  if (runtime.renderer.mode === "webgpu") return "WebGPU";
+  const version = (runtime.engine as unknown as { webGLVersion?: number }).webGLVersion;
+  return version === 1 ? "WebGL" : "WebGL2";
+}
+
+function getPerformanceMetricSettingsMarkup(): string {
+  return PERFORMANCE_METRIC_DEFINITIONS.map((metric) => `
+            <label class="settings-checkbox" title="${metric.tooltip}">
+              <input type="checkbox" data-perf-metric="${metric.id}" ${metric.defaultVisible ? "checked" : ""}>
+              <span>${metric.settingsLabel}</span>
+            </label>`).join("");
+}
+
+function getDefaultVisiblePerformanceMetrics(): Set<PerformanceMetricId> {
+  return new Set(PERFORMANCE_METRIC_DEFINITIONS
+    .filter((metric) => metric.defaultVisible)
+    .map((metric) => metric.id));
+}
+
+function isPerformanceMetricId(value: string | undefined): value is PerformanceMetricId {
+  return value !== undefined && PERFORMANCE_METRIC_IDS.has(value as PerformanceMetricId);
+}
+
+function loadPerformanceMetricVisibility(): Set<PerformanceMetricId> {
+  try {
+    const raw = window.localStorage.getItem(PERFORMANCE_METRIC_VISIBILITY_STORAGE_KEY);
+    if (!raw) return getDefaultVisiblePerformanceMetrics();
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return getDefaultVisiblePerformanceMetrics();
+
+    const visible = new Set<PerformanceMetricId>();
+    for (const value of parsed) {
+      if (typeof value === "string" && isPerformanceMetricId(value)) {
+        visible.add(value);
+      }
+    }
+    return visible;
+  } catch {
+    return getDefaultVisiblePerformanceMetrics();
+  }
+}
+
+function savePerformanceMetricVisibility(visibleMetrics: ReadonlySet<PerformanceMetricId>): void {
+  try {
+    const metricIds = PERFORMANCE_METRIC_DEFINITIONS
+      .filter((metric) => visibleMetrics.has(metric.id))
+      .map((metric) => metric.id);
+    window.localStorage.setItem(PERFORMANCE_METRIC_VISIBILITY_STORAGE_KEY, JSON.stringify(metricIds));
+  } catch {
+    // Ignore private-mode or restricted-storage failures; visibility still works for this session.
+  }
+}
+
+function loadCompassHeightOffset(): number {
+  try {
+    const raw = window.localStorage.getItem(COMPASS_HEIGHT_STORAGE_KEY);
+    if (raw === null) return COMPASS_HEIGHT_OFFSET_METERS;
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? Math.max(-1000, Math.min(1000, parsed)) : COMPASS_HEIGHT_OFFSET_METERS;
+  } catch {
+    return COMPASS_HEIGHT_OFFSET_METERS;
+  }
+}
+
+function syncPerformanceMetricInputs(element: HTMLElement | null, visibleMetrics: ReadonlySet<PerformanceMetricId>): void {
+  element?.querySelectorAll<HTMLInputElement>("[data-perf-metric]").forEach((input) => {
+    input.checked = isPerformanceMetricId(input.dataset.perfMetric) && visibleMetrics.has(input.dataset.perfMetric);
+  });
+}
+
+function renderPerformanceChips(
+  element: HTMLElement,
+  snapshot: PerformanceSnapshot,
+  visibleMetrics: ReadonlySet<PerformanceMetricId>,
+): void {
+  const chips = PERFORMANCE_METRIC_DEFINITIONS.flatMap((metric) => {
+    if (!visibleMetrics.has(metric.id)) return [];
+    const value = metric.format(snapshot);
+    if (value === null) return [];
+
+    const chip = document.createElement("span");
+    chip.className = "hud-chip perf-chip";
+    chip.dataset.perfMetric = metric.id;
+    chip.title = metric.tooltip;
+    chip.setAttribute("aria-label", `${metric.settingsLabel}: ${value}`);
+    chip.textContent = value;
+    return chip;
+  });
+
+  element.replaceChildren(...chips);
+}
+
 function getFallbackNoticeMessage(status: BabylonRuntime["status"]): string {
   if (!status.googleApiKeyProvided) {
     return "Fallback mode active because no Google Maps API key was provided. Append ?key=YOUR_GOOGLE_MAPS_API_KEY to the URL to enable Google Photorealistic 3D Tiles.";
@@ -111,23 +291,10 @@ export async function createGlobeApp(
     <div class="globe-shell">
       <canvas id="globeCanvas" class="globe-canvas" aria-label="3D globe canvas"></canvas>
 
-      <div class="boot-overlay">
-        <span id="rendererModePill" class="renderer-pill">Renderer: initializing\u2026</span>
-        <span id="runtimeModePill" class="renderer-pill">Tiles: initializing\u2026</span>
-        <span id="perfMetricsPill" class="renderer-pill perf-pill">Perf: initializing\u2026</span>
-      </div>
-
-      <div id="runtimeNotice" class="runtime-notice" hidden>
-        <strong id="runtimeNoticeTitle" class="runtime-notice-title"></strong>
-        <p id="runtimeNoticeText" class="runtime-notice-text"></p>
-        <button id="runtimeNoticeDismiss" class="runtime-notice-dismiss" type="button">Dismiss</button>
-      </div>
-
-      <div class="hud-bar">
-        <span id="hudStatus" class="hud-status-text" aria-live="polite" aria-label="Camera status"></span>
+      <div class="hud-bar" aria-label="Map indicators">
         <button id="northButton" class="hud-circle-button north-button" type="button"
           title="Reset to north-up" aria-label="Reset camera to north-up">
-          <svg id="northButtonSvg" viewBox="0 0 36 36" width="36" height="36" aria-hidden="true">
+          <svg id="northButtonSvg" viewBox="0 0 36 36" width="28" height="28" aria-hidden="true">
             <polygon points="18,5 14,14 22,14" fill="#ef4444"/>
             <text x="18" y="27" text-anchor="middle"
               fill="rgba(255,255,255,0.82)"
@@ -139,6 +306,26 @@ export async function createGlobeApp(
           title="Controls help" aria-label="Controls help">?</button>
         <button id="settingsButton" class="hud-circle-button settings-button" type="button"
           title="Settings" aria-label="Settings">&#9881;</button>
+        <span id="rendererModePill" class="hud-chip hud-chip--gpu"
+          title="GPU API used by the map renderer.">GPU</span>
+        <div class="map-source-control">
+          <button id="runtimeModePill" class="hud-chip hud-chip-button hud-chip--source" type="button"
+            aria-haspopup="menu" aria-expanded="false" aria-controls="mapSourceMenu"
+            title="Map data source. Click to switch between Google 3D Tiles and the fallback globe.">Map Source</button>
+          <div id="mapSourceMenu" class="map-source-menu" role="menu" hidden>
+            <button class="map-source-option" type="button" role="menuitem" data-map-source="google">Google 3D Tiles</button>
+            <button class="map-source-option" type="button" role="menuitem" data-map-source="fallback">Fallback Globe</button>
+          </div>
+        </div>
+        <span id="perfMetricsPill" class="hud-chip-group perf-chip-group" aria-label="Performance metrics"></span>
+        <span id="hudStatus" class="hud-chip hud-status-text" aria-live="polite" aria-label="Camera status"
+          title="Camera status: latitude, longitude, heading, pitch, and zoom distance."></span>
+      </div>
+
+      <div id="runtimeNotice" class="runtime-notice" hidden>
+        <strong id="runtimeNoticeTitle" class="runtime-notice-title"></strong>
+        <p id="runtimeNoticeText" class="runtime-notice-text"></p>
+        <button id="runtimeNoticeDismiss" class="runtime-notice-dismiss" type="button">Dismiss</button>
       </div>
 
       <div id="helpModal" class="modal-overlay" hidden aria-modal="true" role="dialog"
@@ -177,6 +364,20 @@ export async function createGlobeApp(
           <p class="settings-line">Camera model: state-driven orbit geometry.</p>
           <p class="settings-line">Pitch: 0\u00B0\u202F=\u202Fhorizon, 90\u00B0\u202F=\u202Fstraight down.</p>
           <p id="settingsRendererLine" class="settings-renderer-line"></p>
+          <div id="settingsPerformanceMetrics" class="settings-metric-menu" aria-label="Performance HUD visibility">
+            <div class="settings-section-title">Performance HUD</div>${getPerformanceMetricSettingsMarkup()}
+          </div>
+          <div class="settings-metric-menu">
+            <div class="settings-section-title">Camera</div>
+            <label class="settings-checkbox settings-slider-row" style="grid-column:1/-1;flex-direction:column;align-items:stretch;gap:4px">
+              <span style="display:flex;justify-content:space-between">
+                <span>Compass orbit height</span>
+                <span id="compassHeightValue"></span>
+              </span>
+              <input id="compassHeightSlider" type="range" min="-1000" max="1000" step="10"
+                style="width:100%;accent-color:#60a5fa;cursor:pointer">
+            </label>
+          </div>
           <p id="settingsBuildLine" class="settings-line">Build: ${BUILD_TIME}</p>
            <p id="settingsSourceLine" class="settings-line">Source: ${SOURCE_VERSION}</p>
            <p id="settingsBundleLine" class="settings-line">Bundle: ${getLoadedBundleName()}</p>
@@ -196,7 +397,8 @@ export async function createGlobeApp(
   }
 
   const rendererModePill = rootElement.querySelector<HTMLElement>("#rendererModePill");
-  const runtimeModePill = rootElement.querySelector<HTMLElement>("#runtimeModePill");
+  const runtimeModePill = rootElement.querySelector<HTMLButtonElement>("#runtimeModePill");
+  const mapSourceMenu = rootElement.querySelector<HTMLElement>("#mapSourceMenu");
   const perfMetricsPill = rootElement.querySelector<HTMLElement>("#perfMetricsPill");
   const runtimeNotice = rootElement.querySelector<HTMLElement>("#runtimeNotice");
   const runtimeNoticeTitle = rootElement.querySelector<HTMLElement>("#runtimeNoticeTitle");
@@ -211,10 +413,10 @@ export async function createGlobeApp(
     if (runtimeModePill) {
       const hasWarning = Boolean(status.lastError);
       runtimeModePill.textContent = status.mode === "google-tiles"
-        ? (hasWarning ? "Tiles: Google (warning)" : "Tiles: Google")
-        : "Tiles: Fallback";
+        ? (hasWarning ? "Google 3D Tiles warning" : "Google 3D Tiles")
+        : "Fallback Globe";
 
-      runtimeModePill.classList.toggle("renderer-pill--fallback", status.mode === "fallback");
+      runtimeModePill.classList.toggle("hud-chip--fallback", status.mode === "fallback");
     }
 
     if (!runtimeNotice || !runtimeNoticeTitle || !runtimeNoticeText) {
@@ -250,7 +452,10 @@ export async function createGlobeApp(
     }
   });
 
-  const googleApiKey = options.googleApiKey ?? getGoogleApiKeyFromUrl();
+  const sourcePreference = getMapSourcePreferenceFromUrl();
+  const googleApiKey = sourcePreference === "fallback"
+    ? null
+    : options.googleApiKey ?? getGoogleApiKeyFromUrl();
 
   const runtime = await createBabylonRuntime(canvas, {
     googleApiKey,
@@ -263,12 +468,12 @@ export async function createGlobeApp(
   const poiTracking = createPoiTracking(runtime.scene, () => runtime.geospatialCamera);
   const culling = createHemisphereCulling(() => runtime.geospatialCamera?.globalPosition ?? null);
   const anchorHeights = createAnchorHeightResolver({
-    provider: createTileHeightProvider(runtime.scene),
-    heightOffsetMeters: COMPASS_HEIGHT_OFFSET_METERS,
+    provider: smoothSurfaceHeightMeters,
+    heightOffsetMeters: loadCompassHeightOffset(),
   });
   runtime.configureOrbitTargetHeight({
     resolveSurfaceHeightMeters: anchorHeights.resolveHeight,
-    initialOffsetMeters: COMPASS_HEIGHT_OFFSET_METERS,
+    initialOffsetMeters: loadCompassHeightOffset(),
   });
   const registry = createLayerRegistry(layerContext, poiTracking, culling, anchorHeights);
   const orbitCompass: OrbitCompassHandle = createOrbitCompass(runtime.scene);
@@ -280,7 +485,10 @@ export async function createGlobeApp(
   });
 
   if (rendererModePill) {
-    rendererModePill.textContent = `Renderer: ${runtime.renderer.mode}`;
+    const rendererLabel = getRendererApiLabel(runtime);
+    rendererModePill.textContent = rendererLabel;
+    rendererModePill.classList.toggle("hud-chip--good", rendererLabel === "WebGPU");
+    rendererModePill.classList.toggle("hud-chip--bad", rendererLabel !== "WebGPU");
   }
 
   applyRuntimeStatus(runtime.status);
@@ -293,6 +501,9 @@ export async function createGlobeApp(
   const helpModalEl = rootElement.querySelector<HTMLElement>("#helpModal");
   const settingsBtnEl = rootElement.querySelector<HTMLButtonElement>("#settingsButton");
   const settingsModalEl = rootElement.querySelector<HTMLElement>("#settingsModal");
+  const settingsPerformanceMetricsEl = rootElement.querySelector<HTMLElement>("#settingsPerformanceMetrics");
+  const compassHeightSliderEl = rootElement.querySelector<HTMLInputElement>("#compassHeightSlider");
+  const compassHeightValueEl = rootElement.querySelector<HTMLElement>("#compassHeightValue");
   const poiExitBtnEl = rootElement.querySelector<HTMLButtonElement>("#poiExitBtn");
 
   const statusHud: StatusHudHandle | null = hudStatusEl ? createStatusHud(hudStatusEl) : null;
@@ -301,6 +512,77 @@ export async function createGlobeApp(
   const settingsModal: SettingsModalHandle | null = settingsModalEl ? createSettingsModal(settingsModalEl) : null;
 
   settingsModal?.setRendererMode(runtime.renderer.mode);
+
+  let visiblePerformanceMetrics = loadPerformanceMetricVisibility();
+  let lastPerfSnapshot: PerformanceSnapshot | null = null;
+  syncPerformanceMetricInputs(settingsPerformanceMetricsEl, visiblePerformanceMetrics);
+
+  if (compassHeightSliderEl) {
+    const storedHeight = loadCompassHeightOffset();
+    compassHeightSliderEl.value = String(storedHeight);
+    if (compassHeightValueEl) compassHeightValueEl.textContent = `${storedHeight}m`;
+  }
+
+  function setMapSourceMenuOpen(open: boolean): void {
+    if (!mapSourceMenu || !runtimeModePill) return;
+    mapSourceMenu.hidden = !open;
+    runtimeModePill.setAttribute("aria-expanded", String(open));
+  }
+
+  const onMapSourceClick = (e: MouseEvent): void => {
+    e.stopPropagation();
+    setMapSourceMenuOpen(Boolean(mapSourceMenu?.hidden));
+  };
+  const onMapSourceMenuClick = (e: MouseEvent): void => {
+    const option = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-map-source]");
+    if (!option) return;
+    const selected = option.dataset.mapSource === "fallback" ? "fallback" : "google";
+    const current = runtime.status.mode === "fallback" ? "fallback" : "google";
+    setMapSourceMenuOpen(false);
+    if (selected !== current) {
+      setMapSourcePreference(selected);
+    }
+  };
+  const onDocumentPointerDown = (e: PointerEvent): void => {
+    if (!mapSourceMenu || mapSourceMenu.hidden) return;
+    if (runtimeModePill?.contains(e.target as Node) || mapSourceMenu.contains(e.target as Node)) return;
+    setMapSourceMenuOpen(false);
+  };
+  const onPerformanceMetricChange = (e: Event): void => {
+    const input = (e.target as HTMLElement).closest<HTMLInputElement>("[data-perf-metric]");
+    if (!input || !isPerformanceMetricId(input.dataset.perfMetric)) return;
+
+    const nextVisibleMetrics = new Set(visiblePerformanceMetrics);
+    if (input.checked) {
+      nextVisibleMetrics.add(input.dataset.perfMetric);
+    } else {
+      nextVisibleMetrics.delete(input.dataset.perfMetric);
+    }
+
+    visiblePerformanceMetrics = nextVisibleMetrics;
+    savePerformanceMetricVisibility(visiblePerformanceMetrics);
+    if (lastPerfSnapshot && perfMetricsPill) {
+      renderPerformanceChips(perfMetricsPill, lastPerfSnapshot, visiblePerformanceMetrics);
+    }
+  };
+
+  runtimeModePill?.addEventListener("click", onMapSourceClick);
+  mapSourceMenu?.addEventListener("click", onMapSourceMenuClick);
+  settingsPerformanceMetricsEl?.addEventListener("change", onPerformanceMetricChange);
+
+  const onCompassHeightInput = (): void => {
+    if (!compassHeightSliderEl) return;
+    const meters = Number(compassHeightSliderEl.value);
+    if (compassHeightValueEl) compassHeightValueEl.textContent = `${meters}m`;
+    anchorHeights.setHeightOffset(meters);
+    runtime.configureOrbitTargetHeight({
+      resolveSurfaceHeightMeters: anchorHeights.resolveHeight,
+      initialOffsetMeters: meters,
+    });
+    try { window.localStorage.setItem(COMPASS_HEIGHT_STORAGE_KEY, String(meters)); } catch { /* ignore */ }
+  };
+  compassHeightSliderEl?.addEventListener("input", onCompassHeightInput);
+  document.addEventListener("pointerdown", onDocumentPointerDown, { capture: true });
 
   northBtnEl?.addEventListener("click", () => {
     poiTracking.exitTracking();
@@ -355,8 +637,9 @@ export async function createGlobeApp(
       }
     }
     const perfSnapshot = performanceMetrics.update();
+    lastPerfSnapshot = perfSnapshot;
     if (perfMetricsPill) {
-      perfMetricsPill.textContent = performanceMetrics.format(perfSnapshot);
+      renderPerformanceChips(perfMetricsPill, perfSnapshot, visiblePerformanceMetrics);
     }
   });
 
@@ -383,6 +666,11 @@ export async function createGlobeApp(
       northButton?.destroy();
       helpModal?.destroy();
       settingsModal?.destroy();
+      runtimeModePill?.removeEventListener("click", onMapSourceClick);
+      mapSourceMenu?.removeEventListener("click", onMapSourceMenuClick);
+      settingsPerformanceMetricsEl?.removeEventListener("change", onPerformanceMetricChange);
+      compassHeightSliderEl?.removeEventListener("input", onCompassHeightInput);
+      document.removeEventListener("pointerdown", onDocumentPointerDown, { capture: true });
 
       poiTracking.destroy();
       registry.destroy();
