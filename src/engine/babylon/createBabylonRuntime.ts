@@ -145,7 +145,7 @@ export async function createBabylonRuntime(
 ): Promise<BabylonRuntime> {
   const normalizedApiKey = options.googleApiKey?.trim() ?? "";
   const hasGoogleApiKey = normalizedApiKey.length > 0;
-  const renderer = await createRendererMode(canvas, { forceWebGl: hasGoogleApiKey });
+  const renderer = await createRendererMode(canvas);
   const scene = new Scene(renderer.engine);
   scene.useRightHandedSystem = true;
 
