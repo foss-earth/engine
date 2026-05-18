@@ -17,6 +17,8 @@ import { createHemisphereCulling } from "../perf/culling";
 import { createPerformanceMetrics, type PerformanceSnapshot } from "../perf/metrics";
 import { createAnchorHeightResolver } from "../terrain/anchorHeight";
 import { smoothSurfaceHeightMeters } from "../terrain/smoothElevation";
+import { createPoiSpriteSizeTuner } from "../hud/poiSpriteSizeTuner";
+import type { PoiSpriteSizeParams } from "../hud/poiSpriteSizeTuner";
 
 export interface GlobeAppHandle extends GlobeHandle {
   runtime: BabylonRuntime;
@@ -24,6 +26,7 @@ export interface GlobeAppHandle extends GlobeHandle {
 
 export interface GlobeAppOptions {
   googleApiKey?: string | null;
+  onPoiSpriteSizeChange?: (params: PoiSpriteSizeParams) => void;
 }
 
 const COMPASS_HEIGHT_OFFSET_METERS = 0;
@@ -34,6 +37,7 @@ const SOURCE_VERSION = __SOURCE_VERSION__;
 const REPOSITORY_SLUG = __REPOSITORY_SLUG__;
 const PERFORMANCE_METRIC_VISIBILITY_STORAGE_KEY = "foss-earth.performanceMetricVisibility";
 const COMPASS_HEIGHT_STORAGE_KEY = "foss-earth.compassHeightOffsetMeters";
+const POI_SPRITE_TUNER_VISIBLE_STORAGE_KEY = "foss-earth.poiSpriteTunerVisible";
 
 type PerformanceMetricId = "fps" | "frame" | "p95" | "activeMeshes" | "drawCalls" | "tiles" | "culling" | "memory";
 
@@ -368,6 +372,13 @@ export async function createGlobeApp(
             <div class="settings-section-title">Performance HUD</div>${getPerformanceMetricSettingsMarkup()}
           </div>
           <div class="settings-metric-menu">
+            <div class="settings-section-title">Extra Panels</div>
+            <label class="settings-checkbox" title="Show the POI sprite size tuner panel at the bottom-right of the map.">
+              <input type="checkbox" id="poiSpriteTunerToggle">
+              <span>POI sprite size tuner</span>
+            </label>
+          </div>
+          <div class="settings-metric-menu">
             <div class="settings-section-title">Camera</div>
             <label class="settings-checkbox settings-slider-row" style="grid-column:1/-1;flex-direction:column;align-items:stretch;gap:4px">
               <span style="display:flex;justify-content:space-between">
@@ -388,6 +399,8 @@ export async function createGlobeApp(
 
       <button id="poiExitBtn" class="poi-exit-btn" hidden
         type="button" aria-label="Exit point of interest view">&#x2715;</button>
+
+      <div id="extraPanelsGrid" class="extra-panels-grid"></div>
     </div>
   `;
 
@@ -505,6 +518,8 @@ export async function createGlobeApp(
   const compassHeightSliderEl = rootElement.querySelector<HTMLInputElement>("#compassHeightSlider");
   const compassHeightValueEl = rootElement.querySelector<HTMLElement>("#compassHeightValue");
   const poiExitBtnEl = rootElement.querySelector<HTMLButtonElement>("#poiExitBtn");
+  const extraPanelsGridEl = rootElement.querySelector<HTMLElement>("#extraPanelsGrid");
+  const poiSpriteTunerToggleEl = rootElement.querySelector<HTMLInputElement>("#poiSpriteTunerToggle");
 
   const statusHud: StatusHudHandle | null = hudStatusEl ? createStatusHud(hudStatusEl) : null;
   const northButton: NorthButtonHandle | null = northBtnSvgEl ? createNorthButton(northBtnSvgEl) : null;
@@ -522,6 +537,32 @@ export async function createGlobeApp(
     compassHeightSliderEl.value = String(storedHeight);
     if (compassHeightValueEl) compassHeightValueEl.textContent = `${storedHeight}m`;
   }
+
+  // ── POI sprite size tuner ─────────────────────────────────────
+  function loadPoiSpriteTunerVisible(): boolean {
+    try {
+      return window.localStorage.getItem(POI_SPRITE_TUNER_VISIBLE_STORAGE_KEY) === "true";
+    } catch { return false; }
+  }
+  function savePoiSpriteTunerVisible(visible: boolean): void {
+    try { window.localStorage.setItem(POI_SPRITE_TUNER_VISIBLE_STORAGE_KEY, String(visible)); } catch { /* ignore */ }
+  }
+  let poiSpriteTunerVisible = loadPoiSpriteTunerVisible();
+  const spriteTuner = extraPanelsGridEl
+    ? createPoiSpriteSizeTuner(extraPanelsGridEl, (params) => {
+        options.onPoiSpriteSizeChange?.(params);
+      })
+    : null;
+  if (poiSpriteTunerVisible) spriteTuner?.show(); else spriteTuner?.hide();
+  if (poiSpriteTunerToggleEl) poiSpriteTunerToggleEl.checked = poiSpriteTunerVisible;
+
+  const onPoiSpriteTunerToggleChange = (): void => {
+    if (!poiSpriteTunerToggleEl) return;
+    poiSpriteTunerVisible = poiSpriteTunerToggleEl.checked;
+    savePoiSpriteTunerVisible(poiSpriteTunerVisible);
+    if (poiSpriteTunerVisible) spriteTuner?.show(); else spriteTuner?.hide();
+  };
+  poiSpriteTunerToggleEl?.addEventListener("change", onPoiSpriteTunerToggleChange);
 
   function setMapSourceMenuOpen(open: boolean): void {
     if (!mapSourceMenu || !runtimeModePill) return;
@@ -666,10 +707,12 @@ export async function createGlobeApp(
       northButton?.destroy();
       helpModal?.destroy();
       settingsModal?.destroy();
+      spriteTuner?.destroy();
       runtimeModePill?.removeEventListener("click", onMapSourceClick);
       mapSourceMenu?.removeEventListener("click", onMapSourceMenuClick);
       settingsPerformanceMetricsEl?.removeEventListener("change", onPerformanceMetricChange);
       compassHeightSliderEl?.removeEventListener("input", onCompassHeightInput);
+      poiSpriteTunerToggleEl?.removeEventListener("change", onPoiSpriteTunerToggleChange);
       document.removeEventListener("pointerdown", onDocumentPointerDown, { capture: true });
 
       poiTracking.destroy();
