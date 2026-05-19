@@ -9,9 +9,20 @@ import {
 } from "@babylonjs/core";
 import type { LinesMesh, Scene } from "@babylonjs/core";
 
-const MIN_RADIUS_METERS = 750;
-const MAX_RADIUS_METERS = 240_000;
-const RADIUS_SCALE = 0.035;
+export interface OrbitCompassScaleParams {
+  radiusScale: number;
+  minRadius: number;
+  maxRadius: number;
+  labelSizeScale: number;
+}
+
+export const DEFAULT_ORBIT_COMPASS_SCALE_PARAMS: OrbitCompassScaleParams = {
+  radiusScale: 0.035,
+  minRadius: 750,
+  maxRadius: 240_000,
+  labelSizeScale: 0.16,
+};
+
 const LABEL_RADIUS_SCALE = 1.28;
 const SURFACE_LIFT_SCALE = 0.08;
 const MIN_SURFACE_LIFT_METERS = 150;
@@ -19,15 +30,28 @@ const MAX_SURFACE_LIFT_METERS = 16_000;
 const ANCHOR_EPSILON_METERS = 1;
 const RADIUS_EPSILON_METERS = 500;
 const COMPASS_OPACITY = 0.5;
+const WHITE_LINE_ALPHA_FACTOR = 0.25;
+const RED_LINE_ALPHA_FACTOR = 1;
+// Lines fade out over this fraction of minRadius as the natural (pre-clamp) radius drops below it.
+const LINE_FADE_BAND = 0.5;
 
 export interface OrbitCompassHandle {
   update(anchor: Vector3 | null, zoomDistance: number): void;
+  setScaleParams(params: OrbitCompassScaleParams): void;
   isMesh(mesh: Mesh | null | undefined): boolean;
   destroy(): void;
 }
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+function normalizeScaleParams(params: OrbitCompassScaleParams): OrbitCompassScaleParams {
+  const radiusScale = Math.max(0.000001, params.radiusScale);
+  const minRadius = Math.max(1, params.minRadius);
+  const maxRadius = Math.max(minRadius, params.maxRadius);
+  const labelSizeScale = Math.max(0.000001, params.labelSizeScale);
+  return { radiusScale, minRadius, maxRadius, labelSizeScale };
 }
 
 function createLine(name: string, color: Color3, scene: Scene, width = 1): LinesMesh {
@@ -37,7 +61,7 @@ function createLine(name: string, color: Color3, scene: Scene, width = 1): Lines
     scene,
   );
   line.color = color;
-  line.alpha = (color === Color3.White() ? 0.25 : 1) * COMPASS_OPACITY;
+  line.alpha = (color === Color3.White() ? WHITE_LINE_ALPHA_FACTOR : RED_LINE_ALPHA_FACTOR) * COMPASS_OPACITY;
   line.enableEdgesRendering();
   line.edgesWidth = width;
   line.isPickable = false;
@@ -48,7 +72,7 @@ function createLine(name: string, color: Color3, scene: Scene, width = 1): Lines
 function createLabel(text: string, color: string, scene: Scene): Mesh {
   const texture = new DynamicTexture(`orbit-compass-label-${text}-texture`, { width: 128, height: 128 }, scene, true);
   texture.hasAlpha = true;
-  texture.drawText(text, 0, 88, "bold 72px system-ui", color, "transparent", true, true);
+  texture.drawText(text, null, null, "bold 72px system-ui", color, "transparent", true, true);
 
   const material = new StandardMaterial(`orbit-compass-label-${text}-material`, scene);
   material.diffuseTexture = texture;
@@ -57,6 +81,7 @@ function createLabel(text: string, color: string, scene: Scene): Mesh {
   material.disableLighting = true;
   material.useAlphaFromDiffuseTexture = true;
   material.alpha = COMPASS_OPACITY;
+  material.backFaceCulling = false;
 
   const label = MeshBuilder.CreatePlane(`orbit-compass-label-${text}`, { size: 1 }, scene);
   label.material = material;
@@ -64,19 +89,6 @@ function createLabel(text: string, color: string, scene: Scene): Mesh {
   label.isPickable = false;
   label.setEnabled(false);
   return label;
-}
-
-function createCenterPoint(scene: Scene): Mesh {
-  const material = new StandardMaterial("orbit-compass-center-material", scene);
-  material.diffuseColor = Color3.White();
-  material.emissiveColor = Color3.White();
-  material.alpha = COMPASS_OPACITY;
-
-  const mesh = MeshBuilder.CreateSphere("orbit-compass-center", { diameter: 1, segments: 12 }, scene);
-  mesh.material = material;
-  mesh.isPickable = false;
-  mesh.setEnabled(false);
-  return mesh;
 }
 
 function getAnchorBasis(anchor: Vector3): { east: Vector3; north: Vector3; up: Vector3 } {
@@ -110,25 +122,19 @@ export function createOrbitCompass(scene: Scene): OrbitCompassHandle {
   const eastWestAxis = createLine("orbit-compass-east-west-axis", Color3.White(), scene);
   const northSouthAxis = createLine("orbit-compass-north-south-axis", Color3.White(), scene);
   const northNeedle = createLine("orbit-compass-north-needle", Color3.FromHexString("#ef4444"), scene, 3);
-  const centerPoint = createCenterPoint(scene);
   const northLabel = createLabel("N", "#ef4444", scene);
   const eastLabel = createLabel("E", "rgba(255,255,255,0.78)", scene);
   const southLabel = createLabel("S", "rgba(255,255,255,0.64)", scene);
   const westLabel = createLabel("W", "rgba(255,255,255,0.78)", scene);
-  const meshes = [eastWestAxis, northSouthAxis, northNeedle, centerPoint, northLabel, eastLabel, southLabel, westLabel];
+  const meshes = [eastWestAxis, northSouthAxis, northNeedle, northLabel, eastLabel, southLabel, westLabel];
   const meshSet = new Set<Mesh>(meshes);
+  let scaleParams = DEFAULT_ORBIT_COMPASS_SCALE_PARAMS;
   let lastAnchor: Vector3 | null = null;
   let lastRadiusMeters = -1;
 
   function hide(): void {
     for (const mesh of meshes) {
       mesh.setEnabled(false);
-    }
-  }
-
-  function show(): void {
-    for (const mesh of meshes) {
-      mesh.setEnabled(true);
     }
   }
 
@@ -148,20 +154,17 @@ export function createOrbitCompass(scene: Scene): OrbitCompassHandle {
     setLine(
       northSouthAxis,
       offsetPoint(center, east, north, up, 0, -radiusMeters),
-      offsetPoint(center, east, north, up, 0, radiusMeters),
+      center,
       scene,
     );
     setLine(
       northNeedle,
-      offsetPoint(center, east, north, up, 0, radiusMeters * 0.15),
+      center,
       offsetPoint(center, east, north, up, 0, radiusMeters * 0.95),
       scene,
     );
 
-    centerPoint.position.copyFrom(center);
-    centerPoint.scaling.setAll(clamp(radiusMeters * 0.018, 80, 2_500));
-
-    const labelScale = clamp(radiusMeters * 0.16, 800, 32_000);
+    const labelScale = clamp(radiusMeters * scaleParams.labelSizeScale, 800, 32_000);
     for (const label of [northLabel, eastLabel, southLabel, westLabel]) {
       label.scaling.setAll(labelScale);
     }
@@ -180,7 +183,8 @@ export function createOrbitCompass(scene: Scene): OrbitCompassHandle {
         return;
       }
 
-      const radiusMeters = clamp(zoomDistance * RADIUS_SCALE, MIN_RADIUS_METERS, MAX_RADIUS_METERS);
+      const naturalRadius = zoomDistance * scaleParams.radiusScale;
+      const radiusMeters = clamp(naturalRadius, scaleParams.minRadius, scaleParams.maxRadius);
       const anchorChanged = !lastAnchor || Vector3.Distance(anchor, lastAnchor) > ANCHOR_EPSILON_METERS;
       const radiusChanged = Math.abs(radiusMeters - lastRadiusMeters) > RADIUS_EPSILON_METERS;
       if (anchorChanged || radiusChanged) {
@@ -188,7 +192,30 @@ export function createOrbitCompass(scene: Scene): OrbitCompassHandle {
         lastAnchor = anchor.clone();
         lastRadiusMeters = radiusMeters;
       }
-      show();
+
+      // Fade axis lines (not labels) as the camera zooms in past the minRadius clamp.
+      const fadeStart = scaleParams.minRadius;
+      const fadeEnd = scaleParams.minRadius * (1 - LINE_FADE_BAND);
+      const fadeFactor = fadeStart <= fadeEnd
+        ? 1
+        : clamp((naturalRadius - fadeEnd) / (fadeStart - fadeEnd), 0, 1);
+      const linesVisible = fadeFactor > 0.001;
+      eastWestAxis.alpha = WHITE_LINE_ALPHA_FACTOR * COMPASS_OPACITY * fadeFactor;
+      northSouthAxis.alpha = WHITE_LINE_ALPHA_FACTOR * COMPASS_OPACITY * fadeFactor;
+      northNeedle.alpha = RED_LINE_ALPHA_FACTOR * COMPASS_OPACITY * fadeFactor;
+
+      for (const mesh of meshes) {
+        if (mesh === eastWestAxis || mesh === northSouthAxis || mesh === northNeedle) {
+          mesh.setEnabled(linesVisible);
+        } else {
+          mesh.setEnabled(true);
+        }
+      }
+    },
+
+    setScaleParams(params: OrbitCompassScaleParams): void {
+      scaleParams = normalizeScaleParams(params);
+      lastRadiusMeters = -1;
     },
 
     isMesh(mesh: Mesh | null | undefined): boolean {

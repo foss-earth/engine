@@ -18,7 +18,9 @@ import { createPerformanceMetrics, type PerformanceSnapshot } from "../perf/metr
 import { createAnchorHeightResolver } from "../terrain/anchorHeight";
 import { smoothSurfaceHeightMeters } from "../terrain/smoothElevation";
 import { createPoiSpriteSizeTuner } from "../hud/poiSpriteSizeTuner";
+import { createCompassScaleTuner } from "../hud/compassScaleTuner";
 import type { PoiSpriteSizeParams } from "../hud/poiSpriteSizeTuner";
+import type { OrbitCompassScaleParams } from "../visualization/orbitCompass";
 
 export interface GlobeAppHandle extends GlobeHandle {
   runtime: BabylonRuntime;
@@ -27,6 +29,7 @@ export interface GlobeAppHandle extends GlobeHandle {
 export interface GlobeAppOptions {
   googleApiKey?: string | null;
   onPoiSpriteSizeChange?: (params: PoiSpriteSizeParams) => void;
+  onCompassScaleChange?: (params: OrbitCompassScaleParams) => void;
 }
 
 const COMPASS_HEIGHT_OFFSET_METERS = 0;
@@ -38,6 +41,7 @@ const REPOSITORY_SLUG = __REPOSITORY_SLUG__;
 const PERFORMANCE_METRIC_VISIBILITY_STORAGE_KEY = "foss-earth.performanceMetricVisibility";
 const COMPASS_HEIGHT_STORAGE_KEY = "foss-earth.compassHeightOffsetMeters";
 const POI_SPRITE_TUNER_VISIBLE_STORAGE_KEY = "foss-earth.poiSpriteTunerVisible";
+const COMPASS_SCALE_TUNER_VISIBLE_STORAGE_KEY = "foss-earth.compassScaleTunerVisible";
 
 type PerformanceMetricId = "fps" | "frame" | "p95" | "activeMeshes" | "drawCalls" | "tiles" | "culling" | "memory";
 
@@ -377,6 +381,10 @@ export async function createGlobeApp(
               <input type="checkbox" id="poiSpriteTunerToggle">
               <span>POI sprite size tuner</span>
             </label>
+            <label class="settings-checkbox" title="Show the compass scale tuner panel at the bottom-right of the map.">
+              <input type="checkbox" id="compassScaleTunerToggle">
+              <span>Compass scale tuner</span>
+            </label>
           </div>
           <div class="settings-metric-menu">
             <div class="settings-section-title">Camera</div>
@@ -520,6 +528,7 @@ export async function createGlobeApp(
   const poiExitBtnEl = rootElement.querySelector<HTMLButtonElement>("#poiExitBtn");
   const extraPanelsGridEl = rootElement.querySelector<HTMLElement>("#extraPanelsGrid");
   const poiSpriteTunerToggleEl = rootElement.querySelector<HTMLInputElement>("#poiSpriteTunerToggle");
+  const compassScaleTunerToggleEl = rootElement.querySelector<HTMLInputElement>("#compassScaleTunerToggle");
 
   const statusHud: StatusHudHandle | null = hudStatusEl ? createStatusHud(hudStatusEl) : null;
   const northButton: NorthButtonHandle | null = northBtnSvgEl ? createNorthButton(northBtnSvgEl) : null;
@@ -563,6 +572,33 @@ export async function createGlobeApp(
     if (poiSpriteTunerVisible) spriteTuner?.show(); else spriteTuner?.hide();
   };
   poiSpriteTunerToggleEl?.addEventListener("change", onPoiSpriteTunerToggleChange);
+
+  // ── Compass scale tuner ───────────────────────────────────────
+  function loadCompassScaleTunerVisible(): boolean {
+    try {
+      return window.localStorage.getItem(COMPASS_SCALE_TUNER_VISIBLE_STORAGE_KEY) === "true";
+    } catch { return false; }
+  }
+  function saveCompassScaleTunerVisible(visible: boolean): void {
+    try { window.localStorage.setItem(COMPASS_SCALE_TUNER_VISIBLE_STORAGE_KEY, String(visible)); } catch { /* ignore */ }
+  }
+  let compassScaleTunerVisible = loadCompassScaleTunerVisible();
+  const compassScaleTuner = extraPanelsGridEl
+    ? createCompassScaleTuner(extraPanelsGridEl, (params) => {
+        orbitCompass.setScaleParams(params);
+        options.onCompassScaleChange?.(params);
+      })
+    : null;
+  if (compassScaleTunerVisible) compassScaleTuner?.show(); else compassScaleTuner?.hide();
+  if (compassScaleTunerToggleEl) compassScaleTunerToggleEl.checked = compassScaleTunerVisible;
+
+  const onCompassScaleTunerToggleChange = (): void => {
+    if (!compassScaleTunerToggleEl) return;
+    compassScaleTunerVisible = compassScaleTunerToggleEl.checked;
+    saveCompassScaleTunerVisible(compassScaleTunerVisible);
+    if (compassScaleTunerVisible) compassScaleTuner?.show(); else compassScaleTuner?.hide();
+  };
+  compassScaleTunerToggleEl?.addEventListener("change", onCompassScaleTunerToggleChange);
 
   function setMapSourceMenuOpen(open: boolean): void {
     if (!mapSourceMenu || !runtimeModePill) return;
@@ -708,11 +744,13 @@ export async function createGlobeApp(
       helpModal?.destroy();
       settingsModal?.destroy();
       spriteTuner?.destroy();
+      compassScaleTuner?.destroy();
       runtimeModePill?.removeEventListener("click", onMapSourceClick);
       mapSourceMenu?.removeEventListener("click", onMapSourceMenuClick);
       settingsPerformanceMetricsEl?.removeEventListener("change", onPerformanceMetricChange);
       compassHeightSliderEl?.removeEventListener("input", onCompassHeightInput);
       poiSpriteTunerToggleEl?.removeEventListener("change", onPoiSpriteTunerToggleChange);
+      compassScaleTunerToggleEl?.removeEventListener("change", onCompassScaleTunerToggleChange);
       document.removeEventListener("pointerdown", onDocumentPointerDown, { capture: true });
 
       poiTracking.destroy();
