@@ -6,7 +6,7 @@ type WheelGestureMode = "pan" | "pinchZoom" | "wheelZoom" | "orbit" | "ignore";
 const WHEEL_GESTURE_IDLE_MS = 180;
 const PIXEL_DELTA_MODE = 0;
 const FRACTIONAL_DELTA_EPSILON = 0.001;
-const MOUSE_WHEEL_ZOOM_SENSITIVITY_BASE = 0.01;
+const MOUSE_WHEEL_ZOOM_SENSITIVITY_BASE = 0.03;
 
 interface WheelGestureSession {
   mode: WheelGestureMode;
@@ -118,8 +118,8 @@ export function attachWheelController(
       const sensitivity = settings?.mode === "mouse"
         ? settings.sensitivity.mouse.orbit
         : settings?.sensitivity.trackpad.orbit ?? 1;
-      const pitchDeltaDeg = -e.deltaY * 0.15 * sensitivity * MOVEMENT_SENSITIVITY_BASE;
-      const headingDeltaDeg = e.deltaX * 0.15 * sensitivity * MOVEMENT_SENSITIVITY_BASE;
+      const pitchDeltaDeg = e.deltaY * 0.15 * sensitivity * MOVEMENT_SENSITIVITY_BASE;
+      const headingDeltaDeg = -e.deltaX * 0.15 * sensitivity * MOVEMENT_SENSITIVITY_BASE;
       camera.orbitBy(pitchDeltaDeg, headingDeltaDeg);
       return;
     }

@@ -714,6 +714,12 @@ export async function createGlobeApp(
 
   // Update HUD every frame while the scene is running
   let hudObserver: ReturnType<typeof runtime.scene.onBeforeRenderObservable.add> | null = null;
+  // Track last known POI-tracking state so we only call setOrbitMode on
+  // transitions, never every frame. Calling setOrbitMode every frame would
+  // stomp over external orbit-mode requests (e.g. from PropertyEarthMap's own
+  // trackedPoint state), since poiTracking.isTracking() returns false for
+  // external trackers and would reset orbitModeActive to false immediately.
+  let lastPoiTrackingActive = false;
   hudObserver = runtime.scene.onBeforeRenderObservable.add(() => {
     const state = runtime.getViewState();
     if (state) {
@@ -724,7 +730,11 @@ export async function createGlobeApp(
     const compassAnchor = anchorHeights.resolve(poiTracking.getOrbitTarget() ?? camera?.center ?? null);
     orbitCompass.update(compassAnchor, state?.zoomMeters ?? camera?.radius ?? 0);
     culling.update();
-    runtime.setOrbitMode(poiTracking.isTracking());
+    const poiTrackingActive = poiTracking.isTracking();
+    if (poiTrackingActive !== lastPoiTrackingActive) {
+      lastPoiTrackingActive = poiTrackingActive;
+      runtime.setOrbitMode(poiTrackingActive);
+    }
 
     // ── POI exit button: project orbit target to screen space ─────
     if (poiExitBtnEl) {

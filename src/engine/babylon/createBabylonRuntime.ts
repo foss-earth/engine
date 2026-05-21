@@ -184,6 +184,17 @@ export async function createBabylonRuntime(
   let inputController: InputController | null = null;
   let orbitModeActive = false;
 
+  // Held while Google tiles are initializing so the scheduler pumps
+  // tiles.update() every frame even when the user hasn't moved the camera.
+  // Without this the render-on-demand scheduler idles after the very first
+  // frame and the tile-load loop stalls until a camera gesture wakes it.
+  let startupHeld = false;
+  const releaseStartupHold = (): void => {
+    if (!startupHeld) return;
+    startupHeld = false;
+    scheduler.endContinuous();
+  };
+
   // Streaming signal: shared between the tiles event wiring (which sets it via
   // beginStreaming/endStreaming) and the public onTilesStreamingChange API.
   const streamingListenersRef = new Set<(streaming: boolean) => void>();
@@ -284,6 +295,8 @@ export async function createBabylonRuntime(
   }
 
   function enableFallbackMode(reason: string): void {
+    releaseStartupHold();
+
     if (status.mode === "fallback" && fallbackExperienceCreated) {
       status.lastError = reason;
       status.message = "Fallback mode active due to Google tiles load failure.";
@@ -324,6 +337,12 @@ export async function createBabylonRuntime(
 
       googleLight = new HemisphericLight("google-tiles-light", new Vector3(0, 1, 0), scene);
       googleLight.intensity = 1.0;
+
+      // Hold a continuous-render reference from startup until the first tiles
+      // become visible. This ensures tiles.update() is called every frame so
+      // the tile-load loop progresses without requiring a camera gesture.
+      startupHeld = true;
+      scheduler.beginContinuous();
 
       // Track in-flight tile loads so the scheduler stays in continuous mode
       // while new geometry is streaming in (camera may be still but the scene
@@ -374,6 +393,7 @@ export async function createBabylonRuntime(
           if (visibleTiles > 0) {
             hideFallbackExperience();
             clearGoogleWatchdog();
+            releaseStartupHold();
           }
         },
       });
