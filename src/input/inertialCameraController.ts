@@ -8,6 +8,8 @@ export interface CameraInputTarget {
 export interface InertialCameraController extends CameraInputTarget {
   update(nowMs?: number): void;
   cancel(): void;
+  /** True while any velocity component is above its stop epsilon. */
+  isActive(): boolean;
 }
 
 const FRAME_MS = 1000 / 60;
@@ -98,5 +100,15 @@ export function createInertialCameraController(target: CameraInputTarget): Inert
     zoomLogVelocity *= decay;
   }
 
-  return { panBy, orbitBy, zoomBy, update, cancel };
+  function isActive(): boolean {
+    return (
+      Math.abs(panVelocityX) > STOP_EPSILON_PX ||
+      Math.abs(panVelocityY) > STOP_EPSILON_PX ||
+      Math.abs(orbitVelocityPitch) > STOP_EPSILON_DEG ||
+      Math.abs(orbitVelocityHeading) > STOP_EPSILON_DEG ||
+      Math.abs(zoomLogVelocity) > STOP_EPSILON_ZOOM_LOG
+    );
+  }
+
+  return { panBy, orbitBy, zoomBy, update, cancel, isActive };
 }

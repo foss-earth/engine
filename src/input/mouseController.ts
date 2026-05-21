@@ -1,4 +1,5 @@
 import type { CameraInputTarget } from "./inertialCameraController";
+import { MOVEMENT_SENSITIVITY_BASE, type InputSettings } from "./inputSettings";
 
 /** Degrees of orbit change per pixel of mouse drag. */
 const MOUSE_ORBIT_DEG_PER_PX = 0.3;
@@ -31,7 +32,7 @@ const DRAG_START_THRESHOLD_PX = 4;
 export function attachMouseController(
   canvas: HTMLCanvasElement,
   camera: CameraInputTarget,
-  options: { isOrbitMode?: () => boolean } = {},
+  options: { isOrbitMode?: () => boolean; getSettings?: () => InputSettings } = {},
 ): () => void {
   let activeButton: 0 | 2 | null = null;
   let isDragging = false;
@@ -71,9 +72,11 @@ export function attachMouseController(
     prevY = e.clientY;
 
     if (activeButton === 0 && !(options.isOrbitMode?.() ?? false)) {
-      camera.panBy(-dx, -dy, canvas.clientHeight);
+      const sensitivity = options.getSettings?.().sensitivity.mouse.pan ?? 1;
+      camera.panBy(-dx * sensitivity * MOVEMENT_SENSITIVITY_BASE, -dy * sensitivity * MOVEMENT_SENSITIVITY_BASE, canvas.clientHeight);
     } else {
-      camera.orbitBy(dy * MOUSE_ORBIT_DEG_PER_PX, dx * MOUSE_ORBIT_DEG_PER_PX);
+      const sensitivity = options.getSettings?.().sensitivity.mouse.orbit ?? 1;
+      camera.orbitBy(dy * MOUSE_ORBIT_DEG_PER_PX * sensitivity * MOVEMENT_SENSITIVITY_BASE, dx * MOUSE_ORBIT_DEG_PER_PX * sensitivity * MOVEMENT_SENSITIVITY_BASE);
     }
   }
 

@@ -3,8 +3,17 @@ import { attachWheelController } from "./wheelController";
 import { attachSafariGestures, isSafariGestureSupported } from "./safariGestures";
 import { attachTouchController } from "./touchController";
 import { attachMouseController } from "./mouseController";
+import {
+  DEFAULT_INPUT_SETTINGS,
+  normalizeSensitivitySettings,
+  type InputModePreference,
+  type InputSensitivitySettings,
+  type InputSettings,
+} from "./inputSettings";
 
 export interface InputController {
+  setMode(mode: InputModePreference): void;
+  setSensitivity(sensitivity: Partial<InputSensitivitySettings>): void;
   destroy(): void;
 }
 
@@ -27,6 +36,10 @@ export function createInputController(
   options: { isOrbitMode?: () => boolean } = {},
 ): InputController {
   const hasSafariGestures = isSafariGestureSupported();
+  const settings: InputSettings = {
+    mode: DEFAULT_INPUT_SETTINGS.mode,
+    sensitivity: normalizeSensitivitySettings(DEFAULT_INPUT_SETTINGS.sensitivity),
+  };
 
   // ── Document-level prevention ────────────────────────────────────
   // Prevent the page from scrolling or zooming while the user interacts
@@ -44,12 +57,22 @@ export function createInputController(
   }
 
   // ── Canvas-level handlers ────────────────────────────────────────
-  const detachWheel = attachWheelController(canvas, camera, { isSafariWithGestures: hasSafariGestures, isOrbitMode: options.isOrbitMode });
-  const detachSafari = hasSafariGestures ? attachSafariGestures(canvas, camera) : (): void => undefined;
-  const detachTouch = attachTouchController(canvas, camera);
-  const detachMouse = attachMouseController(canvas, camera, { isOrbitMode: options.isOrbitMode });
+  const detachWheel = attachWheelController(canvas, camera, { isSafariWithGestures: hasSafariGestures, isOrbitMode: options.isOrbitMode, getSettings: () => settings });
+  const detachSafari = hasSafariGestures ? attachSafariGestures(canvas, camera, { getSettings: () => settings }) : (): void => undefined;
+  const detachTouch = attachTouchController(canvas, camera, { getSettings: () => settings });
+  const detachMouse = attachMouseController(canvas, camera, { isOrbitMode: options.isOrbitMode, getSettings: () => settings });
 
   return {
+    setMode(mode: InputModePreference): void {
+      settings.mode = mode;
+    },
+    setSensitivity(sensitivity: Partial<InputSensitivitySettings>): void {
+      settings.sensitivity = normalizeSensitivitySettings({
+        mouse: { ...settings.sensitivity.mouse, ...sensitivity.mouse },
+        trackpad: { ...settings.sensitivity.trackpad, ...sensitivity.trackpad },
+        touch: { ...settings.sensitivity.touch, ...sensitivity.touch },
+      });
+    },
     destroy(): void {
       detachWheel();
       detachSafari();

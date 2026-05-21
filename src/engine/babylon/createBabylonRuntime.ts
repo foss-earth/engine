@@ -15,10 +15,12 @@ import { GeospatialClippingBehavior } from "@babylonjs/core/Behaviors/Cameras/ge
 
 import { createRendererMode, type RendererSelection } from "./createRendererMode";
 import { createGoogleTilesRuntime, type GoogleTilesRuntime } from "./createTilesRuntime";
+import { createRenderScheduler, type RenderScheduler } from "./renderScheduler";
 import { geodeticToEcef, DEG_TO_RAD } from "../../camera/cameraMath";
 import { CameraController, type OrbitTargetHeightOptions } from "../../camera/cameraState";
 import { createInputController, type InputController } from "../../input/createInputController";
 import { createInertialCameraController, type InertialCameraController } from "../../input/inertialCameraController";
+import type { InputModePreference, InputSensitivitySettings } from "../../input/inputSettings";
 import type { GlobeViewState } from "../types";
 
 const PLANET_RADIUS_METERS = 6_378_137;
@@ -73,6 +75,28 @@ export interface BabylonRuntime {
    * When true, two-finger trackpad swipe orbits instead of panning.
    */
   setOrbitMode(active: boolean): void;
+  /** Force or auto-detect the active input mode used by wheel/pointer controllers. */
+  setInputMode(mode: InputModePreference): void;
+  /** Set movement sensitivity multipliers for mouse, trackpad, and touch. */
+  setInputSensitivity(sensitivity: Partial<InputSensitivitySettings>): void;
+  /**
+   * Render-on-demand controls. The runtime no longer runs an unconditional
+   * render loop; consumers must call requestRender() after any external scene
+   * mutation (theme change, layer mutation, etc.) to see the result.
+   */
+  requestRender(): void;
+  beginContinuous(): void;
+  endContinuous(): void;
+  /** Pause the scheduler (e.g. when the tab is hidden). */
+  setPaused(paused: boolean): void;
+  /** True while the scheduler is pumping frames (rAF in flight or continuous). */
+  isRendering(): boolean;
+  /** Subscribe to render-active transitions. Returns an unsubscribe fn. */
+  onActiveRenderChange(listener: (active: boolean) => void): () => void;
+  /** True while at least one Google tile load is in flight. */
+  isStreamingTiles(): boolean;
+  /** Subscribe to tile-streaming transitions. Returns an unsubscribe fn. */
+  onTilesStreamingChange(listener: (streaming: boolean) => void): () => void;
   destroy(): void;
 }
 
@@ -150,8 +174,6 @@ export async function createBabylonRuntime(
   scene.useRightHandedSystem = true;
 
   let tilesRuntime: GoogleTilesRuntime | null = null;
-  let tilesUpdateObserver: ReturnType<typeof scene.onBeforeRenderObservable.add> | null = null;
-  let inputUpdateObserver: ReturnType<typeof scene.onBeforeRenderObservable.add> | null = null;
   let googleTilesStartupWatchdog: number | null = null;
   let fallbackExperienceCreated = false;
   let fallbackExperience: FallbackExperience | null = null;
@@ -161,6 +183,31 @@ export async function createBabylonRuntime(
   let inertialCameraController: InertialCameraController | null = null;
   let inputController: InputController | null = null;
   let orbitModeActive = false;
+
+  // Streaming signal: shared between the tiles event wiring (which sets it via
+  // beginStreaming/endStreaming) and the public onTilesStreamingChange API.
+  const streamingListenersRef = new Set<(streaming: boolean) => void>();
+  const streamingActiveRef = { value: false };
+
+  // Render-on-demand scheduler. The tick runs inertial decay, tiles streaming,
+  // and the scene render in that order; the scheduler keeps pumping while
+  // inertia is still active or while a continuous-mode caller (e.g. tile load)
+  // holds a reference, and idles otherwise.
+  const scheduler: RenderScheduler = createRenderScheduler({
+    tick: () => {
+      inertialCameraController?.update();
+      tilesRuntime?.update();
+      // beginFrame/endFrame are normally invoked by engine.runRenderLoop's
+      // internal _processFrame. We bypass that loop, so we must bracket the
+      // render ourselves — WebGPU only presents the swap chain inside
+      // endFrame(), and engine.getFps() / frameId are only updated in
+      // beginFrame(). Without this the canvas stays black on WebGPU.
+      renderer.engine.beginFrame();
+      scene.render();
+      renderer.engine.endFrame();
+    },
+    shouldKeepRendering: () => inertialCameraController?.isActive() ?? false,
+  });
 
   const status: BabylonRuntimeStatus = {
     mode: hasGoogleApiKey ? "google-tiles" : "fallback",
@@ -191,11 +238,30 @@ export async function createBabylonRuntime(
     geospatialCamera = createGeospatialCamera(scene);
     scene.activeCamera = geospatialCamera;
     cameraController = new CameraController(geospatialCamera);
-    inertialCameraController = createInertialCameraController(cameraController);
+    const baseInertial = createInertialCameraController(cameraController);
+    // Every input gesture goes through the inertial controller. Wrap its input
+    // methods so each one wakes the on-demand scheduler. The wrapped methods
+    // delegate to the underlying controller, which queues velocity; the
+    // scheduler then pumps frames until the velocity decays under threshold
+    // (via shouldKeepRendering -> isActive()).
+    inertialCameraController = {
+      panBy(dx, dy, h) {
+        baseInertial.panBy(dx, dy, h);
+        scheduler.requestRender();
+      },
+      orbitBy(p, h) {
+        baseInertial.orbitBy(p, h);
+        scheduler.requestRender();
+      },
+      zoomBy(f) {
+        baseInertial.zoomBy(f);
+        scheduler.requestRender();
+      },
+      update: baseInertial.update,
+      cancel: baseInertial.cancel,
+      isActive: baseInertial.isActive,
+    };
     inputController = createInputController(canvas, inertialCameraController, { isOrbitMode: () => orbitModeActive });
-    inputUpdateObserver = scene.onBeforeRenderObservable.add(() => {
-      inertialCameraController?.update();
-    });
 
     return geospatialCamera;
   }
@@ -223,11 +289,6 @@ export async function createBabylonRuntime(
       status.message = "Fallback mode active due to Google tiles load failure.";
       emitStatus();
       return;
-    }
-
-    if (tilesUpdateObserver) {
-      scene.onBeforeRenderObservable.remove(tilesUpdateObserver);
-      tilesUpdateObserver = null;
     }
 
     clearGoogleWatchdog();
@@ -264,6 +325,26 @@ export async function createBabylonRuntime(
       googleLight = new HemisphericLight("google-tiles-light", new Vector3(0, 1, 0), scene);
       googleLight.intensity = 1.0;
 
+      // Track in-flight tile loads so the scheduler stays in continuous mode
+      // while new geometry is streaming in (camera may be still but the scene
+      // is changing). Released on tiles-load-end.
+      let streamingHeld = false;
+      const streamingListeners = streamingListenersRef;
+      const beginStreaming = (): void => {
+        if (streamingHeld) return;
+        streamingHeld = true;
+        streamingActiveRef.value = true;
+        scheduler.beginContinuous();
+        for (const listener of streamingListeners) listener(true);
+      };
+      const endStreaming = (): void => {
+        if (!streamingHeld) return;
+        streamingHeld = false;
+        streamingActiveRef.value = false;
+        scheduler.endContinuous();
+        for (const listener of streamingListeners) listener(false);
+      };
+
       tilesRuntime = createGoogleTilesRuntime({
         scene,
         apiKey: normalizedApiKey,
@@ -280,11 +361,14 @@ export async function createBabylonRuntime(
         },
         onLoadStart: () => {
           status.message = "Google tiles are loading.";
+          beginStreaming();
           emitStatus();
         },
         onLoadEnd: (visibleTiles, activeTiles) => {
           status.lastError = null;
           status.message = `Google tiles loaded (visible: ${visibleTiles}, active: ${activeTiles}).`;
+          endStreaming();
+          scheduler.requestRender();
           emitStatus();
 
           if (visibleTiles > 0) {
@@ -295,10 +379,6 @@ export async function createBabylonRuntime(
       });
 
       tilesRuntime.tiles.checkCollisions = true;
-
-      tilesUpdateObserver = scene.onBeforeRenderObservable.add(() => {
-        tilesRuntime?.update();
-      });
 
       status.mode = "google-tiles";
       status.message = "Google Photorealistic 3D Tiles mode active.";
@@ -333,12 +413,17 @@ export async function createBabylonRuntime(
 
   const handleResize = () => {
     renderer.engine.resize();
+    scheduler.requestRender();
   };
   window.addEventListener("resize", handleResize);
 
-  renderer.engine.runRenderLoop(() => {
-    scene.render();
-  });
+  const handleVisibility = () => {
+    scheduler.setPaused(document.hidden);
+  };
+  document.addEventListener("visibilitychange", handleVisibility);
+
+  // Kick the first frame so initial scene state paints.
+  scheduler.requestRender();
 
   return {
     engine: renderer.engine,
@@ -354,10 +439,12 @@ export async function createBabylonRuntime(
     setViewState(partial: Partial<GlobeViewState>): void {
       inertialCameraController?.cancel();
       cameraController?.setViewState(partial);
+      scheduler.requestRender();
     },
     configureOrbitTargetHeight(options: OrbitTargetHeightOptions | null): void {
       inertialCameraController?.cancel();
       cameraController?.configureOrbitTargetHeight(options);
+      scheduler.requestRender();
     },
     getTileMetrics(): BabylonTileMetrics | null {
       if (!tilesRuntime) {
@@ -371,17 +458,41 @@ export async function createBabylonRuntime(
     setOrbitMode(active: boolean): void {
       orbitModeActive = active;
     },
+    setInputMode(mode: InputModePreference): void {
+      inputController?.setMode(mode);
+    },
+    setInputSensitivity(sensitivity: Partial<InputSensitivitySettings>): void {
+      inputController?.setSensitivity(sensitivity);
+    },
+    requestRender(): void {
+      scheduler.requestRender();
+    },
+    beginContinuous(): void {
+      scheduler.beginContinuous();
+    },
+    endContinuous(): void {
+      scheduler.endContinuous();
+    },
+    setPaused(paused: boolean): void {
+      scheduler.setPaused(paused);
+    },
+    isRendering(): boolean {
+      return scheduler.isActive();
+    },
+    onActiveRenderChange(listener): () => void {
+      return scheduler.onActiveChange(listener);
+    },
+    isStreamingTiles(): boolean {
+      return streamingActiveRef.value;
+    },
+    onTilesStreamingChange(listener): () => void {
+      streamingListenersRef.add(listener);
+      return () => {
+        streamingListenersRef.delete(listener);
+      };
+    },
     destroy() {
-      if (tilesUpdateObserver) {
-        scene.onBeforeRenderObservable.remove(tilesUpdateObserver);
-        tilesUpdateObserver = null;
-      }
-
-      if (inputUpdateObserver) {
-        scene.onBeforeRenderObservable.remove(inputUpdateObserver);
-        inputUpdateObserver = null;
-      }
-
+      scheduler.stop();
       clearGoogleWatchdog();
 
       tilesRuntime?.dispose();
@@ -398,6 +509,7 @@ export async function createBabylonRuntime(
         googleLight = null;
       }
 
+      document.removeEventListener("visibilitychange", handleVisibility);
       window.removeEventListener("resize", handleResize);
       scene.dispose();
       renderer.engine.dispose();

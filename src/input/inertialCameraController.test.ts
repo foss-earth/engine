@@ -54,4 +54,20 @@ describe("createInertialCameraController", () => {
     expect(target.orbitBy).not.toHaveBeenCalled();
     expect(target.zoomBy).not.toHaveBeenCalled();
   });
+
+  it("reports isActive() while velocity exceeds stop thresholds", () => {
+    const target = {
+      panBy: vi.fn(),
+      orbitBy: vi.fn(),
+      zoomBy: vi.fn(),
+    };
+    const controller = createInertialCameraController(target);
+    expect(controller.isActive()).toBe(false);
+
+    controller.panBy(10, 0, 800);
+    expect(controller.isActive()).toBe(true);
+
+    controller.cancel();
+    expect(controller.isActive()).toBe(false);
+  });
 });

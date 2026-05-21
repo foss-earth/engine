@@ -41,7 +41,7 @@ describe("attachTouchController", () => {
     canvas.dispatchEvent(createPointerEvent("pointerdown", { pointerId: 1, pointerType: "touch", clientX: 20, clientY: 30 }));
     canvas.dispatchEvent(createPointerEvent("pointermove", { pointerId: 1, pointerType: "touch", clientX: 32, clientY: 48 }));
 
-    expect(camera.panBy).toHaveBeenCalledWith(-12, -18, 800);
+    expect(camera.panBy).toHaveBeenCalledWith(expect.closeTo(-1.2, 5), expect.closeTo(-1.8, 5), 800);
 
     cleanup();
   });

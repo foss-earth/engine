@@ -1,10 +1,12 @@
 import type { CameraInputTarget } from "./inertialCameraController";
+import { MOVEMENT_SENSITIVITY_BASE, type InputSettings } from "./inputSettings";
 
 type WheelGestureMode = "pan" | "pinchZoom" | "wheelZoom" | "orbit" | "ignore";
 
 const WHEEL_GESTURE_IDLE_MS = 180;
 const PIXEL_DELTA_MODE = 0;
 const FRACTIONAL_DELTA_EPSILON = 0.001;
+const MOUSE_WHEEL_ZOOM_SENSITIVITY_BASE = 0.01;
 
 interface WheelGestureSession {
   mode: WheelGestureMode;
@@ -48,9 +50,12 @@ function classifyWheelGestureMode(
   e: WheelEvent,
   isSafariWithGestures: boolean,
   isOrbitMode: boolean,
+  inputMode: InputSettings["mode"],
 ): WheelGestureMode {
   if (e.shiftKey) return "orbit";
   if (e.ctrlKey && !isSafariWithGestures) return "pinchZoom";
+  if (inputMode === "trackpad") return isOrbitMode ? "orbit" : "pan";
+  if (inputMode === "mouse") return isLikelyHorizontalMouseWheel(e) ? "ignore" : "wheelZoom";
   if (isLikelyVerticalMouseWheel(e)) return "wheelZoom";
   if (isLikelyHorizontalMouseWheel(e)) return "ignore";
   // When the camera is locked to a POI the user expects two-finger swipe to
@@ -75,7 +80,7 @@ function classifyWheelGestureMode(
 export function attachWheelController(
   canvas: HTMLCanvasElement,
   camera: CameraInputTarget,
-  options: { isSafariWithGestures: boolean; isOrbitMode?: () => boolean },
+  options: { isSafariWithGestures: boolean; isOrbitMode?: () => boolean; getSettings?: () => InputSettings },
 ): () => void {
   const { isSafariWithGestures } = options;
   let session: WheelGestureSession | null = null;
@@ -88,7 +93,12 @@ export function attachWheelController(
     const now = performance.now();
     if (!session || now - session.lastEventTimeMs > WHEEL_GESTURE_IDLE_MS) {
       session = {
-        mode: classifyWheelGestureMode(e, isSafariWithGestures, options.isOrbitMode?.() ?? false),
+        mode: classifyWheelGestureMode(
+          e,
+          isSafariWithGestures,
+          options.isOrbitMode?.() ?? false,
+          options.getSettings?.().mode ?? "auto",
+        ),
         lastEventTimeMs: now,
       };
     } else {
@@ -97,14 +107,19 @@ export function attachWheelController(
 
     // ── Trackpad two-finger swipe = pan ──────────────────────────────────
     if (session.mode === "pan") {
-      camera.panBy(e.deltaX, e.deltaY, canvas.clientHeight);
+      const sensitivity = options.getSettings?.().sensitivity.trackpad.pan ?? 1;
+      camera.panBy(e.deltaX * sensitivity * MOVEMENT_SENSITIVITY_BASE, e.deltaY * sensitivity * MOVEMENT_SENSITIVITY_BASE, canvas.clientHeight);
       return;
     }
 
     // ── Shift+wheel = orbit (heading + pitch) ────────────────────────────
     if (session.mode === "orbit") {
-      const pitchDeltaDeg = -e.deltaY * 0.15;
-      const headingDeltaDeg = e.deltaX * 0.15;
+      const settings = options.getSettings?.();
+      const sensitivity = settings?.mode === "mouse"
+        ? settings.sensitivity.mouse.orbit
+        : settings?.sensitivity.trackpad.orbit ?? 1;
+      const pitchDeltaDeg = -e.deltaY * 0.15 * sensitivity * MOVEMENT_SENSITIVITY_BASE;
+      const headingDeltaDeg = e.deltaX * 0.15 * sensitivity * MOVEMENT_SENSITIVITY_BASE;
       camera.orbitBy(pitchDeltaDeg, headingDeltaDeg);
       return;
     }
@@ -115,7 +130,8 @@ export function attachWheelController(
 
     // ── Ctrl+wheel = macOS trackpad pinch-to-zoom (non-Safari browsers) ──
     if (session.mode === "pinchZoom") {
-      const factor = 1 + e.deltaY * 0.01;
+      const sensitivity = options.getSettings?.().sensitivity.trackpad.zoom ?? 1;
+      const factor = 1 + e.deltaY * 0.01 * sensitivity * MOVEMENT_SENSITIVITY_BASE;
       camera.zoomBy(factor);
       return;
     }
@@ -123,7 +139,8 @@ export function attachWheelController(
     // ── Mouse wheel = coarser zoom ───────────────────────────────────────
     // Scroll down (deltaY>0) = zoom out; scroll up (deltaY<0) = zoom in.
     if (Math.abs(e.deltaY) <= FRACTIONAL_DELTA_EPSILON) return;
-    const factor = e.deltaY > 0 ? 1.08 : 0.92;
+    const sensitivity = options.getSettings?.().sensitivity.mouse.zoom ?? 1;
+    const factor = Math.pow(e.deltaY > 0 ? 1.08 : 0.92, sensitivity * MOUSE_WHEEL_ZOOM_SENSITIVITY_BASE);
     camera.zoomBy(factor);
   }
 

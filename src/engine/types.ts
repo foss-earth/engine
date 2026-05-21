@@ -6,6 +6,20 @@ export interface GlobeViewState {
   zoomMeters: number;
 }
 
+export type GlobeInputModePreference = "auto" | "mouse" | "trackpad" | "touch";
+
+export interface GlobeMovementSensitivity {
+  pan: number;
+  orbit: number;
+  zoom: number;
+}
+
+export interface GlobeInputSensitivitySettings {
+  mouse: GlobeMovementSensitivity;
+  trackpad: GlobeMovementSensitivity;
+  touch: GlobeMovementSensitivity;
+}
+
 export interface GlobeLayerContext {
   scene: unknown;
   engine: unknown;
@@ -44,6 +58,12 @@ export interface GlobeHandle {
    * Returns an unsubscribe function.
    */
   onThemeChange(cb: (theme: GlobeTheme) => void): () => void;
+  /**
+   * Render the scene on the next animation frame. The globe renders on demand,
+   * so external code that mutates scene content (e.g. layer sprite data) must
+   * call this to make the change visible.
+   */
+  requestRender(): void;
 }
 
 export type GlobeTheme = "light" | "dark";

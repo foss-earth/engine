@@ -502,6 +502,16 @@ export async function createGlobeApp(
     initialOffsetMeters: loadCompassHeightOffset(),
   });
   const registry = createLayerRegistry(layerContext, poiTracking, culling, anchorHeights);
+  // Layer add/remove mutates scene contents (meshes, sprites); wrap so the
+  // change becomes visible on the next animation frame in render-on-demand mode.
+  const addLayer: typeof registry.addLayer = (layer) => {
+    registry.addLayer(layer);
+    runtime.requestRender();
+  };
+  const removeLayer: typeof registry.removeLayer = (layerId) => {
+    registry.removeLayer(layerId);
+    runtime.requestRender();
+  };
   const orbitCompass: OrbitCompassHandle = createOrbitCompass(runtime.scene);
   const performanceMetrics = createPerformanceMetrics({
     engine: runtime.engine,
@@ -567,6 +577,7 @@ export async function createGlobeApp(
   const spriteTuner = extraPanelsGridEl
     ? createPoiSpriteSizeTuner(extraPanelsGridEl, (params) => {
         options.onPoiSpriteSizeChange?.(params);
+        runtime.requestRender();
       })
     : null;
   if (poiSpriteTunerVisible) spriteTuner?.show(); else spriteTuner?.hide();
@@ -594,6 +605,7 @@ export async function createGlobeApp(
     ? createCompassScaleTuner(extraPanelsGridEl, (params) => {
         orbitCompass.setScaleParams(params);
         options.onCompassScaleChange?.(params);
+        runtime.requestRender();
       })
     : null;
   if (compassScaleTunerVisible) compassScaleTuner?.show(); else compassScaleTuner?.hide();
@@ -688,10 +700,16 @@ export async function createGlobeApp(
   syncThemeButton(getTheme());
   const onThemeButtonClick = (): void => { toggleTheme(); };
   themeBtnEl?.addEventListener("click", onThemeButtonClick);
-  const offThemeChangeForButton = onThemeChange((next) => syncThemeButton(next));
+  // Theme changes can update scene-side colors (fallback clear color, etc.);
+  // pump a frame whenever the theme flips for either tab-local or cross-tab events.
+  const offThemeChangeForButton = onThemeChange((next) => {
+    syncThemeButton(next);
+    runtime.requestRender();
+  });
   poiExitBtnEl?.addEventListener("click", (e) => {
     e.stopPropagation();
     poiTracking.exitTracking();
+    runtime.requestRender();
   });
 
   // Update HUD every frame while the scene is running
@@ -746,10 +764,28 @@ export async function createGlobeApp(
     `[app] runtime initialized renderer=${runtime.renderer.mode} mode=${runtime.status.mode} googleApiKeyProvided=${runtime.status.googleApiKeyProvided}`,
   );
 
+  // Visual feedback for render-on-demand state:
+  // - .is-streaming on the map-source pill while Google tiles are loading
+  //   (drives the spinning outline animation)
+  // - .is-active on the perf metrics group while the scheduler is pumping
+  //   frames (drives the FPS chip's green tint)
+  const offTilesStreaming = runtime.onTilesStreamingChange((streaming) => {
+    runtimeModePill?.classList.toggle("is-streaming", streaming);
+  });
+  if (runtime.isStreamingTiles()) {
+    runtimeModePill?.classList.add("is-streaming");
+  }
+  const offRenderActive = runtime.onActiveRenderChange((active) => {
+    perfMetricsPill?.classList.toggle("is-active", active);
+  });
+  if (runtime.isRendering()) {
+    perfMetricsPill?.classList.add("is-active");
+  }
+
   return {
     runtime,
-    addLayer: registry.addLayer,
-    removeLayer: registry.removeLayer,
+    addLayer,
+    removeLayer,
     getViewState(): GlobeViewState | null {
       return runtime.getViewState();
     },
@@ -759,6 +795,9 @@ export async function createGlobeApp(
     getTheme,
     setTheme,
     onThemeChange,
+    requestRender(): void {
+      runtime.requestRender();
+    },
     destroy() {
       if (hudObserver) {
         runtime.scene.onBeforeRenderObservable.remove(hudObserver);
@@ -778,6 +817,8 @@ export async function createGlobeApp(
       compassScaleTunerToggleEl?.removeEventListener("change", onCompassScaleTunerToggleChange);
       themeBtnEl?.removeEventListener("click", onThemeButtonClick);
       offThemeChangeForButton();
+      offTilesStreaming();
+      offRenderActive();
       document.removeEventListener("pointerdown", onDocumentPointerDown, { capture: true });
 
       poiTracking.destroy();

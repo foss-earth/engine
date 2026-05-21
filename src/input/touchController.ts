@@ -1,6 +1,7 @@
 import { classifyTwoPointGestureIntent, computeTwoPointGestureMetrics } from "../camera/cameraMath";
 import type { TwoPointGestureIntent, TwoPointGestureMetrics } from "../camera/cameraMath";
 import type { CameraInputTarget } from "./inertialCameraController";
+import { MOVEMENT_SENSITIVITY_BASE, type InputSettings } from "./inputSettings";
 
 // ─── Constants ───────────────────────────────────────────────────────
 
@@ -67,6 +68,7 @@ type TouchSession =
 export function attachTouchController(
   canvas: HTMLCanvasElement,
   camera: CameraInputTarget,
+  options: { getSettings?: () => InputSettings } = {},
 ): () => void {
   const activePointers = new Map<number, ActiveTouch>();
   let session: TouchSession | null = null;
@@ -186,7 +188,8 @@ export function attachTouchController(
       const dy = point.y - session.previousPoint.y;
       const isReasonableDelta = Math.abs(dx) <= TOUCH_MAX_DELTA_PX && Math.abs(dy) <= TOUCH_MAX_DELTA_PX;
       if (isReasonableDelta && (Math.abs(dx) >= TOUCH_PAN_DEADZONE_PX || Math.abs(dy) >= TOUCH_PAN_DEADZONE_PX)) {
-        camera.panBy(-dx, -dy, canvas.clientHeight);
+        const sensitivity = options.getSettings?.().sensitivity.touch.pan ?? 1;
+        camera.panBy(-dx * sensitivity * MOVEMENT_SENSITIVITY_BASE, -dy * sensitivity * MOVEMENT_SENSITIVITY_BASE, canvas.clientHeight);
       }
       session.previousPoint = { ...point };
       return;
@@ -239,7 +242,8 @@ export function attachTouchController(
 
     if (session.intent === "swipe"
       && (Math.abs(dx) >= TOUCH_ORBIT_DEADZONE_PX || Math.abs(dy) >= TOUCH_ORBIT_DEADZONE_PX)) {
-      camera.orbitBy(dy * TOUCH_ORBIT_DEG_PER_PX, dx * TOUCH_ORBIT_DEG_PER_PX);
+      const sensitivity = options.getSettings?.().sensitivity.touch.orbit ?? 1;
+      camera.orbitBy(dy * TOUCH_ORBIT_DEG_PER_PX * sensitivity * MOVEMENT_SENSITIVITY_BASE, dx * TOUCH_ORBIT_DEG_PER_PX * sensitivity * MOVEMENT_SENSITIVITY_BASE);
     }
 
     if (session.intent === "pinch"
@@ -252,7 +256,8 @@ export function attachTouchController(
       // compose to the total pinch scale change) — unlike a linear approximation.
       const factor = session.previousMetrics.distancePx / metrics.distancePx;
       if (Math.abs(factor - 1) > 0.001) {
-        camera.zoomBy(factor);
+        const sensitivity = options.getSettings?.().sensitivity.touch.zoom ?? 1;
+        camera.zoomBy(Math.pow(factor, sensitivity * MOVEMENT_SENSITIVITY_BASE));
       }
     }
 
