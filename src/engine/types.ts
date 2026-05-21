@@ -35,4 +35,15 @@ export interface GlobeHandle {
    * No-op in fallback mode.
    */
   setViewState(partial: Partial<GlobeViewState>): void;
+  /** Current UI theme. Default: "dark". */
+  getTheme(): GlobeTheme;
+  /** Set the UI theme and persist it. Notifies all subscribers. */
+  setTheme(theme: GlobeTheme): void;
+  /**
+   * Subscribe to theme changes (including those originating from other tabs).
+   * Returns an unsubscribe function.
+   */
+  onThemeChange(cb: (theme: GlobeTheme) => void): () => void;
 }
+
+export type GlobeTheme = "light" | "dark";

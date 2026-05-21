@@ -5,7 +5,7 @@ import { attachTouchController } from "./touchController";
 
 function createPointerEvent(
   type: string,
-  init: { pointerId: number; pointerType: string; clientX: number; clientY: number; button?: number },
+  init: { pointerId: number; pointerType: string; clientX: number; clientY: number; button?: number; timeStamp?: number },
 ): Event {
   const event = new Event(type, { bubbles: true, cancelable: true });
   for (const [key, value] of Object.entries(init)) {
@@ -55,10 +55,14 @@ describe("attachTouchController", () => {
     };
     const cleanup = attachTouchController(canvas, camera);
 
-    canvas.dispatchEvent(createPointerEvent("pointerdown", { pointerId: 1, pointerType: "touch", clientX: 0, clientY: 0 }));
-    canvas.dispatchEvent(createPointerEvent("pointerdown", { pointerId: 2, pointerType: "touch", clientX: 0, clientY: 100 }));
-    canvas.dispatchEvent(createPointerEvent("pointermove", { pointerId: 1, pointerType: "touch", clientX: 0, clientY: 10 }));
-    canvas.dispatchEvent(createPointerEvent("pointermove", { pointerId: 2, pointerType: "touch", clientX: 0, clientY: 112 }));
+    canvas.dispatchEvent(createPointerEvent("pointerdown", { pointerId: 1, pointerType: "touch", clientX: 0, clientY: 0, timeStamp: 0 }));
+    canvas.dispatchEvent(createPointerEvent("pointerdown", { pointerId: 2, pointerType: "touch", clientX: 0, clientY: 100, timeStamp: 0 }));
+    canvas.dispatchEvent(createPointerEvent("pointermove", { pointerId: 1, pointerType: "touch", clientX: 0, clientY: 10, timeStamp: 20 }));
+
+    expect(camera.orbitBy).not.toHaveBeenCalled();
+    expect(camera.zoomBy).not.toHaveBeenCalled();
+
+    canvas.dispatchEvent(createPointerEvent("pointermove", { pointerId: 2, pointerType: "touch", clientX: 0, clientY: 112, timeStamp: 35 }));
 
     expect(camera.orbitBy).toHaveBeenCalled();
     expect(camera.zoomBy).not.toHaveBeenCalled();
@@ -92,10 +96,77 @@ describe("attachTouchController", () => {
     };
     const cleanup = attachTouchController(canvas, camera);
 
-    canvas.dispatchEvent(createPointerEvent("pointerdown", { pointerId: 1, pointerType: "touch", clientX: 0, clientY: 0 }));
-    canvas.dispatchEvent(createPointerEvent("pointerdown", { pointerId: 2, pointerType: "touch", clientX: 0, clientY: 100 }));
-    canvas.dispatchEvent(createPointerEvent("pointermove", { pointerId: 1, pointerType: "touch", clientX: 0, clientY: -10 }));
-    canvas.dispatchEvent(createPointerEvent("pointermove", { pointerId: 2, pointerType: "touch", clientX: 0, clientY: 110 }));
+    canvas.dispatchEvent(createPointerEvent("pointerdown", { pointerId: 1, pointerType: "touch", clientX: 0, clientY: 0, timeStamp: 0 }));
+    canvas.dispatchEvent(createPointerEvent("pointerdown", { pointerId: 2, pointerType: "touch", clientX: 0, clientY: 100, timeStamp: 0 }));
+    canvas.dispatchEvent(createPointerEvent("pointermove", { pointerId: 1, pointerType: "touch", clientX: 0, clientY: -10, timeStamp: 20 }));
+
+    expect(camera.zoomBy).not.toHaveBeenCalled();
+    expect(camera.orbitBy).not.toHaveBeenCalled();
+
+    canvas.dispatchEvent(createPointerEvent("pointermove", { pointerId: 2, pointerType: "touch", clientX: 0, clientY: 110, timeStamp: 35 }));
+
+    expect(camera.zoomBy).toHaveBeenCalled();
+    expect(camera.orbitBy).not.toHaveBeenCalled();
+
+    cleanup();
+  });
+
+  it("does not let one early touch movement steal a two-finger orbit", () => {
+    const canvas = createCanvas();
+    const camera = {
+      panBy: vi.fn(),
+      orbitBy: vi.fn(),
+      zoomBy: vi.fn(),
+    };
+    const cleanup = attachTouchController(canvas, camera);
+
+    canvas.dispatchEvent(createPointerEvent("pointerdown", { pointerId: 1, pointerType: "touch", clientX: 0, clientY: 0, timeStamp: 0 }));
+    canvas.dispatchEvent(createPointerEvent("pointerdown", { pointerId: 2, pointerType: "touch", clientX: 0, clientY: 100, timeStamp: 0 }));
+    canvas.dispatchEvent(createPointerEvent("pointermove", { pointerId: 1, pointerType: "touch", clientX: 0, clientY: 25, timeStamp: 20 }));
+
+    expect(camera.zoomBy).not.toHaveBeenCalled();
+    expect(camera.orbitBy).not.toHaveBeenCalled();
+
+    canvas.dispatchEvent(createPointerEvent("pointermove", { pointerId: 2, pointerType: "touch", clientX: 0, clientY: 125, timeStamp: 35 }));
+
+    expect(camera.orbitBy).toHaveBeenCalled();
+    expect(camera.zoomBy).not.toHaveBeenCalled();
+
+    cleanup();
+  });
+
+  it("zooms during an asymmetric one-finger pivot pinch", () => {
+    const canvas = createCanvas();
+    const camera = {
+      panBy: vi.fn(),
+      orbitBy: vi.fn(),
+      zoomBy: vi.fn(),
+    };
+    const cleanup = attachTouchController(canvas, camera);
+
+    canvas.dispatchEvent(createPointerEvent("pointerdown", { pointerId: 1, pointerType: "touch", clientX: 0, clientY: 0, timeStamp: 0 }));
+    canvas.dispatchEvent(createPointerEvent("pointerdown", { pointerId: 2, pointerType: "touch", clientX: 0, clientY: 100, timeStamp: 0 }));
+    canvas.dispatchEvent(createPointerEvent("pointermove", { pointerId: 2, pointerType: "touch", clientX: 0, clientY: 130, timeStamp: 150 }));
+
+    expect(camera.zoomBy).toHaveBeenCalled();
+    expect(camera.orbitBy).not.toHaveBeenCalled();
+
+    cleanup();
+  });
+
+  it("does not lock into orbit from landing drift before a pinch", () => {
+    const canvas = createCanvas();
+    const camera = {
+      panBy: vi.fn(),
+      orbitBy: vi.fn(),
+      zoomBy: vi.fn(),
+    };
+    const cleanup = attachTouchController(canvas, camera);
+
+    canvas.dispatchEvent(createPointerEvent("pointerdown", { pointerId: 1, pointerType: "touch", clientX: 0, clientY: 0, timeStamp: 0 }));
+    canvas.dispatchEvent(createPointerEvent("pointerdown", { pointerId: 2, pointerType: "touch", clientX: 0, clientY: 100, timeStamp: 0 }));
+    canvas.dispatchEvent(createPointerEvent("pointermove", { pointerId: 1, pointerType: "touch", clientX: 5, clientY: 3, timeStamp: 20 }));
+    canvas.dispatchEvent(createPointerEvent("pointermove", { pointerId: 2, pointerType: "touch", clientX: 0, clientY: 130, timeStamp: 35 }));
 
     expect(camera.zoomBy).toHaveBeenCalled();
     expect(camera.orbitBy).not.toHaveBeenCalled();

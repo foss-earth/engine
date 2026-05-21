@@ -5,6 +5,7 @@ import type {
   GlobeLayerContext,
   GlobeViewState,
 } from "../engine/types";
+import { getTheme, setTheme, onThemeChange, toggleTheme } from "../theme/theme";
 import { createPoiTracking } from "../layers/poiTracking";
 import { createLayerRegistry } from "../layers/layerRegistry";
 import { MAX_PITCH_DEG } from "../camera/cameraState";
@@ -314,6 +315,10 @@ export async function createGlobeApp(
           title="Controls help" aria-label="Controls help">?</button>
         <button id="settingsButton" class="hud-circle-button settings-button" type="button"
           title="Settings" aria-label="Settings">&#9881;</button>
+        <button id="themeButton" class="hud-circle-button theme-button" type="button"
+          title="Toggle theme" aria-label="Toggle theme">
+          <span class="theme-button-icon" aria-hidden="true">\u263E</span>
+        </button>
         <span id="rendererModePill" class="hud-chip hud-chip--gpu"
           title="GPU API used by the map renderer.">GPU</span>
         <div class="map-source-control">
@@ -521,6 +526,8 @@ export async function createGlobeApp(
   const helpBtnEl = rootElement.querySelector<HTMLButtonElement>("#helpButton");
   const helpModalEl = rootElement.querySelector<HTMLElement>("#helpModal");
   const settingsBtnEl = rootElement.querySelector<HTMLButtonElement>("#settingsButton");
+  const themeBtnEl = rootElement.querySelector<HTMLButtonElement>("#themeButton");
+  const themeBtnIconEl = themeBtnEl?.querySelector<HTMLElement>(".theme-button-icon") ?? null;
   const settingsModalEl = rootElement.querySelector<HTMLElement>("#settingsModal");
   const settingsPerformanceMetricsEl = rootElement.querySelector<HTMLElement>("#settingsPerformanceMetrics");
   const compassHeightSliderEl = rootElement.querySelector<HTMLInputElement>("#compassHeightSlider");
@@ -667,6 +674,21 @@ export async function createGlobeApp(
   });
   helpBtnEl?.addEventListener("click", () => helpModal?.show());
   settingsBtnEl?.addEventListener("click", () => settingsModal?.show());
+
+  // ── Theme button ────────────────────────────────────────────
+  // Shows sun in dark mode (click to go light), moon in light mode (click to go dark).
+  function syncThemeButton(theme: "light" | "dark"): void {
+    if (themeBtnIconEl) themeBtnIconEl.textContent = theme === "dark" ? "\u263C" : "\u263E";
+    if (themeBtnEl) {
+      const nextLabel = theme === "dark" ? "Switch to light theme" : "Switch to dark theme";
+      themeBtnEl.title = nextLabel;
+      themeBtnEl.setAttribute("aria-label", nextLabel);
+    }
+  }
+  syncThemeButton(getTheme());
+  const onThemeButtonClick = (): void => { toggleTheme(); };
+  themeBtnEl?.addEventListener("click", onThemeButtonClick);
+  const offThemeChangeForButton = onThemeChange((next) => syncThemeButton(next));
   poiExitBtnEl?.addEventListener("click", (e) => {
     e.stopPropagation();
     poiTracking.exitTracking();
@@ -734,6 +756,9 @@ export async function createGlobeApp(
     setViewState(partial: Partial<GlobeViewState>): void {
       runtime.setViewState(partial);
     },
+    getTheme,
+    setTheme,
+    onThemeChange,
     destroy() {
       if (hudObserver) {
         runtime.scene.onBeforeRenderObservable.remove(hudObserver);
@@ -751,6 +776,8 @@ export async function createGlobeApp(
       compassHeightSliderEl?.removeEventListener("input", onCompassHeightInput);
       poiSpriteTunerToggleEl?.removeEventListener("change", onPoiSpriteTunerToggleChange);
       compassScaleTunerToggleEl?.removeEventListener("change", onCompassScaleTunerToggleChange);
+      themeBtnEl?.removeEventListener("click", onThemeButtonClick);
+      offThemeChangeForButton();
       document.removeEventListener("pointerdown", onDocumentPointerDown, { capture: true });
 
       poiTracking.destroy();

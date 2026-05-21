@@ -14,6 +14,10 @@ const TOUCH_PAN_DEADZONE_PX = 0.5;
 const TOUCH_ORBIT_DEADZONE_PX = 0.75;
 /** Minimum pinch distance change (px) before zoom is applied. */
 const TOUCH_PINCH_DEADZONE_PX = 1.5;
+/** Minimum per-finger movement (px) before a touch contributes to intent classification. */
+const TOUCH_INTENT_POINTER_MOVE_PX = 4;
+/** Delay before a one-moving-touch pivot pinch may commit to zoom. */
+const TOUCH_SINGLE_TOUCH_PINCH_DELAY_MS = 120;
 
 // ─── Types ────────────────────────────────────────────────────────────
 
@@ -22,12 +26,24 @@ interface ActiveTouch {
   y: number;
 }
 
+interface ActiveTouchEntry {
+  pointerId: number;
+  point: ActiveTouch;
+}
+
+interface TouchMovementState {
+  hasTwoMovingTouches: boolean;
+  touchesMovingTogether: boolean;
+}
+
 type TouchSession =
   | { kind: "single"; pointerId: number; previousPoint: ActiveTouch }
   | {
     kind: "multi";
+    startPoints: Map<number, ActiveTouch>;
     startMetrics: TwoPointGestureMetrics;
     previousMetrics: TwoPointGestureMetrics;
+    startTimeMs: number;
     intent: TwoPointGestureIntent;
   };
 
@@ -55,12 +71,17 @@ export function attachTouchController(
   const activePointers = new Map<number, ActiveTouch>();
   let session: TouchSession | null = null;
 
-  function getSortedPoints(): [ActiveTouch, ActiveTouch] | null {
+  function getSortedEntries(): [ActiveTouchEntry, ActiveTouchEntry] | null {
     if (activePointers.size !== 2) return null;
     const sorted = Array.from(activePointers.entries())
       .sort(([a], [b]) => a - b)
-      .map(([, p]) => p);
+      .map(([pointerId, point]) => ({ pointerId, point }));
     return [sorted[0], sorted[1]];
+  }
+
+  function getSortedPoints(): [ActiveTouch, ActiveTouch] | null {
+    const entries = getSortedEntries();
+    return entries ? [entries[0].point, entries[1].point] : null;
   }
 
   function getCurrentMetrics(): TwoPointGestureMetrics | null {
@@ -79,9 +100,56 @@ export function attachTouchController(
     session = { kind: "single", pointerId, previousPoint: { ...point } };
   }
 
-  function startTwoFingerSession(): void {
+  function startTwoFingerSession(timeMs: number): void {
+    const entries = getSortedEntries();
     const metrics = getCurrentMetrics();
-    session = metrics ? { kind: "multi", startMetrics: metrics, previousMetrics: metrics, intent: null } : null;
+    session = entries && metrics
+      ? {
+        kind: "multi",
+        startPoints: new Map(entries.map(({ pointerId, point }) => [pointerId, { ...point }])),
+        startMetrics: metrics,
+        previousMetrics: metrics,
+        startTimeMs: timeMs,
+        intent: null,
+      }
+      : null;
+  }
+
+  function getTouchMovementState(multiSession: Extract<TouchSession, { kind: "multi" }>): TouchMovementState {
+    const entries = getSortedEntries();
+    if (!entries) return { hasTwoMovingTouches: false, touchesMovingTogether: false };
+
+    const movements = entries.map(({ pointerId, point }) => {
+      const startPoint = multiSession.startPoints.get(pointerId);
+      const dx = startPoint ? point.x - startPoint.x : 0;
+      const dy = startPoint ? point.y - startPoint.y : 0;
+      return { dx, dy, magnitude: Math.hypot(dx, dy) };
+    });
+
+    const [firstMove, secondMove] = movements;
+    const hasTwoMovingTouches = firstMove.magnitude >= TOUCH_INTENT_POINTER_MOVE_PX
+      && secondMove.magnitude >= TOUCH_INTENT_POINTER_MOVE_PX;
+    if (!hasTwoMovingTouches) {
+      return { hasTwoMovingTouches: false, touchesMovingTogether: false };
+    }
+
+    const dot = firstMove.dx * secondMove.dx + firstMove.dy * secondMove.dy;
+    const cosine = dot / (firstMove.magnitude * secondMove.magnitude);
+    const magnitudeRatio = Math.min(firstMove.magnitude, secondMove.magnitude)
+      / Math.max(firstMove.magnitude, secondMove.magnitude);
+    return {
+      hasTwoMovingTouches: true,
+      touchesMovingTogether: cosine >= 0.7 && magnitudeRatio >= 0.5,
+    };
+  }
+
+  function safelyCapturePointer(pointerId: number): void {
+    try {
+      canvas.setPointerCapture(pointerId);
+    } catch {
+      // Some browsers (notably iOS Safari) throw InvalidPointerId on rapid
+      // multi-touch.  Swallow — the gesture still works without capture.
+    }
   }
 
   function onPointerDown(e: PointerEvent): void {
@@ -89,12 +157,12 @@ export function attachTouchController(
     stopTouchEvent(e);
     camera.cancel?.();
     activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    canvas.setPointerCapture(e.pointerId);
+    safelyCapturePointer(e.pointerId);
 
     if (activePointers.size === 1) {
       startSingleFingerSession();
     } else if (activePointers.size === 2) {
-      startTwoFingerSession();
+      startTwoFingerSession(e.timeStamp);
     } else if (activePointers.size > 2) {
       // More than two fingers — cancel our session and let Babylon decide.
       session = null;
@@ -127,7 +195,7 @@ export function attachTouchController(
     if (activePointers.size !== 2) return;
 
     if (!session || session.kind !== "multi") {
-      startTwoFingerSession();
+      startTwoFingerSession(e.timeStamp);
       return;
     }
 
@@ -141,9 +209,7 @@ export function attachTouchController(
       metrics.centroidX - session.startMetrics.centroidX,
       metrics.centroidY - session.startMetrics.centroidY,
     );
-    const scaleRatio = session.startMetrics.distancePx > 0
-      ? metrics.distancePx / session.startMetrics.distancePx
-      : 1;
+    const totalDistanceDeltaPx = metrics.distancePx - session.startMetrics.distancePx;
     const isReasonableDelta = Math.abs(dx) <= TOUCH_MAX_DELTA_PX
       && Math.abs(dy) <= TOUCH_MAX_DELTA_PX
       && Math.abs(distanceDeltaPx) <= TOUCH_MAX_DELTA_PX;
@@ -153,7 +219,23 @@ export function attachTouchController(
       return;
     }
 
-    session.intent ??= classifyTwoPointGestureIntent(totalCentroidTranslationPx, scaleRatio);
+    const wasUnclassified = session.intent === null;
+    const touchMovementState = getTouchMovementState(session);
+    const allowSingleTouchPinch = !touchMovementState.hasTwoMovingTouches
+      && e.timeStamp - session.startTimeMs >= TOUCH_SINGLE_TOUCH_PINCH_DELAY_MS;
+    session.intent ??= classifyTwoPointGestureIntent(
+      totalCentroidTranslationPx,
+      totalDistanceDeltaPx,
+      touchMovementState.hasTwoMovingTouches,
+      touchMovementState.touchesMovingTogether,
+      allowSingleTouchPinch,
+    );
+    // When intent first commits, re-baseline startMetrics so any leftover
+    // pre-classification drift from this gesture can't bias decisions later
+    // in the same session.  We still apply this frame's motion below.
+    if (wasUnclassified && session.intent !== null) {
+      session.startMetrics = metrics;
+    }
 
     if (session.intent === "swipe"
       && (Math.abs(dx) >= TOUCH_ORBIT_DEADZONE_PX || Math.abs(dy) >= TOUCH_ORBIT_DEADZONE_PX)) {
@@ -191,7 +273,7 @@ export function attachTouchController(
     } else if (activePointers.size === 0) {
       session = null;
     } else if (activePointers.size === 2) {
-      startTwoFingerSession();
+      startTwoFingerSession(e.timeStamp);
     }
   }
 
@@ -199,11 +281,19 @@ export function attachTouchController(
   canvas.addEventListener("pointermove", onPointerMove, { passive: false });
   canvas.addEventListener("pointerup", onPointerUp);
   canvas.addEventListener("pointercancel", onPointerUp);
+  // Safety net: some browsers (notably iOS Safari) occasionally drop
+  // pointerup/pointercancel during fast multi-touch.  Listening on the
+  // window guarantees stale pointers can't get stuck in `activePointers`
+  // and block fresh two-finger sessions from being recognized as pinch.
+  window.addEventListener("pointerup", onPointerUp);
+  window.addEventListener("pointercancel", onPointerUp);
 
   return () => {
     canvas.removeEventListener("pointerdown", onPointerDown);
     canvas.removeEventListener("pointermove", onPointerMove);
     canvas.removeEventListener("pointerup", onPointerUp);
     canvas.removeEventListener("pointercancel", onPointerUp);
+    window.removeEventListener("pointerup", onPointerUp);
+    window.removeEventListener("pointercancel", onPointerUp);
   };
 }

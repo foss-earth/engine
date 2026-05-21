@@ -179,15 +179,24 @@ describe("computeTwoPointGestureMetrics", () => {
 
 describe("classifyTwoPointGestureIntent", () => {
   it("recognizes swipe intent when centroid translation dominates", () => {
-    expect(classifyTwoPointGestureIntent(15, 1.01)).toBe("swipe");
+    expect(classifyTwoPointGestureIntent(15, 1, true, true)).toBe("swipe");
+    expect(classifyTwoPointGestureIntent(15, 1, true, false)).toBeNull();
   });
 
-  it("recognizes pinch intent when scale dominates", () => {
-    expect(classifyTwoPointGestureIntent(0, 1.14)).toBe("pinch");
+  it("recognizes pinch intent when distance change dominates", () => {
+    expect(classifyTwoPointGestureIntent(0, 20)).toBe("pinch");
+    expect(classifyTwoPointGestureIntent(0, -20)).toBe("pinch");
+    expect(classifyTwoPointGestureIntent(10, 20)).toBe("pinch");
   });
 
   it("returns null while intent is still ambiguous", () => {
-    expect(classifyTwoPointGestureIntent(1, 1.02)).toBeNull();
+    expect(classifyTwoPointGestureIntent(3, 4)).toBeNull();
+    expect(classifyTwoPointGestureIntent(5, 10, false)).toBeNull();
+    expect(classifyTwoPointGestureIntent(10, 24, false, false, false)).toBeNull();
+  });
+
+  it("allows a large one-finger pivot pinch", () => {
+    expect(classifyTwoPointGestureIntent(10, 24, false, false, true)).toBe("pinch");
   });
 });
 

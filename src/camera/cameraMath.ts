@@ -126,16 +126,39 @@ export function computeTwoPointGestureMetrics(
 
 /**
  * Classify a two-finger gesture as swipe (centroid translation dominant)
- * or pinch (scale change dominant). Returns null while still ambiguous.
+ * or pinch (distance change dominant). Returns null while still ambiguous.
  */
 export function classifyTwoPointGestureIntent(
   centroidTranslationPx: number,
-  scaleRatio: number,
+  distanceDeltaPx: number,
+  hasTwoMovingTouches = true,
+  touchesMovingTogether = false,
+  allowSingleTouchPinch = false,
 ): TwoPointGestureIntent {
-  const swipeScore = centroidTranslationPx / 2;
-  const scaleScore = Math.abs(scaleRatio - 1) / 0.05;
-  if (swipeScore >= 1 && swipeScore > scaleScore * 1.25) return "swipe";
-  if (scaleScore >= 1 && scaleScore > swipeScore * 1.25) return "pinch";
+  const distanceDeltaAbsPx = Math.abs(distanceDeltaPx);
+
+  if (!hasTwoMovingTouches) {
+    return allowSingleTouchPinch && distanceDeltaAbsPx >= 24 ? "pinch" : null;
+  }
+
+  const pinchDistanceThresholdPx = 8;
+
+  if (
+    distanceDeltaAbsPx >= pinchDistanceThresholdPx
+    && (!touchesMovingTogether || distanceDeltaAbsPx >= centroidTranslationPx * 1.5)
+  ) {
+    return "pinch";
+  }
+
+  if (
+    hasTwoMovingTouches
+    && touchesMovingTogether
+    && centroidTranslationPx >= 8
+    && centroidTranslationPx >= distanceDeltaAbsPx * 0.75
+  ) {
+    return "swipe";
+  }
+
   return null;
 }
 
