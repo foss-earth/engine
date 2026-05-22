@@ -239,7 +239,8 @@ export function attachTouchController(
 
   function applyPan(touches: TouchList): void {
     if (!session || session.kind !== "pan") return;
-    const t = Array.from(touches).find((x) => x.identifier === session!.identifier);
+    const s = session;
+    const t = Array.from(touches).find((x) => x.identifier === s.identifier);
     if (!t) return;
     const p = pointFromTouch(t);
     const dx = p.x - session.previous.x;
@@ -352,7 +353,7 @@ export function attachTouchController(
         hasTwoMovingTouches: true,
         touchesMovingTogether: false,
         intent,
-        note: `orbit=${session.orbitActive ? 1 : 0} zoom=${session.zoomActive ? 1 : 0} cStep=${centroidStepPx.toFixed(1)} sStep=${scaleStep.toFixed(3)}`,
+        note: `orbit=${session.orbitActive ? 1 : 0} zoom=${session.zoomActive ? 1 : 0} cStep=${centroidStepPx.toFixed(1)} sStep=${clampedScaleStep.toFixed(3)}`,
       }, touches);
     }
   }
