@@ -1,13 +1,38 @@
 import type { CameraInputTarget } from "./inertialCameraController";
-import { MOVEMENT_SENSITIVITY_BASE, type InputSettings } from "./inputSettings";
+import type { InputSettings } from "./inputSettings";
 import { attachTouchDebugOverlay, isTouchDebugEnabled, type TouchDebugEvent } from "./touchDebugOverlay";
 
 // ─── Tuning constants ────────────────────────────────────────────────
+// These encode "what sensitivity=1 feels like" for each gesture.
+// They are intentionally hidden from the user — the user-facing sensitivity
+// slider is a pure multiplier on top of these values (0.5 = half, 2 = double).
 
-/** Degrees of orbit change per pixel of two-finger centroid movement. */
-const TOUCH_ORBIT_DEG_PER_PX = 0.5;
-/** Maximum accepted per-frame delta (px). Larger values are jitter/glitches. */
+/**
+ * Camera units panned per pixel of finger movement at sensitivity=1.
+ * Tuned so that a typical one-finger swipe feels 1:1 with the globe surface.
+ */
+const TOUCH_PAN_SPEED = 0.48;
+/**
+ * Degrees of orbit per pixel of two-finger centroid movement at sensitivity=1.
+ * Combined from the old TOUCH_ORBIT_DEG_PER_PX(0.5) × default_orbit_sens(2) × BASE(0.1).
+ */
+const TOUCH_ORBIT_DEG_PER_PX = 0.1;
+/**
+ * Exponent applied to the pinch scale factor at sensitivity=1.
+ * Combined from old default_zoom_sens(12) × BASE(0.1).
+ * Higher = faster zoom per unit of finger spread.
+ */
+const TOUCH_ZOOM_EXPONENT = 0.24;
+/** Maximum accepted centroid movement per frame (px). Orbit jitter guard. */
 const TOUCH_MAX_DELTA_PX = 80;
+/**
+ * Maximum accepted finger-distance change per frame (px) for zoom.
+ * Higher than the centroid guard because fast pinch is a real gesture:
+ * two thumbs can spread/contract >80 px in a single frame at 60 fps.
+ * Frames that exceed this are clamped rather than dropped so the baseline
+ * keeps advancing and subsequent frames are not cascaded-rejected.
+ */
+const TOUCH_MAX_ZOOM_DELTA_PX = 250;
 /** Minimum one-finger translation (px) before pan is applied. */
 const TOUCH_PAN_DEADZONE_PX = 0.5;
 /**
@@ -224,8 +249,8 @@ export function attachTouchController(
     if (Math.abs(dx) < TOUCH_PAN_DEADZONE_PX && Math.abs(dy) < TOUCH_PAN_DEADZONE_PX) return;
     const sensitivity = options.getSettings?.().sensitivity.touch.pan ?? 1;
     camera.panBy(
-      -dx * sensitivity * MOVEMENT_SENSITIVITY_BASE,
-      -dy * sensitivity * MOVEMENT_SENSITIVITY_BASE,
+      -dx * sensitivity * TOUCH_PAN_SPEED,
+      -dy * sensitivity * TOUCH_PAN_SPEED,
       canvas.clientHeight,
     );
   }
@@ -257,22 +282,30 @@ export function attachTouchController(
     const dCx = c.x - session.previousCentroid.x;
     const dCy = c.y - session.previousCentroid.y;
     const centroidStepPx = Math.hypot(dCx, dCy);
-    const scaleStep = d / session.previousDistance;
-    const logScaleStep = Math.log(scaleStep);
 
-    // Jitter guard — absurd deltas are dropped without updating previous, so
-    // the next legitimate frame still has a usable baseline.  (Updating
-    // previous on a glitch can swallow the real motion that follows.)
-    if (
-      Math.abs(dCx) > TOUCH_MAX_DELTA_PX
-      || Math.abs(dCy) > TOUCH_MAX_DELTA_PX
-      || Math.abs(d - session.previousDistance) > TOUCH_MAX_DELTA_PX
-    ) {
+    // ── Centroid jitter guard (orbit) ─────────────────────────────────────
+    // A centroid jump > 80 px is physically impossible on glass — it's a
+    // glitch.  Drop the whole frame and keep the old baseline so the next
+    // real frame has a clean reference.
+    if (Math.abs(dCx) > TOUCH_MAX_DELTA_PX || Math.abs(dCy) > TOUCH_MAX_DELTA_PX) {
       return;
     }
 
+    // ── Distance clamp (zoom) ──────────────────────────────────────────────
+    // A fast pinch can legitimately produce large per-frame distance changes.
+    // Instead of dropping those frames (which would cascade-reject a whole
+    // fast-zoom gesture), clamp the effective distance change and always
+    // advance the baseline.  Values beyond TOUCH_MAX_ZOOM_DELTA_PX are true
+    // hardware glitches and get capped to the maximum plausible step.
+    const clampedD =
+      Math.abs(d - session.previousDistance) > TOUCH_MAX_ZOOM_DELTA_PX
+        ? session.previousDistance + Math.sign(d - session.previousDistance) * TOUCH_MAX_ZOOM_DELTA_PX
+        : d;
+    const clampedScaleStep = clampedD / session.previousDistance;
+    const clampedLogScaleStep = Math.log(clampedScaleStep);
+
     session.accumulatedCentroidTravelPx += centroidStepPx;
-    session.accumulatedAbsLogScale += Math.abs(logScaleStep);
+    session.accumulatedAbsLogScale += Math.abs(clampedLogScaleStep);
 
     if (!session.orbitActive && session.accumulatedCentroidTravelPx >= ORBIT_ACTIVATION_PX) {
       session.orbitActive = true;
@@ -284,20 +317,22 @@ export function attachTouchController(
     if (session.orbitActive) {
       const sensitivity = options.getSettings?.().sensitivity.touch.orbit ?? 1;
       camera.orbitBy(
-        dCy * TOUCH_ORBIT_DEG_PER_PX * sensitivity * MOVEMENT_SENSITIVITY_BASE,
-        dCx * TOUCH_ORBIT_DEG_PER_PX * sensitivity * MOVEMENT_SENSITIVITY_BASE,
+        dCy * TOUCH_ORBIT_DEG_PER_PX * sensitivity,
+        dCx * TOUCH_ORBIT_DEG_PER_PX * sensitivity,
       );
     }
-    if (session.zoomActive && Math.abs(logScaleStep) > 0.0001) {
+    if (session.zoomActive && Math.abs(clampedLogScaleStep) > 0.0001) {
       // zoomBy is multiplicative; factor < 1 zooms in, > 1 zooms out.
-      // Fingers spreading apart (d > previousDistance, scaleStep > 1) must zoom in,
-      // so factor = previousDistance / d = 1 / scaleStep.
+      // Fingers spreading apart (clampedD > previousDistance) must zoom in,
+      // so factor = previousDistance / clampedD = 1 / clampedScaleStep.
       const sensitivity = options.getSettings?.().sensitivity.touch.zoom ?? 1;
-      const factor = 1 / scaleStep;
-      camera.zoomBy(Math.pow(factor, sensitivity * MOVEMENT_SENSITIVITY_BASE));
+      const factor = 1 / clampedScaleStep;
+      camera.zoomBy(Math.pow(factor, sensitivity * TOUCH_ZOOM_EXPONENT));
     }
 
     session.previousCentroid = c;
+    // Always advance the distance baseline — even on a clamped frame — so
+    // subsequent frames don't keep seeing a large delta from a stale value.
     session.previousDistance = d;
 
     // Debug — repurpose "classify" as a per-frame activity snapshot.

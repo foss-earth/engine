@@ -13,7 +13,7 @@ import {
 } from "@babylonjs/core";
 import { GeospatialClippingBehavior } from "@babylonjs/core/Behaviors/Cameras/geospatialClippingBehavior";
 
-import { createRendererMode, type RendererSelection } from "./createRendererMode";
+import { createRendererMode, type RendererMode, type RendererSelection } from "./createRendererMode";
 import { createGoogleTilesRuntime, type GoogleTilesRuntime } from "./createTilesRuntime";
 import { createRenderScheduler, type RenderScheduler } from "./renderScheduler";
 import { geodeticToEcef, DEG_TO_RAD } from "../../camera/cameraMath";
@@ -34,8 +34,11 @@ const DEFAULT_CAMERA_PITCH_RAD = 1.167625429373872;
 
 export interface BabylonRuntimeOptions {
   googleApiKey?: string | null;
+  rendererForce?: RendererMode | null;
   onStatusChange?: (status: BabylonRuntimeStatus) => void;
 }
+
+export type { RendererMode };
 
 export type RuntimeMode = "google-tiles" | "fallback";
 
@@ -169,7 +172,7 @@ export async function createBabylonRuntime(
 ): Promise<BabylonRuntime> {
   const normalizedApiKey = options.googleApiKey?.trim() ?? "";
   const hasGoogleApiKey = normalizedApiKey.length > 0;
-  const renderer = await createRendererMode(canvas);
+  const renderer = await createRendererMode(canvas, { force: options.rendererForce ?? null });
   const scene = new Scene(renderer.engine);
   scene.useRightHandedSystem = true;
 

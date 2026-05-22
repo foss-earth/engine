@@ -20,7 +20,7 @@ export interface InputSettings {
 export const DEFAULT_INPUT_SENSITIVITY: InputSensitivitySettings = {
   mouse: { pan: 1, orbit: 1, zoom: 1 },
   trackpad: { pan: 1, orbit: 1, zoom: 1 },
-  touch: { pan: 3, orbit: 2, zoom: 2 },
+  touch: { pan: 1, orbit: 1, zoom: 1 },
 };
 
 export const MOVEMENT_SENSITIVITY_BASE = 0.1;
@@ -32,7 +32,7 @@ export const DEFAULT_INPUT_SETTINGS: InputSettings = {
 
 export function clampSensitivity(value: number): number {
   if (!Number.isFinite(value)) return 1;
-  return Math.max(0.01, Math.min(20, value));
+  return Math.max(0.1, Math.min(10, value));
 }
 
 export function normalizeSensitivitySettings(

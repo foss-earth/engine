@@ -1,5 +1,5 @@
 import { Matrix, Vector3 } from "@babylonjs/core";
-import { createBabylonRuntime, type BabylonRuntime } from "../engine/babylon/createBabylonRuntime";
+import { createBabylonRuntime, type BabylonRuntime, type RendererMode } from "../engine/babylon/createBabylonRuntime";
 import type {
   GlobeHandle,
   GlobeLayerContext,
@@ -179,10 +179,25 @@ function setMapSourcePreference(source: "google" | "fallback"): void {
   window.location.assign(url.toString());
 }
 
-function getRendererApiLabel(runtime: BabylonRuntime): string {
-  if (runtime.renderer.mode === "webgpu") return "WebGPU";
-  const version = (runtime.engine as unknown as { webGLVersion?: number }).webGLVersion;
-  return version === 1 ? "WebGL" : "WebGL2";
+function getRendererForceFromUrl(): RendererMode | null {
+  const v = new URLSearchParams(window.location.search).get("renderer")?.toLowerCase() ?? "";
+  if (v === "webgpu") return "webgpu";
+  if (v === "webgl2") return "webgl2";
+  if (v === "webgl") return "webgl";
+  return null;
+}
+
+function setRendererForce(force: RendererMode | null): void {
+  const url = new URL(window.location.href);
+  if (force) url.searchParams.set("renderer", force);
+  else url.searchParams.delete("renderer");
+  window.location.assign(url.toString());
+}
+
+function getRendererApiLabel(mode: RendererMode): string {
+  if (mode === "webgpu") return "WebGPU";
+  if (mode === "webgl2") return "WebGL2";
+  return "WebGL";
 }
 
 function getPerformanceMetricSettingsMarkup(): string {
@@ -319,8 +334,17 @@ export async function createGlobeApp(
           title="Toggle theme" aria-label="Toggle theme">
           <span class="theme-button-icon" aria-hidden="true">\u263E</span>
         </button>
-        <span id="rendererModePill" class="hud-chip hud-chip--gpu"
-          title="GPU API used by the map renderer.">GPU</span>
+        <div class="renderer-control">
+          <button id="rendererModePill" class="hud-chip hud-chip-button hud-chip--gpu" type="button"
+            aria-haspopup="menu" aria-expanded="false" aria-controls="rendererMenu"
+            title="GPU renderer API. Click to change.">GPU</button>
+          <div id="rendererMenu" class="renderer-menu" role="menu" hidden>
+            <button class="renderer-option" type="button" role="menuitem" data-renderer="">Auto-detect</button>
+            <button class="renderer-option" type="button" role="menuitem" data-renderer="webgpu">Force WebGPU</button>
+            <button class="renderer-option" type="button" role="menuitem" data-renderer="webgl2">Force WebGL2</button>
+            <button class="renderer-option" type="button" role="menuitem" data-renderer="webgl">Force WebGL</button>
+          </div>
+        </div>
         <div class="map-source-control">
           <button id="runtimeModePill" class="hud-chip hud-chip-button hud-chip--source" type="button"
             aria-haspopup="menu" aria-expanded="false" aria-controls="mapSourceMenu"
@@ -422,7 +446,8 @@ export async function createGlobeApp(
     throw new Error('Expected to find a canvas element with id "globeCanvas".');
   }
 
-  const rendererModePill = rootElement.querySelector<HTMLElement>("#rendererModePill");
+  const rendererModePill = rootElement.querySelector<HTMLButtonElement>("#rendererModePill");
+  const rendererMenu = rootElement.querySelector<HTMLElement>("#rendererMenu");
   const runtimeModePill = rootElement.querySelector<HTMLButtonElement>("#runtimeModePill");
   const mapSourceMenu = rootElement.querySelector<HTMLElement>("#mapSourceMenu");
   const perfMetricsPill = rootElement.querySelector<HTMLElement>("#perfMetricsPill");
@@ -482,9 +507,11 @@ export async function createGlobeApp(
   const googleApiKey = sourcePreference === "fallback"
     ? null
     : options.googleApiKey ?? getGoogleApiKeyFromUrl();
+  const rendererForce = getRendererForceFromUrl();
 
   const runtime = await createBabylonRuntime(canvas, {
     googleApiKey,
+    rendererForce,
     onStatusChange: applyRuntimeStatus,
   });
   const layerContext: GlobeLayerContext = {
@@ -521,10 +548,37 @@ export async function createGlobeApp(
   });
 
   if (rendererModePill) {
-    const rendererLabel = getRendererApiLabel(runtime);
-    rendererModePill.textContent = rendererLabel;
-    rendererModePill.classList.toggle("hud-chip--good", rendererLabel === "WebGPU");
-    rendererModePill.classList.toggle("hud-chip--bad", rendererLabel !== "WebGPU");
+    const rendererLabel = getRendererApiLabel(runtime.renderer.mode);
+    const forceFailed =
+      runtime.renderer.requested !== "auto" && runtime.renderer.requested !== runtime.renderer.mode;
+    rendererModePill.textContent = forceFailed ? `${rendererLabel}*` : rendererLabel;
+    rendererModePill.classList.toggle("hud-chip--good", runtime.renderer.mode === "webgpu");
+    rendererModePill.classList.toggle("hud-chip--bad", runtime.renderer.mode !== "webgpu");
+  }
+  // Mark the active option in the renderer menu
+  rendererMenu?.querySelectorAll<HTMLElement>("[data-renderer]").forEach((btn) => {
+    btn.classList.toggle("is-active", (btn.dataset.renderer ?? "") === (rendererForce ?? ""));
+  });
+  // Inject diagnostics block into the renderer menu when a forced renderer fell back
+  if (rendererMenu && runtime.renderer.diagnostics) {
+    const d = runtime.renderer.diagnostics;
+    const lines: string[] = [
+      `Secure context: ${d.isSecureContext ? "✓ yes" : "✗ no — WebGPU requires HTTPS"}`,
+      `navigator.gpu: ${d.navigatorGpuPresent ? "✓ present" : "✗ missing"}`,
+      d.isSupportedAsyncResult !== null
+        ? `IsSupportedAsync: ${d.isSupportedAsyncResult}`
+        : null,
+      runtime.renderer.fallbackReason ? `Error: ${runtime.renderer.fallbackReason}` : null,
+    ].filter((l): l is string => l !== null);
+    if (lines.length) {
+      const hr = document.createElement("div");
+      hr.className = "renderer-debug-sep";
+      rendererMenu.appendChild(hr);
+      const dbg = document.createElement("div");
+      dbg.className = "renderer-debug";
+      dbg.textContent = lines.join("\n");
+      rendererMenu.appendChild(dbg);
+    }
   }
 
   applyRuntimeStatus(runtime.status);
@@ -552,7 +606,7 @@ export async function createGlobeApp(
   const helpModal: HelpModalHandle | null = helpModalEl ? createHelpModal(helpModalEl) : null;
   const settingsModal: SettingsModalHandle | null = settingsModalEl ? createSettingsModal(settingsModalEl) : null;
 
-  settingsModal?.setRendererMode(runtime.renderer.mode);
+  settingsModal?.setRendererMode(getRendererApiLabel(runtime.renderer.mode));
 
   let visiblePerformanceMetrics = loadPerformanceMetricVisibility();
   let lastPerfSnapshot: PerformanceSnapshot | null = null;
@@ -639,10 +693,33 @@ export async function createGlobeApp(
       setMapSourcePreference(selected);
     }
   };
-  const onDocumentPointerDown = (e: PointerEvent): void => {
-    if (!mapSourceMenu || mapSourceMenu.hidden) return;
-    if (runtimeModePill?.contains(e.target as Node) || mapSourceMenu.contains(e.target as Node)) return;
+  function setRendererMenuOpen(open: boolean): void {
+    if (!rendererMenu || !rendererModePill) return;
+    rendererMenu.hidden = !open;
+    rendererModePill.setAttribute("aria-expanded", String(open));
+  }
+  const onRendererPillClick = (e: MouseEvent): void => {
+    e.stopPropagation();
+    setRendererMenuOpen(Boolean(rendererMenu?.hidden));
     setMapSourceMenuOpen(false);
+  };
+  const onRendererMenuClick = (e: MouseEvent): void => {
+    const option = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-renderer]");
+    if (!option) return;
+    const val = option.dataset.renderer ?? "";
+    const force: RendererMode | null = (val === "webgpu" || val === "webgl2" || val === "webgl") ? val : null;
+    setRendererMenuOpen(false);
+    setRendererForce(force);
+  };
+  const onDocumentPointerDown = (e: PointerEvent): void => {
+    if (mapSourceMenu && !mapSourceMenu.hidden) {
+      if (!runtimeModePill?.contains(e.target as Node) && !mapSourceMenu.contains(e.target as Node))
+        setMapSourceMenuOpen(false);
+    }
+    if (rendererMenu && !rendererMenu.hidden) {
+      if (!rendererModePill?.contains(e.target as Node) && !rendererMenu.contains(e.target as Node))
+        setRendererMenuOpen(false);
+    }
   };
   const onPerformanceMetricChange = (e: Event): void => {
     const input = (e.target as HTMLElement).closest<HTMLInputElement>("[data-perf-metric]");
@@ -662,6 +739,8 @@ export async function createGlobeApp(
     }
   };
 
+  rendererModePill?.addEventListener("click", onRendererPillClick);
+  rendererMenu?.addEventListener("click", onRendererMenuClick);
   runtimeModePill?.addEventListener("click", onMapSourceClick);
   mapSourceMenu?.addEventListener("click", onMapSourceMenuClick);
   settingsPerformanceMetricsEl?.addEventListener("change", onPerformanceMetricChange);
