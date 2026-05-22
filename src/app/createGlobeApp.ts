@@ -1,5 +1,12 @@
 import { Matrix, Vector3 } from "@babylonjs/core";
 import { createBabylonRuntime, type BabylonRuntime, type RendererMode } from "../engine/babylon/createBabylonRuntime";
+import {
+  DEFAULT_RASTER_BASE_MAP_ID,
+  RASTER_BASE_MAP_SOURCES,
+  isKnownRasterBaseMapId,
+  resolveRasterBaseMapSource,
+  type RasterBaseMapSource,
+} from "../engine/babylon/rasterBaseMaps";
 import type {
   GlobeHandle,
   GlobeLayerContext,
@@ -29,6 +36,9 @@ export interface GlobeAppHandle extends GlobeHandle {
 
 export interface GlobeAppOptions {
   googleApiKey?: string | null;
+  baseMap?: string | RasterBaseMapSource | null;
+  preferGoogleTiles?: boolean;
+  getSurfaceHeightMeters?: (latDeg: number, lonDeg: number) => number | null;
   onPoiSpriteSizeChange?: (params: PoiSpriteSizeParams) => void;
   onCompassScaleChange?: (params: OrbitCompassScaleParams) => void;
 }
@@ -165,15 +175,16 @@ function getGoogleApiKeyFromUrl(): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
-function getMapSourcePreferenceFromUrl(): "google" | "fallback" | null {
+function getMapSourcePreferenceFromUrl(): string | null {
   const searchParams = new URLSearchParams(window.location.search);
   const value = (searchParams.get("mapSource") ?? searchParams.get("tiles") ?? "").trim().toLowerCase();
   if (value === "google" || value === "google-3d-tiles") return "google";
-  if (value === "fallback" || value === "fallback-globe") return "fallback";
+  if (value === "fallback" || value === "fallback-globe") return DEFAULT_RASTER_BASE_MAP_ID;
+  if (isKnownRasterBaseMapId(value)) return value;
   return null;
 }
 
-function setMapSourcePreference(source: "google" | "fallback"): void {
+function setMapSourcePreference(source: string): void {
   const url = new URL(window.location.href);
   url.searchParams.set("mapSource", source);
   window.location.assign(url.toString());
@@ -307,6 +318,15 @@ function getGoogleWarningMessage(status: BabylonRuntime["status"]): string {
   return "Google mode is active, but tiles may still be loading.";
 }
 
+function getRasterWarningMessage(status: BabylonRuntime["status"]): string {
+  const source = status.rasterBaseMap;
+  if (status.lastError) {
+    return `${source?.label ?? "Raster basemap"} is active, but some tiles failed to load: ${status.lastError}`;
+  }
+
+  return `${source?.label ?? "Raster basemap"} is active. Attribution: ${source?.attribution ?? "see provider terms"}.`;
+}
+
 export async function createGlobeApp(
   rootElement: HTMLElement,
   options: GlobeAppOptions = {},
@@ -348,10 +368,10 @@ export async function createGlobeApp(
         <div class="map-source-control">
           <button id="runtimeModePill" class="hud-chip hud-chip-button hud-chip--source" type="button"
             aria-haspopup="menu" aria-expanded="false" aria-controls="mapSourceMenu"
-            title="Map data source. Click to switch between Google 3D Tiles and the fallback globe.">Map Source</button>
+            title="Map data source. Click to switch between Google 3D Tiles and free raster basemaps.">Map Source</button>
           <div id="mapSourceMenu" class="map-source-menu" role="menu" hidden>
             <button class="map-source-option" type="button" role="menuitem" data-map-source="google">Google 3D Tiles</button>
-            <button class="map-source-option" type="button" role="menuitem" data-map-source="fallback">Fallback Globe</button>
+            ${RASTER_BASE_MAP_SOURCES.map((source) => `<button class="map-source-option" type="button" role="menuitem" data-map-source="${source.id}">${source.label}</button>`).join("")}
           </div>
         </div>
         <span id="perfMetricsPill" class="hud-chip-group perf-chip-group" aria-label="Performance metrics"></span>
@@ -459,15 +479,23 @@ export async function createGlobeApp(
   hydrateDeployShaLine(settingsDeployLine);
 
   let runtimeNoticeDismissed = false;
+  const configuredBaseMap = resolveRasterBaseMapSource(options.baseMap ?? DEFAULT_RASTER_BASE_MAP_ID);
 
   const applyRuntimeStatus = (status: BabylonRuntime["status"]): void => {
     if (runtimeModePill) {
       const hasWarning = Boolean(status.lastError);
-      runtimeModePill.textContent = status.mode === "google-tiles"
-        ? (hasWarning ? "Google 3D Tiles warning" : "Google 3D Tiles")
-        : "Fallback Globe";
+      if (status.mode === "google-tiles") {
+        runtimeModePill.textContent = hasWarning ? "Google 3D Tiles warning" : "Google 3D Tiles";
+      } else if (status.mode === "raster-basemap") {
+        runtimeModePill.textContent = hasWarning
+          ? `${status.rasterBaseMap?.label ?? "Raster"} warning`
+          : status.rasterBaseMap?.label ?? "Raster Basemap";
+      } else {
+        runtimeModePill.textContent = "Fallback Globe";
+      }
 
       runtimeModePill.classList.toggle("hud-chip--fallback", status.mode === "fallback");
+      runtimeModePill.classList.toggle("hud-chip--raster", status.mode === "raster-basemap");
     }
 
     if (!runtimeNotice || !runtimeNoticeTitle || !runtimeNoticeText) {
@@ -483,6 +511,17 @@ export async function createGlobeApp(
       runtimeNotice.hidden = false;
       runtimeNoticeTitle.textContent = "Fallback Mode";
       runtimeNoticeText.textContent = getFallbackNoticeMessage(status);
+      return;
+    }
+
+    if (status.mode === "raster-basemap") {
+      if (!status.lastError) {
+        runtimeNotice.hidden = true;
+        return;
+      }
+      runtimeNotice.hidden = false;
+      runtimeNoticeTitle.textContent = "Raster Basemap Warning";
+      runtimeNoticeText.textContent = getRasterWarningMessage(status);
       return;
     }
 
@@ -504,13 +543,19 @@ export async function createGlobeApp(
   });
 
   const sourcePreference = getMapSourcePreferenceFromUrl();
-  const googleApiKey = sourcePreference === "fallback"
-    ? null
-    : options.googleApiKey ?? getGoogleApiKeyFromUrl();
+  const urlGoogleApiKey = options.googleApiKey ?? getGoogleApiKeyFromUrl();
+  const shouldUseGoogle = sourcePreference === "google"
+    || (!sourcePreference && options.preferGoogleTiles !== false && Boolean(urlGoogleApiKey));
+  const googleApiKey = shouldUseGoogle ? urlGoogleApiKey : null;
+  const rasterBaseMap = shouldUseGoogle
+    ? configuredBaseMap
+    : resolveRasterBaseMapSource(sourcePreference ?? configuredBaseMap);
   const rendererForce = getRendererForceFromUrl();
 
   const runtime = await createBabylonRuntime(canvas, {
     googleApiKey,
+    rasterBaseMap,
+    getSurfaceHeightMeters: options.getSurfaceHeightMeters,
     rendererForce,
     onStatusChange: applyRuntimeStatus,
   });
@@ -520,8 +565,11 @@ export async function createGlobeApp(
   };
   const poiTracking = createPoiTracking(runtime.scene, () => runtime.geospatialCamera);
   const culling = createHemisphereCulling(() => runtime.geospatialCamera?.globalPosition ?? null);
+  const resolveSurfaceHeightMeters = (latDeg: number, lonDeg: number): number => (
+    options.getSurfaceHeightMeters?.(latDeg, lonDeg) ?? smoothSurfaceHeightMeters(latDeg, lonDeg)
+  );
   const anchorHeights = createAnchorHeightResolver({
-    provider: smoothSurfaceHeightMeters,
+    provider: resolveSurfaceHeightMeters,
     heightOffsetMeters: loadCompassHeightOffset(),
   });
   runtime.configureOrbitTargetHeight({
@@ -580,6 +628,14 @@ export async function createGlobeApp(
       rendererMenu.appendChild(dbg);
     }
   }
+
+  mapSourceMenu?.querySelectorAll<HTMLElement>("[data-map-source]").forEach((btn) => {
+    const value = btn.dataset.mapSource ?? "";
+    const isActive = runtime.status.mode === "google-tiles"
+      ? value === "google"
+      : value === (runtime.status.rasterBaseMap?.id ?? configuredBaseMap.id);
+    btn.classList.toggle("is-active", isActive);
+  });
 
   applyRuntimeStatus(runtime.status);
 
@@ -686,8 +742,10 @@ export async function createGlobeApp(
   const onMapSourceMenuClick = (e: MouseEvent): void => {
     const option = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-map-source]");
     if (!option) return;
-    const selected = option.dataset.mapSource === "fallback" ? "fallback" : "google";
-    const current = runtime.status.mode === "fallback" ? "fallback" : "google";
+    const selected = option.dataset.mapSource ?? DEFAULT_RASTER_BASE_MAP_ID;
+    const current = runtime.status.mode === "google-tiles"
+      ? "google"
+      : runtime.status.rasterBaseMap?.id ?? DEFAULT_RASTER_BASE_MAP_ID;
     setMapSourceMenuOpen(false);
     if (selected !== current) {
       setMapSourcePreference(selected);

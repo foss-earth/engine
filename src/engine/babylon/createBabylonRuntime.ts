@@ -15,6 +15,8 @@ import { GeospatialClippingBehavior } from "@babylonjs/core/Behaviors/Cameras/ge
 
 import { createRendererMode, type RendererMode, type RendererSelection } from "./createRendererMode";
 import { createGoogleTilesRuntime, type GoogleTilesRuntime } from "./createTilesRuntime";
+import { createRasterTilesRuntime, type RasterTilesRuntime } from "./createRasterTilesRuntime";
+import type { RasterBaseMapSource } from "./rasterBaseMaps";
 import { createRenderScheduler, type RenderScheduler } from "./renderScheduler";
 import { geodeticToEcef, DEG_TO_RAD } from "../../camera/cameraMath";
 import { CameraController, type OrbitTargetHeightOptions } from "../../camera/cameraState";
@@ -34,18 +36,21 @@ const DEFAULT_CAMERA_PITCH_RAD = 1.167625429373872;
 
 export interface BabylonRuntimeOptions {
   googleApiKey?: string | null;
+  rasterBaseMap?: RasterBaseMapSource | null;
+  getSurfaceHeightMeters?: (latDeg: number, lonDeg: number) => number | null;
   rendererForce?: RendererMode | null;
   onStatusChange?: (status: BabylonRuntimeStatus) => void;
 }
 
 export type { RendererMode };
 
-export type RuntimeMode = "google-tiles" | "fallback";
+export type RuntimeMode = "google-tiles" | "raster-basemap" | "fallback";
 
 export interface BabylonRuntimeStatus {
   mode: RuntimeMode;
   message: string;
   googleApiKeyProvided: boolean;
+  rasterBaseMap: RasterBaseMapSource | null;
   lastError: string | null;
 }
 
@@ -71,7 +76,7 @@ export interface BabylonRuntime {
   setViewState(partial: Partial<GlobeViewState>): void;
   /** Configure the surface height and starting offset used by the camera orbit target. */
   configureOrbitTargetHeight(options: OrbitTargetHeightOptions | null): void;
-  /** Return current Google 3D tile counts, or null in fallback mode. */
+  /** Return current base-map tile counts, or null when no tile runtime is active. */
   getTileMetrics(): BabylonTileMetrics | null;
   /**
    * Tell the input system whether the camera is currently locked to a POI.
@@ -177,6 +182,7 @@ export async function createBabylonRuntime(
   scene.useRightHandedSystem = true;
 
   let tilesRuntime: GoogleTilesRuntime | null = null;
+  let rasterTilesRuntime: RasterTilesRuntime | null = null;
   let googleTilesStartupWatchdog: number | null = null;
   let fallbackExperienceCreated = false;
   let fallbackExperience: FallbackExperience | null = null;
@@ -211,6 +217,7 @@ export async function createBabylonRuntime(
     tick: () => {
       inertialCameraController?.update();
       tilesRuntime?.update();
+      rasterTilesRuntime?.update();
       // beginFrame/endFrame are normally invoked by engine.runRenderLoop's
       // internal _processFrame. We bypass that loop, so we must bracket the
       // render ourselves — WebGPU only presents the swap chain inside
@@ -229,6 +236,7 @@ export async function createBabylonRuntime(
       ? "Google Photorealistic 3D Tiles are initializing."
       : "Fallback mode active.",
     googleApiKeyProvided: hasGoogleApiKey,
+    rasterBaseMap: options.rasterBaseMap ?? null,
     lastError: null,
   };
 
@@ -242,6 +250,22 @@ export async function createBabylonRuntime(
       googleTilesStartupWatchdog = null;
     }
   }
+
+  let streamingHeld = false;
+  const beginStreaming = (): void => {
+    if (streamingHeld) return;
+    streamingHeld = true;
+    streamingActiveRef.value = true;
+    scheduler.beginContinuous();
+    for (const listener of streamingListenersRef) listener(true);
+  };
+  const endStreaming = (): void => {
+    if (!streamingHeld) return;
+    streamingHeld = false;
+    streamingActiveRef.value = false;
+    scheduler.endContinuous();
+    for (const listener of streamingListenersRef) listener(false);
+  };
 
   function ensureGeospatialCamera(): GeospatialCamera {
     if (geospatialCamera) {
@@ -300,6 +324,11 @@ export async function createBabylonRuntime(
   function enableFallbackMode(reason: string): void {
     releaseStartupHold();
 
+    if (options.rasterBaseMap) {
+      enableRasterBaseMapMode(reason);
+      return;
+    }
+
     if (status.mode === "fallback" && fallbackExperienceCreated) {
       status.lastError = reason;
       status.message = "Fallback mode active due to Google tiles load failure.";
@@ -311,6 +340,8 @@ export async function createBabylonRuntime(
 
     tilesRuntime?.dispose();
     tilesRuntime = null;
+  rasterTilesRuntime?.dispose();
+  rasterTilesRuntime = null;
 
     if (googleLight) {
       googleLight.dispose();
@@ -325,6 +356,68 @@ export async function createBabylonRuntime(
     ensureFallbackExperience();
 
     console.warn("[runtime] Switching to fallback mode", { reason });
+    emitStatus();
+  }
+
+  function enableRasterBaseMapMode(reason: string | null): void {
+    releaseStartupHold();
+    clearGoogleWatchdog();
+
+    tilesRuntime?.dispose();
+    tilesRuntime = null;
+
+    if (googleLight) {
+      googleLight.dispose();
+      googleLight = null;
+    }
+
+    ensureGeospatialCamera();
+    ensureFallbackExperience();
+    hideFallbackExperience();
+
+    const rasterBaseMap = options.rasterBaseMap;
+    if (!rasterBaseMap) {
+      enableFallbackMode(reason ?? "No raster basemap was configured.");
+      return;
+    }
+
+    if (rasterTilesRuntime?.source.id !== rasterBaseMap.id) {
+      rasterTilesRuntime?.dispose();
+      rasterTilesRuntime = createRasterTilesRuntime({
+        scene,
+        source: rasterBaseMap,
+        getViewState: () => cameraController?.getViewState() ?? null,
+        getSurfaceHeightMeters: options.getSurfaceHeightMeters,
+        requestRender: () => scheduler.requestRender(),
+        onLoadStart: () => {
+          status.message = `${rasterBaseMap.label} tiles are loading.`;
+          beginStreaming();
+          emitStatus();
+        },
+        onLoadEnd: (visibleTiles, activeTiles) => {
+          status.message = `${rasterBaseMap.label} active (visible: ${visibleTiles}, active: ${activeTiles}).`;
+          endStreaming();
+          scheduler.requestRender();
+          emitStatus();
+        },
+        onLoadError: (error, url) => {
+          status.lastError = `${error.message} (${url})`;
+          status.message = `${rasterBaseMap.label} reported tile load errors.`;
+          emitStatus();
+        },
+      });
+    }
+
+    status.mode = "raster-basemap";
+    status.rasterBaseMap = rasterBaseMap;
+    status.lastError = reason;
+    status.message = reason
+      ? `${rasterBaseMap.label} active after Google tiles failed.`
+      : `${rasterBaseMap.label} raster basemap active.`;
+    rasterTilesRuntime.update();
+    scheduler.requestRender();
+
+    console.info("[runtime] Raster basemap runtime initialized", { source: rasterBaseMap.id, reason });
     emitStatus();
   }
 
@@ -346,26 +439,6 @@ export async function createBabylonRuntime(
       // the tile-load loop progresses without requiring a camera gesture.
       startupHeld = true;
       scheduler.beginContinuous();
-
-      // Track in-flight tile loads so the scheduler stays in continuous mode
-      // while new geometry is streaming in (camera may be still but the scene
-      // is changing). Released on tiles-load-end.
-      let streamingHeld = false;
-      const streamingListeners = streamingListenersRef;
-      const beginStreaming = (): void => {
-        if (streamingHeld) return;
-        streamingHeld = true;
-        streamingActiveRef.value = true;
-        scheduler.beginContinuous();
-        for (const listener of streamingListeners) listener(true);
-      };
-      const endStreaming = (): void => {
-        if (!streamingHeld) return;
-        streamingHeld = false;
-        streamingActiveRef.value = false;
-        scheduler.endContinuous();
-        for (const listener of streamingListeners) listener(false);
-      };
 
       tilesRuntime = createGoogleTilesRuntime({
         scene,
@@ -426,12 +499,16 @@ export async function createBabylonRuntime(
       enableFallbackMode(getErrorMessage(error));
     }
   } else {
-    ensureGeospatialCamera();
-    ensureFallbackExperience();
-    status.message = "Fallback mode active: missing Google Maps API key.";
-    emitStatus();
+    if (options.rasterBaseMap) {
+      enableRasterBaseMapMode(null);
+    } else {
+      ensureGeospatialCamera();
+      ensureFallbackExperience();
+      status.message = "Fallback mode active: missing Google Maps API key.";
+      emitStatus();
+    }
 
-    console.warn("[runtime] No Google Maps API key found. Starting in fallback mode.");
+    console.warn("[runtime] No Google Maps API key found. Starting without Google 3D tiles.");
   }
 
   const handleResize = () => {
@@ -470,13 +547,13 @@ export async function createBabylonRuntime(
       scheduler.requestRender();
     },
     getTileMetrics(): BabylonTileMetrics | null {
-      if (!tilesRuntime) {
-        return null;
+      if (tilesRuntime) {
+        return {
+          visibleTiles: tilesRuntime.tiles.visibleTiles.size,
+          activeTiles: tilesRuntime.tiles.activeTiles.size,
+        };
       }
-      return {
-        visibleTiles: tilesRuntime.tiles.visibleTiles.size,
-        activeTiles: tilesRuntime.tiles.activeTiles.size,
-      };
+      return rasterTilesRuntime?.getMetrics() ?? null;
     },
     setOrbitMode(active: boolean): void {
       orbitModeActive = active;
@@ -520,6 +597,9 @@ export async function createBabylonRuntime(
 
       tilesRuntime?.dispose();
       tilesRuntime = null;
+
+      rasterTilesRuntime?.dispose();
+      rasterTilesRuntime = null;
 
       inputController?.destroy();
       inputController = null;
