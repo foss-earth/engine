@@ -180,7 +180,11 @@ describe("computeTwoPointGestureMetrics", () => {
 describe("classifyTwoPointGestureIntent", () => {
   it("recognizes swipe intent when centroid translation dominates", () => {
     expect(classifyTwoPointGestureIntent(15, 1, true, true)).toBe("swipe");
-    expect(classifyTwoPointGestureIntent(15, 1, true, false)).toBeNull();
+    // Even when fingers don't pass the "moving together" cosine/magnitude
+    // bar (e.g. noisy Android Firefox touch coordinates), a clearly
+    // translation-dominant gesture must still classify as swipe — not
+    // pinch — so the user can orbit.
+    expect(classifyTwoPointGestureIntent(15, 1, true, false)).toBe("swipe");
   });
 
   it("recognizes pinch intent when distance change dominates", () => {
@@ -193,10 +197,25 @@ describe("classifyTwoPointGestureIntent", () => {
     expect(classifyTwoPointGestureIntent(3, 4)).toBeNull();
     expect(classifyTwoPointGestureIntent(5, 10, false)).toBeNull();
     expect(classifyTwoPointGestureIntent(10, 24, false, false, false)).toBeNull();
+    // Neither signal dominates the other by the required margin — wait
+    // for another frame instead of guessing.
+    expect(classifyTwoPointGestureIntent(10, 12, true, false)).toBeNull();
   });
 
   it("allows a large one-finger pivot pinch", () => {
     expect(classifyTwoPointGestureIntent(10, 24, false, false, true)).toBe("pinch");
+  });
+
+  it("classifies single-active-finger swipe immediately when centroid dominates", () => {
+    // Mirrors Android Firefox: one finger fires events, the other never does.
+    // centroid has moved far, distance barely changed → immediate swipe
+    // (no delay needed — false swipe is geometrically impossible in this mode).
+    expect(classifyTwoPointGestureIntent(43.5, 0.7, false, false, false)).toBe("swipe");
+    expect(classifyTwoPointGestureIntent(43.5, 0.7, false, false, true)).toBe("swipe");
+    // Ambiguous (neither dominates) → wait.
+    expect(classifyTwoPointGestureIntent(20, 20, false, false, true)).toBeNull();
+    // Vertical swipe toward stationary finger: centΔ = distΔ/2 → cannot commit to swipe.
+    expect(classifyTwoPointGestureIntent(20, 40, false, false, false)).toBeNull();
   });
 });
 

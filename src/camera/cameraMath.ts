@@ -127,6 +127,18 @@ export function computeTwoPointGestureMetrics(
 /**
  * Classify a two-finger gesture as swipe (centroid translation dominant)
  * or pinch (distance change dominant). Returns null while still ambiguous.
+ *
+ * Inspired by Apple's UIGestureRecognizer model: each candidate intent
+ * has an independent signal (centroid translation for swipe, spread
+ * change for pinch), and we commit only when one signal clearly
+ * dominates the other. If neither does, we return null and wait for
+ * the next frame — guessing under ambiguity is what locks Android
+ * Firefox into permanent zoom on what should be an orbit gesture.
+ *
+ * `touchesMovingTogether` is used only as a *bias* that lowers the
+ * dominance ratio swipe needs (parallel motion is strong swipe
+ * evidence). It is NOT a hard gate, because touchscreen noise makes
+ * "parallel" detection unreliable on many devices.
  */
 export function classifyTwoPointGestureIntent(
   centroidTranslationPx: number,
@@ -134,27 +146,52 @@ export function classifyTwoPointGestureIntent(
   hasTwoMovingTouches = true,
   touchesMovingTogether = false,
   allowSingleTouchPinch = false,
+  singleTouchPinchDistanceThresholdPx = 24,
 ): TwoPointGestureIntent {
   const distanceDeltaAbsPx = Math.abs(distanceDeltaPx);
+  const COMMIT_THRESHOLD_PX = 8;
+  const DOMINANCE_RATIO = 1.5;
 
   if (!hasTwoMovingTouches) {
-    return allowSingleTouchPinch && distanceDeltaAbsPx >= 24 ? "pinch" : null;
+    // Only one finger is generating pointermove events — common on Android
+    // Firefox, which frequently delays or omits events for the "slower" finger
+    // during a parallel two-finger swipe.
+    //
+    // Swipe can commit immediately: it is geometrically impossible to
+    // false-classify swipe in this mode.  When one finger is stationary the
+    // centroid always moves at exactly half the rate of the distance change
+    // (centΔ = distΔ/2), so centΔ >= distΔ×DOMINANCE_RATIO is only ever true
+    // when the moving finger is travelling *perpendicular* to the finger-finger
+    // axis — which is exactly a genuine swipe direction.
+    if (
+      centroidTranslationPx >= COMMIT_THRESHOLD_PX
+      && centroidTranslationPx >= distanceDeltaAbsPx * DOMINANCE_RATIO
+    ) return "swipe";
+    // Pinch requires the caller-supplied delay so a lagging-but-present second
+    // finger has time to arrive and flip hasTwoMovingTouches to true before we
+    // lock into zoom.
+    if (
+      allowSingleTouchPinch
+      && distanceDeltaAbsPx >= singleTouchPinchDistanceThresholdPx
+      && distanceDeltaAbsPx >= centroidTranslationPx * DOMINANCE_RATIO
+    ) return "pinch";
+    return null;
   }
 
-  const pinchDistanceThresholdPx = 8;
+  // Parallel motion is a strong swipe signal — allow swipe to commit
+  // whenever centroid translation merely matches the spread change.
+  const swipeRatio = touchesMovingTogether ? 1.0 : DOMINANCE_RATIO;
 
   if (
-    distanceDeltaAbsPx >= pinchDistanceThresholdPx
-    && (!touchesMovingTogether || distanceDeltaAbsPx >= centroidTranslationPx * 1.5)
+    distanceDeltaAbsPx >= COMMIT_THRESHOLD_PX
+    && distanceDeltaAbsPx >= centroidTranslationPx * DOMINANCE_RATIO
   ) {
     return "pinch";
   }
 
   if (
-    hasTwoMovingTouches
-    && touchesMovingTogether
-    && centroidTranslationPx >= 8
-    && centroidTranslationPx >= distanceDeltaAbsPx * 0.75
+    centroidTranslationPx >= COMMIT_THRESHOLD_PX
+    && centroidTranslationPx >= distanceDeltaAbsPx * swipeRatio
   ) {
     return "swipe";
   }
