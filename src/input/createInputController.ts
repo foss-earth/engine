@@ -43,14 +43,19 @@ export function createInputController(
 
   // ── Document-level prevention ────────────────────────────────────
   // Prevent the page from scrolling or zooming while the user interacts
-  // with the globe canvas.
-  const docWheelHandler = (e: Event): void => { e.preventDefault(); };
+  // with the globe canvas. Scope to events targeting the canvas so wheel
+  // gestures over HTML overlays (menus, panels) continue to scroll normally.
+  const isCanvasEvent = (e: Event): boolean => {
+    const t = e.target as Node | null;
+    return t === canvas || (t != null && canvas.contains(t));
+  };
+  const docWheelHandler = (e: Event): void => { if (isCanvasEvent(e)) e.preventDefault(); };
   document.addEventListener("wheel", docWheelHandler, { passive: false });
 
   const docGestureCleanup: Array<() => void> = [];
   if (hasSafariGestures) {
     for (const type of ["gesturestart", "gesturechange", "gestureend"] as const) {
-      const handler = (e: Event): void => { e.preventDefault(); };
+      const handler = (e: Event): void => { if (isCanvasEvent(e)) e.preventDefault(); };
       document.addEventListener(type, handler, { passive: false } as AddEventListenerOptions);
       docGestureCleanup.push(() => document.removeEventListener(type, handler));
     }
