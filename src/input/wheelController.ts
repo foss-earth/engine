@@ -52,7 +52,7 @@ function classifyWheelGestureMode(
   isOrbitMode: boolean,
   inputMode: InputSettings["mode"],
 ): WheelGestureMode {
-  if (e.shiftKey) return "orbit";
+  if (e.shiftKey) return inputMode === "trackpad" ? "pinchZoom" : "orbit";
   if (e.ctrlKey && !isSafariWithGestures) return "pinchZoom";
   if (inputMode === "trackpad") return isOrbitMode ? "orbit" : "pan";
   if (inputMode === "mouse") return isLikelyHorizontalMouseWheel(e) ? "ignore" : "wheelZoom";

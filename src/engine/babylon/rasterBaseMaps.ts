@@ -17,7 +17,7 @@ export interface RasterBaseMapSource {
   };
 }
 
-export const DEFAULT_RASTER_BASE_MAP_ID = "usgs-imagery";
+export const DEFAULT_RASTER_BASE_MAP_ID = "usgs-imagery-topo";
 
 export const RASTER_BASE_MAP_SOURCES: readonly RasterBaseMapSource[] = [
   {

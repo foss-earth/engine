@@ -76,14 +76,14 @@ const PERFORMANCE_METRIC_DEFINITIONS: readonly PerformanceMetricDefinition[] = [
     id: "frame",
     settingsLabel: "Frame time",
     tooltip: "Average time spent rendering each frame.",
-    defaultVisible: true,
+    defaultVisible: false,
     format: (snapshot) => `${snapshot.frameMs.toFixed(1)}ms`,
   },
   {
     id: "p95",
     settingsLabel: "P95 frame time",
     tooltip: "95th percentile frame time over the recent sample window.",
-    defaultVisible: true,
+    defaultVisible: false,
     format: (snapshot) => `p95 ${snapshot.p95FrameMs.toFixed(1)}ms`,
   },
   {
@@ -97,7 +97,7 @@ const PERFORMANCE_METRIC_DEFINITIONS: readonly PerformanceMetricDefinition[] = [
     id: "drawCalls",
     settingsLabel: "Draw calls",
     tooltip: "GPU draw calls submitted for the current frame when the renderer exposes them.",
-    defaultVisible: true,
+    defaultVisible: false,
     format: (snapshot) => snapshot.drawCalls === null ? null : `d${snapshot.drawCalls}`,
   },
   {
@@ -111,7 +111,7 @@ const PERFORMANCE_METRIC_DEFINITIONS: readonly PerformanceMetricDefinition[] = [
     id: "culling",
     settingsLabel: "Culling",
     tooltip: "Visible tracked objects over total tracked objects after hemisphere culling.",
-    defaultVisible: true,
+    defaultVisible: false,
     format: (snapshot) => snapshot.culling.total > 0 ? `c${snapshot.culling.visible}/${snapshot.culling.total}` : null,
   },
   {

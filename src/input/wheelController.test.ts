@@ -158,4 +158,48 @@ describe("attachWheelController", () => {
 
     cleanup();
   });
+
+  it("zooms (not orbits) when shift is held in trackpad mode", () => {
+    vi.spyOn(performance, "now").mockReturnValue(1_000);
+    const canvas = createCanvas();
+    const camera = {
+      panBy: vi.fn(),
+      orbitBy: vi.fn(),
+      zoomBy: vi.fn(),
+    };
+    const getSettings = () => ({
+      mode: "trackpad" as const,
+      sensitivity: { mouse: { pan: 1, orbit: 1, zoom: 1 }, trackpad: { pan: 1, orbit: 1, zoom: 1 }, touch: { pan: 1, orbit: 1, zoom: 1 } },
+    });
+    const cleanup = attachWheelController(canvas, camera, { isSafariWithGestures: false, getSettings });
+
+    canvas.dispatchEvent(createWheelEvent({ deltaY: -20, shiftKey: true }));
+
+    expect(camera.zoomBy).toHaveBeenCalled();
+    expect(camera.orbitBy).not.toHaveBeenCalled();
+
+    cleanup();
+  });
+
+  it("orbits when shift is held in non-trackpad (mouse) mode", () => {
+    vi.spyOn(performance, "now").mockReturnValue(1_000);
+    const canvas = createCanvas();
+    const camera = {
+      panBy: vi.fn(),
+      orbitBy: vi.fn(),
+      zoomBy: vi.fn(),
+    };
+    const getSettings = () => ({
+      mode: "mouse" as const,
+      sensitivity: { mouse: { pan: 1, orbit: 1, zoom: 1 }, trackpad: { pan: 1, orbit: 1, zoom: 1 }, touch: { pan: 1, orbit: 1, zoom: 1 } },
+    });
+    const cleanup = attachWheelController(canvas, camera, { isSafariWithGestures: false, getSettings });
+
+    canvas.dispatchEvent(createWheelEvent({ deltaY: -20, shiftKey: true }));
+
+    expect(camera.orbitBy).toHaveBeenCalled();
+    expect(camera.zoomBy).not.toHaveBeenCalled();
+
+    cleanup();
+  });
 });
