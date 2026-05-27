@@ -124,9 +124,9 @@ function tileKey(tile: TileCoord): string {
 
 function buildTileUrl(source: RasterBaseMapSource, tile: TileCoord): string {
   return source.urlTemplate
-    .replaceAll("{z}", String(tile.z))
-    .replaceAll("{x}", String(tile.x))
-    .replaceAll("{y}", String(tile.y));
+    .replace(/\{z\}/g, String(tile.z))
+    .replace(/\{x\}/g, String(tile.x))
+    .replace(/\{y\}/g, String(tile.y));
 }
 
 function getDesiredTiles(view: GlobeViewState, source: RasterBaseMapSource): TileCoord[] {

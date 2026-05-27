@@ -102,7 +102,8 @@ export function resolveRasterBaseMapSource(source: string | RasterBaseMapSource 
     return source;
   }
 
-  return RASTER_BASE_MAP_BY_ID.get(source ?? "")
+  const sourceId = typeof source === "string" ? source : "";
+  return RASTER_BASE_MAP_BY_ID.get(sourceId)
     ?? RASTER_BASE_MAP_BY_ID.get(DEFAULT_RASTER_BASE_MAP_ID)
     ?? RASTER_BASE_MAP_SOURCES[0];
 }
