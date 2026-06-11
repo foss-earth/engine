@@ -1,4 +1,5 @@
 import type { CameraInputTarget } from "./inertialCameraController";
+import { attachAnchorPanDebugOverlay, type AnchorPanDebugOverlay } from "./anchorPanDebugOverlay";
 import { MOVEMENT_SENSITIVITY_BASE, type InputSettings } from "./inputSettings";
 
 /** Degrees of orbit change per pixel of mouse drag. */
@@ -36,10 +37,43 @@ export function attachMouseController(
 ): () => void {
   let activeButton: 0 | 2 | null = null;
   let isDragging = false;
+  let anchorPanActive = false;
   let startX = 0;
   let startY = 0;
   let prevX = 0;
   let prevY = 0;
+  let anchorDownClientX = 0;
+  let anchorDownClientY = 0;
+  const anchorPanDebugOverlay: AnchorPanDebugOverlay = attachAnchorPanDebugOverlay(canvas);
+
+  function stopInertial(): void {
+    if (camera.cancelInertial) {
+      camera.cancelInertial();
+    } else {
+      camera.cancel?.();
+    }
+  }
+
+  function shouldUseAnchorPan(button: number): boolean {
+    return button === 0
+      && !(options.isOrbitMode?.() ?? false)
+      && (options.getSettings?.().globeAnchorRotation ?? false);
+  }
+
+  function updateAnchorPanDebug(clientX: number, clientY: number): void {
+    if (!anchorPanActive) {
+      anchorPanDebugOverlay.hide();
+      return;
+    }
+    const error = camera.getAnchorPanScreenError?.({
+      clientX,
+      clientY,
+      canvas,
+    });
+    const anchorX = error?.anchorClientX ?? anchorDownClientX;
+    const anchorY = error?.anchorClientY ?? anchorDownClientY;
+    anchorPanDebugOverlay.update(anchorX, anchorY, clientX, clientY);
+  }
 
   function onPointerDown(e: PointerEvent): void {
     if (e.pointerType !== "mouse") return;
@@ -47,27 +81,64 @@ export function attachMouseController(
     // Do NOT stop propagation here — let Babylon's picking system see the event.
     activeButton = e.button as 0 | 2;
     isDragging = false;
+    anchorPanActive = false;
     startX = prevX = e.clientX;
     startY = prevY = e.clientY;
     canvas.setPointerCapture(e.pointerId);
+
+    if (shouldUseAnchorPan(e.button) && camera.beginAnchorPan) {
+      anchorPanActive = camera.beginAnchorPan({
+        clientX: e.clientX,
+        clientY: e.clientY,
+        canvas,
+      });
+      if (anchorPanActive) {
+        anchorDownClientX = e.clientX;
+        anchorDownClientY = e.clientY;
+        updateAnchorPanDebug(e.clientX, e.clientY);
+      }
+    }
   }
 
   function onPointerMove(e: PointerEvent): void {
     if (e.pointerType !== "mouse" || activeButton === null) return;
 
+    const dx = e.clientX - prevX;
+    const dy = e.clientY - prevY;
+    const distFromStart = Math.hypot(e.clientX - startX, e.clientY - startY);
+
+    if (anchorPanActive && activeButton === 0 && !(options.isOrbitMode?.() ?? false)) {
+      if (distFromStart >= DRAG_START_THRESHOLD_PX) {
+        if (!isDragging) {
+          isDragging = true;
+          stopInertial();
+        }
+        e.preventDefault();
+        e.stopImmediatePropagation();
+      }
+      if (dx !== 0 || dy !== 0) {
+        const sensitivity = options.getSettings?.().sensitivity.mouse.pan ?? 1;
+        camera.panAnchorTo?.({
+          clientX: e.clientX,
+          clientY: e.clientY,
+          canvas,
+        }, sensitivity);
+      }
+      updateAnchorPanDebug(e.clientX, e.clientY);
+      prevX = e.clientX;
+      prevY = e.clientY;
+      return;
+    }
+
     if (!isDragging) {
-      const dist = Math.hypot(e.clientX - startX, e.clientY - startY);
-      if (dist < DRAG_START_THRESHOLD_PX) return; // still within click tolerance
-      // Commit to drag — cancel any inertia and take over event handling.
+      const dist = distFromStart;
+      if (dist < DRAG_START_THRESHOLD_PX) return;
       isDragging = true;
-      camera.cancel?.();
+      stopInertial();
     }
 
     e.preventDefault();
     e.stopImmediatePropagation();
-
-    const dx = e.clientX - prevX;
-    const dy = e.clientY - prevY;
     prevX = e.clientX;
     prevY = e.clientY;
 
@@ -83,12 +154,14 @@ export function attachMouseController(
   function onPointerUp(e: PointerEvent): void {
     if (e.pointerType !== "mouse" || activeButton === null) return;
     if (isDragging) {
-      // Swallow the up event so Babylon does not misfire a pick on drag-end.
       e.preventDefault();
       e.stopImmediatePropagation();
     }
-    // If not dragging it was a plain click — let the event propagate so
-    // Babylon's picking system fires the sphere-click handler.
+    if (anchorPanActive) {
+      camera.endAnchorPan?.();
+      anchorPanActive = false;
+      anchorPanDebugOverlay.hide();
+    }
     isDragging = false;
     activeButton = null;
     if (canvas.hasPointerCapture(e.pointerId)) {
@@ -108,6 +181,7 @@ export function attachMouseController(
   canvas.addEventListener("contextmenu", onContextMenu, opts as EventListenerOptions);
 
   return (): void => {
+    anchorPanDebugOverlay.destroy();
     canvas.removeEventListener("pointerdown", onPointerDown, opts as EventListenerOptions);
     canvas.removeEventListener("pointermove", onPointerMove, opts as EventListenerOptions);
     canvas.removeEventListener("pointerup", onPointerUp, opts as EventListenerOptions);

@@ -2,6 +2,13 @@ import { Vector3 } from "@babylonjs/core";
 import type { GeospatialCamera } from "@babylonjs/core";
 import type { GlobeViewState } from "../engine/types";
 import {
+  ANCHOR_PAN_CHASE,
+  computeScreenAnchorError,
+  pickEllipsoidFromScreen,
+  type ScreenAnchorError,
+  type ScreenPickInput,
+} from "./anchorPan";
+import {
   geodeticToEcef,
   ecefToGeodetic,
   DEG_TO_RAD,
@@ -72,6 +79,10 @@ export class CameraController {
   private orbitTargetOffsetMeters = 0;
   private smoothedSurfaceHeightMeters: number | null = null;
   private lastSurfaceHeightResolveMs: number | null = null;
+  /** Fixed ellipsoid grab point from pointer down — the screen error segment starts here. */
+  private anchorPanPoint: Vector3 | null = null;
+  /** Client coords at pointer down — visual fallback when projection is stale. */
+  private anchorPanDownClient: { x: number; y: number } | null = null;
 
   constructor(camera: GeospatialCamera) {
     this.camera = camera;
@@ -201,6 +212,97 @@ export class CameraController {
     const newLatDeg = Math.max(-89.999, Math.min(89.999, state.latDeg + latDeltaDeg));
     const newLonDeg = ((state.lonDeg + lonDeltaDeg + 180) % 360 + 360) % 360 - 180;
     this.applyViewState({ ...state, latDeg: newLatDeg, lonDeg: newLonDeg }, this.getCurrentCenterHeightMeters());
+  }
+
+  /**
+   * Begin an anchor-based pan gesture by picking the globe point under the pointer.
+   * Returns false when the ray misses the ellipsoid (sky / off-globe).
+   */
+  beginAnchorPan(pick: ScreenPickInput): boolean {
+    const scene = this.camera.getScene();
+    if (!scene) {
+      this.anchorPanPoint = null;
+      this.anchorPanDownClient = null;
+      return false;
+    }
+    const hit = pickEllipsoidFromScreen(scene, this.camera, pick.canvas, pick.clientX, pick.clientY);
+    if (!hit) {
+      this.anchorPanPoint = null;
+      this.anchorPanDownClient = null;
+      return false;
+    }
+    this.anchorPanPoint = hit.clone();
+    this.anchorPanDownClient = { x: pick.clientX, y: pick.clientY };
+    return true;
+  }
+
+  /**
+   * Continue an anchor-based pan: move orbit center lat/lon only (heading/pitch/zoom
+   * unchanged) to shrink the screen-space line from the grab point to the cursor.
+   */
+  panAnchorTo(pick: ScreenPickInput, sensitivity = 1): boolean {
+    if (!this.anchorPanPoint) {
+      return false;
+    }
+
+    const scene = this.camera.getScene();
+    if (!scene) {
+      return false;
+    }
+
+    const error = computeScreenAnchorError(
+      this.anchorPanPoint,
+      pick.clientX,
+      pick.clientY,
+      scene,
+      this.camera,
+      pick.canvas,
+      this.anchorPanDownClient ?? undefined,
+    );
+    if (!error || error.lengthPx < ANCHOR_PAN_CHASE.donePx) {
+      return error !== null;
+    }
+
+    // Screen error is already in CSS pixels — apply directly to panBy (not the
+    // legacy 0.1 movement gain used for inertial frame deltas).
+    const chase = Math.min(
+      ANCHOR_PAN_CHASE.maxFactor,
+      Math.max(ANCHOR_PAN_CHASE.minFactor, error.lengthPx / ANCHOR_PAN_CHASE.fullChasePx),
+    );
+    const factor = sensitivity * chase;
+    this.panBy(-error.dx * factor, -error.dy * factor, pick.canvas.clientHeight);
+    return true;
+  }
+
+  /** End an anchor-based pan gesture. */
+  endAnchorPan(): void {
+    this.anchorPanPoint = null;
+    this.anchorPanDownClient = null;
+  }
+
+  /** True while an anchor pan gesture is active. */
+  isAnchorPanActive(): boolean {
+    return this.anchorPanPoint !== null;
+  }
+
+  /** Screen-space error segment for the active grab point (debug / HUD). */
+  getAnchorPanScreenError(pick: ScreenPickInput): ScreenAnchorError | null {
+    if (!this.anchorPanPoint) {
+      return null;
+    }
+    const scene = this.camera.getScene();
+    if (!scene) {
+      return null;
+    }
+    return computeScreenAnchorError(
+      this.anchorPanPoint,
+      pick.clientX,
+      pick.clientY,
+      scene,
+      this.camera,
+      pick.canvas,
+      this.anchorPanDownClient ?? undefined,
+    );
   }
 
   /**

@@ -27,6 +27,7 @@ import { createAnchorHeightResolver } from "../terrain/anchorHeight";
 import { smoothSurfaceHeightMeters } from "../terrain/smoothElevation";
 import { createPoiSpriteSizeTuner } from "../hud/poiSpriteSizeTuner";
 import { createCompassScaleTuner } from "../hud/compassScaleTuner";
+import { loadGlobeAnchorRotationPreference } from "../input/inputSettings";
 import type { PoiSpriteSizeParams } from "../hud/poiSpriteSizeTuner";
 import type { OrbitCompassScaleParams } from "../visualization/orbitCompass";
 
@@ -437,6 +438,10 @@ export async function createGlobeApp(
           </div>
           <div class="settings-metric-menu">
             <div class="settings-section-title">Camera</div>
+            <label class="settings-checkbox" title="Drag the globe so the point under your cursor stays grabbed, like Google Earth. When off, pan uses the legacy flat screen translation model.">
+              <input type="checkbox" id="globeAnchorRotationToggle">
+              <span>Globe anchor rotation pan</span>
+            </label>
             <label class="settings-checkbox settings-slider-row" style="grid-column:1/-1;flex-direction:column;align-items:stretch;gap:4px">
               <span style="display:flex;justify-content:space-between">
                 <span>Compass orbit height</span>
@@ -656,6 +661,7 @@ export async function createGlobeApp(
   const extraPanelsGridEl = rootElement.querySelector<HTMLElement>("#extraPanelsGrid");
   const poiSpriteTunerToggleEl = rootElement.querySelector<HTMLInputElement>("#poiSpriteTunerToggle");
   const compassScaleTunerToggleEl = rootElement.querySelector<HTMLInputElement>("#compassScaleTunerToggle");
+  const globeAnchorRotationToggleEl = rootElement.querySelector<HTMLInputElement>("#globeAnchorRotationToggle");
 
   const statusHud: StatusHudHandle | null = hudStatusEl ? createStatusHud(hudStatusEl) : null;
   const northButton: NorthButtonHandle | null = northBtnSvgEl ? createNorthButton(northBtnSvgEl) : null;
@@ -673,6 +679,16 @@ export async function createGlobeApp(
     compassHeightSliderEl.value = String(storedHeight);
     if (compassHeightValueEl) compassHeightValueEl.textContent = `${storedHeight}m`;
   }
+
+  if (globeAnchorRotationToggleEl) {
+    globeAnchorRotationToggleEl.checked = runtime.getGlobeAnchorRotation?.()
+      ?? loadGlobeAnchorRotationPreference();
+  }
+  const onGlobeAnchorRotationToggleChange = (): void => {
+    if (!globeAnchorRotationToggleEl) return;
+    runtime.setGlobeAnchorRotation?.(globeAnchorRotationToggleEl.checked);
+  };
+  globeAnchorRotationToggleEl?.addEventListener("change", onGlobeAnchorRotationToggleChange);
 
   // ── POI sprite size tuner ─────────────────────────────────────
   function loadPoiSpriteTunerVisible(): boolean {
@@ -962,6 +978,7 @@ export async function createGlobeApp(
       compassHeightSliderEl?.removeEventListener("input", onCompassHeightInput);
       poiSpriteTunerToggleEl?.removeEventListener("change", onPoiSpriteTunerToggleChange);
       compassScaleTunerToggleEl?.removeEventListener("change", onCompassScaleTunerToggleChange);
+      globeAnchorRotationToggleEl?.removeEventListener("change", onGlobeAnchorRotationToggleChange);
       themeBtnEl?.removeEventListener("click", onThemeButtonClick);
       offThemeChangeForButton();
       offTilesStreaming();

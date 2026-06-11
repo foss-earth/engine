@@ -87,6 +87,9 @@ export interface BabylonRuntime {
   setInputMode(mode: InputModePreference): void;
   /** Set movement sensitivity multipliers for mouse, trackpad, and touch. */
   setInputSensitivity(sensitivity: Partial<InputSensitivitySettings>): void;
+  /** Toggle anchor-based globe drag pan (grabbed surface point follows cursor). */
+  setGlobeAnchorRotation(enabled: boolean): void;
+  getGlobeAnchorRotation(): boolean;
   /**
    * Render-on-demand controls. The runtime no longer runs an unconditional
    * render loop; consumers must call requestRender() after any external scene
@@ -295,8 +298,32 @@ export async function createBabylonRuntime(
         baseInertial.zoomBy(f);
         scheduler.requestRender();
       },
+      beginAnchorPan(pick) {
+        baseInertial.cancel();
+        return cameraController!.beginAnchorPan(pick);
+      },
+      panAnchorTo(pick, sensitivity) {
+        const moved = cameraController!.panAnchorTo(pick, sensitivity);
+        if (moved) {
+          scheduler.requestRender();
+        }
+        return moved;
+      },
+      getAnchorPanScreenError(pick) {
+        return cameraController!.getAnchorPanScreenError(pick);
+      },
+      endAnchorPan() {
+        cameraController!.endAnchorPan();
+      },
       update: baseInertial.update,
-      cancel: baseInertial.cancel,
+      /** Stop inertial velocity only — does not end an active anchor-pan grab. */
+      cancelInertial() {
+        baseInertial.cancel();
+      },
+      cancel() {
+        baseInertial.cancel();
+        cameraController?.endAnchorPan();
+      },
       isActive: baseInertial.isActive,
     };
     inputController = createInputController(canvas, inertialCameraController, { isOrbitMode: () => orbitModeActive });
@@ -563,6 +590,12 @@ export async function createBabylonRuntime(
     },
     setInputSensitivity(sensitivity: Partial<InputSensitivitySettings>): void {
       inputController?.setSensitivity(sensitivity);
+    },
+    setGlobeAnchorRotation(enabled: boolean): void {
+      inputController?.setGlobeAnchorRotation(enabled);
+    },
+    getGlobeAnchorRotation(): boolean {
+      return inputController?.getGlobeAnchorRotation() ?? false;
     },
     requestRender(): void {
       scheduler.requestRender();

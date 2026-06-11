@@ -1,8 +1,28 @@
+export interface AnchorPanPick {
+  clientX: number;
+  clientY: number;
+  canvas: HTMLCanvasElement;
+}
+
+export interface AnchorPanScreenError {
+  anchorClientX: number;
+  anchorClientY: number;
+  dx: number;
+  dy: number;
+  lengthPx: number;
+}
+
 export interface CameraInputTarget {
   panBy(screenDxPx: number, screenDyPx: number, canvasHeight: number): void;
   orbitBy(pitchDeltaDeg: number, headingDeltaDeg: number): void;
   zoomBy(factor: number): void;
+  /** Stop inertial velocity without ending an active anchor-pan grab. */
+  cancelInertial?(): void;
   cancel?(): void;
+  beginAnchorPan?(pick: AnchorPanPick): boolean;
+  panAnchorTo?(pick: AnchorPanPick, sensitivity?: number): boolean;
+  getAnchorPanScreenError?(pick: AnchorPanPick): AnchorPanScreenError | null;
+  endAnchorPan?(): void;
 }
 
 export interface InertialCameraController extends CameraInputTarget {

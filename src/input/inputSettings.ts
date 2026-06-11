@@ -15,6 +15,8 @@ export interface InputSensitivitySettings {
 export interface InputSettings {
   mode: InputModePreference;
   sensitivity: InputSensitivitySettings;
+  /** When true, drag-pan rotates the globe so the grabbed surface point follows the cursor. */
+  globeAnchorRotation: boolean;
 }
 
 export const DEFAULT_INPUT_SENSITIVITY: InputSensitivitySettings = {
@@ -28,7 +30,26 @@ export const MOVEMENT_SENSITIVITY_BASE = 0.1;
 export const DEFAULT_INPUT_SETTINGS: InputSettings = {
   mode: "auto",
   sensitivity: DEFAULT_INPUT_SENSITIVITY,
+  globeAnchorRotation: false,
 };
+
+export const GLOBE_ANCHOR_ROTATION_STORAGE_KEY = "foss-earth.globeAnchorRotation";
+
+export function loadGlobeAnchorRotationPreference(): boolean {
+  try {
+    return window.localStorage.getItem(GLOBE_ANCHOR_ROTATION_STORAGE_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+export function saveGlobeAnchorRotationPreference(enabled: boolean): void {
+  try {
+    window.localStorage.setItem(GLOBE_ANCHOR_ROTATION_STORAGE_KEY, String(enabled));
+  } catch {
+    // Ignore private-mode or restricted-storage failures.
+  }
+}
 
 export function clampSensitivity(value: number): number {
   if (!Number.isFinite(value)) return 1;

@@ -5,7 +5,9 @@ import { attachTouchController } from "./touchController";
 import { attachMouseController } from "./mouseController";
 import {
   DEFAULT_INPUT_SETTINGS,
+  loadGlobeAnchorRotationPreference,
   normalizeSensitivitySettings,
+  saveGlobeAnchorRotationPreference,
   type InputModePreference,
   type InputSensitivitySettings,
   type InputSettings,
@@ -14,6 +16,8 @@ import {
 export interface InputController {
   setMode(mode: InputModePreference): void;
   setSensitivity(sensitivity: Partial<InputSensitivitySettings>): void;
+  setGlobeAnchorRotation(enabled: boolean): void;
+  getGlobeAnchorRotation(): boolean;
   destroy(): void;
 }
 
@@ -39,6 +43,7 @@ export function createInputController(
   const settings: InputSettings = {
     mode: DEFAULT_INPUT_SETTINGS.mode,
     sensitivity: normalizeSensitivitySettings(DEFAULT_INPUT_SETTINGS.sensitivity),
+    globeAnchorRotation: loadGlobeAnchorRotationPreference(),
   };
 
   // ── Document-level prevention ────────────────────────────────────
@@ -77,6 +82,13 @@ export function createInputController(
         trackpad: { ...settings.sensitivity.trackpad, ...sensitivity.trackpad },
         touch: { ...settings.sensitivity.touch, ...sensitivity.touch },
       });
+    },
+    setGlobeAnchorRotation(enabled: boolean): void {
+      settings.globeAnchorRotation = enabled;
+      saveGlobeAnchorRotationPreference(enabled);
+    },
+    getGlobeAnchorRotation(): boolean {
+      return settings.globeAnchorRotation;
     },
     destroy(): void {
       detachWheel();

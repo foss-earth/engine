@@ -57,6 +57,7 @@ interface PanSession {
   kind: "pan";
   identifier: number;
   previous: Point2D;
+  anchorPanActive: boolean;
 }
 
 interface TransformSession {
@@ -175,7 +176,15 @@ export function attachTouchController(
       return;
     }
     const t = touches[0];
-    session = { kind: "pan", identifier: t.identifier, previous: pointFromTouch(t) };
+    let anchorPanActive = false;
+    if ((options.getSettings?.().globeAnchorRotation ?? false) && camera.beginAnchorPan) {
+      anchorPanActive = camera.beginAnchorPan({
+        clientX: t.clientX,
+        clientY: t.clientY,
+        canvas,
+      });
+    }
+    session = { kind: "pan", identifier: t.identifier, previous: pointFromTouch(t), anchorPanActive };
   }
 
   function startTransformSession(touches: TouchList): void {
@@ -248,7 +257,18 @@ export function attachTouchController(
     session.previous = p;
     if (Math.abs(dx) > TOUCH_MAX_DELTA_PX || Math.abs(dy) > TOUCH_MAX_DELTA_PX) return;
     if (Math.abs(dx) < TOUCH_PAN_DEADZONE_PX && Math.abs(dy) < TOUCH_PAN_DEADZONE_PX) return;
+
     const sensitivity = options.getSettings?.().sensitivity.touch.pan ?? 1;
+
+    if (s.anchorPanActive && camera.panAnchorTo) {
+      camera.panAnchorTo({
+        clientX: p.x,
+        clientY: p.y,
+        canvas,
+      }, sensitivity);
+      return;
+    }
+
     camera.panBy(
       -dx * sensitivity * TOUCH_PAN_SPEED,
       -dy * sensitivity * TOUCH_PAN_SPEED,
@@ -405,6 +425,9 @@ export function attachTouchController(
 
   function onTouchEnd(e: TouchEvent): void {
     stop(e);
+    if (session?.kind === "pan" && session.anchorPanActive) {
+      camera.endAnchorPan?.();
+    }
     for (const t of Array.from(e.changedTouches)) {
       touchMoveCount.delete(t.identifier);
       emitDebug({
