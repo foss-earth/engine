@@ -1,5 +1,6 @@
 import { Matrix, Vector3 } from "@babylonjs/core";
 import { createBabylonRuntime, type BabylonRuntime, type RendererMode } from "../engine/babylon/createBabylonRuntime";
+import { clearRendererPreference } from "../engine/babylon/rendererPreference";
 import {
   DEFAULT_RASTER_BASE_MAP_ID,
   RASTER_BASE_MAP_SOURCES,
@@ -200,6 +201,9 @@ function getRendererForceFromUrl(): RendererMode | null {
 }
 
 function setRendererForce(force: RendererMode | null): void {
+  if (force === null) {
+    clearRendererPreference();
+  }
   const url = new URL(window.location.href);
   if (force) url.searchParams.set("renderer", force);
   else url.searchParams.delete("renderer");

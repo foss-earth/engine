@@ -13,7 +13,7 @@ import {
 } from "@babylonjs/core";
 import { GeospatialClippingBehavior } from "@babylonjs/core/Behaviors/Cameras/geospatialClippingBehavior";
 
-import { createRendererMode, type RendererMode, type RendererSelection } from "./createRendererMode";
+import { bootstrapGlobeRenderer, type RendererMode, type RendererSelection } from "./createRendererMode";
 import { createGoogleTilesRuntime, type GoogleTilesRuntime } from "./createTilesRuntime";
 import { createRasterTilesRuntime, type RasterTilesRuntime } from "./createRasterTilesRuntime";
 import type { RasterBaseMapSource } from "./rasterBaseMaps";
@@ -180,9 +180,9 @@ export async function createBabylonRuntime(
 ): Promise<BabylonRuntime> {
   const normalizedApiKey = options.googleApiKey?.trim() ?? "";
   const hasGoogleApiKey = normalizedApiKey.length > 0;
-  const renderer = await createRendererMode(canvas, { force: options.rendererForce ?? null });
-  const scene = new Scene(renderer.engine);
-  scene.useRightHandedSystem = true;
+  const { renderer, scene } = await bootstrapGlobeRenderer(canvas, {
+    force: options.rendererForce ?? null,
+  });
 
   let tilesRuntime: GoogleTilesRuntime | null = null;
   let rasterTilesRuntime: RasterTilesRuntime | null = null;
