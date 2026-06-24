@@ -116,7 +116,7 @@ function distance(a: Point2D, b: Point2D): number {
 export function attachTouchController(
   canvas: HTMLCanvasElement,
   camera: CameraInputTarget,
-  options: { getSettings?: () => InputSettings; onDebug?: (event: TouchDebugEvent) => void } = {},
+  options: { isOrbitMode?: () => boolean; getSettings?: () => InputSettings; onDebug?: (event: TouchDebugEvent) => void } = {},
 ): () => void {
   // ── Debug overlay wiring ────────────────────────────────────────
   let debugOverlayDestroy: (() => void) | null = null;
@@ -337,8 +337,9 @@ export function attachTouchController(
 
     if (session.orbitActive) {
       const sensitivity = options.getSettings?.().sensitivity.touch.orbit ?? 1;
+      const pitchSign = options.isOrbitMode?.() ? -1 : 1;
       camera.orbitBy(
-        dCy * TOUCH_ORBIT_DEG_PER_PX * sensitivity,
+        pitchSign * dCy * TOUCH_ORBIT_DEG_PER_PX * sensitivity,
         dCx * TOUCH_ORBIT_DEG_PER_PX * sensitivity,
       );
     }

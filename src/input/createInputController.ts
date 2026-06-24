@@ -69,7 +69,7 @@ export function createInputController(
   // ── Canvas-level handlers ────────────────────────────────────────
   const detachWheel = attachWheelController(canvas, camera, { isSafariWithGestures: hasSafariGestures, isOrbitMode: options.isOrbitMode, getSettings: () => settings });
   const detachSafari = hasSafariGestures ? attachSafariGestures(canvas, camera, { getSettings: () => settings }) : (): void => undefined;
-  const detachTouch = attachTouchController(canvas, camera, { getSettings: () => settings });
+  const detachTouch = attachTouchController(canvas, camera, { isOrbitMode: options.isOrbitMode, getSettings: () => settings });
   const detachMouse = attachMouseController(canvas, camera, { isOrbitMode: options.isOrbitMode, getSettings: () => settings });
 
   return {

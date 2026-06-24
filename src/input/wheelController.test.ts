@@ -202,4 +202,28 @@ describe("attachWheelController", () => {
 
     cleanup();
   });
+
+  it("inverts POI-orbit pitch so swipe-up tilts the view upward", () => {
+    vi.spyOn(performance, "now").mockReturnValue(1_000);
+    const canvas = createCanvas();
+    const camera = {
+      panBy: vi.fn(),
+      orbitBy: vi.fn(),
+      zoomBy: vi.fn(),
+    };
+    const cleanup = attachWheelController(canvas, camera, {
+      isSafariWithGestures: false,
+      isOrbitMode: () => true,
+    });
+
+    canvas.dispatchEvent(createWheelEvent({ deltaY: -10.5 }));
+
+    expect(camera.orbitBy).toHaveBeenCalledTimes(1);
+    const [pitch, heading] = camera.orbitBy.mock.calls[0] as [number, number];
+    expect(pitch).toBeCloseTo(0.1575, 5);
+    expect(heading).toBeCloseTo(0, 5);
+    expect(camera.panBy).not.toHaveBeenCalled();
+
+    cleanup();
+  });
 });

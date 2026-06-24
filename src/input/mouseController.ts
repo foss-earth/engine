@@ -147,7 +147,11 @@ export function attachMouseController(
       camera.panBy(-dx * sensitivity * MOVEMENT_SENSITIVITY_BASE, -dy * sensitivity * MOVEMENT_SENSITIVITY_BASE, canvas.clientHeight);
     } else {
       const sensitivity = options.getSettings?.().sensitivity.mouse.orbit ?? 1;
-      camera.orbitBy(dy * MOUSE_ORBIT_DEG_PER_PX * sensitivity * MOVEMENT_SENSITIVITY_BASE, dx * MOUSE_ORBIT_DEG_PER_PX * sensitivity * MOVEMENT_SENSITIVITY_BASE);
+      const pitchSign = options.isOrbitMode?.() ? -1 : 1;
+      camera.orbitBy(
+        pitchSign * dy * MOUSE_ORBIT_DEG_PER_PX * sensitivity * MOVEMENT_SENSITIVITY_BASE,
+        dx * MOUSE_ORBIT_DEG_PER_PX * sensitivity * MOVEMENT_SENSITIVITY_BASE,
+      );
     }
   }
 

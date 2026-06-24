@@ -118,7 +118,10 @@ export function attachWheelController(
       const sensitivity = settings?.mode === "mouse"
         ? settings.sensitivity.mouse.orbit
         : settings?.sensitivity.trackpad.orbit ?? 1;
-      const pitchDeltaDeg = e.deltaY * 0.15 * sensitivity * MOVEMENT_SENSITIVITY_BASE;
+      // POI orbit mode maps trackpad swipe to orbit; invert pitch so swipe-up
+      // tilts the view upward (matches pan drag direction users expect).
+      const pitchSign = options.isOrbitMode?.() ? -1 : 1;
+      const pitchDeltaDeg = pitchSign * e.deltaY * 0.15 * sensitivity * MOVEMENT_SENSITIVITY_BASE;
       const headingDeltaDeg = -e.deltaX * 0.15 * sensitivity * MOVEMENT_SENSITIVITY_BASE;
       camera.orbitBy(pitchDeltaDeg, headingDeltaDeg);
       return;
