@@ -30,16 +30,21 @@ export const MOVEMENT_SENSITIVITY_BASE = 0.1;
 export const DEFAULT_INPUT_SETTINGS: InputSettings = {
   mode: "auto",
   sensitivity: DEFAULT_INPUT_SENSITIVITY,
-  globeAnchorRotation: false,
+  /** Google Earth-style grab pan — surface point under the cursor stays fixed while dragging. */
+  globeAnchorRotation: true,
 };
 
 export const GLOBE_ANCHOR_ROTATION_STORAGE_KEY = "foss-earth.globeAnchorRotation";
 
 export function loadGlobeAnchorRotationPreference(): boolean {
   try {
-    return window.localStorage.getItem(GLOBE_ANCHOR_ROTATION_STORAGE_KEY) === "true";
+    const stored = window.localStorage.getItem(GLOBE_ANCHOR_ROTATION_STORAGE_KEY);
+    if (stored === null) {
+      return DEFAULT_INPUT_SETTINGS.globeAnchorRotation;
+    }
+    return stored === "true";
   } catch {
-    return false;
+    return DEFAULT_INPUT_SETTINGS.globeAnchorRotation;
   }
 }
 

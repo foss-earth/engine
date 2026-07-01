@@ -442,8 +442,8 @@ export async function createGlobeApp(
           </div>
           <div class="settings-metric-menu">
             <div class="settings-section-title">Camera</div>
-            <label class="settings-checkbox" title="Drag the globe so the point under your cursor stays grabbed, like Google Earth. When off, pan uses the legacy flat screen translation model.">
-              <input type="checkbox" id="globeAnchorRotationToggle">
+            <label class="settings-checkbox" title="Drag the globe so the point under your cursor stays grabbed, like Google Earth. When off, pan uses a flat screen translation instead. Enabled by default.">
+              <input type="checkbox" id="globeAnchorRotationToggle" checked>
               <span>Globe anchor rotation pan</span>
             </label>
             <label class="settings-checkbox settings-slider-row" style="grid-column:1/-1;flex-direction:column;align-items:stretch;gap:4px">

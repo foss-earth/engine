@@ -3,11 +3,13 @@ import type { GeospatialCamera } from "@babylonjs/core";
 import type { GlobeViewState } from "../engine/types";
 import {
   ANCHOR_PAN_CHASE,
+  clientToViewportCoords,
   computeScreenAnchorError,
   pickEllipsoidFromScreen,
   type ScreenAnchorError,
   type ScreenPickInput,
 } from "./anchorPan";
+import { hasPickablePointAt } from "../sprites/picking";
 import {
   geodeticToEcef,
   ecefToGeodetic,
@@ -221,6 +223,12 @@ export class CameraController {
   beginAnchorPan(pick: ScreenPickInput): boolean {
     const scene = this.camera.getScene();
     if (!scene) {
+      this.anchorPanPoint = null;
+      this.anchorPanDownClient = null;
+      return false;
+    }
+    const { x, y } = clientToViewportCoords(pick.canvas, scene, pick.clientX, pick.clientY);
+    if (hasPickablePointAt(scene, x, y)) {
       this.anchorPanPoint = null;
       this.anchorPanDownClient = null;
       return false;

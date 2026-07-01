@@ -42,3 +42,13 @@ export function pickPointMetadata<T = unknown>(
   }
   return null;
 }
+
+/** True when a pickable sprite or mesh with metadata sits under the viewport point. */
+export function hasPickablePointAt(
+  scene: Scene,
+  x: number,
+  y: number,
+  options: PickPointMetadataOptions = {},
+): boolean {
+  return pickPointMetadata(scene, x, y, options) !== null;
+}
