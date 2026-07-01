@@ -36,6 +36,75 @@ export const DEFAULT_INPUT_SETTINGS: InputSettings = {
 
 export const GLOBE_ANCHOR_ROTATION_STORAGE_KEY = "foss-earth.globeAnchorRotation";
 
+export const INPUT_MODE_STORAGE_KEY = "foss-earth.inputMode";
+export const INPUT_SENSITIVITY_STORAGE_KEY = "foss-earth.inputSensitivity";
+export const INPUT_SENSITIVITY_VERSION_KEY = "foss-earth.inputSensitivityVersion";
+export const INPUT_SENSITIVITY_VERSION = "1";
+
+/** Legacy keys written by an older Fundfolio embed — read once for migration. */
+const LEGACY_INPUT_MODE_STORAGE_KEY = "moir-park.map-input-mode";
+const LEGACY_INPUT_SENSITIVITY_STORAGE_KEY = "moir-park.map-input-sensitivity";
+const LEGACY_INPUT_SENSITIVITY_VERSION_KEY = "moir-park.map-input-sensitivity-version";
+const LEGACY_INPUT_SENSITIVITY_VERSION = "6";
+
+export type HudInputMode = Exclude<InputModePreference, "auto">;
+
+function isHudInputMode(value: string | null): value is HudInputMode {
+  return value === "mouse" || value === "trackpad" || value === "touch";
+}
+
+export function loadInputModePreference(availableModes: ReadonlySet<HudInputMode>): HudInputMode {
+  try {
+    const saved = window.localStorage.getItem(INPUT_MODE_STORAGE_KEY)
+      ?? window.localStorage.getItem(LEGACY_INPUT_MODE_STORAGE_KEY);
+    if (isHudInputMode(saved) && availableModes.has(saved)) {
+      return saved;
+    }
+  } catch {
+    // Ignore restricted storage.
+  }
+
+  return availableModes.has("trackpad") ? "trackpad" : availableModes.values().next().value ?? "mouse";
+}
+
+export function saveInputModePreference(mode: HudInputMode): void {
+  try {
+    window.localStorage.setItem(INPUT_MODE_STORAGE_KEY, mode);
+  } catch {
+    // Ignore restricted storage.
+  }
+}
+
+export function loadInputSensitivityPreference(): InputSensitivitySettings {
+  try {
+    const raw = window.localStorage.getItem(INPUT_SENSITIVITY_STORAGE_KEY)
+      ?? window.localStorage.getItem(LEGACY_INPUT_SENSITIVITY_STORAGE_KEY);
+    const savedVersion = window.localStorage.getItem(INPUT_SENSITIVITY_VERSION_KEY)
+      ?? window.localStorage.getItem(LEGACY_INPUT_SENSITIVITY_VERSION_KEY);
+    const next = normalizeSensitivitySettings(raw ? JSON.parse(raw) as Partial<InputSensitivitySettings> : {});
+    if (savedVersion !== INPUT_SENSITIVITY_VERSION && savedVersion !== LEGACY_INPUT_SENSITIVITY_VERSION) {
+      next.mouse.zoom = DEFAULT_INPUT_SENSITIVITY.mouse.zoom;
+      next.trackpad.zoom = DEFAULT_INPUT_SENSITIVITY.trackpad.zoom;
+      next.touch.pan = DEFAULT_INPUT_SENSITIVITY.touch.pan;
+      next.touch.orbit = DEFAULT_INPUT_SENSITIVITY.touch.orbit;
+      next.touch.zoom = DEFAULT_INPUT_SENSITIVITY.touch.zoom;
+      saveInputSensitivityPreference(next);
+    }
+    return next;
+  } catch {
+    return normalizeSensitivitySettings({});
+  }
+}
+
+export function saveInputSensitivityPreference(settings: InputSensitivitySettings): void {
+  try {
+    window.localStorage.setItem(INPUT_SENSITIVITY_STORAGE_KEY, JSON.stringify(settings));
+    window.localStorage.setItem(INPUT_SENSITIVITY_VERSION_KEY, INPUT_SENSITIVITY_VERSION);
+  } catch {
+    // Ignore restricted storage.
+  }
+}
+
 export function loadGlobeAnchorRotationPreference(): boolean {
   try {
     const stored = window.localStorage.getItem(GLOBE_ANCHOR_ROTATION_STORAGE_KEY);

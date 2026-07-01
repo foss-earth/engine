@@ -98,7 +98,7 @@ function formatEvent(event: TouchDebugEvent, baseTimestamp: number): FormattedEn
     case "session":
       return {
         text: `${t}s session=${event.sessionKind} ${event.note ?? ""}`,
-        color: "#a78bfa",
+        color: "#3b82f6",
       };
     case "classify": {
       const intentColor =

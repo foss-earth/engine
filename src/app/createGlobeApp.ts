@@ -28,12 +28,14 @@ import { createAnchorHeightResolver } from "../terrain/anchorHeight";
 import { smoothSurfaceHeightMeters } from "../terrain/smoothElevation";
 import { createPoiSpriteSizeTuner } from "../hud/poiSpriteSizeTuner";
 import { createCompassScaleTuner } from "../hud/compassScaleTuner";
+import { createInputModeHud, type InputModeHudHandle } from "../hud/inputModeHud";
 import { loadGlobeAnchorRotationPreference } from "../input/inputSettings";
 import type { PoiSpriteSizeParams } from "../hud/poiSpriteSizeTuner";
 import type { OrbitCompassScaleParams } from "../visualization/orbitCompass";
 
 export interface GlobeAppHandle extends GlobeHandle {
   runtime: BabylonRuntime;
+  inputModeHud: InputModeHudHandle | null;
 }
 
 export interface GlobeAppOptions {
@@ -452,7 +454,7 @@ export async function createGlobeApp(
                 <span id="compassHeightValue"></span>
               </span>
               <input id="compassHeightSlider" type="range" min="-1000" max="1000" step="10"
-                style="width:100%;accent-color:#60a5fa;cursor:pointer">
+                style="width:100%;accent-color:var(--globe-accent);cursor:pointer">
             </label>
           </div>
           <p id="settingsBuildLine" class="settings-line">Build: ${BUILD_TIME}</p>
@@ -749,6 +751,13 @@ export async function createGlobeApp(
   };
   compassScaleTunerToggleEl?.addEventListener("change", onCompassScaleTunerToggleChange);
 
+  const inputModeHud: InputModeHudHandle | null = themeBtnEl
+    ? createInputModeHud(rootElement, themeBtnEl, {
+        onModeChange: (mode) => runtime.setInputMode?.(mode),
+        onSensitivityChange: (sensitivity) => runtime.setInputSensitivity?.(sensitivity),
+      })
+    : null;
+
   function setMapSourceMenuOpen(open: boolean): void {
     if (!mapSourceMenu || !runtimeModePill) return;
     mapSourceMenu.hidden = !open;
@@ -951,6 +960,7 @@ export async function createGlobeApp(
 
   return {
     runtime,
+    inputModeHud,
     addLayer,
     removeLayer,
     getViewState(): GlobeViewState | null {
@@ -976,6 +986,7 @@ export async function createGlobeApp(
       settingsModal?.destroy();
       spriteTuner?.destroy();
       compassScaleTuner?.destroy();
+      inputModeHud?.destroy();
       runtimeModePill?.removeEventListener("click", onMapSourceClick);
       mapSourceMenu?.removeEventListener("click", onMapSourceMenuClick);
       settingsPerformanceMetricsEl?.removeEventListener("change", onPerformanceMetricChange);
