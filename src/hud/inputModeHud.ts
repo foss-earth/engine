@@ -22,6 +22,42 @@ export interface InputModeHudOptions {
 
 const DELTA_EPSILON = 0.001;
 const MENU_VIEWPORT_GUTTER_PX = 8;
+/** Sky blue — applied inline so host-app CSS cannot shift the HUD toward purple. */
+const HUD_ACCENT = "#0284c7";
+const HUD_ACCENT_ACTIVE_BG = "rgba(14, 165, 233, 0.16)";
+
+const INPUT_MODE_ACCENT_STYLE_ID = "foss-earth-input-mode-accent";
+
+function ensureInputModeAccentStyles(): void {
+  if (document.getElementById(INPUT_MODE_ACCENT_STYLE_ID)) return;
+  const style = document.createElement("style");
+  style.id = INPUT_MODE_ACCENT_STYLE_ID;
+  style.textContent = `
+    #inputModeMenu .input-mode-toggle-option.is-active,
+    #inputModeMenu .input-mode-toggle-option.is-active span,
+    #inputModeMenu .gesture-action-label,
+    #inputModeMenu .gesture-action-icon,
+    #inputModeMenu .gesture-play-btn {
+      color: ${HUD_ACCENT} !important;
+    }
+    #inputModeMenu .input-mode-toggle-option.is-active {
+      background: ${HUD_ACCENT_ACTIVE_BG} !important;
+    }
+    #inputModeMenu .gesture-action-icon svg,
+    #inputModeMenu .input-mode-toggle-option.is-active svg {
+      stroke: ${HUD_ACCENT} !important;
+    }
+    #inputModeMenu .gesture-play-btn svg {
+      fill: ${HUD_ACCENT} !important;
+    }
+  `;
+  document.head.append(style);
+}
+
+function applyAccentToSvg(svg: SVGElement | null): void {
+  if (!svg) return;
+  svg.style.stroke = HUD_ACCENT;
+}
 
 const MODE_LABELS: Record<HudInputMode, string> = {
   mouse: "Mouse mode",
@@ -79,8 +115,8 @@ function detectAvailableModes(): Set<HudInputMode> {
   return modes;
 }
 
-const SVG_ICON_ATTRS = 'xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"';
-const SVG_ACTION_ATTRS = 'xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"';
+const SVG_ICON_ATTRS = `xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="${HUD_ACCENT}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"`;
+const SVG_ACTION_ATTRS = `xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="${HUD_ACCENT}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"`;
 
 function gestureIconSvg(mode: HudInputMode, movement: MovementKind): string {
   const a = SVG_ICON_ATTRS;
@@ -127,7 +163,7 @@ const RESET_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12
 const PLAY_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><path d="M5 3l14 9-14 9V3z"/></svg>';
 
 function svgForMode(mode: HudInputMode): string {
-  const common = 'xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"';
+  const common = `xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="${HUD_ACCENT}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"`;
   if (mode === "mouse") {
     return `<svg ${common}><rect x="5" y="2" width="14" height="20" rx="7"/><path d="M12 6v4"/></svg>`;
   }
@@ -145,6 +181,7 @@ export function createInputModeHud(
   anchorAfter: HTMLElement,
   options: InputModeHudOptions = {},
 ): InputModeHudHandle {
+  ensureInputModeAccentStyles();
   const availableModes = detectAvailableModes();
   let activeMode = loadInputModePreference(availableModes);
   let sensitivity = loadInputSensitivityPreference();
@@ -246,8 +283,13 @@ export function createInputModeHud(
       btn.type = "button";
       btn.setAttribute("aria-pressed", String(activeMode === mode));
       btn.dataset.mode = mode;
-      if (activeMode === mode) btn.classList.add("is-active");
+      if (activeMode === mode) {
+        btn.classList.add("is-active");
+        btn.style.color = HUD_ACCENT;
+        btn.style.background = HUD_ACCENT_ACTIVE_BG;
+      }
       btn.innerHTML = `<span class="input-mode-toggle-icon">${svgForMode(mode)}</span><span>${MODE_LABELS[mode].replace(" mode", "")}</span>`;
+      applyAccentToSvg(btn.querySelector(".input-mode-toggle-icon svg"));
       btn.addEventListener("click", () => {
         activeMode = mode;
         saveInputModePreference(mode);
@@ -292,7 +334,8 @@ export function createInputModeHud(
       playBtn.className = "gesture-play-btn";
       playBtn.title = "Apply";
       playBtn.hidden = true;
-      playBtn.innerHTML = PLAY_SVG;
+      playBtn.style.color = HUD_ACCENT;
+      playBtn.innerHTML = PLAY_SVG.replace('fill="currentColor"', `fill="${HUD_ACCENT}"`);
 
       const getVal = (): number => clampSensitivity(parseFloat(numInput.value) || 1);
 
@@ -327,6 +370,11 @@ export function createInputModeHud(
       const actionEl = document.createElement("div");
       actionEl.className = "gesture-action";
       actionEl.innerHTML = `<span class="gesture-action-icon">${actionIconSvg(movement)}</span><span class="gesture-action-label">${MOVEMENT_LABELS[movement]}</span>`;
+      const actionLabel = actionEl.querySelector<HTMLElement>(".gesture-action-label");
+      const actionIcon = actionEl.querySelector<HTMLElement>(".gesture-action-icon");
+      if (actionLabel) actionLabel.style.color = HUD_ACCENT;
+      if (actionIcon) actionIcon.style.color = HUD_ACCENT;
+      applyAccentToSvg(actionIcon?.querySelector("svg") ?? null);
 
       row.append(sourceEl, ctrlEl, arrowEl, actionEl);
       panel.appendChild(row);
@@ -338,6 +386,7 @@ export function createInputModeHud(
     debugRow.className = "input-mode-debug-toggle";
     debugRow.innerHTML = `<span>Debug wheel events</span><input type="checkbox" ${debugMode ? "checked" : ""}>`;
     const input = debugRow.querySelector("input");
+    if (input) input.style.accentColor = HUD_ACCENT;
     input?.addEventListener("change", () => {
       debugMode = Boolean(input.checked);
       renderButton();
@@ -405,6 +454,7 @@ export function createInputModeHud(
       onAutoModeExit = handler;
     },
     destroy(): void {
+      document.getElementById(INPUT_MODE_ACCENT_STYLE_ID)?.remove();
       button.removeEventListener("click", onButtonClick);
       document.removeEventListener("pointerdown", onDocumentPointerDown, true);
       window.removeEventListener("resize", onWindowResize);
