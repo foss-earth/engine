@@ -1,0 +1,327 @@
+/* ─── HUD Bar ─────────────────────────────────────────────────────── */
+.hud-bar {
+  position: fixed;
+  bottom: 16px;
+  left: 16px;
+  z-index: 10;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px;
+  width: fit-content;
+  max-width: min(1080px, calc(100vw - 32px));
+  font-family: "SF Mono", "Menlo", "Monaco", monospace;
+  pointer-events: auto;
+}
+
+.hud-chip,
+.hud-circle-button {
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  background: rgba(10, 14, 22, 0.76);
+  color: rgba(239, 246, 255, 0.88);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+  backdrop-filter: blur(8px);
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.1;
+  letter-spacing: 0;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.hud-chip-group {
+  display: contents;
+}
+
+.hud-chip--good {
+  border-color: rgba(34, 197, 94, 0.5);
+  background: rgba(5, 46, 22, 0.82);
+  color: rgba(187, 247, 208, 0.96);
+}
+
+.hud-chip--bad {
+  border-color: rgba(239, 68, 68, 0.54);
+  background: rgba(69, 10, 10, 0.82);
+  color: rgba(254, 202, 202, 0.96);
+}
+
+.hud-chip--fallback {
+  border-color: rgba(251, 191, 36, 0.5);
+  background: rgba(69, 39, 9, 0.84);
+  color: rgba(254, 243, 199, 0.96);
+}
+
+.hud-chip--raster {
+  border-color: rgba(34, 211, 238, 0.5);
+  background: rgba(8, 47, 73, 0.84);
+  color: rgba(207, 250, 254, 0.96);
+}
+
+.hud-chip-button,
+.hud-circle-button,
+.map-source-option {
+  appearance: none;
+  cursor: pointer;
+}
+
+.hud-chip-button:hover,
+.hud-circle-button:hover,
+.map-source-option:hover,
+.renderer-option:hover {
+  border-color: rgba(255, 255, 255, 0.32);
+  background: rgba(20, 26, 36, 0.9);
+}
+
+.hud-chip-button:active,
+.hud-circle-button:active,
+.map-source-option:active,
+.renderer-option:active {
+  background: rgba(30, 40, 56, 0.95);
+}
+
+.hud-circle-button {
+  width: 30px;
+  padding: 0;
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 15px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.map-source-control {
+  position: relative;
+  display: inline-flex;
+}
+
+.map-source-menu {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 8px);
+  display: grid;
+  gap: 4px;
+  min-width: 172px;
+  padding: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  background: rgba(10, 14, 22, 0.94);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.36);
+  backdrop-filter: blur(10px);
+}
+
+.map-source-menu[hidden] {
+  display: none;
+}
+
+.renderer-control {
+  position: relative;
+  display: inline-flex;
+}
+
+.renderer-menu {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 8px);
+  display: grid;
+  gap: 4px;
+  min-width: 172px;
+  padding: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  background: rgba(10, 14, 22, 0.94);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.36);
+  backdrop-filter: blur(10px);
+  z-index: 10;
+}
+
+.renderer-menu[hidden] {
+  display: none;
+}
+
+.renderer-option {
+  appearance: none;
+  cursor: pointer;
+  min-height: 28px;
+  padding: 6px 9px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: rgba(239, 246, 255, 0.88);
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.1;
+  letter-spacing: 0;
+  text-align: left;
+}
+
+.renderer-option.is-active,
+.map-source-option.is-active {
+  border-color: rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.08);
+  font-weight: 600;
+}
+
+.renderer-debug-sep {
+  height: 1px;
+  margin: 4px 0;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.renderer-debug {
+  padding: 5px 9px;
+  color: rgba(239, 246, 255, 0.55);
+  font-size: 10px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.map-source-option {
+  min-height: 28px;
+  padding: 6px 9px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: rgba(239, 246, 255, 0.88);
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.1;
+  letter-spacing: 0;
+  text-align: left;
+}
+
+.north-button {
+  overflow: hidden;
+}
+
+.settings-button {
+  font-size: 18px;
+}
+
+/* ─── Theme button ──────────────────────────────────────────── */
+.theme-button {
+  font-size: 16px;
+}
+
+:root[data-theme="light"] .hud-chip,
+:root[data-theme="light"] .hud-circle-button {
+  border-color: rgba(15, 23, 42, 0.18);
+  background: rgba(248, 250, 252, 0.82);
+  color: rgba(15, 23, 42, 0.88);
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.18);
+}
+
+:root[data-theme="light"] .hud-chip-button:hover,
+:root[data-theme="light"] .hud-circle-button:hover,
+:root[data-theme="light"] .map-source-option:hover,
+:root[data-theme="light"] .renderer-option:hover {
+  border-color: rgba(15, 23, 42, 0.32);
+  background: rgba(226, 232, 240, 0.94);
+}
+
+:root[data-theme="light"] .hud-chip-button:active,
+:root[data-theme="light"] .hud-circle-button:active,
+:root[data-theme="light"] .map-source-option:active,
+:root[data-theme="light"] .renderer-option:active {
+  background: rgba(203, 213, 225, 0.96);
+}
+
+:root[data-theme="light"] .map-source-menu {
+  border-color: rgba(15, 23, 42, 0.18);
+  background: rgba(248, 250, 252, 0.97);
+}
+
+:root[data-theme="light"] .map-source-option {
+  color: rgba(15, 23, 42, 0.88);
+}
+
+:root[data-theme="light"] .renderer-menu {
+  border-color: rgba(15, 23, 42, 0.18);
+  background: rgba(248, 250, 252, 0.97);
+}
+
+:root[data-theme="light"] .renderer-option {
+  color: rgba(15, 23, 42, 0.88);
+}
+
+:root[data-theme="light"] .renderer-option.is-active {
+  border-color: rgba(15, 23, 42, 0.22);
+  background: rgba(15, 23, 42, 0.08);
+}
+
+:root[data-theme="light"] .renderer-debug-sep {
+  background: rgba(15, 23, 42, 0.14);
+}
+
+:root[data-theme="light"] .renderer-debug {
+  color: rgba(15, 23, 42, 0.5);
+}
+
+/* ── Render-on-demand activity indicators ───────────────────────── */
+
+/*
+ * Spinning comet outline while Google tiles are streaming.
+ *
+ * Technique: double-background with @property-animated angle.
+ *   - Layer 1 (padding-box): solid chip background — fills the content area.
+ *   - Layer 2 (border-box):  conic-gradient spotlight — only visible through
+ *     the 2px transparent border, so it appears as a comet running the rail.
+ *
+ * The @property declaration makes --hud-spin-angle an interpolatable angle,
+ * so CSS handles the animation entirely on the compositor — zero JS/rAF cost.
+ */
+@property --hud-spin-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+
+@keyframes hud-chip-spin {
+  to { --hud-spin-angle: 360deg; }
+}
+
+.hud-chip.is-streaming {
+  border-color: transparent;
+  background:
+    /* chip fill — keep normal dark glass look */
+    linear-gradient(rgba(10, 14, 22, 0.76), rgba(10, 14, 22, 0.76)) padding-box,
+    /* comet spotlight painted into the 2px border rail */
+    conic-gradient(
+      from var(--hud-spin-angle),
+      rgba(37, 99, 235, 0.06)  0deg,
+      rgba(37, 99, 235, 0.06)  210deg,
+      rgba(37, 99, 235, 0.7)   280deg,
+      rgba(125, 211, 252, 1)    320deg,
+      rgba(186, 230, 253, 1)    340deg,
+      rgba(125, 211, 252, 0.7)  355deg,
+      rgba(37, 99, 235, 0.06)  360deg
+    ) border-box;
+  animation: hud-chip-spin 1.6s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hud-chip.is-streaming {
+    animation: none;
+    border-color: rgba(125, 211, 252, 0.55);
+    background: rgba(10, 14, 22, 0.76);
+  }
+}
+
+/* Green tint on the FPS chip while the scheduler is actively rendering. */
+.hud-chip-group.is-active .perf-chip[data-perf-metric="fps"] {
+  border-color: rgba(34, 197, 94, 0.55);
+  background: rgba(5, 46, 22, 0.78);
+  color: rgba(187, 247, 208, 0.98);
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.perf-chip[data-perf-metric="fps"] {
+  transition: background-color 320ms ease, border-color 320ms ease, color 320ms ease;
+}

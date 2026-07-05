@@ -6,6 +6,13 @@ import {
   saveInputSensitivityPreference,
   type HudInputMode,
 } from "../input/inputSettings";
+import oneFingerClickSvgRaw from "../assets/icons/gesture-one-finger-click.svg?raw";
+import mouseLeftButtonSvgRaw from "../assets/icons/gesture-mouse-left-button.svg?raw";
+import mouseRightButtonSvgRaw from "../assets/icons/gesture-mouse-right-button.svg?raw";
+import mouseScrollWheelSvgRaw from "../assets/icons/gesture-mouse-scroll-wheel.svg?raw";
+import trackpadPinchSvgRaw from "../assets/icons/gesture-pinch.svg?raw";
+import trackpadSwipeSvgRaw from "../assets/icons/gesture-two-finger-swipe.svg?raw";
+import trackpadTouchSvgRaw from "../assets/icons/gesture-two-finger-touch.svg?raw";
 
 type MovementKind = "pan" | "orbit" | "zoom";
 
@@ -22,7 +29,6 @@ export interface InputModeHudOptions {
 
 const DELTA_EPSILON = 0.001;
 const MENU_VIEWPORT_GUTTER_PX = 8;
-/** Sky blue — applied inline so host-app CSS cannot shift the HUD toward purple. */
 const HUD_ACCENT = "#0284c7";
 const HUD_ACCENT_ACTIVE_BG = "rgba(14, 165, 233, 0.16)";
 
@@ -34,21 +40,14 @@ function ensureInputModeAccentStyles(): void {
   style.id = INPUT_MODE_ACCENT_STYLE_ID;
   style.textContent = `
     #inputModeMenu .input-mode-toggle-option.is-active,
-    #inputModeMenu .input-mode-toggle-option.is-active span,
-    #inputModeMenu .gesture-action-label,
-    #inputModeMenu .gesture-action-icon,
-    #inputModeMenu .gesture-play-btn {
+    #inputModeMenu .input-mode-toggle-option.is-active span {
       color: ${HUD_ACCENT} !important;
     }
     #inputModeMenu .input-mode-toggle-option.is-active {
       background: ${HUD_ACCENT_ACTIVE_BG} !important;
     }
-    #inputModeMenu .gesture-action-icon svg,
     #inputModeMenu .input-mode-toggle-option.is-active svg {
       stroke: ${HUD_ACCENT} !important;
-    }
-    #inputModeMenu .gesture-play-btn svg {
-      fill: ${HUD_ACCENT} !important;
     }
   `;
   document.head.append(style);
@@ -117,18 +116,37 @@ function detectAvailableModes(): Set<HudInputMode> {
 
 const SVG_ICON_ATTRS = `xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="${HUD_ACCENT}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"`;
 const SVG_ACTION_ATTRS = `xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="${HUD_ACCENT}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"`;
+function sanitizeGestureSvg(svgRaw: string): string {
+  return svgRaw
+    .replace(/<\?xml[^>]*>/i, "")
+    .replace(/<!--[^]*?-->/g, "")
+    .replace(/<!DOCTYPE[^>]*>/i, "")
+    .replace(/fill="#000000"/gi, 'fill="currentColor"')
+    .replace(/width="800px"/i, 'width="14"')
+    .replace(/height="800px"/i, 'height="14"')
+    .trim();
+}
+const MOUSE_LEFT_BUTTON_SVG = sanitizeGestureSvg(mouseLeftButtonSvgRaw);
+const MOUSE_RIGHT_BUTTON_SVG = sanitizeGestureSvg(mouseRightButtonSvgRaw);
+const MOUSE_SCROLL_WHEEL_SVG = sanitizeGestureSvg(mouseScrollWheelSvgRaw);
+const ONE_FINGER_CLICK_SVG = sanitizeGestureSvg(oneFingerClickSvgRaw);
+const TRACKPAD_PINCH_SVG = sanitizeGestureSvg(trackpadPinchSvgRaw);
+const TRACKPAD_SWIPE_SVG = sanitizeGestureSvg(trackpadSwipeSvgRaw);
+const TRACKPAD_TOUCH_SVG = sanitizeGestureSvg(trackpadTouchSvgRaw);
 
 function gestureIconSvg(mode: HudInputMode, movement: MovementKind): string {
   const a = SVG_ICON_ATTRS;
   if (mode === "mouse") {
-    if (movement === "pan") return `<svg ${a}><rect x="5" y="2" width="14" height="20" rx="7"/><path d="M12 2v8"/><path d="M5 5.5Q5 2 8.5 2H12v8H5V9" fill="currentColor" fill-opacity=".22" stroke="none"/><path d="M9 15l3 4 3-4" stroke-width="1.5"/></svg>`;
-    if (movement === "zoom") return `<svg ${a}><rect x="5" y="2" width="14" height="20" rx="7"/><path d="M12 2v8"/><path d="M10 8l2-2 2 2"/><path d="M10 13l2 2 2-2"/></svg>`;
-    if (movement === "orbit") return `<svg ${a}><rect x="5" y="2" width="14" height="20" rx="7"/><path d="M12 2v8"/><path d="M12 2Q19 2 19 5.5V10H12V2z" fill="currentColor" fill-opacity=".22" stroke="none"/><path d="M9 15l3 4 3-4" stroke-width="1.5"/></svg>`;
+    if (movement === "pan") return MOUSE_LEFT_BUTTON_SVG;
+    if (movement === "zoom") return MOUSE_SCROLL_WHEEL_SVG;
+    if (movement === "orbit") return MOUSE_RIGHT_BUTTON_SVG;
   }
   if (mode === "trackpad") {
-    if (movement === "pan") return `<svg ${a}><line x1="9" y1="3" x2="9" y2="15"/><line x1="15" y1="3" x2="15" y2="15"/><path d="M6 18l6 4 6-4" stroke-width="1.5"/></svg>`;
-    if (movement === "zoom") return `<svg ${a}><path d="M7 4L3 8"/><path d="M17 4l4 4"/><path d="M7 20L3 16"/><path d="M17 20l4-4"/><circle cx="12" cy="12" r="2" fill="currentColor" fill-opacity=".3"/></svg>`;
-    if (movement === "orbit") return `<svg ${a}><line x1="9" y1="5" x2="9" y2="15"/><line x1="15" y1="5" x2="15" y2="15"/><path d="M6 18l6 4 6-4" stroke-width="1.5"/><rect x="3" y="2" width="7" height="5" rx="1" fill="currentColor" fill-opacity=".15" stroke="rgba(255,255,255,.3)" stroke-width="1"/><path d="M4 5V3.5h2" stroke="rgba(255,255,255,.6)" stroke-width="1.2"/></svg>`;
+    if (movement === "pan") {
+      return `<div class="gesture-card-bg-stack" aria-hidden="true">${TRACKPAD_SWIPE_SVG}${ONE_FINGER_CLICK_SVG}</div>`;
+    }
+    if (movement === "zoom") return TRACKPAD_PINCH_SVG;
+    if (movement === "orbit") return TRACKPAD_TOUCH_SVG;
   }
   if (movement === "pan") return `<svg ${a}><line x1="12" y1="3" x2="12" y2="15"/><path d="M9 18l3 4 3-4" stroke-width="1.5"/></svg>`;
   if (movement === "zoom") return `<svg ${a}><path d="M7 4L3 8"/><path d="M17 4l4 4"/><path d="M7 20L3 16"/><path d="M17 20l4-4"/><circle cx="12" cy="12" r="2" fill="currentColor" fill-opacity=".3"/></svg>`;
@@ -142,9 +160,9 @@ function gestureTextLabel(mode: HudInputMode, movement: MovementKind): string {
     if (movement === "orbit") return "R drag";
   }
   if (mode === "trackpad") {
-    if (movement === "pan") return "2-finger";
+    if (movement === "pan") return "2-finger swipe";
     if (movement === "zoom") return "Pinch";
-    if (movement === "orbit") return "⇧ Swipe";
+    if (movement === "orbit") return "2-finger click";
   }
   if (movement === "pan") return "1-finger";
   if (movement === "zoom") return "Pinch";
@@ -305,15 +323,17 @@ export function createInputModeHud(
     panel.className = "input-mode-sensitivity-panel";
 
     for (const movement of ["pan", "orbit", "zoom"] as const) {
-      const row = document.createElement("div");
-      row.className = "gesture-row";
+      const card = document.createElement("div");
+      card.className = "gesture-card";
 
-      const sourceEl = document.createElement("div");
-      sourceEl.className = "gesture-source";
-      sourceEl.innerHTML = `<span class="gesture-icon">${gestureIconSvg(activeMode, movement)}</span><span class="gesture-label">${gestureTextLabel(activeMode, movement)}</span>`;
+      const backgroundEl = document.createElement("div");
+      backgroundEl.className = "gesture-card-bg";
+      backgroundEl.classList.add(`gesture-card-bg--${movement}`);
+      backgroundEl.setAttribute("aria-hidden", "true");
+      backgroundEl.innerHTML = gestureIconSvg(activeMode, movement);
 
-      const ctrlEl = document.createElement("div");
-      ctrlEl.className = "gesture-controls";
+      const topRowEl = document.createElement("div");
+      topRowEl.className = "gesture-top-row";
 
       const numInput = document.createElement("input");
       numInput.type = "number";
@@ -360,24 +380,34 @@ export function createInputModeHud(
       playBtn.addEventListener("click", () => applyVal(getVal()));
       resetBtn.addEventListener("click", () => applyVal(1.0));
 
-      ctrlEl.append(numInput, resetBtn, playBtn);
+      const inputWrapEl = document.createElement("div");
+      inputWrapEl.className = "gesture-input-wrap";
+      inputWrapEl.appendChild(numInput);
 
-      const arrowEl = document.createElement("span");
-      arrowEl.className = "gesture-arrow";
-      arrowEl.setAttribute("aria-hidden", "true");
-      arrowEl.textContent = "→";
+      const buttonWrapEl = document.createElement("div");
+      buttonWrapEl.className = "gesture-btn-wrap";
+      buttonWrapEl.append(resetBtn, playBtn);
 
-      const actionEl = document.createElement("div");
-      actionEl.className = "gesture-action";
-      actionEl.innerHTML = `<span class="gesture-action-icon">${actionIconSvg(movement)}</span><span class="gesture-action-label">${MOVEMENT_LABELS[movement]}</span>`;
-      const actionLabel = actionEl.querySelector<HTMLElement>(".gesture-action-label");
-      const actionIcon = actionEl.querySelector<HTMLElement>(".gesture-action-icon");
-      if (actionLabel) actionLabel.style.color = HUD_ACCENT;
-      if (actionIcon) actionIcon.style.color = HUD_ACCENT;
-      applyAccentToSvg(actionIcon?.querySelector("svg") ?? null);
+      topRowEl.append(inputWrapEl, buttonWrapEl);
 
-      row.append(sourceEl, ctrlEl, arrowEl, actionEl);
-      panel.appendChild(row);
+      const movementMetaEl = document.createElement("div");
+      movementMetaEl.className = "gesture-meta-row";
+
+      const actionLabelEl = document.createElement("span");
+      actionLabelEl.className = "gesture-action-label";
+      actionLabelEl.textContent = MOVEMENT_LABELS[movement];
+
+      const actionIconEl = document.createElement("span");
+      actionIconEl.className = "gesture-action-icon";
+      actionIconEl.innerHTML = actionIconSvg(movement);
+
+      movementMetaEl.append(actionLabelEl, actionIconEl);
+      const contentEl = document.createElement("div");
+      contentEl.className = "gesture-card-content";
+      contentEl.append(topRowEl, movementMetaEl);
+
+      card.append(backgroundEl, contentEl);
+      panel.appendChild(card);
     }
 
     menu.appendChild(panel);

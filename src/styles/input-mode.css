@@ -1,0 +1,547 @@
+/* ─── Input mode HUD ─────────────────────────────────────────── */
+.input-mode-button {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  justify-content: center;
+  gap: 0;
+  padding: 0;
+  overflow: visible;
+}
+
+.input-mode-button-icon {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+}
+
+.input-mode-button-icon svg {
+  display: block;
+  pointer-events: none;
+}
+
+.input-mode-button--auto {
+  width: max-content;
+  min-width: 36px;
+  max-width: none;
+  border-radius: 999px;
+  justify-content: flex-start;
+  gap: 6px;
+  padding: 0 8px 0 0;
+  border-color: rgba(2, 132, 199, 0.55);
+  background: rgba(8, 47, 73, 0.92);
+}
+
+.input-mode-button--debug {
+  outline: 2px solid rgba(251, 191, 36, 0.8);
+  outline-offset: 2px;
+}
+
+.input-mode-control {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.input-mode-anchor {
+  position: relative;
+  display: flex;
+  flex-shrink: 0;
+}
+
+.input-mode-auto-badge {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 46px;
+  height: 24px;
+  border-radius: 999px;
+  padding: 0 11px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  font-weight: 800;
+  line-height: 1;
+  color: #bae6fd;
+  border: 1px solid rgba(2, 132, 199, 0.55);
+  background: rgba(2, 132, 199, 0.28);
+  pointer-events: none;
+}
+
+.input-mode-auto-badge[hidden] {
+  display: none !important;
+}
+
+.input-mode-auto-badge::after {
+  content: "×";
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  background: rgba(2, 6, 23, 0.95);
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 11px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: system-ui, -apple-system, sans-serif;
+  font-weight: 700;
+  padding-top: 1px;
+}
+
+.input-mode-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 20;
+  width: max-content;
+  max-width: min(340px, calc(100vw - 16px));
+  max-height: min(560px, calc(100vh - 96px));
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  background: rgba(10, 14, 22, 0.92);
+  color: rgba(239, 246, 255, 0.9);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(10px);
+}
+
+.input-mode-menu[hidden] {
+  display: none;
+}
+
+.input-mode-debug-toggle {
+  width: 100%;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border-radius: 6px;
+  color: inherit;
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.input-mode-debug-toggle:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.input-mode-toggle-row {
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 7px;
+  margin-bottom: 2px;
+  width: 100%;
+}
+
+.input-mode-toggle-option {
+  appearance: none;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: 0;
+  padding: 5px 8px;
+  border-radius: 5px;
+  background: transparent;
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  color: rgba(239, 246, 255, 0.5);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+
+.input-mode-toggle-option:focus,
+.input-mode-toggle-option:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+.input-mode-toggle-option:hover {
+  background: rgba(255, 255, 255, 0.07);
+  color: rgba(239, 246, 255, 0.8);
+}
+
+.input-mode-toggle-option.is-active {
+  background: rgba(14, 165, 233, 0.22);
+  color: var(--globe-accent-bright);
+  outline: 2px solid rgba(226, 232, 240, 0.9);
+  outline-offset: -1px;
+}
+
+.input-mode-toggle-option.is-active .input-mode-toggle-icon,
+.input-mode-toggle-option.is-active .input-mode-toggle-icon svg {
+  color: inherit;
+}
+
+.input-mode-toggle-icon,
+.input-mode-toggle-icon svg {
+  width: 14px;
+  height: 14px;
+  display: block;
+  flex-shrink: 0;
+}
+
+.input-mode-sensitivity-panel {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.gesture-card {
+  position: relative;
+  aspect-ratio: 1 / 1;
+  min-height: 94px;
+  padding: 6px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+  overflow: hidden;
+}
+
+.gesture-card-bg {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: rgba(248, 250, 252, 0.9);
+  pointer-events: none;
+}
+
+.gesture-card-bg svg {
+  width: 54px !important;
+  height: 54px !important;
+  opacity: 0.9;
+}
+
+.gesture-card-bg-stack {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.gesture-card-bg-stack svg {
+  width: 44px !important;
+  height: 44px !important;
+  opacity: 0.86;
+}
+
+.gesture-card-bg--orbit svg {
+  width: 42px !important;
+  height: 42px !important;
+  opacity: 0.75;
+}
+
+.gesture-card-content {
+  position: relative;
+  z-index: 1;
+  height: 100%;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.gesture-top-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+}
+
+.gesture-input-wrap {
+  display: flex;
+  align-items: center;
+}
+
+.gesture-btn-wrap {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.gesture-meta-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  width: 100%;
+}
+
+.gesture-source {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 86px;
+  min-width: 0;
+}
+
+.gesture-icon,
+.gesture-action-icon,
+.gesture-action-icon svg {
+  display: block;
+}
+
+.gesture-icon,
+.gesture-action-icon {
+  display: grid;
+  place-items: center;
+  justify-self: center;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+.gesture-icon,
+.gesture-icon svg {
+  color: rgba(239, 246, 255, 0.5);
+}
+
+.gesture-label {
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 10px;
+  font-weight: 600;
+  color: rgba(239, 246, 255, 0.58);
+  padding-left: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.gesture-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  width: 100%;
+}
+
+.gesture-value-input {
+  width: 42px;
+  padding: 2px 5px;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  border-radius: 4px;
+  color: #93c5fd;
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  -moz-appearance: textfield;
+}
+
+.gesture-value-input::-webkit-inner-spin-button,
+.gesture-value-input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+}
+
+.gesture-value-input:focus {
+  outline: none;
+  border-color: #0284c7;
+  box-shadow: 0 0 0 2px rgba(14, 165, 233, 0.15);
+}
+
+.gesture-reset-btn,
+.gesture-play-btn {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+  flex-shrink: 0;
+  color: rgba(239, 246, 255, 0.32);
+  transition: background 0.1s, color 0.1s;
+}
+
+.gesture-reset-btn svg,
+.gesture-play-btn svg {
+  display: block;
+  flex-shrink: 0;
+}
+
+.gesture-reset-btn svg {
+  width: 12px;
+  height: 12px;
+  stroke: currentColor;
+}
+
+.gesture-reset-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(239, 246, 255, 0.8);
+}
+
+.gesture-play-btn {
+  color: rgba(239, 246, 255, 0.4);
+}
+
+.gesture-play-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(239, 246, 255, 0.8);
+}
+
+.gesture-arrow {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.18);
+  font-family: system-ui, -apple-system, sans-serif;
+  padding: 0 1px;
+}
+
+.gesture-action {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  min-width: 52px;
+}
+
+.gesture-action-icon,
+.gesture-action-icon svg {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  color: rgba(239, 246, 255, 0.52);
+}
+
+.gesture-action-label {
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 10px;
+  font-weight: 700;
+  color: rgba(239, 246, 255, 0.62);
+  text-align: center;
+  white-space: nowrap;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.input-mode-debug-toggle {
+  justify-content: space-between;
+  margin-top: 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 0;
+  padding-top: 10px;
+}
+
+.input-mode-debug-toggle input {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  accent-color: var(--globe-accent);
+}
+
+:root[data-theme="light"] .input-mode-menu {
+  border-color: rgba(15, 23, 42, 0.18);
+  background: rgba(248, 250, 252, 0.97);
+  color: rgba(15, 23, 42, 0.88);
+}
+
+:root[data-theme="light"] .input-mode-toggle-row {
+  background: rgba(15, 23, 42, 0.06);
+}
+
+:root[data-theme="light"] .input-mode-toggle-option {
+  color: rgba(15, 23, 42, 0.5);
+}
+
+:root[data-theme="light"] .input-mode-toggle-option:hover {
+  background: rgba(15, 23, 42, 0.06);
+  color: rgba(15, 23, 42, 0.8);
+}
+
+:root[data-theme="light"] .input-mode-toggle-option.is-active {
+  background: rgba(14, 165, 233, 0.14);
+  color: var(--globe-accent);
+  outline: 2px solid rgba(15, 23, 42, 0.5);
+}
+
+:root[data-theme="light"] .input-mode-toggle-option.is-active .input-mode-toggle-icon,
+:root[data-theme="light"] .input-mode-toggle-option.is-active .input-mode-toggle-icon svg {
+  color: inherit;
+}
+
+:root[data-theme="light"] .gesture-icon,
+:root[data-theme="light"] .gesture-icon svg {
+  color: rgba(15, 23, 42, 0.45);
+}
+
+:root[data-theme="light"] .gesture-trigger-icon {
+  color: rgba(15, 23, 42, 0.55);
+}
+
+:root[data-theme="light"] .gesture-card {
+  border-color: rgba(15, 23, 42, 0.12);
+  background: rgba(255, 255, 255, 0.6);
+}
+
+:root[data-theme="light"] .gesture-card-bg {
+  color: rgba(15, 23, 42, 0.88);
+}
+
+:root[data-theme="light"] .gesture-card-bg-stack svg {
+  opacity: 0.8;
+}
+
+:root[data-theme="light"] .gesture-card-bg--orbit svg {
+  opacity: 0.7;
+}
+
+:root[data-theme="light"] .gesture-label {
+  color: rgba(15, 23, 42, 0.55);
+}
+
+:root[data-theme="light"] .gesture-value-input {
+  background: rgba(255, 255, 255, 0.8);
+  border-color: rgba(15, 23, 42, 0.14);
+  color: rgba(15, 23, 42, 0.9);
+}
+
+:root[data-theme="light"] .gesture-reset-btn {
+  color: rgba(15, 23, 42, 0.45);
+}
+
+:root[data-theme="light"] .gesture-reset-btn:hover {
+  background: rgba(15, 23, 42, 0.06);
+  color: rgba(15, 23, 42, 0.8);
+}
+
+:root[data-theme="light"] .gesture-action-icon,
+:root[data-theme="light"] .gesture-action-icon svg,
+:root[data-theme="light"] .gesture-action-label {
+  color: rgba(15, 23, 42, 0.55);
+}
+
+:root[data-theme="light"] .input-mode-button--auto {
+  border-color: rgba(2, 132, 199, 0.45);
+  background: rgba(224, 242, 254, 0.9);
+}
