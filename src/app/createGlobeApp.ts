@@ -1,3 +1,4 @@
+import { attachRendererActivity } from "../shell/rendererActivity";
 import { Matrix, Vector3 } from "@babylonjs/core";
 import { createBabylonRuntime, type BabylonRuntime, type RendererMode } from "../engine/babylon/createBabylonRuntime";
 import { clearRendererPreference } from "../engine/babylon/rendererPreference";
@@ -30,6 +31,7 @@ import { createPoiSpriteSizeTuner } from "../hud/poiSpriteSizeTuner";
 import { createCompassScaleTuner } from "../hud/compassScaleTuner";
 import { createInputModeHud, type InputModeHudHandle } from "../hud/inputModeHud";
 import { loadGlobeAnchorRotationPreference } from "../input/inputSettings";
+import { createHudBar } from "../shell/hudBar";
 import type { PoiSpriteSizeParams } from "../hud/poiSpriteSizeTuner";
 import type { OrbitCompassScaleParams } from "../visualization/orbitCompass";
 
@@ -342,49 +344,7 @@ export async function createGlobeApp(
     <div class="globe-shell">
       <canvas id="globeCanvas" class="globe-canvas" aria-label="3D globe canvas"></canvas>
 
-      <div class="hud-bar" aria-label="Map indicators">
-        <button id="northButton" class="hud-circle-button north-button" type="button"
-          title="Reset to north-up" aria-label="Reset camera to north-up">
-          <svg id="northButtonSvg" viewBox="0 0 36 36" width="28" height="28" aria-hidden="true">
-            <polygon points="18,5 14,14 22,14" fill="#ef4444"/>
-            <text x="18" y="27" text-anchor="middle"
-              fill="rgba(255,255,255,0.82)"
-              font-family="system-ui,-apple-system,sans-serif"
-              font-weight="700" font-size="13">N</text>
-          </svg>
-        </button>
-        <button id="helpButton" class="hud-circle-button" type="button"
-          title="Controls help" aria-label="Controls help">?</button>
-        <button id="settingsButton" class="hud-circle-button settings-button" type="button"
-          title="Settings" aria-label="Settings">&#9881;</button>
-        <button id="themeButton" class="hud-circle-button theme-button" type="button"
-          title="Toggle theme" aria-label="Toggle theme">
-          <span class="theme-button-icon" aria-hidden="true">\u263E</span>
-        </button>
-        <div class="renderer-control">
-          <button id="rendererModePill" class="hud-chip hud-chip-button hud-chip--gpu" type="button"
-            aria-haspopup="menu" aria-expanded="false" aria-controls="rendererMenu"
-            title="GPU renderer API. Click to change.">GPU</button>
-          <div id="rendererMenu" class="renderer-menu" role="menu" hidden>
-            <button class="renderer-option" type="button" role="menuitem" data-renderer="">Auto-detect</button>
-            <button class="renderer-option" type="button" role="menuitem" data-renderer="webgpu">Force WebGPU</button>
-            <button class="renderer-option" type="button" role="menuitem" data-renderer="webgl2">Force WebGL2</button>
-            <button class="renderer-option" type="button" role="menuitem" data-renderer="webgl">Force WebGL</button>
-          </div>
-        </div>
-        <div class="map-source-control">
-          <button id="runtimeModePill" class="hud-chip hud-chip-button hud-chip--source" type="button"
-            aria-haspopup="menu" aria-expanded="false" aria-controls="mapSourceMenu"
-            title="Map data source. Click to switch between Google 3D Tiles and free raster basemaps.">Map Source</button>
-          <div id="mapSourceMenu" class="map-source-menu" role="menu" hidden>
-            <button class="map-source-option" type="button" role="menuitem" data-map-source="google">Google 3D Tiles</button>
-            ${RASTER_BASE_MAP_SOURCES.map((source) => `<button class="map-source-option" type="button" role="menuitem" data-map-source="${source.id}">${source.label}</button>`).join("")}
-          </div>
-        </div>
-        <span id="perfMetricsPill" class="hud-chip-group perf-chip-group" aria-label="Performance metrics"></span>
-        <span id="hudStatus" class="hud-chip hud-status-text" aria-live="polite" aria-label="Camera status"
-          title="Camera status: latitude, longitude, heading, pitch, and zoom distance."></span>
-      </div>
+      <div id="hudBarRoot"></div>
 
       <div id="runtimeNotice" class="runtime-notice" hidden>
         <strong id="runtimeNoticeTitle" class="runtime-notice-title"></strong>
@@ -471,6 +431,73 @@ export async function createGlobeApp(
       <div id="extraPanelsGrid" class="extra-panels-grid"></div>
     </div>
   `;
+
+  const hudBarRoot = rootElement.querySelector<HTMLElement>("#hudBarRoot");
+  if (!hudBarRoot) {
+    throw new Error("Expected to find the HUD bar root.");
+  }
+  const hudBar = createHudBar(hudBarRoot, {
+    ariaLabel: "Map indicators",
+    items: [
+      {
+        kind: "button",
+        id: "northButton",
+        title: "Reset to north-up",
+        ariaLabel: "Reset camera to north-up",
+        className: "north-button",
+        content: () => {
+          const template = document.createElement("template");
+          template.innerHTML = `<svg id="northButtonSvg" viewBox="0 0 36 36" width="28" height="28" aria-hidden="true"><polygon points="18,5 14,14 22,14" fill="#ef4444"></polygon><text x="18" y="27" text-anchor="middle" fill="rgba(255,255,255,0.82)" font-family="system-ui,-apple-system,sans-serif" font-weight="700" font-size="13">N</text></svg>`;
+          return template.content.firstElementChild ?? document.createElement("span");
+        },
+      },
+      { kind: "button", id: "helpButton", title: "Controls help", ariaLabel: "Controls help", text: "?" },
+      { kind: "button", id: "settingsButton", title: "Settings", ariaLabel: "Settings", className: "settings-button", text: "⚙" },
+      {
+        kind: "button",
+        id: "themeButton",
+        title: "Toggle theme",
+        ariaLabel: "Toggle theme",
+        className: "theme-button",
+        content: () => {
+          const icon = document.createElement("span");
+          icon.className = "theme-button-icon";
+          icon.setAttribute("aria-hidden", "true");
+          icon.textContent = "☾";
+          return icon;
+        },
+      },
+      {
+        kind: "menu",
+        id: "rendererControl",
+        className: "renderer-control",
+        button: { kind: "button", id: "rendererModePill", title: "GPU renderer API. Click to change.", ariaLabel: "GPU renderer API", appearance: "chip", className: "hud-chip-button hud-chip--gpu", text: "GPU" },
+        menuId: "rendererMenu",
+        menuClassName: "renderer-menu",
+        optionClassName: "renderer-option",
+        optionDataAttribute: "renderer",
+        options: [
+          { id: "", label: "Auto-detect" },
+          { id: "webgpu", label: "Force WebGPU" },
+          { id: "webgl2", label: "Force WebGL2" },
+          { id: "webgl", label: "Force WebGL" },
+        ],
+      },
+      {
+        kind: "menu",
+        id: "mapSourceControl",
+        className: "map-source-control",
+        button: { kind: "button", id: "runtimeModePill", title: "Map data source. Click to switch between Google 3D Tiles and free raster basemaps.", ariaLabel: "Map data source", appearance: "chip", className: "hud-chip-button hud-chip--source", text: "Map Source" },
+        menuId: "mapSourceMenu",
+        menuClassName: "map-source-menu",
+        optionClassName: "map-source-option",
+        optionDataAttribute: "mapSource",
+        options: [{ id: "google", label: "Google 3D Tiles" }, ...RASTER_BASE_MAP_SOURCES],
+      },
+      { kind: "slot", id: "perfMetricsPill", className: "hud-chip-group perf-chip-group", ariaLabel: "Performance metrics" },
+      { kind: "slot", id: "hudStatus", className: "hud-chip hud-status-text", ariaLive: "polite", ariaLabel: "Camera status", title: "Camera status: latitude, longitude, heading, pitch, and zoom distance." },
+    ],
+  });
 
   const canvas = rootElement.querySelector<HTMLCanvasElement>("#globeCanvas");
   if (!canvas) {
@@ -951,6 +978,7 @@ export async function createGlobeApp(
   if (runtime.isStreamingTiles()) {
     runtimeModePill?.classList.add("is-streaming");
   }
+  const offRendererActivity = rendererModePill ? attachRendererActivity(rendererModePill, runtime) : () => {};
   const offRenderActive = runtime.onActiveRenderChange((active) => {
     perfMetricsPill?.classList.toggle("is-active", active);
   });
@@ -997,7 +1025,9 @@ export async function createGlobeApp(
       themeBtnEl?.removeEventListener("click", onThemeButtonClick);
       offThemeChangeForButton();
       offTilesStreaming();
+      offRendererActivity();
       offRenderActive();
+      hudBar.destroy();
       document.removeEventListener("pointerdown", onDocumentPointerDown, { capture: true });
 
       poiTracking.destroy();

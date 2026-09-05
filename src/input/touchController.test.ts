@@ -56,7 +56,7 @@ describe("attachTouchController (TouchEvent / continuous transform)", () => {
     dispatchTouch(canvas, "touchmove", t1, t1, 16);
 
     expect(camera.panBy).toHaveBeenCalledTimes(1);
-    expect(camera.panBy).toHaveBeenCalledWith(expect.closeTo(-1.2, 5), expect.closeTo(-1.8, 5), 800);
+    expect(camera.panBy).toHaveBeenCalledWith(expect.closeTo(-5.76, 5), expect.closeTo(-8.64, 5), 800);
 
     cleanup();
   });
@@ -231,9 +231,9 @@ describe("attachTouchController (TouchEvent / continuous transform)", () => {
 
     expect(camera.panBy).toHaveBeenCalledTimes(1);
     const [dx, dy] = camera.panBy.mock.calls[0];
-    // Expected: -(135-130)*0.1*1 = -0.5,  -(205-200)*0.1*1 = -0.5
-    expect(dx).toBeCloseTo(-0.5, 5);
-    expect(dy).toBeCloseTo(-0.5, 5);
+    // Expected: -(135-130)*0.48*1 = -2.4,  -(205-200)*0.48*1 = -2.4
+    expect(dx).toBeCloseTo(-2.4, 5);
+    expect(dy).toBeCloseTo(-2.4, 5);
 
     cleanup();
   });

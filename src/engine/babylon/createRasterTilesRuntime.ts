@@ -3,6 +3,7 @@ import {
   Mesh,
   StandardMaterial,
   Texture,
+  TransformNode,
   VertexData,
   type Scene,
 } from "@babylonjs/core";
@@ -31,6 +32,8 @@ export interface RasterTileMetrics {
 export interface RasterTilesRuntimeOptions {
   scene: Scene;
   source: RasterBaseMapSource;
+  worldRoot?: TransformNode;
+  alwaysRefresh?: boolean;
   getViewState: () => GlobeViewState | null;
   getSurfaceHeightMeters?: (latDeg: number, lonDeg: number) => number | null;
   requestRender?: () => void;
@@ -284,7 +287,11 @@ function createTileMesh(options: RasterTilesRuntimeOptions, tile: TileCoord): Me
   mesh.isPickable = true;
   mesh.renderingGroupId = 0;
   mesh.setEnabled(false);
-  mesh.freezeWorldMatrix();
+  if (options.worldRoot) {
+    mesh.parent = options.worldRoot;
+  } else {
+    mesh.freezeWorldMatrix();
+  }
 
   return mesh;
 }
@@ -547,7 +554,8 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
       if (disposed) return;
 
       const view = options.getViewState();
-      if (!view || !hasMeaningfulCameraChange(view)) return;
+      if (!view) return;
+      if (!options.alwaysRefresh && !hasMeaningfulCameraChange(view)) return;
       lastView = { latDeg: view.latDeg, lonDeg: view.lonDeg, zoomMeters: view.zoomMeters };
       tick += 1;
 

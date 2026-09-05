@@ -59,7 +59,7 @@ describe("attachWheelController", () => {
 
     canvas.dispatchEvent(createWheelEvent({ deltaY: 40 }));
 
-    expect(camera.zoomBy).toHaveBeenCalledWith(expect.closeTo(Math.pow(1.08, 0.01), 6));
+    expect(camera.zoomBy).toHaveBeenCalledWith(expect.closeTo(Math.pow(1.08, 0.03), 6));
     expect(camera.panBy).not.toHaveBeenCalled();
 
     cleanup();

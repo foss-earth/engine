@@ -23,6 +23,10 @@ export interface InputModeHudHandle {
 }
 
 export interface InputModeHudOptions {
+  availableModes?: ReadonlySet<HudInputMode>;
+  movements?: readonly MovementKind[];
+  trackpadOrbitGesture?: "touch" | "swipe";
+  gestureDescription?: (mode: HudInputMode, movement: MovementKind) => string;
   onModeChange?: (mode: HudInputMode) => void;
   onSensitivityChange?: (settings: GlobeInputSensitivitySettings) => void;
 }
@@ -153,22 +157,6 @@ function gestureIconSvg(mode: HudInputMode, movement: MovementKind): string {
   return `<svg ${a}><line x1="9" y1="5" x2="9" y2="15"/><line x1="15" y1="5" x2="15" y2="15"/><path d="M6 18l6 4 6-4" stroke-width="1.5"/></svg>`;
 }
 
-function gestureTextLabel(mode: HudInputMode, movement: MovementKind): string {
-  if (mode === "mouse") {
-    if (movement === "pan") return "L drag";
-    if (movement === "zoom") return "Scroll";
-    if (movement === "orbit") return "R drag";
-  }
-  if (mode === "trackpad") {
-    if (movement === "pan") return "2-finger swipe";
-    if (movement === "zoom") return "Pinch";
-    if (movement === "orbit") return "2-finger click";
-  }
-  if (movement === "pan") return "1-finger";
-  if (movement === "zoom") return "Pinch";
-  return "2-finger";
-}
-
 function actionIconSvg(movement: MovementKind): string {
   const a = SVG_ACTION_ATTRS;
   if (movement === "pan") return `<svg ${a}><path d="M5 9l-3 3 3 3"/><path d="M9 5l3-3 3 3"/><path d="M15 19l-3 3-3-3"/><path d="M19 9l3 3-3 3"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="12" y1="2" x2="12" y2="22"/></svg>`;
@@ -200,7 +188,7 @@ export function createInputModeHud(
   options: InputModeHudOptions = {},
 ): InputModeHudHandle {
   ensureInputModeAccentStyles();
-  const availableModes = detectAvailableModes();
+  const availableModes = options.availableModes ?? detectAvailableModes();
   let activeMode = loadInputModePreference(availableModes);
   let sensitivity = loadInputSensitivityPreference();
   let debugMode = false;
@@ -322,7 +310,7 @@ export function createInputModeHud(
     const panel = document.createElement("div");
     panel.className = "input-mode-sensitivity-panel";
 
-    for (const movement of ["pan", "orbit", "zoom"] as const) {
+    for (const movement of options.movements ?? ["pan", "orbit", "zoom"] as const) {
       const card = document.createElement("div");
       card.className = "gesture-card";
 
@@ -330,7 +318,13 @@ export function createInputModeHud(
       backgroundEl.className = "gesture-card-bg";
       backgroundEl.classList.add(`gesture-card-bg--${movement}`);
       backgroundEl.setAttribute("aria-hidden", "true");
-      backgroundEl.innerHTML = gestureIconSvg(activeMode, movement);
+      backgroundEl.innerHTML = activeMode === "trackpad" && movement === "orbit" && options.trackpadOrbitGesture === "swipe"
+        ? TRACKPAD_SWIPE_SVG : gestureIconSvg(activeMode, movement);
+      const description = options.gestureDescription?.(activeMode, movement);
+      if (description) {
+        card.title = description;
+        card.setAttribute("aria-label", description);
+      }
 
       const topRowEl = document.createElement("div");
       topRowEl.className = "gesture-top-row";

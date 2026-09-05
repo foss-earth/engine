@@ -8,6 +8,7 @@ import {
   MeshBuilder,
   Scene,
   StandardMaterial,
+  TransformNode,
   Vector3,
   WebGPUEngine,
 } from "@babylonjs/core";
@@ -40,6 +41,8 @@ export interface BabylonRuntimeOptions {
   getSurfaceHeightMeters?: (latDeg: number, lonDeg: number) => number | null;
   rendererForce?: RendererMode | null;
   onStatusChange?: (status: BabylonRuntimeStatus) => void;
+  /** Enable a consumer-driven simulation camera and frame callback. */
+  simMode?: boolean;
 }
 
 export type { RendererMode };
@@ -108,6 +111,14 @@ export interface BabylonRuntime {
   isStreamingTiles(): boolean;
   /** Subscribe to tile-streaming transitions. Returns an unsubscribe fn. */
   onTilesStreamingChange(listener: (streaming: boolean) => void): () => void;
+  /** Root for world content that must follow a simulation's floating origin. */
+  getWorldRoot(): TransformNode | null;
+  /** Update the geospatial position used to select raster tiles in simulation mode. */
+  setSimViewState(partial: Partial<GlobeViewState>): void;
+  /** Set the simulation callback invoked before each rendered frame. */
+  /** Hold continuous rendering only while the simulation is running. Defaults to true in simMode. */
+  setSimRunning(running: boolean): void;
+  setSimTick(callback: ((deltaSeconds: number) => void) | null): void;
   destroy(): void;
 }
 
@@ -124,7 +135,7 @@ interface FallbackExperience {
   light: HemisphericLight;
 }
 
-function createFallbackExperience(scene: Scene): FallbackExperience {
+function createFallbackExperience(scene: Scene, worldRoot: TransformNode | null): FallbackExperience {
   scene.clearColor = DEFAULT_FALLBACK_BACKGROUND;
 
   const light = new HemisphericLight("fallback-light", new Vector3(0, 1, 0), scene);
@@ -136,6 +147,9 @@ function createFallbackExperience(scene: Scene): FallbackExperience {
     scene,
   );
   globeMesh.isPickable = false;
+  if (worldRoot) {
+    globeMesh.parent = worldRoot;
+  }
 
   const globeMaterial = new StandardMaterial("fallback-globe-material", scene);
   globeMaterial.diffuseColor = Color3.FromHexString("#355f8f");
@@ -180,9 +194,17 @@ export async function createBabylonRuntime(
 ): Promise<BabylonRuntime> {
   const normalizedApiKey = options.googleApiKey?.trim() ?? "";
   const hasGoogleApiKey = normalizedApiKey.length > 0;
+  const simMode = options.simMode === true;
   const { renderer, scene } = await bootstrapGlobeRenderer(canvas, {
     force: options.rendererForce ?? null,
   });
+
+  let simLight: HemisphericLight | null = null;
+  if (simMode) {
+    scene.clearColor = new Color4(0.45, 0.65, 0.92, 1);
+    simLight = new HemisphericLight("sim-light", new Vector3(0, 1, 0), scene);
+    simLight.intensity = 1.1;
+  }
 
   let tilesRuntime: GoogleTilesRuntime | null = null;
   let rasterTilesRuntime: RasterTilesRuntime | null = null;
@@ -195,6 +217,10 @@ export async function createBabylonRuntime(
   let inertialCameraController: InertialCameraController | null = null;
   let inputController: InputController | null = null;
   let orbitModeActive = false;
+  let simRunning = simMode;
+  let simTick: ((deltaSeconds: number) => void) | null = null;
+  let simViewState: GlobeViewState | null = null;
+  const worldRoot = simMode ? new TransformNode("sim-world-root", scene) : null;
 
   // Held while Google tiles are initializing so the scheduler pumps
   // tiles.update() every frame even when the user hasn't moved the camera.
@@ -218,7 +244,9 @@ export async function createBabylonRuntime(
   // holds a reference, and idles otherwise.
   const scheduler: RenderScheduler = createRenderScheduler({
     tick: () => {
-      inertialCameraController?.update();
+      if (!simMode) {
+        inertialCameraController?.update();
+      }
       tilesRuntime?.update();
       rasterTilesRuntime?.update();
       // beginFrame/endFrame are normally invoked by engine.runRenderLoop's
@@ -227,10 +255,12 @@ export async function createBabylonRuntime(
       // endFrame(), and engine.getFps() / frameId are only updated in
       // beginFrame(). Without this the canvas stays black on WebGPU.
       renderer.engine.beginFrame();
+      const deltaSeconds = Math.max(renderer.engine.getDeltaTime() / 1000, 1 / 240);
+      simTick?.(deltaSeconds);
       scene.render();
       renderer.engine.endFrame();
     },
-    shouldKeepRendering: () => inertialCameraController?.isActive() ?? false,
+    shouldKeepRendering: () => simRunning || (inertialCameraController?.isActive() ?? false),
   });
 
   const status: BabylonRuntimeStatus = {
@@ -326,7 +356,9 @@ export async function createBabylonRuntime(
       },
       isActive: baseInertial.isActive,
     };
-    inputController = createInputController(canvas, inertialCameraController, { isOrbitMode: () => orbitModeActive });
+    inputController = simMode
+      ? null
+      : createInputController(canvas, inertialCameraController, { isOrbitMode: () => orbitModeActive });
 
     return geospatialCamera;
   }
@@ -339,7 +371,7 @@ export async function createBabylonRuntime(
       return;
     }
 
-    fallbackExperience = createFallbackExperience(scene);
+    fallbackExperience = createFallbackExperience(scene, worldRoot);
     fallbackExperienceCreated = true;
   }
 
@@ -350,6 +382,7 @@ export async function createBabylonRuntime(
 
   function enableFallbackMode(reason: string): void {
     releaseStartupHold();
+    endStreaming();
 
     if (options.rasterBaseMap) {
       enableRasterBaseMapMode(reason);
@@ -388,6 +421,7 @@ export async function createBabylonRuntime(
 
   function enableRasterBaseMapMode(reason: string | null): void {
     releaseStartupHold();
+    endStreaming();
     clearGoogleWatchdog();
 
     tilesRuntime?.dispose();
@@ -413,7 +447,11 @@ export async function createBabylonRuntime(
       rasterTilesRuntime = createRasterTilesRuntime({
         scene,
         source: rasterBaseMap,
-        getViewState: () => cameraController?.getViewState() ?? null,
+        worldRoot: worldRoot ?? undefined,
+        alwaysRefresh: simMode,
+        getViewState: () => simMode && simViewState
+          ? simViewState
+          : cameraController?.getViewState() ?? null,
         getSurfaceHeightMeters: options.getSurfaceHeightMeters,
         requestRender: () => scheduler.requestRender(),
         onLoadStart: () => {
@@ -502,6 +540,9 @@ export async function createBabylonRuntime(
       });
 
       tilesRuntime.tiles.checkCollisions = true;
+      if (worldRoot) {
+        tilesRuntime.tiles.group.parent = worldRoot;
+      }
 
       status.mode = "google-tiles";
       status.message = "Google Photorealistic 3D Tiles mode active.";
@@ -561,6 +602,7 @@ export async function createBabylonRuntime(
       return geospatialCamera;
     },
     getViewState(): GlobeViewState | null {
+      if (simMode && simViewState) return simViewState;
       return cameraController?.getViewState() ?? null;
     },
     setViewState(partial: Partial<GlobeViewState>): void {
@@ -624,6 +666,29 @@ export async function createBabylonRuntime(
         streamingListenersRef.delete(listener);
       };
     },
+    getWorldRoot(): TransformNode | null {
+      return worldRoot;
+    },
+    setSimViewState(partial: Partial<GlobeViewState>): void {
+      if (!simMode) return;
+      const current = simViewState ?? {
+        latDeg: DEFAULT_CAMERA_LAT_DEG,
+        lonDeg: DEFAULT_CAMERA_LON_DEG,
+        headingDeg: 0,
+        pitchDeg: 0,
+        zoomMeters: DEFAULT_CAMERA_ALTITUDE_METERS,
+      };
+      simViewState = { ...current, ...partial };
+      rasterTilesRuntime?.update();
+    },
+    setSimRunning(running): void {
+      if (!simMode || simRunning === running) return;
+      simRunning = running;
+      scheduler.requestRender();
+    },
+    setSimTick(callback: ((deltaSeconds: number) => void) | null): void {
+      simTick = callback;
+    },
     destroy() {
       scheduler.stop();
       clearGoogleWatchdog();
@@ -643,6 +708,10 @@ export async function createBabylonRuntime(
       if (googleLight) {
         googleLight.dispose();
         googleLight = null;
+      }
+      if (simLight) {
+        simLight.dispose();
+        simLight = null;
       }
 
       document.removeEventListener("visibilitychange", handleVisibility);
