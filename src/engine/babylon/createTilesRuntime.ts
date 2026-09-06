@@ -1,3 +1,4 @@
+import { measureMapResponse } from "./mapDownloadMeter";
 import type { Scene } from "@babylonjs/core";
 import { TilesRenderer } from "3d-tiles-renderer/babylonjs";
 import { GoogleCloudAuthPlugin } from "3d-tiles-renderer/core/plugins";
@@ -7,6 +8,7 @@ const GOOGLE_3D_TILES_ROOT_URL = "https://tile.googleapis.com/v1/3dtiles/root.js
 export interface GoogleTilesRuntimeOptions {
   scene: Scene;
   apiKey: string;
+  onDownloadBytes?: (bytes: number) => void;
   onLoadError?: (error: Error, url: string) => void;
   onLoadStart?: () => void;
   onLoadEnd?: (visibleTiles: number, activeTiles: number) => void;
@@ -34,13 +36,22 @@ export function createGoogleTilesRuntime(options: GoogleTilesRuntimeOptions): Go
   const tiles = new TilesRenderer(GOOGLE_3D_TILES_ROOT_URL, scene);
   tiles.fetchOptions.mode = "cors";
 
-  tiles.registerPlugin(
-    new GoogleCloudAuthPlugin({
-      apiToken: apiKey,
-      autoRefreshToken: true,
-      useRecommendedSettings: true,
-    }),
-  );
+  const authPlugin = new GoogleCloudAuthPlugin({
+    apiToken: apiKey,
+    autoRefreshToken: true,
+    useRecommendedSettings: true,
+  });
+  // The plugin owns authenticated fetch and retries. Wrap its existing response
+  // rather than replacing authentication or patching global fetch.
+  const downloader = authPlugin as GoogleCloudAuthPlugin & {
+    fetchData(uri: string, options: RequestInit): Promise<Response>;
+  };
+  const fetchData = downloader.fetchData.bind(downloader);
+  downloader.fetchData = async (uri, fetchOptions) => {
+    const response = await fetchData(uri, fetchOptions);
+    return options.onDownloadBytes ? measureMapResponse(response, options.onDownloadBytes) : response;
+  };
+  tiles.registerPlugin(authPlugin);
 
   const handleLoadStart = (): void => {
     console.info("[tiles] Google 3D tiles loading started");

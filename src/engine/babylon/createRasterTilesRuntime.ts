@@ -1,3 +1,4 @@
+import { loadMapTexture } from "./loadMapTexture";
 import {
   Color3,
   Mesh,
@@ -38,6 +39,7 @@ export interface RasterTilesRuntimeOptions {
   getSurfaceHeightMeters?: (latDeg: number, lonDeg: number) => number | null;
   requestRender?: () => void;
   onLoadStart?: () => void;
+  onDownloadBytes?: (bytes: number) => void;
   onLoadEnd?: (visibleTiles: number, activeTiles: number) => void;
   onLoadError?: (error: Error, url: string) => void;
 }
@@ -316,12 +318,7 @@ function createTileRecord(
     settled: false,
   };
 
-  const texture = new Texture(
-    url,
-    scene,
-    false,
-    false,
-    Texture.TRILINEAR_SAMPLINGMODE,
+  const texture = loadMapTexture(url, scene,
     () => {
       record.loaded = true;
       onSettled(record);
@@ -332,6 +329,7 @@ function createTileRecord(
       options.onLoadError?.(new Error(detail), url);
       onSettled(record);
     },
+    (bytes) => options.onDownloadBytes?.(bytes),
   );
   texture.wrapU = Texture.CLAMP_ADDRESSMODE;
   texture.wrapV = Texture.CLAMP_ADDRESSMODE;

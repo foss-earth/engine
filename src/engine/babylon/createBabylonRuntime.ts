@@ -1,3 +1,4 @@
+import { createMapDownloadMeter } from "./mapDownloadMeter";
 import {
   Color3,
   Color4,
@@ -109,6 +110,9 @@ export interface BabylonRuntime {
   onActiveRenderChange(listener: (active: boolean) => void): () => void;
   /** True while at least one Google tile load is in flight. */
   isStreamingTiles(): boolean;
+  /** Rolling one-second map payload rate; cached responses may contribute. */
+  getMapDownloadBytesPerSecond(): number;
+  onMapDownloadRateChange(listener: (bytesPerSecond: number) => void): () => void;
   /** Subscribe to tile-streaming transitions. Returns an unsubscribe fn. */
   onTilesStreamingChange(listener: (streaming: boolean) => void): () => void;
   /** Root for world content that must follow a simulation's floating origin. */
@@ -206,6 +210,7 @@ export async function createBabylonRuntime(
     simLight.intensity = 1.1;
   }
 
+  const downloadMeter = createMapDownloadMeter();
   let tilesRuntime: GoogleTilesRuntime | null = null;
   let rasterTilesRuntime: RasterTilesRuntime | null = null;
   let googleTilesStartupWatchdog: number | null = null;
@@ -445,6 +450,7 @@ export async function createBabylonRuntime(
     if (rasterTilesRuntime?.source.id !== rasterBaseMap.id) {
       rasterTilesRuntime?.dispose();
       rasterTilesRuntime = createRasterTilesRuntime({
+        onDownloadBytes: downloadMeter.addBytes,
         scene,
         source: rasterBaseMap,
         worldRoot: worldRoot ?? undefined,
@@ -506,6 +512,7 @@ export async function createBabylonRuntime(
       scheduler.beginContinuous();
 
       tilesRuntime = createGoogleTilesRuntime({
+        onDownloadBytes: downloadMeter.addBytes,
         scene,
         apiKey: normalizedApiKey,
         onLoadError: (error, url) => {
@@ -657,6 +664,8 @@ export async function createBabylonRuntime(
     onActiveRenderChange(listener): () => void {
       return scheduler.onActiveChange(listener);
     },
+    getMapDownloadBytesPerSecond: downloadMeter.getBytesPerSecond,
+    onMapDownloadRateChange: downloadMeter.subscribe,
     isStreamingTiles(): boolean {
       return streamingActiveRef.value;
     },
@@ -690,6 +699,7 @@ export async function createBabylonRuntime(
       simTick = callback;
     },
     destroy() {
+      downloadMeter.destroy();
       scheduler.stop();
       clearGoogleWatchdog();
 

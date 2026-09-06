@@ -1,4 +1,5 @@
-import { attachRendererActivity } from "../shell/rendererActivity";
+import { attachMapDownloadSpeed, setMapSourceLabel } from "../shell/mapDownloadHud";
+import { attachRendererActivity, attachTileStreamingActivity } from "../shell/rendererActivity";
 import { Matrix, Vector3 } from "@babylonjs/core";
 import { createBabylonRuntime, type BabylonRuntime, type RendererMode } from "../engine/babylon/createBabylonRuntime";
 import { clearRendererPreference } from "../engine/babylon/rendererPreference";
@@ -290,21 +291,33 @@ function renderPerformanceChips(
   snapshot: PerformanceSnapshot,
   visibleMetrics: ReadonlySet<PerformanceMetricId>,
 ): void {
+  const existing = new Map(Array.from(element.children, (child) => [
+    (child as HTMLElement).dataset.perfMetric, child as HTMLElement,
+  ]));
   const chips = PERFORMANCE_METRIC_DEFINITIONS.flatMap((metric) => {
     if (!visibleMetrics.has(metric.id)) return [];
     const value = metric.format(snapshot);
     if (value === null) return [];
 
-    const chip = document.createElement("span");
+    const chip = existing.get(metric.id) ?? document.createElement("span");
     chip.className = "hud-chip perf-chip";
     chip.dataset.perfMetric = metric.id;
     chip.title = metric.tooltip;
     chip.setAttribute("aria-label", `${metric.settingsLabel}: ${value}`);
-    chip.textContent = value;
+    if (chip.textContent !== value) chip.textContent = value;
     return chip;
   });
 
-  element.replaceChildren(...chips);
+  // Keep retained chips mounted so CSS animations are not restarted each frame.
+  const retained = new Set(chips);
+  for (const child of existing.values()) {
+    if (!retained.has(child)) child.remove();
+  }
+  let cursor = element.firstChild;
+  for (const chip of chips) {
+    if (chip === cursor) cursor = cursor.nextSibling;
+    else element.insertBefore(chip, cursor);
+  }
 }
 
 function getFallbackNoticeMessage(status: BabylonRuntime["status"]): string {
@@ -523,13 +536,13 @@ export async function createGlobeApp(
     if (runtimeModePill) {
       const hasWarning = Boolean(status.lastError);
       if (status.mode === "google-tiles") {
-        runtimeModePill.textContent = hasWarning ? "Google 3D Tiles warning" : "Google 3D Tiles";
+        setMapSourceLabel(runtimeModePill, hasWarning ? "Google 3D Tiles warning" : "Google 3D Tiles");
       } else if (status.mode === "raster-basemap") {
-        runtimeModePill.textContent = hasWarning
+        setMapSourceLabel(runtimeModePill, hasWarning
           ? `${status.rasterBaseMap?.label ?? "Raster"} warning`
-          : status.rasterBaseMap?.label ?? "Raster Basemap";
+          : status.rasterBaseMap?.label ?? "Raster Basemap");
       } else {
-        runtimeModePill.textContent = "Fallback Globe";
+        setMapSourceLabel(runtimeModePill, "Fallback Globe");
       }
 
       runtimeModePill.classList.toggle("hud-chip--fallback", status.mode === "fallback");
@@ -972,12 +985,8 @@ export async function createGlobeApp(
   //   (drives the spinning outline animation)
   // - .is-active on the perf metrics group while the scheduler is pumping
   //   frames (drives the FPS chip's green tint)
-  const offTilesStreaming = runtime.onTilesStreamingChange((streaming) => {
-    runtimeModePill?.classList.toggle("is-streaming", streaming);
-  });
-  if (runtime.isStreamingTiles()) {
-    runtimeModePill?.classList.add("is-streaming");
-  }
+  const offMapDownload = runtimeModePill ? attachMapDownloadSpeed(runtimeModePill, runtime) : () => {};
+  const offTilesStreaming = runtimeModePill ? attachTileStreamingActivity(runtimeModePill, runtime) : () => {};
   const offRendererActivity = rendererModePill ? attachRendererActivity(rendererModePill, runtime) : () => {};
   const offRenderActive = runtime.onActiveRenderChange((active) => {
     perfMetricsPill?.classList.toggle("is-active", active);
@@ -1024,6 +1033,7 @@ export async function createGlobeApp(
       globeAnchorRotationToggleEl?.removeEventListener("change", onGlobeAnchorRotationToggleChange);
       themeBtnEl?.removeEventListener("click", onThemeButtonClick);
       offThemeChangeForButton();
+      offMapDownload();
       offTilesStreaming();
       offRendererActivity();
       offRenderActive();
