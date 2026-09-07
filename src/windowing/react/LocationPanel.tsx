@@ -43,7 +43,8 @@ export function LocationPanel({ initialLocation, onApply, searchProvider }: Loca
       {!searchProvider && <p>Place search is unavailable. Enter coordinates below.</p>}
       {results.map((result) => <button type="button" key={result.id} onClick={() => {
         setLat(String(result.latDeg)); setLon(String(result.lonDeg));
-        setMessage(`Selected ${result.label}. Apply to continue.`);
+        onApply({ latDeg: result.latDeg, lonDeg: result.lonDeg });
+        setMessage(`Moved to ${result.label}.`);
       }}>{result.label}</button>)}
     </form>
     <form onSubmit={(event) => {
