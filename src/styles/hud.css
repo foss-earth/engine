@@ -93,6 +93,11 @@
   display: inline-flex;
 }
 
+/* Keep the download readout close to the basemap button's right edge. */
+.map-source-control > .hud-chip-button {
+  padding-right: 2px;
+}
+
 .map-source-menu {
   position: absolute;
   left: 0;
@@ -331,15 +336,24 @@
 
 
 .map-download-speed {
-  font-size: 0.75em;
   color: #9ca3af;
   display: inline-block;
   flex: 0 0 4ch;
   width: 4ch;
-  margin-left: 8px;
+  margin-left: 2px;
   font-family: "SF Mono", "Menlo", "Monaco", monospace;
   font-variant-numeric: tabular-nums;
   text-align: center;
   white-space: pre;
   line-height: 1.05;
+}
+
+.map-download-value {
+  display: block;
+  font-size: 0.75em;
+}
+
+.map-download-unit {
+  display: block;
+  font-size: 0.5em;
 }
