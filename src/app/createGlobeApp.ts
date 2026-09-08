@@ -193,7 +193,7 @@ function getMapSourcePreferenceFromUrl(): string | null {
 function setMapSourcePreference(source: string): void {
   const url = new URL(window.location.href);
   url.searchParams.set("mapSource", source);
-  window.location.assign(url.toString());
+  window.history.replaceState(null, "", url);
 }
 
 function getRendererForceFromUrl(): RendererMode | null {
@@ -596,14 +596,14 @@ export async function createGlobeApp(
   const urlGoogleApiKey = options.googleApiKey ?? getGoogleApiKeyFromUrl();
   const shouldUseGoogle = sourcePreference === "google"
     || (!sourcePreference && options.preferGoogleTiles !== false && Boolean(urlGoogleApiKey));
-  const googleApiKey = shouldUseGoogle ? urlGoogleApiKey : null;
   const rasterBaseMap = shouldUseGoogle
     ? configuredBaseMap
     : resolveRasterBaseMapSource(sourcePreference ?? configuredBaseMap);
   const rendererForce = getRendererForceFromUrl();
 
   const runtime = await createBabylonRuntime(canvas, {
-    googleApiKey,
+    googleApiKey: urlGoogleApiKey,
+    preferGoogleTiles: shouldUseGoogle,
     rasterBaseMap,
     getSurfaceHeightMeters: options.getSurfaceHeightMeters,
     rendererForce,
@@ -817,6 +817,7 @@ export async function createGlobeApp(
       : runtime.status.rasterBaseMap?.id ?? DEFAULT_RASTER_BASE_MAP_ID;
     setMapSourceMenuOpen(false);
     if (selected !== current) {
+      runtime.setMapSource(selected === "google" ? "google" : resolveRasterBaseMapSource(selected));
       setMapSourcePreference(selected);
     }
   };

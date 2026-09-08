@@ -1,6 +1,6 @@
 import { createMapDownloadMeter } from "./mapDownloadMeter";
 import { createSurfaceQuery, type SurfaceQuery } from "../../terrain/surfaceQuery";
-import { MAPTERHORN, type TerrainSource } from "../../terrain/terrainTiles";
+import { resolveTerrainSource, type TerrainSource } from "../../terrain/terrainTiles";
 import {
   Color3,
   Color4,
@@ -21,6 +21,7 @@ import { bootstrapGlobeRenderer, type RendererMode, type RendererSelection } fro
 import { createGoogleTilesRuntime, type GoogleTilesRuntime } from "./createTilesRuntime";
 import { createRasterTilesRuntime, type RasterTilesRuntime } from "./createRasterTilesRuntime";
 import type { RasterBaseMapSource } from "./rasterBaseMaps";
+import type { RasterQualitySetting, RasterQualityState } from "./rasterQuality";
 import { createTerrainPerformanceCapture, type TerrainPerformanceCapture } from "../../terrain/terrainPerformanceCapture";
 
 declare global {
@@ -45,9 +46,12 @@ const DEFAULT_CAMERA_PITCH_RAD = 1.167625429373872;
 
 export interface BabylonRuntimeOptions {
   googleApiKey?: string | null;
+  /** Whether Google 3D Tiles should be the initial active source when keyed. */
+  preferGoogleTiles?: boolean;
   rasterBaseMap?: RasterBaseMapSource | null;
   getSurfaceHeightMeters?: (latDeg: number, lonDeg: number) => number | null;
   terrainSource?: TerrainSource;
+  rasterQuality?: RasterQualitySetting;
   /** Explicit opt-in; no per-query timings or capture buffers by default. */
   terrainPerformanceCapture?: TerrainPerformanceCapture;
   rendererForce?: RendererMode | null;
@@ -65,6 +69,8 @@ export interface BabylonRuntimeStatus {
   message: string;
   googleApiKeyProvided: boolean;
   rasterBaseMap: RasterBaseMapSource | null;
+  terrainSource: TerrainSource | null;
+  rasterQuality: RasterQualityState | null;
   lastError: string | null;
 }
 
@@ -94,6 +100,15 @@ export interface BabylonRuntime {
   configureOrbitTargetHeight(options: OrbitTargetHeightOptions | null): void;
   /** Return current base-map tile counts, or null when no tile runtime is active. */
   getTileMetrics(): BabylonTileMetrics | null;
+  /** Switch imagery without reloading the application or resetting consumers. */
+  setRasterBaseMap(source: RasterBaseMapSource): void;
+  /** Switch between Google 3D Tiles and a raster basemap without a page reload. */
+  setMapSource(source: "google" | RasterBaseMapSource): void;
+  /** Switch the elevation stream used by raster basemaps. */
+  setTerrainSource(source: TerrainSource): void;
+  /** Select Auto, Low, Balanced, or High raster terrain detail. */
+  setRasterQuality(setting: RasterQualitySetting): void;
+  getRasterQuality(): RasterQualityState | null;
   /**
    * Tell the input system whether the camera is currently locked to a POI.
    * When true, two-finger trackpad swipe orbits instead of panning.
@@ -210,6 +225,7 @@ export async function createBabylonRuntime(
 ): Promise<BabylonRuntime> {
   const normalizedApiKey = options.googleApiKey?.trim() ?? "";
   const hasGoogleApiKey = normalizedApiKey.length > 0;
+  const shouldStartGoogle = hasGoogleApiKey && options.preferGoogleTiles !== false;
   const simMode = options.simMode === true;
   const { renderer, scene } = await bootstrapGlobeRenderer(canvas, {
     force: options.rendererForce ?? null,
@@ -241,6 +257,10 @@ export async function createBabylonRuntime(
   let simRunning = simMode;
   let simTick: ((deltaSeconds: number) => void) | null = null;
   let simViewState: GlobeViewState | null = null;
+  let activeRasterBaseMap = options.rasterBaseMap ?? null;
+  let activeTerrainSource = resolveTerrainSource(options.terrainSource);
+  let activeRasterQuality: RasterQualitySetting | undefined = options.rasterQuality;
+  let lastRasterFrameAt = performance.now();
   const worldRoot = simMode ? new TransformNode("sim-world-root", scene) : null;
 
   // Held while Google tiles are initializing so the scheduler pumps
@@ -263,13 +283,32 @@ export async function createBabylonRuntime(
   // and the scene render in that order; the scheduler keeps pumping while
   // inertia is still active or while a continuous-mode caller (e.g. tile load)
   // holds a reference, and idles otherwise.
+  const status: BabylonRuntimeStatus = {
+    mode: shouldStartGoogle ? "google-tiles" : "fallback",
+    message: shouldStartGoogle
+      ? "Google Photorealistic 3D Tiles are initializing."
+      : "Fallback mode active.",
+    googleApiKeyProvided: hasGoogleApiKey,
+    rasterBaseMap: activeRasterBaseMap,
+    terrainSource: activeTerrainSource,
+    rasterQuality: null,
+    lastError: null,
+  };
   const scheduler: RenderScheduler = createRenderScheduler({
     tick: () => {
-      terrainCapture?.beginFrame(performance.now());
+      const frameNow = performance.now();
+      terrainCapture?.beginFrame(frameNow);
       if (!simMode) {
         inertialCameraController?.update();
       }
       tilesRuntime?.update();
+      rasterTilesRuntime?.reportFrame(frameNow, frameNow - lastRasterFrameAt, document.hidden);
+      lastRasterFrameAt = frameNow;
+      const rasterQuality = rasterTilesRuntime?.getQualityState() ?? null;
+      if (status.rasterQuality !== rasterQuality) {
+        status.rasterQuality = rasterQuality;
+        options.onStatusChange?.({ ...status });
+      }
       rasterTilesRuntime?.update();
       // beginFrame/endFrame are normally invoked by engine.runRenderLoop's
       // internal _processFrame. We bypass that loop, so we must bracket the
@@ -286,18 +325,8 @@ export async function createBabylonRuntime(
     shouldKeepRendering: () => simRunning || (inertialCameraController?.isActive() ?? false),
   });
 
-  const status: BabylonRuntimeStatus = {
-    mode: hasGoogleApiKey ? "google-tiles" : "fallback",
-    message: hasGoogleApiKey
-      ? "Google Photorealistic 3D Tiles are initializing."
-      : "Fallback mode active.",
-    googleApiKeyProvided: hasGoogleApiKey,
-    rasterBaseMap: options.rasterBaseMap ?? null,
-    lastError: null,
-  };
-
   const terrainCredit = document.createElement("a");
-  terrainCredit.href = (options.terrainSource ?? MAPTERHORN).attribution;
+  terrainCredit.href = activeTerrainSource.attribution;
   terrainCredit.textContent = "Terrain attribution";
   terrainCredit.target = "_blank";
   terrainCredit.rel = "noopener noreferrer";
@@ -417,7 +446,7 @@ export async function createBabylonRuntime(
     releaseStartupHold();
     endStreaming();
 
-    if (options.rasterBaseMap) {
+    if (activeRasterBaseMap) {
       enableRasterBaseMapMode(reason);
       return;
     }
@@ -433,8 +462,8 @@ export async function createBabylonRuntime(
 
     tilesRuntime?.dispose();
     tilesRuntime = null;
-  rasterTilesRuntime?.dispose();
-  rasterTilesRuntime = null;
+    rasterTilesRuntime?.dispose();
+    rasterTilesRuntime = null;
 
     if (googleLight) {
       googleLight.dispose();
@@ -452,7 +481,7 @@ export async function createBabylonRuntime(
     emitStatus();
   }
 
-  function enableRasterBaseMapMode(reason: string | null): void {
+  function enableRasterBaseMapMode(reason: string | null, recreate = false): void {
     releaseStartupHold();
     endStreaming();
     clearGoogleWatchdog();
@@ -469,13 +498,13 @@ export async function createBabylonRuntime(
     ensureFallbackExperience();
     hideFallbackExperience();
 
-    const rasterBaseMap = options.rasterBaseMap;
+    const rasterBaseMap = activeRasterBaseMap;
     if (!rasterBaseMap) {
       enableFallbackMode(reason ?? "No raster basemap was configured.");
       return;
     }
 
-    if (rasterTilesRuntime?.source.id !== rasterBaseMap.id) {
+    if (recreate || !rasterTilesRuntime) {
       rasterTilesRuntime?.dispose();
       rasterTilesRuntime = createRasterTilesRuntime({
         onDownloadBytes: downloadMeter.addBytes,
@@ -487,30 +516,35 @@ export async function createBabylonRuntime(
           ? simViewState
           : cameraController?.getViewState() ?? null,
         getSurfaceHeightMeters: options.getSurfaceHeightMeters,
-        terrainSource: options.terrainSource,
+        terrainSource: activeTerrainSource,
+        quality: activeRasterQuality,
         performanceCapture: terrainCapture,
         requestRender: () => scheduler.requestRender(),
         onLoadStart: () => {
-          status.message = `${rasterBaseMap.label} tiles are loading.`;
+          status.message = `${activeRasterBaseMap?.label ?? "Raster"} tiles are loading.`;
           beginStreaming();
           emitStatus();
         },
         onLoadEnd: (visibleTiles, activeTiles) => {
-          status.message = `${rasterBaseMap.label} active (visible: ${visibleTiles}, active: ${activeTiles}).`;
+          status.message = `${activeRasterBaseMap?.label ?? "Raster"} active (visible: ${visibleTiles}, active: ${activeTiles}).`;
           endStreaming();
           scheduler.requestRender();
           emitStatus();
         },
         onLoadError: (error, url) => {
           status.lastError = `${error.message} (${url})`;
-          status.message = `${rasterBaseMap.label} reported tile load errors.`;
+          status.message = `${activeRasterBaseMap?.label ?? "Raster"} reported tile load errors.`;
           emitStatus();
         },
       });
+    } else if (rasterTilesRuntime.source.id !== rasterBaseMap.id) {
+      rasterTilesRuntime.setSource(rasterBaseMap);
     }
 
     status.mode = "raster-basemap";
     status.rasterBaseMap = rasterBaseMap;
+    status.terrainSource = activeTerrainSource;
+    status.rasterQuality = rasterTilesRuntime.getQualityState();
     status.lastError = reason;
     status.message = reason
       ? `${rasterBaseMap.label} active after Google tiles failed.`
@@ -518,13 +552,27 @@ export async function createBabylonRuntime(
     rasterTilesRuntime.update();
     scheduler.requestRender();
 
-    console.info("[runtime] Raster basemap runtime initialized", { source: rasterBaseMap.id, reason });
+    console.info("[runtime] Raster basemap runtime initialized", { source: rasterBaseMap.id, terrain: activeTerrainSource.id, reason });
     emitStatus();
   }
 
-  emitStatus();
+  function enableGoogleTilesMode(): void {
+    releaseStartupHold();
+    endStreaming();
+    clearGoogleWatchdog();
+    rasterTilesRuntime?.dispose();
+    rasterTilesRuntime = null;
+    status.rasterQuality = null;
+    if (!hasGoogleApiKey) {
+      if (activeRasterBaseMap) enableRasterBaseMapMode("Google 3D Tiles need an API key.");
+      else enableFallbackMode("Google 3D Tiles need an API key.");
+      return;
+    }
+    tilesRuntime?.dispose();
+    tilesRuntime = null;
+    googleLight?.dispose();
+    googleLight = null;
 
-  if (hasGoogleApiKey) {
     try {
       scene.clearColor = DEFAULT_GOOGLE_BACKGROUND;
 
@@ -603,8 +651,14 @@ export async function createBabylonRuntime(
       console.error("[runtime] Google tiles initialization failed, entering fallback mode", error);
       enableFallbackMode(getErrorMessage(error));
     }
+  }
+
+  emitStatus();
+
+  if (shouldStartGoogle) {
+    enableGoogleTilesMode();
   } else {
-    if (options.rasterBaseMap) {
+    if (activeRasterBaseMap) {
       enableRasterBaseMapMode(null);
     } else {
       ensureGeospatialCamera();
@@ -663,6 +717,42 @@ export async function createBabylonRuntime(
         };
       }
       return rasterTilesRuntime?.getMetrics() ?? null;
+    },
+    setRasterBaseMap(source): void {
+      if (activeRasterBaseMap?.id === source.id && status.mode === "raster-basemap") return;
+      activeRasterBaseMap = source;
+      enableRasterBaseMapMode(null);
+    },
+    setMapSource(source): void {
+      if (source === "google") {
+        if (status.mode !== "google-tiles") enableGoogleTilesMode();
+        return;
+      }
+      if (activeRasterBaseMap?.id === source.id && status.mode === "raster-basemap") return;
+      activeRasterBaseMap = source;
+      enableRasterBaseMapMode(null);
+    },
+    setTerrainSource(source): void {
+      const nextSource = resolveTerrainSource(source);
+      if (activeTerrainSource.id === nextSource.id) return;
+      activeTerrainSource = nextSource;
+      terrainCredit.href = nextSource.attribution;
+      status.terrainSource = nextSource;
+      if (status.mode === "raster-basemap") {
+        enableRasterBaseMapMode(null, true);
+      } else {
+        emitStatus();
+      }
+    },
+    setRasterQuality(setting): void {
+      activeRasterQuality = setting;
+      rasterTilesRuntime?.setQuality(setting);
+      status.rasterQuality = rasterTilesRuntime?.getQualityState() ?? null;
+      emitStatus();
+      scheduler.requestRender();
+    },
+    getRasterQuality(): RasterQualityState | null {
+      return rasterTilesRuntime?.getQualityState() ?? null;
     },
     setOrbitMode(active: boolean): void {
       orbitModeActive = active;

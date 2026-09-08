@@ -2,15 +2,44 @@
 export interface TerrainTile { z: number; x: number; y: number }
 export interface TerrainGrid extends TerrainTile { size: number; heights: Float32Array; neighbors?: TerrainGrid[] }
 export interface TerrainSource {
+  /** Stable selection key used by settings and cache boundaries. */
+  id: string;
+  label: string;
+  provider: string;
   urlTemplate: string;
   maxZoom: number;
   attribution: string;
 }
 export const MAPTERHORN: TerrainSource = {
+  id: "mapterhorn",
+  label: "Mapterhorn Terrain",
+  provider: "Mapterhorn",
   urlTemplate: "https://tiles.mapterhorn.com/{z}/{x}/{y}.webp",
   maxZoom: 15,
   attribution: "https://mapterhorn.com/attribution/",
 };
+
+/** Mapzen's public Terrarium archive, mirrored as static AWS terrain tiles. */
+export const AWS_TERRARIUM: TerrainSource = {
+  id: "aws-terrarium",
+  label: "AWS Terrarium",
+  provider: "Mapzen terrain tiles on AWS",
+  urlTemplate: "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png",
+  maxZoom: 15,
+  attribution: "https://registry.opendata.aws/terrain-tiles/",
+};
+
+export const TERRAIN_SOURCES: readonly TerrainSource[] = [MAPTERHORN, AWS_TERRARIUM];
+const TERRAIN_SOURCE_BY_ID = new Map(TERRAIN_SOURCES.map(source => [source.id, source]));
+
+export function resolveTerrainSource(source: string | TerrainSource | null | undefined): TerrainSource {
+  if (source && typeof source !== "string") return source;
+  return TERRAIN_SOURCE_BY_ID.get(source ?? "") ?? MAPTERHORN;
+}
+
+export function isKnownTerrainSourceId(value: string | null | undefined): boolean {
+  return typeof value === "string" && TERRAIN_SOURCE_BY_ID.has(value);
+}
 
 export function decodeTerrarium(data: Uint8ClampedArray, size: number): Float32Array {
   if (data.length !== size * size * 4) throw new Error("Invalid terrain image dimensions");

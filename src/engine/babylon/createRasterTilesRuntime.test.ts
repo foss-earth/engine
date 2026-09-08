@@ -77,11 +77,31 @@ describe("raster imagery and terrain lifecycle", () => {
     expect(scene.meshes).toHaveLength(0);
     engine.dispose();
   });
-  it.each([false, true])("processes one refinement pass per update (alwaysRefresh=%s) and idles when settled", async alwaysRefresh => {
+  it("hot-swaps imagery without requesting elevation again or revising the surface", async () => {
+    const engine = new NullEngine(); const scene = new Scene(engine);
+    const runtime = createRasterTilesRuntime({ scene, source: RASTER_BASE_MAP_SOURCES[0], getViewState: () => view });
+    runtime.update();
+    pending.imagery.forEach(loaded => loaded());
+    await resolveFirstDetail();
+    runtime.update();
+    const elevationRequests = pending.terrain.length;
+    const revision = runtime.getRevision();
+    const meshes = scene.meshes.filter(mesh => mesh.metadata?.mapSurface);
+    const initialImageRequests = pending.imagery.length;
+    runtime.setSource({ ...RASTER_BASE_MAP_SOURCES[0], id: "test-hot-swap", urlTemplate: "https://example.test/{z}/{x}/{y}.png" });
+    expect(runtime.source.id).toBe("test-hot-swap");
+    expect(pending.terrain).toHaveLength(elevationRequests);
+    expect(pending.imagery.length).toBeGreaterThan(initialImageRequests);
+    pending.imagery.slice(initialImageRequests).forEach(loaded => loaded());
+    runtime.update();
+    expect(runtime.getRevision()).toBe(revision);
+    expect(meshes.every(mesh => !mesh.isDisposed())).toBe(true);
+    runtime.dispose(); engine.dispose();
+  });
+  it.each([false, true])("commits terrain once and idles when settled (alwaysRefresh=%s)", async alwaysRefresh => {
     let now = 0;
     vi.spyOn(performance, "now").mockImplementation(() => now);
     const stitch = vi.spyOn(refinement, "stitchTerrainEdges");
-    const advance = vi.spyOn(refinement, "advanceRefinement");
     const engine = new NullEngine(); const scene = new Scene(engine);
     const runtime = createRasterTilesRuntime({ scene, source: RASTER_BASE_MAP_SOURCES[0], alwaysRefresh,
       getViewState: () => view });
@@ -93,17 +113,16 @@ describe("raster imagery and terrain lifecycle", () => {
     now = 600;
     runtime.update();
     expect(stitch).toHaveBeenCalledOnce();
-    expect(advance).toHaveBeenCalledOnce();
     const revision = runtime.getRevision();
     now = 1300;
     runtime.update();
-    expect(stitch).toHaveBeenCalledTimes(2);
-    expect(runtime.getRevision()).toBe(revision + 1);
+    expect(stitch).toHaveBeenCalledOnce();
+    expect(runtime.getRevision()).toBe(revision);
     const settled = runtime.getRevision();
     const writes = scene.meshes.map(mesh => vi.spyOn(mesh, "updateVerticesData"));
     now = 2000;
     runtime.update(); runtime.update();
-    expect(stitch).toHaveBeenCalledTimes(2);
+    expect(stitch).toHaveBeenCalledOnce();
     expect(runtime.getRevision()).toBe(settled);
     expect(writes.every(write => write.mock.calls.length === 0)).toBe(true);
     runtime.dispose(); engine.dispose();

@@ -36,7 +36,7 @@ export function getMapSourcePreferenceFromSearchParams(searchParams: URLSearchPa
 export function setMapSourcePreference(source: string): void {
   const url = new URL(window.location.href);
   url.searchParams.set("mapSource", source);
-  window.location.assign(url.toString());
+  window.history.replaceState(null, "", url);
 }
 
 export function resolveMapRuntimeConfig(
@@ -51,11 +51,13 @@ export function resolveMapRuntimeConfig(
     || (!sourcePreference && preferGoogleTiles && Boolean(urlGoogleApiKey));
 
   return {
-    googleApiKey: shouldUseGoogle ? urlGoogleApiKey : null,
+    // Keep the key available while a flat map is selected so a live switch
+    // back to Google tiles does not need to reconstruct the application.
+    googleApiKey: urlGoogleApiKey,
     rasterBaseMap: shouldUseGoogle
       ? configuredBaseMap
       : resolveRasterBaseMapSource(sourcePreference ?? configuredBaseMap),
-    preferGoogleTiles,
+    preferGoogleTiles: shouldUseGoogle,
   };
 }
 
