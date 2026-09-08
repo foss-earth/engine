@@ -27,7 +27,6 @@ import { createOrbitCompass, type OrbitCompassHandle } from "../visualization/or
 import { createHemisphereCulling } from "../perf/culling";
 import { createPerformanceMetrics, type PerformanceSnapshot } from "../perf/metrics";
 import { createAnchorHeightResolver } from "../terrain/anchorHeight";
-import { smoothSurfaceHeightMeters } from "../terrain/smoothElevation";
 import { createPoiSpriteSizeTuner } from "../hud/poiSpriteSizeTuner";
 import { createCompassScaleTuner } from "../hud/compassScaleTuner";
 import { createInputModeHud, type InputModeHudHandle } from "../hud/inputModeHud";
@@ -616,11 +615,12 @@ export async function createGlobeApp(
   };
   const poiTracking = createPoiTracking(runtime.scene, () => runtime.geospatialCamera);
   const culling = createHemisphereCulling(() => runtime.geospatialCamera?.globalPosition ?? null);
-  const resolveSurfaceHeightMeters = (latDeg: number, lonDeg: number): number => (
-    options.getSurfaceHeightMeters?.(latDeg, lonDeg) ?? smoothSurfaceHeightMeters(latDeg, lonDeg)
+  const resolveSurfaceHeightMeters = (latDeg: number, lonDeg: number): number | null => (
+    options.getSurfaceHeightMeters?.(latDeg, lonDeg) ?? runtime.surface?.sample(latDeg, lonDeg)?.heightMeters ?? null
   );
   const anchorHeights = createAnchorHeightResolver({
     provider: resolveSurfaceHeightMeters,
+    cacheProviderSamples: false,
     heightOffsetMeters: loadCompassHeightOffset(),
   });
   runtime.configureOrbitTargetHeight({

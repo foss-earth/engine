@@ -5,6 +5,8 @@ import {
   StandardMaterial,
   Texture,
   TransformNode,
+  Vector3,
+  VertexBuffer,
   VertexData,
   type Scene,
 } from "@babylonjs/core";
@@ -14,7 +16,9 @@ import {
   WGS84_A,
   geodeticToEcef,
 } from "../../camera/cameraMath";
-import { smoothSurfaceHeightMeters } from "../../terrain/smoothElevation";
+import { createTerrainTileLoader, sampleTerrainGrid, type TerrainGrid, type TerrainSource } from "../../terrain/terrainTiles";
+import { GLOBAL_TERRAIN } from "../../terrain/globalTerrain";
+import { advanceRefinement, inheritParent, meshPositions, refineMesh, stitchTerrainEdges, type MeshRefinement } from "../../terrain/meshRefinement";
 import type { GlobeViewState } from "../types";
 import type { RasterBaseMapSource } from "./rasterBaseMaps";
 
@@ -37,6 +41,7 @@ export interface RasterTilesRuntimeOptions {
   alwaysRefresh?: boolean;
   getViewState: () => GlobeViewState | null;
   getSurfaceHeightMeters?: (latDeg: number, lonDeg: number) => number | null;
+  terrainSource?: TerrainSource;
   requestRender?: () => void;
   onLoadStart?: () => void;
   onDownloadBytes?: (bytes: number) => void;
@@ -48,6 +53,7 @@ export interface RasterTilesRuntime {
   readonly source: RasterBaseMapSource;
   update(): void;
   getMetrics(): RasterTileMetrics;
+  getRevision(): number;
   dispose(): void;
 }
 
@@ -63,6 +69,7 @@ interface HighLodTile {
 }
 
 interface RasterTileRecord {
+  tile: TileCoord;
   key: string;
   mesh: Mesh;
   material: StandardMaterial;
@@ -70,6 +77,8 @@ interface RasterTileRecord {
   loaded: boolean;
   failed: boolean;
   settled: boolean;
+  refinement: MeshRefinement | null;
+  target: number[];
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -134,8 +143,8 @@ function buildTileUrl(source: RasterBaseMapSource, tile: TileCoord): string {
     .replace(/\{y\}/g, String(tile.y));
 }
 
-function getDesiredTiles(view: GlobeViewState, source: RasterBaseMapSource): TileCoord[] {
-  const z = chooseTileZoom(view, source);
+function getDesiredTiles(view: GlobeViewState, source: RasterBaseMapSource, minimumZoom = 0): TileCoord[] {
+  const z = Math.max(minimumZoom, chooseTileZoom(view, source));
   const baseZoom = chooseGlobalBaseZoom(source, z);
   const n = 2 ** z;
   const centerX = lonToTileX(view.lonDeg, z);
@@ -171,6 +180,15 @@ function getDesiredTiles(view: GlobeViewState, source: RasterBaseMapSource): Til
         for (let dx = -radius; dx <= radius; dx += 1) {
           const x = wrapTileX(centerX + dx, z);
           markHighLod(x, y);
+        }
+      }
+      // Prefetch a short corridor ahead without changing the central resident ring.
+      if (Number.isFinite(view.headingDeg)) {
+        const heading = view.headingDeg * DEG_TO_RAD;
+        for (let step = 1; step <= 3; step++) for (let offset = -2; offset <= 2; offset++) {
+          const x = wrapTileX(centerX + Math.round(Math.sin(heading) * (radius + step) + Math.cos(heading) * offset), z);
+          const y = centerY + Math.round(-Math.cos(heading) * (radius + step) + Math.sin(heading) * offset);
+          if (y >= 0 && y < n && !highLodTiles.some(tile => tile.x === x && tile.y === y)) markHighLod(x, y);
         }
       }
     }
@@ -240,14 +258,14 @@ function chooseTilePatchSegments(tile: TileCoord): number {
   return clamp(Math.ceil(angularSpanDeg), MIN_TILE_PATCH_SEGMENTS, MAX_TILE_PATCH_SEGMENTS);
 }
 
-function createTileMesh(options: RasterTilesRuntimeOptions, tile: TileCoord): Mesh {
+export function createTerrainMesh(options: RasterTilesRuntimeOptions, tile: TileCoord, grid?: TerrainGrid): Mesh {
   const { scene, source } = options;
-  const getSurfaceHeightMeters = options.getSurfaceHeightMeters ?? smoothSurfaceHeightMeters;
   const mesh = new Mesh(`raster-basemap-tile-${source.id}-${tileKey(tile)}`, scene);
   const positions: number[] = [];
   const uvs: number[] = [];
   const indices: number[] = [];
-  const segments = chooseTilePatchSegments(tile);
+  const segments = grid ? Math.max(chooseTilePatchSegments(tile), tile.z >= 14 ? 128 : 64) : chooseTilePatchSegments(tile);
+  const center = geodeticToEcef(tileYToLat(tile.y + 0.5, tile.z) * DEG_TO_RAD, tileXToLon(tile.x + 0.5, tile.z) * DEG_TO_RAD, 0);
 
   for (let row = 0; row <= segments; row += 1) {
     const v = row / segments;
@@ -258,9 +276,12 @@ function createTileMesh(options: RasterTilesRuntimeOptions, tile: TileCoord): Me
       const u = col / segments;
       const mercatorX = tile.x + u;
       const lonDeg = tileXToLon(mercatorX, tile.z);
-      const altitudeMeters = getSurfaceHeightMeters(latDeg, lonDeg) ?? smoothSurfaceHeightMeters(latDeg, lonDeg);
+      const scale = grid ? 2 ** (grid.z - tile.z) : 1;
+      const altitudeMeters = grid
+        ? sampleTerrainGrid(grid, mercatorX * scale, mercatorY * scale)
+        : options.getSurfaceHeightMeters?.(latDeg, lonDeg) ?? 0;
       const ecef = geodeticToEcef(latDeg * DEG_TO_RAD, lonDeg * DEG_TO_RAD, altitudeMeters);
-      positions.push(ecef.x, ecef.y, ecef.z);
+      positions.push(ecef.x - center.x, ecef.y - center.y, ecef.z - center.z);
       uvs.push(u, v);
     }
   }
@@ -286,6 +307,9 @@ function createTileMesh(options: RasterTilesRuntimeOptions, tile: TileCoord): Me
   data.uvs = uvs;
   data.applyToMesh(mesh, true);
 
+  mesh.position = new Vector3(center.x, center.y, center.z);
+  mesh.metadata = { mapSurface: true, terrainZoom: grid?.z ?? -1, segments };
+
   mesh.isPickable = true;
   mesh.renderingGroupId = 0;
   mesh.setEnabled(false);
@@ -302,26 +326,61 @@ function createTileRecord(
   options: RasterTilesRuntimeOptions,
   tile: TileCoord,
   onSettled: (record: RasterTileRecord) => void,
+  loadTerrain: (tile: TileCoord, progress: (grid: TerrainGrid) => void) => Promise<TerrainGrid>,
+  onChanged: () => void,
 ): RasterTileRecord {
   const { scene, source } = options;
   const key = tileKey(tile);
   const url = buildTileUrl(source, tile);
-  const mesh = createTileMesh(options, tile);
+  const mesh = createTerrainMesh(options, tile, options.getSurfaceHeightMeters ? undefined : GLOBAL_TERRAIN);
   const material = new StandardMaterial(`raster-basemap-material-${source.id}-${key}`, scene);
   const record: RasterTileRecord = {
     key,
+    tile,
     mesh,
     material,
     texture: null as unknown as Texture,
     loaded: false,
     failed: false,
     settled: false,
+    refinement: null,
+    target: meshPositions(mesh),
   };
 
+  let imageryReady = false;
+  let terrainReady = false;
+  const finish = () => {
+    if (record.settled) return;
+    if (imageryReady) { record.loaded = true; onChanged(); }
+    if (imageryReady && terrainReady) onSettled(record);
+  };
+  const applyGrid = (grid?: TerrainGrid) => {
+    if (record.settled || record.mesh.isDisposed()) return;
+    if (grid && grid.z <= record.mesh.metadata.terrainZoom) return;
+    const readyMesh = createTerrainMesh(options, tile, grid);
+    record.target = meshPositions(readyMesh);
+    record.refinement = refineMesh(record.mesh, record.target, performance.now());
+    record.mesh.metadata.terrainZoom = grid?.z ?? -1;
+    readyMesh.dispose();
+    onChanged();
+  };
+  const terrain = options.getSurfaceHeightMeters ? Promise.resolve(undefined) : loadTerrain(tile, applyGrid);
+  void terrain.then(grid => {
+    applyGrid(grid);
+    if (record.settled || record.mesh.isDisposed()) return;
+    terrainReady = true;
+    finish();
+  }).catch(error => {
+    if (record.settled || record.mesh.isDisposed()) return;
+    options.onLoadError?.(error instanceof Error ? error : new Error(String(error)), `terrain:${key}`);
+    // Keep the best geometry already available when detail fails.
+    terrainReady = true;
+    finish();
+  });
   const texture = loadMapTexture(url, scene,
     () => {
-      record.loaded = true;
-      onSettled(record);
+      imageryReady = true;
+      finish();
     },
     (message, exception) => {
       record.failed = true;
@@ -366,17 +425,22 @@ interface DisplayBuildResult {
 }
 
 export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): RasterTilesRuntime {
+  const terrain = createTerrainTileLoader(options.terrainSource, options.onDownloadBytes);
   // Persistent cache: tiles stay alive after they leave the desired set so we
   // can keep showing them (or use them as best-effort fallbacks) without
   // re-downloading. Eviction is LRU and only kicks in over MAX_CACHED_TILES.
   const cache = new Map<string, RasterTileRecord>();
   const lastUsedTick = new Map<string, number>();
+  const retryAfter = new Map<string, number>();
   let visibleTileKeys = new Set<string>();
   let tick = 0;
   let lastDesired: DesiredEntry[] = [];
   let loadingCount = 0;
   let loadCycleActive = false;
   let disposed = false;
+  let revision = 0;
+  let retainedFocusZoom = 0;
+  let geometryDirty = false;
   let lastView: Pick<GlobeViewState, "latDeg" | "lonDeg" | "zoomMeters"> | null = null;
 
   function getMetrics(): RasterTileMetrics {
@@ -409,6 +473,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
     if (record.failed) {
       // Drop failed tiles from the cache so we can retry on next request.
       cache.delete(record.key);
+      retryAfter.set(record.key, performance.now() + 30000);
       lastUsedTick.delete(record.key);
       disposeTile(record);
     } else {
@@ -421,14 +486,27 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
     emitLoadEndIfIdle();
   }
 
-  function ensureCached(tile: TileCoord): RasterTileRecord {
+  function ensureCached(tile: TileCoord): void {
     const key = tileKey(tile);
     const existing = cache.get(key);
-    if (existing) return existing;
+    if (existing || performance.now() < (retryAfter.get(key) ?? 0)) return;
     beginLoad();
-    const record = createTileRecord(options, tile, finishLoad);
+    const loadProgressive = async (requested: TileCoord, progress: (grid: TerrainGrid) => void) => {
+      const coarseZoom = Math.max(0, Math.min(requested.z, requested.z - 4));
+      if (coarseZoom < requested.z) {
+        try {
+          const scale = 2 ** (requested.z - coarseZoom);
+          progress(await terrain.loadPatch({ z: coarseZoom, x: Math.floor(requested.x / scale), y: Math.floor(requested.y / scale) }));
+        } catch { /* Retain bundled terrain and still try the detail source. */ }
+      }
+      return terrain.loadPatch(requested);
+    };
+    const record = createTileRecord(options, tile, finishLoad, loadProgressive, () => {
+      geometryDirty = true;
+      recomputeVisibility();
+      options.requestRender?.();
+    });
     cache.set(key, record);
-    return record;
   }
 
   function touchAncestors(tile: TileCoord, baseZoom: number): void {
@@ -491,7 +569,11 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
     ];
     const childKeys = children.flatMap((child) => child.keys);
     if (children.every((child) => child.covered)) {
-      return { covered: true, keys: childKeys };
+      const quality = cache.get(key)?.mesh.metadata.terrainZoom ?? -1;
+      // Never replace a known parent with less accurate startup geometry.
+      if (!loaded || childKeys.every(child => cache.get(child)!.mesh.metadata.terrainZoom >= quality)) {
+        return { covered: true, keys: childKeys };
+      }
     }
     return loaded ? { covered: true, keys: [key] } : { covered: false, keys: childKeys };
   }
@@ -508,6 +590,27 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
           }
         }
       }
+    }
+    const oldVisible = visibleTileKeys;
+    const changed = oldVisible.size !== representatives.size || [...representatives].some(key => !oldVisible.has(key));
+    if (changed) {
+      for (const key of representatives) {
+        if (oldVisible.has(key)) continue;
+        const record = cache.get(key)!;
+        let { z, x, y } = record.tile;
+        while (z > 0) {
+          z--; x = Math.floor(x / 2); y = Math.floor(y / 2);
+          const parent = cache.get(`${z}/${x}/${y}`);
+          if (parent && oldVisible.has(parent.key)) {
+            const from = inheritParent(record, parent);
+            record.mesh.updateVerticesData(VertexBuffer.PositionKind, from, true);
+            record.refinement = refineMesh(record.mesh, record.target, performance.now());
+            break;
+          }
+        }
+      }
+      revision++;
+      geometryDirty = true;
     }
     visibleTileKeys = representatives;
     for (const [key, record] of cache) {
@@ -546,6 +649,22 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
     return Math.abs(view.latDeg - lastView.latDeg) > 0.00001 || Math.abs(view.lonDeg - lastView.lonDeg) > 0.00001;
   }
 
+  function animateTerrain(): void {
+    const visible = [...visibleTileKeys].map(key => cache.get(key)!);
+    const now = performance.now();
+    const moving = visible.some(record => record.refinement !== null);
+    if (!geometryDirty && !moving) return;
+    for (const record of visible) {
+      if (record.refinement) {
+        if (!advanceRefinement(record.mesh, record.refinement, now)) record.refinement = null;
+      } else record.mesh.updateVerticesData(VertexBuffer.PositionKind, record.target, true);
+    }
+    stitchTerrainEdges(visible);
+    revision++;
+    geometryDirty = false;
+    if (visible.some(record => record.refinement !== null)) options.requestRender?.();
+  }
+
   return {
     source: options.source,
     update(): void {
@@ -553,28 +672,49 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
 
       const view = options.getViewState();
       if (!view) return;
+      animateTerrain();
       if (!options.alwaysRefresh && !hasMeaningfulCameraChange(view)) return;
+      if (![view.latDeg, view.lonDeg, view.zoomMeters].every(Number.isFinite)) return;
+      if (lastView && (Math.abs(lastView.latDeg - view.latDeg) > 1 || Math.abs(lastView.lonDeg - view.lonDeg) > 1)) retainedFocusZoom = 0;
       lastView = { latDeg: view.latDeg, lonDeg: view.lonDeg, zoomMeters: view.zoomMeters };
       tick += 1;
 
-      const baseZoom = chooseGlobalBaseZoom(options.source, chooseTileZoom(view, options.source));
-      const desiredTiles = getDesiredTiles(view, options.source);
+      if (options.alwaysRefresh) retainedFocusZoom = Math.max(retainedFocusZoom, chooseTileZoom(view, options.source));
+      const baseZoom = chooseGlobalBaseZoom(options.source, Math.max(retainedFocusZoom, chooseTileZoom(view, options.source)));
+      const desiredTiles = getDesiredTiles(view, options.source, retainedFocusZoom);
+      // Load nearby detail first, so a flight doesn't wait behind distant tiles.
+      desiredTiles.sort((a, b) => b.z - a.z ||
+        Math.hypot(a.x - lonToTileX(view.lonDeg, a.z), a.y - latToTileY(view.latDeg, a.z)) -
+        Math.hypot(b.x - lonToTileX(view.lonDeg, b.z), b.y - latToTileY(view.latDeg, b.z)));
       lastDesired = desiredTiles.map((tile) => ({ tile, key: tileKey(tile), baseZoom }));
 
       // Queue loads for any desired tile not yet cached; touch ancestors so
       // already-loaded coarser tiles survive LRU while we wait for detail.
+      // Real coarse parents are useful immediately while finer leaves stream.
+      const parents = new Map<string, TileCoord>();
+      for (const entry of lastDesired) {
+        let { z, x, y } = entry.tile;
+        while (z > entry.baseZoom) {
+          z--; x = Math.floor(x / 2); y = Math.floor(y / 2);
+          parents.set(`${z}/${x}/${y}`, { z, x, y });
+        }
+      }
+      for (const tile of [...parents.values()].sort((a, b) => a.z - b.z)) ensureCached(tile);
       for (const entry of lastDesired) {
         ensureCached(entry.tile);
         touchAncestors(entry.tile, baseZoom);
       }
 
       recomputeVisibility();
+      animateTerrain();
       evictIfNeeded();
       emitLoadEndIfIdle();
     },
     getMetrics,
+    getRevision: () => revision,
     dispose(): void {
       disposed = true;
+      terrain.dispose();
       for (const record of cache.values()) {
         if (!record.settled) {
           record.settled = true;
@@ -584,6 +724,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
       }
       cache.clear();
       lastUsedTick.clear();
+      retryAfter.clear();
       lastDesired = [];
       loadingCount = 0;
       loadCycleActive = false;

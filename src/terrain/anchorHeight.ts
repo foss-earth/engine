@@ -18,6 +18,8 @@ export interface AnchorHeightResolverOptions {
   heightOffsetMeters?: number;
   /** Optional synchronous height source, backed by precomputed/domain data. */
   provider?: AnchorHeightProvider;
+  /** Disable for providers sampling streamed geometry whose LOD can change. */
+  cacheProviderSamples?: boolean;
   /** Maximum vertical motion speed for the displayed anchor height. */
   maxVerticalSpeedMetersPerSecond?: number;
   /** How long to wait before retrying a provider miss for the same cell. */
@@ -92,7 +94,7 @@ export function createAnchorHeightResolver(options: AnchorHeightResolverOptions 
   function resolveBaseHeight(latDeg: number, lonDeg: number): number {
     const key = getCellKey(latDeg, lonDeg, cellSizeDeg);
     const cached = heightCache.get(key);
-    if (cached !== undefined) {
+    if (cached !== undefined && options.cacheProviderSamples !== false) {
       return cached;
     }
 
@@ -107,7 +109,7 @@ export function createAnchorHeightResolver(options: AnchorHeightResolverOptions 
 
     const provided = options.provider(latDeg, lonDeg);
     if (provided !== null) {
-      heightCache.set(key, provided);
+      if (options.cacheProviderSamples !== false) heightCache.set(key, provided);
       missRetryAtByCell.delete(key);
       return provided;
     }

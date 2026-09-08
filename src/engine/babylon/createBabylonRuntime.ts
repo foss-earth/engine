@@ -1,4 +1,6 @@
 import { createMapDownloadMeter } from "./mapDownloadMeter";
+import { createSurfaceQuery, type SurfaceQuery } from "../../terrain/surfaceQuery";
+import { MAPTERHORN, type TerrainSource } from "../../terrain/terrainTiles";
 import {
   Color3,
   Color4,
@@ -40,6 +42,7 @@ export interface BabylonRuntimeOptions {
   googleApiKey?: string | null;
   rasterBaseMap?: RasterBaseMapSource | null;
   getSurfaceHeightMeters?: (latDeg: number, lonDeg: number) => number | null;
+  terrainSource?: TerrainSource;
   rendererForce?: RendererMode | null;
   onStatusChange?: (status: BabylonRuntimeStatus) => void;
   /** Enable a consumer-driven simulation camera and frame callback. */
@@ -64,6 +67,8 @@ export interface BabylonTileMetrics {
 }
 
 export interface BabylonRuntime {
+  /** Collision and placement queries against the currently displayed map mesh. */
+  surface: SurfaceQuery;
   engine: Engine | WebGPUEngine;
   scene: Scene;
   renderer: RendererSelection;
@@ -278,7 +283,17 @@ export async function createBabylonRuntime(
     lastError: null,
   };
 
+  const terrainCredit = document.createElement("a");
+  terrainCredit.href = (options.terrainSource ?? MAPTERHORN).attribution;
+  terrainCredit.textContent = "Terrain attribution";
+  terrainCredit.target = "_blank";
+  terrainCredit.rel = "noopener noreferrer";
+  terrainCredit.style.cssText = "position:absolute;bottom:4px;right:8px;z-index:20;font:11px sans-serif;color:white;background:#0009;padding:3px 6px;pointer-events:auto";
+  terrainCredit.hidden = true;
+  canvas.parentElement?.appendChild(terrainCredit);
+
   const emitStatus = (): void => {
+    terrainCredit.hidden = status.mode !== "raster-basemap" || Boolean(options.getSurfaceHeightMeters);
     options.onStatusChange?.({ ...status });
   };
 
@@ -459,6 +474,7 @@ export async function createBabylonRuntime(
           ? simViewState
           : cameraController?.getViewState() ?? null,
         getSurfaceHeightMeters: options.getSurfaceHeightMeters,
+        terrainSource: options.terrainSource,
         requestRender: () => scheduler.requestRender(),
         onLoadStart: () => {
           status.message = `${rasterBaseMap.label} tiles are loading.`;
@@ -601,6 +617,8 @@ export async function createBabylonRuntime(
   scheduler.requestRender();
 
   return {
+    surface: createSurfaceQuery(scene, () => worldRoot, mesh => Boolean(mesh.metadata?.mapSurface)
+      || Boolean(tilesRuntime && mesh.isDescendantOf(tilesRuntime.tiles.group)), () => rasterTilesRuntime?.getRevision() ?? 0),
     engine: renderer.engine,
     scene,
     renderer,
@@ -699,6 +717,7 @@ export async function createBabylonRuntime(
       simTick = callback;
     },
     destroy() {
+      terrainCredit.remove();
       downloadMeter.destroy();
       scheduler.stop();
       clearGoogleWatchdog();
