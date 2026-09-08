@@ -52,6 +52,7 @@ export interface RasterTilesRuntimeOptions {
   onDownloadBytes?: (bytes: number) => void;
   onLoadEnd?: (visibleTiles: number, activeTiles: number) => void;
   onLoadError?: (error: Error, url: string) => void;
+  onDebugEvent?: (event: string, detail?: Record<string, unknown>) => void;
 }
 
 export interface RasterTilesRuntime {
@@ -409,6 +410,7 @@ function createTileRecord(
   requestTerrain(loadTerrain, 0, true);
   const loadImagery = (nextSource: RasterBaseMapSource, generation: number) => {
     const url = buildTileUrl(nextSource, tile);
+    options.onDebugEvent?.("imagery-request-start", { key, source: nextSource.id, generation, url });
     // A source can switch before its first image settles. The replacement is
     // still responsible for activating this record once it arrives.
     const activatesRecord = !imageryReady;
@@ -422,6 +424,7 @@ function createTileRecord(
         const oldTexture = record.texture;
         record.texture = texture;
         material.diffuseTexture = texture;
+        options.onDebugEvent?.("texture-material-assignment", { key, source: nextSource.id, generation });
         if (oldTexture && oldTexture !== texture) oldTexture.dispose();
         if (activatesRecord) {
           imageryReady = true;
@@ -429,10 +432,12 @@ function createTileRecord(
         } else {
           options.requestRender?.();
         }
+        options.onDebugEvent?.("imagery-request-success", { key, source: nextSource.id, generation });
       },
       (message, exception) => {
         if (record.mesh.isDisposed() || generation !== record.imageryGeneration) return;
         const detail = exception instanceof Error ? exception.message : String(message ?? "unknown texture load error");
+        options.onDebugEvent?.("imagery-request-error", { key, source: nextSource.id, generation, url, error: detail });
         options.onLoadError?.(new Error(detail), url);
         if (activatesRecord) {
           record.failed = true;
@@ -682,6 +687,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
     visibleTileKeys = representatives;
     for (const [key, record] of cache) {
       const visible = representatives.has(key) && record.loaded && !record.failed;
+      if (visible && !record.mesh.isEnabled()) options.onDebugEvent?.("tile-visible", { key });
       record.mesh.setEnabled(visible);
       if (visible) lastUsedTick.set(key, tick);
     }

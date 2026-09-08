@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 
-import { NullEngine, Scene } from "@babylonjs/core";
+import { FreeCamera, NullEngine, Scene, Vector3 } from "@babylonjs/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   createInputController: vi.fn(),
   createGoogleTilesRuntime: vi.fn(),
+  createRasterTilesRuntime: vi.fn(),
 }));
 
 vi.mock("./createRendererMode", async (importOriginal) => {
@@ -30,8 +31,25 @@ vi.mock("./createTilesRuntime", () => ({
   createGoogleTilesRuntime: mocks.createGoogleTilesRuntime,
 }));
 
+vi.mock("./createRasterTilesRuntime", () => ({
+  createRasterTilesRuntime: mocks.createRasterTilesRuntime,
+}));
+
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.createRasterTilesRuntime.mockImplementation((options: { source: { id: string } }) => ({
+    source: options.source,
+    update: vi.fn(),
+    setSource: vi.fn(),
+    setTerrainSource: vi.fn(),
+    getMetrics: () => ({ visibleTiles: 1, activeTiles: 1 }),
+    getRevision: () => 0,
+    sample: () => null,
+    getQualityState: () => ({ setting: "auto", activeProfile: "balanced" }),
+    setQuality: vi.fn(),
+    reportFrame: vi.fn(),
+    dispose: vi.fn(),
+  }));
 });
 
 describe("createBabylonRuntime simulation mode", () => {
@@ -106,6 +124,43 @@ describe("createBabylonRuntime simulation mode", () => {
     expect(runtime.isRendering()).toBe(true);
     expect(scheduledFrame).not.toBeNull();
 
+    runtime.destroy();
+  });
+
+  it("keeps the flight camera active through paused raster and Google map switches", async () => {
+    mocks.createGoogleTilesRuntime.mockReturnValue({
+      tiles: { visibleTiles: new Set(), activeTiles: new Set(), group: {} },
+      update: vi.fn(), dispose: vi.fn(),
+    });
+    const { createBabylonRuntime } = await import("./createBabylonRuntime");
+    const runtime = await createBabylonRuntime(document.createElement("canvas"), { googleApiKey: "test", simMode: true });
+    const flightCamera = new FreeCamera("flight-camera", Vector3.Zero(), runtime.scene);
+    runtime.scene.activeCamera = flightCamera;
+    runtime.setSimRunning(false);
+
+    runtime.setMapSource({ id: "test-raster", label: "Test raster", provider: "test", urlTemplate: "https://example.test/{z}/{x}/{y}.png", attribution: "test" });
+    expect(runtime.scene.activeCamera).toBe(flightCamera);
+
+    runtime.setMapSource("google");
+    expect(runtime.scene.activeCamera).toBe(flightCamera);
+    runtime.destroy();
+  });
+
+  it("retains visible Google coverage until replacement raster coverage is ready", async () => {
+    const googleRuntime = {
+      tiles: { visibleTiles: new Set(["google-tile"]), activeTiles: new Set(["google-tile"]), group: {} },
+      update: vi.fn(), dispose: vi.fn(),
+    };
+    mocks.createGoogleTilesRuntime.mockReturnValue(googleRuntime);
+    const { createBabylonRuntime } = await import("./createBabylonRuntime");
+    const runtime = await createBabylonRuntime(document.createElement("canvas"), { googleApiKey: "test", simMode: true });
+
+    runtime.setMapSource({ id: "test-raster", label: "Test raster", provider: "test", urlTemplate: "https://example.test/{z}/{x}/{y}.png", attribution: "test" });
+    expect(googleRuntime.dispose).not.toHaveBeenCalled();
+
+    const callbacks = mocks.createRasterTilesRuntime.mock.calls.at(-1)?.[0] as { onLoadEnd(visibleTiles: number, activeTiles: number): void };
+    callbacks.onLoadEnd(1, 1);
+    expect(googleRuntime.dispose).toHaveBeenCalledOnce();
     runtime.destroy();
   });
 });

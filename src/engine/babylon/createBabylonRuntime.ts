@@ -25,7 +25,22 @@ import type { RasterQualitySetting, RasterQualityState } from "./rasterQuality";
 import { createTerrainPerformanceCapture, type TerrainPerformanceCapture } from "../../terrain/terrainPerformanceCapture";
 
 declare global {
-  interface Window { fossTerrainPerformance?: TerrainPerformanceCapture }
+  interface Window {
+    fossTerrainPerformance?: TerrainPerformanceCapture;
+    __fossMapDebug?: {
+      readonly runtimeMode: RuntimeMode;
+      readonly sceneMeshCount: number;
+      readonly enabledMeshCount: number;
+      readonly rasterVisibleTiles: number;
+      readonly rasterActiveTiles: number;
+      readonly fallbackEnabled: boolean;
+      readonly activeCamera: string | null;
+      readonly schedulerActive: boolean;
+      readonly pendingTextureCount: number;
+      readonly readyTextureCount: number;
+      readonly recentEvents: readonly MapDebugEvent[];
+    };
+  }
 }
 import { createRenderScheduler, type RenderScheduler } from "./renderScheduler";
 import { geodeticToEcef, DEG_TO_RAD } from "../../camera/cameraMath";
@@ -77,6 +92,12 @@ export interface BabylonRuntimeStatus {
 export interface BabylonTileMetrics {
   visibleTiles: number;
   activeTiles: number;
+}
+
+interface MapDebugEvent {
+  at: number;
+  event: string;
+  detail?: Record<string, unknown>;
 }
 
 export interface BabylonRuntime {
@@ -224,6 +245,13 @@ export async function createBabylonRuntime(
   options: BabylonRuntimeOptions = {},
 ): Promise<BabylonRuntime> {
   const normalizedApiKey = options.googleApiKey?.trim() ?? "";
+  const mapDebugEnabled = new URLSearchParams(window.location.search).get("mapDebug") === "1";
+  const mapDebugEvents: MapDebugEvent[] = [];
+  const recordMapDebugEvent = (event: string, detail?: Record<string, unknown>): void => {
+    if (!mapDebugEnabled) return;
+    mapDebugEvents.push({ at: performance.now(), event, detail });
+    if (mapDebugEvents.length > 100) mapDebugEvents.shift();
+  };
   const hasGoogleApiKey = normalizedApiKey.length > 0;
   const shouldStartGoogle = hasGoogleApiKey && options.preferGoogleTiles !== false;
   const simMode = options.simMode === true;
@@ -324,6 +352,7 @@ export async function createBabylonRuntime(
       scene.render();
       renderer.engine.endFrame();
       terrainCapture?.endFrame();
+      recordMapDebugEvent("scene-render", { mode: status.mode, enabledMeshes: scene.meshes.filter(mesh => mesh.isEnabled()).length });
     },
     shouldKeepRendering: () => simRunning || (inertialCameraController?.isActive() ?? false),
   });
@@ -367,12 +396,16 @@ export async function createBabylonRuntime(
 
   function ensureGeospatialCamera(): GeospatialCamera {
     if (geospatialCamera) {
-      scene.activeCamera = geospatialCamera;
+      // Flight mode owns scene.activeCamera with its cockpit/chase camera.
+      // Map transitions only need the geospatial camera to exist; activating it
+      // here replaces that flight camera (which has been disabled) and renders
+      // an empty scene.
+      if (!simMode || !scene.activeCamera) scene.activeCamera = geospatialCamera;
       return geospatialCamera;
     }
 
     geospatialCamera = createGeospatialCamera(scene);
-    scene.activeCamera = geospatialCamera;
+    if (!simMode || !scene.activeCamera) scene.activeCamera = geospatialCamera;
     cameraController = new CameraController(geospatialCamera);
     const baseInertial = createInertialCameraController(cameraController);
     // Every input gesture goes through the inertial controller. Wrap its input
@@ -433,19 +466,23 @@ export async function createBabylonRuntime(
       scene.clearColor = DEFAULT_FALLBACK_BACKGROUND;
       fallbackExperience?.globeMesh.setEnabled(true);
       fallbackExperience?.light.setEnabled(true);
+      recordMapDebugEvent("fallback-show");
       return;
     }
 
     fallbackExperience = createFallbackExperience(scene, worldRoot);
     fallbackExperienceCreated = true;
+    recordMapDebugEvent("fallback-create");
   }
 
   function hideFallbackExperience(): void {
     fallbackExperience?.globeMesh.setEnabled(false);
     fallbackExperience?.light.setEnabled(false);
+    recordMapDebugEvent("fallback-hide");
   }
 
   function enableFallbackMode(reason: string): void {
+    recordMapDebugEvent("fallback-mode-select", { reason });
     releaseStartupHold();
     endStreaming();
 
@@ -463,8 +500,10 @@ export async function createBabylonRuntime(
 
     clearGoogleWatchdog();
 
+    if (tilesRuntime) recordMapDebugEvent("google-runtime-dispose");
     tilesRuntime?.dispose();
     tilesRuntime = null;
+    if (rasterTilesRuntime) recordMapDebugEvent("raster-runtime-dispose");
     rasterTilesRuntime?.dispose();
     rasterTilesRuntime = null;
 
@@ -485,17 +524,23 @@ export async function createBabylonRuntime(
   }
 
   function enableRasterBaseMapMode(reason: string | null, recreate = false): void {
+    recordMapDebugEvent("raster-mode-select", { source: activeRasterBaseMap?.id ?? null, reason, recreate });
     const retainRasterCoverage = status.mode === "raster-basemap"
       && (rasterTilesRuntime?.getMetrics().visibleTiles ?? 0) > 0;
+    const retainGoogleCoverage = status.mode === "google-tiles"
+      && (tilesRuntime?.tiles.visibleTiles.size ?? 0) > 0;
     releaseStartupHold();
     endStreaming();
     clearGoogleWatchdog();
 
-    tilesRuntime?.dispose();
-    tilesRuntime = null;
-
-    if (googleLight) {
-      googleLight.dispose();
+    // Keep visible Google geometry until raster coverage has been adopted.
+    // A pending Google runtime has no useful coverage and must not leave stale
+    // callbacks that can later change the selected raster mode.
+    if (!retainGoogleCoverage) {
+      if (tilesRuntime) recordMapDebugEvent("google-runtime-dispose");
+      tilesRuntime?.dispose();
+      tilesRuntime = null;
+      googleLight?.dispose();
       googleLight = null;
     }
 
@@ -504,7 +549,7 @@ export async function createBabylonRuntime(
     // Switching from Google (or a failed raster load) has no raster coverage
     // yet. Keep the simple globe visible until actual raster tiles arrive;
     // otherwise the canvas is just the clear colour during the handoff.
-    if (retainRasterCoverage) hideFallbackExperience();
+    if (retainRasterCoverage || retainGoogleCoverage) hideFallbackExperience();
 
     const rasterBaseMap = activeRasterBaseMap;
     if (!rasterBaseMap) {
@@ -513,6 +558,7 @@ export async function createBabylonRuntime(
     }
 
     if (recreate || !rasterTilesRuntime) {
+      if (rasterTilesRuntime) recordMapDebugEvent("raster-runtime-dispose");
       rasterTilesRuntime?.dispose();
       rasterTilesRuntime = createRasterTilesRuntime({
         onDownloadBytes: downloadMeter.addBytes,
@@ -528,19 +574,32 @@ export async function createBabylonRuntime(
         quality: activeRasterQuality,
         performanceCapture: terrainCapture,
         requestRender: () => scheduler.requestRender(),
+        onDebugEvent: recordMapDebugEvent,
         onLoadStart: () => {
+          recordMapDebugEvent("raster-load-start");
           status.message = `${activeRasterBaseMap?.label ?? "Raster"} tiles are loading.`;
           beginStreaming();
           emitStatus();
         },
         onLoadEnd: (visibleTiles, activeTiles) => {
+          recordMapDebugEvent("raster-load-end", { visibleTiles, activeTiles });
           status.message = `${activeRasterBaseMap?.label ?? "Raster"} active (visible: ${visibleTiles}, active: ${activeTiles}).`;
-          if (visibleTiles > 0) hideFallbackExperience();
+          if (visibleTiles > 0) {
+            hideFallbackExperience();
+            if (tilesRuntime) {
+              recordMapDebugEvent("google-runtime-dispose");
+              tilesRuntime.dispose();
+              tilesRuntime = null;
+              googleLight?.dispose();
+              googleLight = null;
+            }
+          }
           endStreaming();
           scheduler.requestRender();
           emitStatus();
         },
         onLoadError: (error, url) => {
+          recordMapDebugEvent("raster-load-error", { error: error.message, url });
           status.lastError = `${error.message} (${url})`;
           status.message = `${activeRasterBaseMap?.label ?? "Raster"} reported tile load errors.`;
           emitStatus();
@@ -566,11 +625,17 @@ export async function createBabylonRuntime(
   }
 
   function enableGoogleTilesMode(): void {
+    recordMapDebugEvent("google-mode-select");
     releaseStartupHold();
     endStreaming();
     clearGoogleWatchdog();
-    rasterTilesRuntime?.dispose();
-    rasterTilesRuntime = null;
+    const retainRasterCoverage = (rasterTilesRuntime?.getMetrics().visibleTiles ?? 0) > 0;
+    // Preserve the last usable raster surface until Google has visible tiles.
+    if (!retainRasterCoverage) {
+      if (rasterTilesRuntime) recordMapDebugEvent("raster-runtime-dispose");
+      rasterTilesRuntime?.dispose();
+      rasterTilesRuntime = null;
+    }
     status.rasterQuality = null;
     if (!hasGoogleApiKey) {
       if (activeRasterBaseMap) enableRasterBaseMapMode("Google 3D Tiles need an API key.");
@@ -603,6 +668,8 @@ export async function createBabylonRuntime(
         scene,
         apiKey: normalizedApiKey,
         onLoadError: (error, url) => {
+          if (status.mode !== "google-tiles") return;
+          recordMapDebugEvent("google-load-error", { error: error.message, url });
           status.lastError = `${error.message} (${url})`;
           status.message = "Google tiles reported load errors.";
           emitStatus();
@@ -614,11 +681,15 @@ export async function createBabylonRuntime(
           }
         },
         onLoadStart: () => {
+          if (status.mode !== "google-tiles") return;
+          recordMapDebugEvent("google-load-start");
           status.message = "Google tiles are loading.";
           beginStreaming();
           emitStatus();
         },
         onLoadEnd: (visibleTiles, activeTiles) => {
+          if (status.mode !== "google-tiles") return;
+          recordMapDebugEvent("google-load-end", { visibleTiles, activeTiles });
           status.lastError = null;
           status.message = `Google tiles loaded (visible: ${visibleTiles}, active: ${activeTiles}).`;
           endStreaming();
@@ -627,6 +698,11 @@ export async function createBabylonRuntime(
 
           if (visibleTiles > 0) {
             hideFallbackExperience();
+            if (rasterTilesRuntime) {
+              recordMapDebugEvent("raster-runtime-dispose");
+              rasterTilesRuntime.dispose();
+              rasterTilesRuntime = null;
+            }
             clearGoogleWatchdog();
             releaseStartupHold();
           }
@@ -690,6 +766,23 @@ export async function createBabylonRuntime(
   };
   document.addEventListener("visibilitychange", handleVisibility);
 
+  if (mapDebugEnabled) {
+    window.__fossMapDebug = {
+      get runtimeMode() { return status.mode; },
+      get sceneMeshCount() { return scene.meshes.length; },
+      get enabledMeshCount() { return scene.meshes.filter(mesh => mesh.isEnabled()).length; },
+      get rasterVisibleTiles() { return rasterTilesRuntime?.getMetrics().visibleTiles ?? 0; },
+      get rasterActiveTiles() { return rasterTilesRuntime?.getMetrics().activeTiles ?? 0; },
+      get fallbackEnabled() { return fallbackExperience?.globeMesh.isEnabled() ?? false; },
+      get activeCamera() { return scene.activeCamera?.name ?? null; },
+      get schedulerActive() { return scheduler.isActive(); },
+      get pendingTextureCount() { return scene.textures.filter(texture => !texture.isReady()).length; },
+      get readyTextureCount() { return scene.textures.filter(texture => texture.isReady()).length; },
+      get recentEvents() { return mapDebugEvents; },
+    };
+    recordMapDebugEvent("debug-ready");
+  }
+
   // Kick the first frame so initial scene state paints.
   scheduler.requestRender();
 
@@ -733,6 +826,7 @@ export async function createBabylonRuntime(
       enableRasterBaseMapMode(null);
     },
     setMapSource(source): void {
+      recordMapDebugEvent("map-source-selection", { source });
       if (source === "google") {
         if (status.mode !== "google-tiles") enableGoogleTilesMode();
         return;
