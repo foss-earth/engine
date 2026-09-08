@@ -1,10 +1,24 @@
 import { MeshBuilder, NullEngine, Scene, TransformNode, Vector3 } from "@babylonjs/core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createSurfaceQuery } from "./surfaceQuery";
 import { createTerrainMesh } from "../engine/babylon/createRasterTilesRuntime";
 import { RASTER_BASE_MAP_SOURCES } from "../engine/babylon/rasterBaseMaps";
 
 describe("visible map surface queries", () => {
+  it("treats an indexed raster miss as final while retaining general raycasts", () => {
+    const engine = new NullEngine(); const scene = new Scene(engine);
+    const pick = vi.spyOn(scene, "pickWithRay");
+    const sample = vi.fn<() => null | undefined>(() => null);
+    const query = createSurfaceQuery(scene, () => null, () => true, () => 0, sample);
+    expect(query.sample(34, -118)).toBeNull();
+    expect(pick).not.toHaveBeenCalled();
+    sample.mockReturnValue(undefined);
+    query.sample(34, -118);
+    expect(pick).toHaveBeenCalledOnce();
+    query.raycast({ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, 10);
+    expect(pick).toHaveBeenCalledTimes(2);
+    engine.dispose();
+  });
   it("hits building walls sideways and ignores hidden meshes and unrelated aircraft", () => {
     const engine = new NullEngine(); const scene = new Scene(engine);
     const wall = MeshBuilder.CreateBox("building", { size: 10 }, scene);

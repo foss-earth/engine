@@ -18,6 +18,9 @@ import {
 } from "../../camera/cameraMath";
 import { createTerrainTileLoader, sampleTerrainGrid, type TerrainGrid, type TerrainSource } from "../../terrain/terrainTiles";
 import { GLOBAL_TERRAIN } from "../../terrain/globalTerrain";
+import { createRasterSurfaceSampler } from "../../terrain/rasterSurfaceSampler";
+import type { SurfaceHit } from "../../terrain/surfaceQuery";
+import type { TerrainPerformanceCapture } from "../../terrain/terrainPerformanceCapture";
 import { advanceRefinement, inheritParent, meshPositions, refineMesh, stitchTerrainEdges, type MeshRefinement } from "../../terrain/meshRefinement";
 import type { GlobeViewState } from "../types";
 import type { RasterBaseMapSource } from "./rasterBaseMaps";
@@ -42,6 +45,7 @@ export interface RasterTilesRuntimeOptions {
   getViewState: () => GlobeViewState | null;
   getSurfaceHeightMeters?: (latDeg: number, lonDeg: number) => number | null;
   terrainSource?: TerrainSource;
+  performanceCapture?: TerrainPerformanceCapture;
   requestRender?: () => void;
   onLoadStart?: () => void;
   onDownloadBytes?: (bytes: number) => void;
@@ -54,6 +58,7 @@ export interface RasterTilesRuntime {
   update(): void;
   getMetrics(): RasterTileMetrics;
   getRevision(): number;
+  sample(latDeg: number, lonDeg: number): SurfaceHit | null;
   dispose(): void;
 }
 
@@ -259,6 +264,7 @@ function chooseTilePatchSegments(tile: TileCoord): number {
 }
 
 export function createTerrainMesh(options: RasterTilesRuntimeOptions, tile: TileCoord, grid?: TerrainGrid): Mesh {
+  const started = options.performanceCapture ? performance.now() : 0;
   const { scene, source } = options;
   const mesh = new Mesh(`raster-basemap-tile-${source.id}-${tileKey(tile)}`, scene);
   const positions: number[] = [];
@@ -319,6 +325,10 @@ export function createTerrainMesh(options: RasterTilesRuntimeOptions, tile: Tile
     mesh.freezeWorldMatrix();
   }
 
+  if (options.performanceCapture) {
+    options.performanceCapture.counters.preparationCpuMs += performance.now() - started;
+    options.performanceCapture.counters.geometryWrites++;
+  }
   return mesh;
 }
 
@@ -358,10 +368,12 @@ function createTileRecord(
     if (record.settled || record.mesh.isDisposed()) return;
     if (grid && grid.z <= record.mesh.metadata.terrainZoom) return;
     const readyMesh = createTerrainMesh(options, tile, grid);
+    const started = options.performanceCapture ? performance.now() : 0;
     record.target = meshPositions(readyMesh);
     record.refinement = refineMesh(record.mesh, record.target, performance.now());
     record.mesh.metadata.terrainZoom = grid?.z ?? -1;
     readyMesh.dispose();
+    if (options.performanceCapture) options.performanceCapture.counters.preparationCpuMs += performance.now() - started;
     onChanged();
   };
   const terrain = options.getSurfaceHeightMeters ? Promise.resolve(undefined) : loadTerrain(tile, applyGrid);
@@ -425,7 +437,9 @@ interface DisplayBuildResult {
 }
 
 export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): RasterTilesRuntime {
-  const terrain = createTerrainTileLoader(options.terrainSource, options.onDownloadBytes);
+  const capture = options.performanceCapture;
+  const terrain = createTerrainTileLoader(options.terrainSource, options.onDownloadBytes, undefined, Boolean(capture),
+    capture ? milliseconds => { capture.counters.preparationCpuMs += milliseconds; } : undefined);
   // Persistent cache: tiles stay alive after they leave the desired set so we
   // can keep showing them (or use them as best-effort fallbacks) without
   // re-downloading. Eviction is LRU and only kicks in over MAX_CACHED_TILES.
@@ -439,6 +453,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
   let loadCycleActive = false;
   let disposed = false;
   let revision = 0;
+  const surfaceSampler = createRasterSurfaceSampler(() => revision, capture?.counters);
   let retainedFocusZoom = 0;
   let geometryDirty = false;
   let visibilityDirty = false;
@@ -603,6 +618,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
           if (parent && oldVisible.has(parent.key)) {
             const from = inheritParent(record, parent);
             record.mesh.updateVerticesData(VertexBuffer.PositionKind, from, true);
+            if (capture) capture.counters.geometryWrites++;
             record.refinement = refineMesh(record.mesh, record.target, performance.now());
             break;
           }
@@ -617,6 +633,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
       record.mesh.setEnabled(visible);
       if (visible) lastUsedTick.set(key, tick);
     }
+    if (changed) surfaceSampler.setCoverage([...representatives].map(key => cache.get(key)!));
   }
 
   function evictIfNeeded(): void {
@@ -655,10 +672,13 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
     if (!geometryDirty && !moving) return;
     for (const record of visible) {
       if (record.refinement) {
-        if (!advanceRefinement(record.mesh, record.refinement, now)) record.refinement = null;
-      } else record.mesh.updateVerticesData(VertexBuffer.PositionKind, record.target, true);
+        if (!advanceRefinement(record.mesh, record.refinement, now, capture?.counters)) record.refinement = null;
+      } else {
+        record.mesh.updateVerticesData(VertexBuffer.PositionKind, record.target, true);
+        if (capture) capture.counters.geometryWrites++;
+      }
     }
-    stitchTerrainEdges(visible);
+    stitchTerrainEdges(visible, capture?.counters);
     revision++;
     geometryDirty = false;
     if (visible.some(record => record.refinement !== null)) options.requestRender?.();
@@ -695,24 +715,61 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
       touchAncestors(entry.tile, baseZoom);
     }
 
-    visibilityDirty = true;
+      visibilityDirty = true;
+  }
+
+  function captureResources(now: number): void {
+    if (!capture?.needsResources(now)) return;
+    let cachedTriangles = 0, adoptedTriangles = 0, meshBytes = 0, textureBytes = 0;
+    for (const record of cache.values()) {
+      const triangles = record.mesh.getTotalIndices() / 3;
+      cachedTriangles += triangles;
+      if (visibleTileKeys.has(record.key)) adoptedTriangles += triangles;
+      // Conservative CPU + GPU estimate for position/normal/UV/index storage and
+      // retained target/morph arrays. Decoder/driver allocations are unavailable.
+      meshBytes += record.mesh.getTotalVertices() * 8 * 12 + triangles * 3 * 12 + record.target.length * 8;
+      if (record.refinement) meshBytes += record.refinement.from.length * 8;
+      const size = record.texture.getSize();
+      textureBytes += size.width * size.height * 4 * 4 / 3;
+    }
+    const dem = terrain.getMetrics();
+    capture.recordResources({ adoptedTiles: visibleTileKeys.size, cachedTiles: cache.size, adoptedTriangles,
+      cachedTriangles, meshBytes, textureBytes, decodedDemBytes: dem.decodedBytes, pendingTiles: loadingCount,
+      activeDemRequests: dem.active, queuedDemRequests: dem.queued }, now);
   }
 
   return {
     source: options.source,
     update(): void {
       if (disposed) return;
+      const started = capture ? performance.now() : 0, oldRevision = revision;
+      const previousPreparation = capture?.counters.preparationCpuMs ?? 0;
       const view = options.getViewState();
+      // Simulation ticks still advance active refinement every frame, but a
+      // stationary (or sub-threshold) aircraft has no new coverage to select.
       if (view && [view.latDeg, view.lonDeg, view.zoomMeters].every(Number.isFinite)
-        && (options.alwaysRefresh || hasMeaningfulCameraChange(view))) selectTiles(view);
+        && hasMeaningfulCameraChange(view)) selectTiles(view);
       if (visibilityDirty) recomputeVisibility();
       // One pass after coverage adoption, including stationary/paused frames.
       animateTerrain();
       evictIfNeeded();
       emitLoadEndIfIdle();
+      if (capture) {
+        // Mesh construction is already recorded as preparation; do not count it twice.
+        capture.counters.updateCpuMs += performance.now() - started - (capture.counters.preparationCpuMs - previousPreparation);
+        capture.counters.revisionChanges += revision - oldRevision;
+        captureResources(performance.now());
+      }
     },
     getMetrics,
     getRevision: () => revision,
+    sample(lat, lon) {
+      if (!capture) return surfaceSampler.sample(lat, lon);
+      const started = performance.now();
+      const hit = surfaceSampler.sample(lat, lon);
+      capture.counters.sampleCpuMs += performance.now() - started;
+      return hit;
+    },
     dispose(): void {
       disposed = true;
       terrain.dispose();
@@ -724,6 +781,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
         disposeTile(record);
       }
       cache.clear();
+      surfaceSampler.setCoverage([]);
       lastUsedTick.clear();
       retryAfter.clear();
       lastDesired = [];

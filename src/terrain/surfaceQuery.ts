@@ -16,7 +16,8 @@ export interface SurfaceHit {
 /** Query only currently visible map triangles. Input/output are always ECEF,
  * even when a consumer moves the map under a floating origin. No cached heights. */
 export function createSurfaceQuery(scene: Scene, getWorldRoot: () => TransformNode | null,
-  isSurface: (mesh: AbstractMesh) => boolean, getRevision: () => number = () => 0) {
+  isSurface: (mesh: AbstractMesh) => boolean, getRevision: () => number = () => 0,
+  sampleOverride?: (latDeg: number, lonDeg: number) => SurfaceHit | null | undefined) {
   function raycast(origin: EcefCoord, direction: EcefCoord, lengthMeters: number): SurfaceHit | null {
     if (![origin.x, origin.y, origin.z, direction.x, direction.y, direction.z, lengthMeters].every(Number.isFinite)
       || lengthMeters <= 0) return null;
@@ -38,6 +39,9 @@ export function createSurfaceQuery(scene: Scene, getWorldRoot: () => TransformNo
   }
   function sample(latDeg: number, lonDeg: number): SurfaceHit | null {
     if (!Number.isFinite(latDeg) || !Number.isFinite(lonDeg) || Math.abs(latDeg) > 90) return null;
+    // undefined selects the general path; null is an authoritative raster miss.
+    const overridden = sampleOverride?.(latDeg, lonDeg);
+    if (overridden !== undefined) return overridden;
     const lat = latDeg * DEG_TO_RAD, lon = lonDeg * DEG_TO_RAD;
     return raycast(geodeticToEcef(lat, lon, 20000),
       { x: -Math.cos(lat) * Math.cos(lon), y: -Math.cos(lat) * Math.sin(lon), z: -Math.sin(lat) }, 40000);

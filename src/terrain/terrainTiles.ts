@@ -54,8 +54,9 @@ export function sampleTerrainGrid(grid: TerrainGrid, x: number, y: number): numb
   return a * (1 - v) + b * v;
 }
 
-async function decodeImage(blob: Blob): Promise<{ size: number; heights: Float32Array }> {
+async function decodeImage(blob: Blob, onDecodeCpu?: (milliseconds: number) => void): Promise<{ size: number; heights: Float32Array }> {
   const bitmap = await createImageBitmap(blob, { colorSpaceConversion: "none", premultiplyAlpha: "none" });
+  const started = onDecodeCpu ? performance.now() : 0;
   try {
     if (bitmap.width !== bitmap.height || bitmap.width > 1024) throw new Error("Invalid terrain tile size");
     const canvas = document.createElement("canvas");
@@ -64,17 +65,21 @@ async function decodeImage(blob: Blob): Promise<{ size: number; heights: Float32
     if (!ctx) throw new Error("Terrain image decoder unavailable");
     ctx.drawImage(bitmap, 0, 0);
     return { size: bitmap.width, heights: decodeTerrarium(ctx.getImageData(0, 0, bitmap.width, bitmap.height).data, bitmap.width) };
-  } finally { bitmap.close(); }
+  } finally { bitmap.close(); onDecodeCpu?.(performance.now() - started); }
 }
 
 export function createTerrainTileLoader(
   source = MAPTERHORN,
   onBytes?: (bytes: number) => void,
-  decode = decodeImage,
+  decode: ((blob: Blob) => Promise<{ size: number; heights: Float32Array }>) | undefined = undefined,
+  trackMemory = false,
+  onDecodeCpu?: (milliseconds: number) => void,
 ) {
+  const decodeTile = decode ?? ((blob: Blob) => decodeImage(blob, onDecodeCpu));
   const controller = new AbortController();
   const cache = new Map<string, Promise<TerrainGrid>>();
   const settled = new Set<string>();
+  const decodedArrays = trackMemory ? new Map<string, Float32Array>() : null;
   let active = 0;
   const queue: Array<() => void> = [];
   async function download(tile: TerrainTile): Promise<TerrainGrid> {
@@ -88,7 +93,7 @@ export function createTerrainTileLoader(
       }
       const blob = await response.blob();
       onBytes?.(blob.size);
-      return { ...tile, ...await decode(blob) };
+      return { ...tile, ...await decodeTile(blob) };
     } finally { active--; pump(); }
   }
   // Release the download slot before awaiting a parent (avoid queue deadlock).
@@ -103,14 +108,16 @@ export function createTerrainTileLoader(
     const key = `${tile.z}/${tile.x}/${tile.y}`;
     const found = cache.get(key);
     if (found) { cache.delete(key); cache.set(key, found); return found; }
-    const pending = download(tile).catch(error => { cache.delete(key); settled.delete(key); throw error; });
+    const pending = download(tile).catch(error => { cache.delete(key); settled.delete(key); decodedArrays?.delete(key); throw error; });
     cache.set(key, pending);
     // Settled arrays are small and bounded; geometry retains its own samples.
-    void pending.then(() => {
+    void pending.then(grid => {
+      if (cache.get(key) !== pending) return;
       settled.add(key);
+      decodedArrays?.set(key, grid.heights);
       for (const candidate of cache.keys()) {
         if (cache.size <= 256) break;
-        if (settled.has(candidate)) { cache.delete(candidate); settled.delete(candidate); }
+        if (settled.has(candidate)) { cache.delete(candidate); settled.delete(candidate); decodedArrays?.delete(candidate); }
       }
     }, () => {});
     return pending;
@@ -125,5 +132,8 @@ export function createTerrainTileLoader(
     }
     return { ...grid, neighbors: await Promise.all(neighbors) };
   }
-  return { load, loadPatch, dispose() { controller.abort(); cache.clear(); settled.clear(); } };
+  return { load, loadPatch,
+    getMetrics() { return { active, queued: queue.length,
+      decodedBytes: decodedArrays ? [...new Set(decodedArrays.values())].reduce((sum, array) => sum + array.byteLength, 0) : null }; },
+    dispose() { controller.abort(); cache.clear(); settled.clear(); decodedArrays?.clear(); } };
 }

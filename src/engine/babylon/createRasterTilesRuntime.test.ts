@@ -1,6 +1,7 @@
 import { NullEngine, Scene, Texture } from "@babylonjs/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as refinement from "../../terrain/meshRefinement";
+import { createTerrainPerformanceCapture } from "../../terrain/terrainPerformanceCapture";
 import type { TerrainGrid, TerrainTile } from "../../terrain/terrainTiles";
 import { createRasterTilesRuntime } from "./createRasterTilesRuntime";
 import { RASTER_BASE_MAP_SOURCES } from "./rasterBaseMaps";
@@ -16,6 +17,7 @@ vi.mock("./loadMapTexture", () => ({ loadMapTexture: (_url: string, scene: Scene
 vi.mock("../../terrain/terrainTiles", async importOriginal => ({
   ...await importOriginal<typeof import("../../terrain/terrainTiles")>(),
   createTerrainTileLoader: () => ({ dispose: pending.dispose,
+    getMetrics: () => ({ active: 0, queued: 0, decodedBytes: 0 }),
     loadPatch: (tile: TerrainTile) => new Promise<TerrainGrid>((resolve, reject) => pending.terrain.push({ tile, resolve, reject })) }),
 }));
 beforeEach(() => { pending.imagery = []; pending.terrain = []; pending.dispose.mockClear(); });
@@ -32,6 +34,26 @@ async function resolveFirstDetail(): Promise<void> {
 }
 
 describe("raster imagery and terrain lifecycle", () => {
+  it("captures asynchronous preparation and queries when requested", async () => {
+    const engine = new NullEngine(); const scene = new Scene(engine);
+    const capture = createTerrainPerformanceCapture(4);
+    const runtime = createRasterTilesRuntime({ scene, source: RASTER_BASE_MAP_SOURCES[0], getViewState: () => view,
+      performanceCapture: capture });
+    capture.beginFrame(0); runtime.update(); capture.endFrame();
+    pending.imagery.forEach(loaded => loaded());
+    await resolveFirstDetail();
+    expect(capture.counters.preparationCpuMs).toBeGreaterThan(0);
+    capture.beginFrame(16); runtime.update();
+    const hit = runtime.sample(0.1, 0.1);
+    expect(hit).not.toBeNull();
+    capture.endFrame();
+    const snapshot = capture.snapshot();
+    expect(snapshot.metrics.samples.max).toBe(1);
+    expect(snapshot.metrics.seamPasses.max).toBe(1);
+    expect(snapshot.metrics.sampleCpuMs.max).toBeGreaterThan(0);
+    expect(snapshot.resources?.cachedTriangles).toBeGreaterThan(0);
+    runtime.dispose(); engine.dispose();
+  });
   it("displays real global fallback and refines the same mesh when terrain arrives", async () => {
     const engine = new NullEngine(); const scene = new Scene(engine);
     const runtime = createRasterTilesRuntime({ scene, source: RASTER_BASE_MAP_SOURCES[0], getViewState: () => view });
@@ -48,6 +70,9 @@ describe("raster imagery and terrain lifecycle", () => {
     expect(runtime.getRevision()).toBeGreaterThan(beforeRevision);
     expect(beforeMeshes.every(mesh => !mesh.isDisposed())).toBe(true);
     expect(scene.meshes.filter(mesh => mesh.isEnabled()).every(mesh => mesh.metadata?.mapSurface)).toBe(true);
+    const clock = vi.spyOn(performance, "now");
+    expect(runtime.sample(0.1, 0.1)).not.toBeNull();
+    expect(clock).not.toHaveBeenCalled();
     runtime.dispose();
     expect(scene.meshes).toHaveLength(0);
     engine.dispose();

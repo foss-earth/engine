@@ -17,13 +17,15 @@ describe("streamed terrain", () => {
   it("deduplicates requests and falls back on 404 without deadlocking all six slots", async () => {
     const fetcher = vi.fn(async (url: string) => new Response("tile", { status: url.includes("/0/0/0") ? 200 : 404 }));
     vi.stubGlobal("fetch", fetcher);
-    const loader = createTerrainTileLoader(undefined, undefined, async () => ({ size: 1, heights: new Float32Array([250]) }));
+    const loader = createTerrainTileLoader(undefined, undefined, async () => ({ size: 1, heights: new Float32Array([250]) }), true);
     const tile = { z: 2, x: 0, y: 0 };
     expect(loader.load(tile)).toBe(loader.load(tile));
     const grids = await Promise.all(Array.from({ length: 8 }, (_, i) => loader.load({ z: 2, x: i % 4, y: Math.floor(i / 4) })));
     expect(grids.every(grid => grid.z === 0 && grid.heights[0] === 250)).toBe(true);
     expect(fetcher.mock.calls.filter(([url]) => url.includes("/0/0/0"))).toHaveLength(1);
+    expect(loader.getMetrics().decodedBytes).toBe(4); // shared parent array is counted once
     loader.dispose();
+    expect(loader.getMetrics().decodedBytes).toBe(0);
   });
   it("uses both tiles at a shared edge instead of producing a half-pixel height step", () => {
     const left = { z: 1, x: 0, y: 0, size: 2, heights: new Float32Array([0, 10, 0, 10]) };

@@ -21,6 +21,11 @@ import { bootstrapGlobeRenderer, type RendererMode, type RendererSelection } fro
 import { createGoogleTilesRuntime, type GoogleTilesRuntime } from "./createTilesRuntime";
 import { createRasterTilesRuntime, type RasterTilesRuntime } from "./createRasterTilesRuntime";
 import type { RasterBaseMapSource } from "./rasterBaseMaps";
+import { createTerrainPerformanceCapture, type TerrainPerformanceCapture } from "../../terrain/terrainPerformanceCapture";
+
+declare global {
+  interface Window { fossTerrainPerformance?: TerrainPerformanceCapture }
+}
 import { createRenderScheduler, type RenderScheduler } from "./renderScheduler";
 import { geodeticToEcef, DEG_TO_RAD } from "../../camera/cameraMath";
 import { CameraController, type OrbitTargetHeightOptions } from "../../camera/cameraState";
@@ -43,6 +48,8 @@ export interface BabylonRuntimeOptions {
   rasterBaseMap?: RasterBaseMapSource | null;
   getSurfaceHeightMeters?: (latDeg: number, lonDeg: number) => number | null;
   terrainSource?: TerrainSource;
+  /** Explicit opt-in; no per-query timings or capture buffers by default. */
+  terrainPerformanceCapture?: TerrainPerformanceCapture;
   rendererForce?: RendererMode | null;
   onStatusChange?: (status: BabylonRuntimeStatus) => void;
   /** Enable a consumer-driven simulation camera and frame callback. */
@@ -207,6 +214,10 @@ export async function createBabylonRuntime(
   const { renderer, scene } = await bootstrapGlobeRenderer(canvas, {
     force: options.rendererForce ?? null,
   });
+  const captureFromUrl = new URLSearchParams(window.location.search).get("terrainCapture") === "1";
+  const terrainCapture = options.terrainPerformanceCapture ?? (captureFromUrl ? createTerrainPerformanceCapture() : undefined);
+  const previousCapture = window.fossTerrainPerformance;
+  if (captureFromUrl) window.fossTerrainPerformance = terrainCapture;
 
   let simLight: HemisphericLight | null = null;
   if (simMode) {
@@ -254,6 +265,7 @@ export async function createBabylonRuntime(
   // holds a reference, and idles otherwise.
   const scheduler: RenderScheduler = createRenderScheduler({
     tick: () => {
+      terrainCapture?.beginFrame(performance.now());
       if (!simMode) {
         inertialCameraController?.update();
       }
@@ -269,6 +281,7 @@ export async function createBabylonRuntime(
       simTick?.(deltaSeconds);
       scene.render();
       renderer.engine.endFrame();
+      terrainCapture?.endFrame();
     },
     shouldKeepRendering: () => simRunning || (inertialCameraController?.isActive() ?? false),
   });
@@ -475,6 +488,7 @@ export async function createBabylonRuntime(
           : cameraController?.getViewState() ?? null,
         getSurfaceHeightMeters: options.getSurfaceHeightMeters,
         terrainSource: options.terrainSource,
+        performanceCapture: terrainCapture,
         requestRender: () => scheduler.requestRender(),
         onLoadStart: () => {
           status.message = `${rasterBaseMap.label} tiles are loading.`;
@@ -618,7 +632,8 @@ export async function createBabylonRuntime(
 
   return {
     surface: createSurfaceQuery(scene, () => worldRoot, mesh => Boolean(mesh.metadata?.mapSurface)
-      || Boolean(tilesRuntime && mesh.isDescendantOf(tilesRuntime.tiles.group)), () => rasterTilesRuntime?.getRevision() ?? 0),
+      || Boolean(tilesRuntime && mesh.isDescendantOf(tilesRuntime.tiles.group)), () => rasterTilesRuntime?.getRevision() ?? 0,
+      (lat, lon) => rasterTilesRuntime?.sample(lat, lon)),
     engine: renderer.engine,
     scene,
     renderer,
@@ -717,6 +732,10 @@ export async function createBabylonRuntime(
       simTick = callback;
     },
     destroy() {
+      if (captureFromUrl && window.fossTerrainPerformance === terrainCapture) {
+        if (previousCapture) window.fossTerrainPerformance = previousCapture;
+        else delete window.fossTerrainPerformance;
+      }
       terrainCredit.remove();
       downloadMeter.destroy();
       scheduler.stop();

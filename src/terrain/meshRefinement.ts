@@ -3,16 +3,18 @@ import type { TerrainTile } from "./terrainTiles";
 
 export interface TerrainPatch { mesh: Mesh; tile: TerrainTile }
 export interface MeshRefinement { from: number[]; to: number[]; started: number; duration: number }
+export interface GeometryWriteCounters { geometryWrites: number; seamPasses: number }
 const order = (a: TerrainPatch, b: TerrainPatch) => a.tile.z - b.tile.z || a.tile.x - b.tile.x || a.tile.y - b.tile.y;
 export function meshPositions(mesh: Mesh): number[] { return Array.from(mesh.getVerticesData(VertexBuffer.PositionKind)!); }
 export function refineMesh(mesh: Mesh, to: number[], now: number, duration = 1200): MeshRefinement {
   return { from: meshPositions(mesh), to, started: now, duration };
 }
-export function advanceRefinement(mesh: Mesh, refinement: MeshRefinement, now: number): boolean {
+export function advanceRefinement(mesh: Mesh, refinement: MeshRefinement, now: number, counters?: GeometryWriteCounters): boolean {
   const t = Math.max(0, Math.min(1, (now - refinement.started) / refinement.duration));
   const blend = t * t * (3 - 2 * t);
   const positions = refinement.from.map((value, i) => value + (refinement.to[i] - value) * blend);
   mesh.updateVerticesData(VertexBuffer.PositionKind, positions, true);
+  if (counters) counters.geometryWrites++;
   return t < 1;
 }
 
@@ -44,7 +46,8 @@ export function inheritParent(child: TerrainPatch, parent: TerrainPatch): number
 
 /** Fine boundary vertices lie on the adjacent coarser triangles, including
  * during refinement. A short interior band blends the seam into fine detail. */
-export function stitchTerrainEdges(patches: TerrainPatch[]): void {
+export function stitchTerrainEdges(patches: TerrainPatch[], counters?: GeometryWriteCounters): void {
+  if (counters) counters.seamPasses++;
   const byKey = new Map(patches.map(patch => [`${patch.tile.z}/${patch.tile.x}/${patch.tile.y}`, patch]));
   for (const patch of [...patches].sort(order)) {
     const { tile, mesh } = patch;
@@ -82,7 +85,10 @@ export function stitchTerrainEdges(patches: TerrainPatch[]): void {
         }
       }
     }
-    if (positions) mesh.updateVerticesData(VertexBuffer.PositionKind, positions, true);
+    if (positions) {
+      mesh.updateVerticesData(VertexBuffer.PositionKind, positions, true);
+      if (counters) counters.geometryWrites++;
+    }
   }
   // T-junction corners choose the same coarsest owner on all participating tiles.
   for (const patch of [...patches].sort(order)) {
@@ -105,5 +111,6 @@ export function stitchTerrainEdges(patches: TerrainPatch[]): void {
       for (let axis = 0; axis < 3; axis++) positions[index + axis] = point[axis] - origin[axis];
     }
     mesh.updateVerticesData(VertexBuffer.PositionKind, positions, true);
+    if (counters) counters.geometryWrites++;
   }
 }
