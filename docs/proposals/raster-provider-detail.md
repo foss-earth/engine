@@ -1,6 +1,6 @@
 # Provider capabilities and available detail levels
 
-Status: Proposed appendix to [Flat-basemap performance recovery](raster-terrain-performance.md)  
+Status: Implementation appendix to [Flat-basemap performance recovery](raster-terrain-performance.md)
 Date: 2026-09-07  
 Scope: raster imagery, raster elevation, and the terrain mesh built from them
 
@@ -107,15 +107,15 @@ preserves the elevation choice; changing elevation preserves the basemap and
 quality setting. Hardware adaptation changes detail within the selected source,
 not the user's provider choice.
 
-Mapterhorn remains the default. The proposed second option is **Mapzen Terrain
+Mapterhorn remains the default. The second registered option is **Mapzen Terrain
 Tiles (AWS)**: the [AWS dataset entry](https://registry.opendata.aws/terrain-tiles/)
 documents public elevation tiles, and its
 [format documentation](https://github.com/tilezen/joerd/blob/master/docs/formats.md)
-includes Terrarium PNG. This is an adapter candidate, not a tested integration or
-a promise of finer terrain. Before offering it, verify the actual endpoint's
-browser access, encoding, tile dimensions, usable levels, coverage, height
-reference and attribution. Do not copy Mapterhorn's limits into its descriptor.
-Completing this feature requires at least two validated, working choices.
+includes Terrarium PNG. The runtime registers the public Terrarium endpoint with
+its own level cap and attribution; it is not a promise of finer terrain. Browser
+testing still needs to verify endpoint access, coverage and vertical-reference
+compatibility at the user's routes. Do not copy Mapterhorn's limits into its
+descriptor.
 
 Foss-earth owns the provider registry, descriptors and live source-switching API;
 the flight simulator supplies the selector UI. Hosts may register compatible

@@ -59,6 +59,8 @@ export interface RasterTilesRuntime {
   update(): void;
   /** Replace imagery in-place; elevation grids and displayed terrain stay put. */
   setSource(source: RasterBaseMapSource): void;
+  /** Stream a replacement elevation source onto the current displayed mesh. */
+  setTerrainSource(source: TerrainSource): void;
   getMetrics(): RasterTileMetrics;
   getRevision(): number;
   sample(latDeg: number, lonDeg: number): SurfaceHit | null;
@@ -92,6 +94,9 @@ interface RasterTileRecord {
   target: number[];
   imageryGeneration: number;
   replaceImagery(source: RasterBaseMapSource, generation: number): void;
+  terrainGeneration: number;
+  appliedTerrainGeneration: number;
+  replaceTerrain(loadTerrain: (tile: TileCoord, progress: (grid: TerrainGrid) => void) => Promise<TerrainGrid>, generation: number): void;
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -351,6 +356,9 @@ function createTileRecord(
     target: meshPositions(mesh),
     imageryGeneration: 0,
     replaceImagery: () => {},
+    terrainGeneration: 0,
+    appliedTerrainGeneration: 0,
+    replaceTerrain: () => {},
   };
 
   let imageryReady = false;
@@ -360,31 +368,45 @@ function createTileRecord(
     if (imageryReady) { record.loaded = true; onChanged(record); }
     if (imageryReady && terrainReady) onSettled(record);
   };
-  const applyGrid = (grid?: TerrainGrid) => {
-    if (record.settled || record.mesh.isDisposed()) return;
-    if (grid && grid.z <= record.mesh.metadata.terrainZoom) return;
+  const applyGrid = (grid: TerrainGrid | undefined, generation: number) => {
+    if (record.mesh.isDisposed() || generation !== record.terrainGeneration) return;
+    if (grid && record.appliedTerrainGeneration === generation && grid.z <= record.mesh.metadata.terrainZoom) return;
     const readyMesh = createTerrainMesh(options, tile, grid);
     const started = options.performanceCapture ? performance.now() : 0;
     record.target = meshPositions(readyMesh);
     record.grid = grid;
+    record.appliedTerrainGeneration = generation;
     record.mesh.metadata.terrainZoom = grid?.z ?? -1;
     readyMesh.dispose();
     if (options.performanceCapture) options.performanceCapture.counters.preparationCpuMs += performance.now() - started;
     onChanged(record);
   };
-  const terrain = options.getSurfaceHeightMeters ? Promise.resolve(undefined) : loadTerrain(tile, applyGrid);
-  void terrain.then(grid => {
-    applyGrid(grid);
-    if (record.settled || record.mesh.isDisposed()) return;
-    terrainReady = true;
-    finish();
-  }).catch(error => {
-    if (record.settled || record.mesh.isDisposed()) return;
-    options.onLoadError?.(error instanceof Error ? error : new Error(String(error)), `terrain:${key}`);
-    // Keep the best geometry already available when detail fails.
-    terrainReady = true;
-    finish();
-  });
+  const requestTerrain = (
+    nextLoadTerrain: (tile: TileCoord, progress: (grid: TerrainGrid) => void) => Promise<TerrainGrid>,
+    generation: number,
+    settlesInitialRecord: boolean,
+  ) => {
+    record.terrainGeneration = generation;
+    const terrain = options.getSurfaceHeightMeters ? Promise.resolve(undefined) : nextLoadTerrain(tile, grid => applyGrid(grid, generation));
+    void terrain.then(grid => {
+      applyGrid(grid, generation);
+      if (record.mesh.isDisposed() || generation !== record.terrainGeneration) return;
+      if (settlesInitialRecord) {
+        terrainReady = true;
+        finish();
+      }
+    }).catch(error => {
+      if (record.mesh.isDisposed() || generation !== record.terrainGeneration) return;
+      options.onLoadError?.(error instanceof Error ? error : new Error(String(error)), `terrain:${key}`);
+      // Keep the best geometry already available when detail fails.
+      if (settlesInitialRecord) {
+        terrainReady = true;
+        finish();
+      }
+    });
+  };
+  record.replaceTerrain = (nextLoadTerrain, generation) => requestTerrain(nextLoadTerrain, generation, false);
+  requestTerrain(loadTerrain, 0, true);
   const loadImagery = (nextSource: RasterBaseMapSource, generation: number) => {
     const url = buildTileUrl(nextSource, tile);
     // A source can switch before its first image settles. The replacement is
@@ -471,8 +493,11 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
   // Tile-record callbacks retain this object, so changing Auto's active profile
   // also affects meshes prepared after the quality change.
   const meshOptions: RasterTilesRuntimeOptions = { ...options, activeQualityProfile: qualityState.activeProfile };
-  const terrain = createTerrainTileLoader(options.terrainSource, options.onDownloadBytes, undefined, Boolean(capture),
+  let terrainSource = options.terrainSource;
+  const createTerrainLoader = () => createTerrainTileLoader(terrainSource, options.onDownloadBytes, undefined, Boolean(capture),
     capture ? milliseconds => { capture.counters.preparationCpuMs += milliseconds; } : undefined);
+  let terrain = createTerrainLoader();
+  let terrainGeneration = 0;
   // Persistent cache: tiles stay alive after they leave the desired set so we
   // can keep showing them (or use them as best-effort fallbacks) without
   // re-downloading. Eviction is LRU and bound by the active quality profile.
@@ -536,18 +561,12 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
   function ensureCached(tile: TileCoord): void {
     const key = tileKey(tile);
     const existing = cache.get(key);
-    if (existing || performance.now() < (retryAfter.get(key) ?? 0)) return;
+    if (existing) {
+      if (existing.terrainGeneration !== terrainGeneration) existing.replaceTerrain(loadProgressive, terrainGeneration);
+      return;
+    }
+    if (performance.now() < (retryAfter.get(key) ?? 0)) return;
     beginLoad();
-    const loadProgressive = async (requested: TileCoord, progress: (grid: TerrainGrid) => void) => {
-      const coarseZoom = Math.max(0, Math.min(requested.z, requested.z - 4));
-      if (coarseZoom < requested.z) {
-        try {
-          const scale = 2 ** (requested.z - coarseZoom);
-          progress(await terrain.loadPatch({ z: coarseZoom, x: Math.floor(requested.x / scale), y: Math.floor(requested.y / scale) }));
-        } catch { /* Retain bundled terrain and still try the detail source. */ }
-      }
-      return terrain.loadPatch(requested);
-    };
     const record = createTileRecord(meshOptions, imagerySource, tile, finishLoad, loadProgressive, changed => {
       geometryDirty = true;
       dirtyGeometryKeys.add(changed.key);
@@ -555,6 +574,20 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
       options.requestRender?.();
     });
     cache.set(key, record);
+  }
+
+  function loadProgressive(requested: TileCoord, progress: (grid: TerrainGrid) => void): Promise<TerrainGrid> {
+    const coarseZoom = Math.max(0, Math.min(requested.z, requested.z - 4));
+    const loader = terrain;
+    return (async () => {
+      if (coarseZoom < requested.z) {
+        try {
+          const scale = 2 ** (requested.z - coarseZoom);
+          progress(await loader.loadPatch({ z: coarseZoom, x: Math.floor(requested.x / scale), y: Math.floor(requested.y / scale) }));
+        } catch { /* Retain the current displayed surface and still try detail. */ }
+      }
+      return loader.loadPatch(requested);
+    })();
   }
 
   function touchAncestors(tile: TileCoord, baseZoom: number): void {
@@ -822,6 +855,22 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
       // A provider may have different useful bounds/levels. Selection updates
       // independently from the DEM and does not revise the physical surface.
       lastView = null;
+      options.requestRender?.();
+    },
+    setTerrainSource(source): void {
+      if (terrainSource?.id === source.id) return;
+      terrain.dispose();
+      terrainSource = source;
+      terrain = createTerrainLoader();
+      terrainGeneration += 1;
+      // Keep the adopted mesh live until its replacement grid commits. Current
+      // desired and visible tiles get priority; cache-only tiles switch lazily
+      // if they later become useful again.
+      const requested = new Set([...lastDesired.map(entry => entry.key), ...visibleTileKeys]);
+      for (const key of requested) {
+        const record = cache.get(key);
+        if (record) record.replaceTerrain(loadProgressive, terrainGeneration);
+      }
       options.requestRender?.();
     },
     getMetrics,

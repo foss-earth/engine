@@ -739,7 +739,9 @@ export async function createBabylonRuntime(
       terrainCredit.href = nextSource.attribution;
       status.terrainSource = nextSource;
       if (status.mode === "raster-basemap") {
-        enableRasterBaseMapMode(null, true);
+        rasterTilesRuntime?.setTerrainSource(nextSource);
+        scheduler.requestRender();
+        emitStatus();
       } else {
         emitStatus();
       }

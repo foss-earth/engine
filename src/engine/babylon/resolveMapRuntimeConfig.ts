@@ -4,10 +4,14 @@ import {
   resolveRasterBaseMapSource,
   type RasterBaseMapSource,
 } from "./rasterBaseMaps";
+import { resolveTerrainSource, type TerrainSource } from "../../terrain/terrainTiles";
+import type { RasterQualitySetting } from "./rasterQuality";
 
 export interface MapRuntimeConfig {
   googleApiKey: string | null;
   rasterBaseMap: RasterBaseMapSource;
+  terrainSource: TerrainSource;
+  rasterQuality: RasterQualitySetting;
   preferGoogleTiles: boolean;
 }
 
@@ -15,6 +19,8 @@ export interface ResolveMapRuntimeConfigOptions {
   googleApiKey?: string | null;
   baseMap?: string | RasterBaseMapSource | null;
   preferGoogleTiles?: boolean;
+  terrainSource?: string | TerrainSource | null;
+  rasterQuality?: RasterQualitySetting | null;
   searchParams?: URLSearchParams;
 }
 
@@ -39,6 +45,28 @@ export function setMapSourcePreference(source: string): void {
   window.history.replaceState(null, "", url);
 }
 
+export function getTerrainSourcePreferenceFromSearchParams(searchParams: URLSearchParams): string | null {
+  const value = (searchParams.get("elevationSource") ?? searchParams.get("terrainSource") ?? "").trim().toLowerCase();
+  return value || null;
+}
+
+export function setTerrainSourcePreference(source: string): void {
+  const url = new URL(window.location.href);
+  url.searchParams.set("elevationSource", source);
+  window.history.replaceState(null, "", url);
+}
+
+export function getRasterQualityPreferenceFromSearchParams(searchParams: URLSearchParams): RasterQualitySetting {
+  const value = (searchParams.get("terrainQuality") ?? "").trim().toLowerCase();
+  return value === "low" || value === "balanced" || value === "high" || value === "auto" ? value : "auto";
+}
+
+export function setRasterQualityPreference(setting: RasterQualitySetting): void {
+  const url = new URL(window.location.href);
+  url.searchParams.set("terrainQuality", setting);
+  window.history.replaceState(null, "", url);
+}
+
 export function resolveMapRuntimeConfig(
   options: ResolveMapRuntimeConfigOptions = {},
 ): MapRuntimeConfig {
@@ -57,6 +85,8 @@ export function resolveMapRuntimeConfig(
     rasterBaseMap: shouldUseGoogle
       ? configuredBaseMap
       : resolveRasterBaseMapSource(sourcePreference ?? configuredBaseMap),
+    terrainSource: resolveTerrainSource(options.terrainSource ?? getTerrainSourcePreferenceFromSearchParams(searchParams)),
+    rasterQuality: options.rasterQuality ?? getRasterQualityPreferenceFromSearchParams(searchParams),
     preferGoogleTiles: shouldUseGoogle,
   };
 }

@@ -98,6 +98,23 @@ describe("raster imagery and terrain lifecycle", () => {
     expect(meshes.every(mesh => !mesh.isDisposed())).toBe(true);
     runtime.dispose(); engine.dispose();
   });
+  it("keeps the displayed terrain alive while an elevation provider switches", async () => {
+    const engine = new NullEngine(); const scene = new Scene(engine);
+    const runtime = createRasterTilesRuntime({ scene, source: RASTER_BASE_MAP_SOURCES[0], getViewState: () => view });
+    runtime.update();
+    pending.imagery.forEach(loaded => loaded());
+    await resolveFirstDetail();
+    runtime.update();
+    const revision = runtime.getRevision();
+    const meshes = scene.meshes.filter(mesh => mesh.metadata?.mapSurface);
+    pending.dispose.mockClear();
+    runtime.setTerrainSource({ id: "test-elevation", label: "Test elevation", provider: "test", urlTemplate: "https://example.test/{z}/{x}/{y}.png", maxZoom: 15, attribution: "https://example.test" });
+    expect(pending.dispose).toHaveBeenCalledOnce();
+    expect(meshes.every(mesh => !mesh.isDisposed())).toBe(true);
+    runtime.update();
+    expect(runtime.getRevision()).toBe(revision);
+    runtime.dispose(); engine.dispose();
+  });
   it.each([false, true])("commits terrain once and idles when settled (alwaysRefresh=%s)", async alwaysRefresh => {
     let now = 0;
     vi.spyOn(performance, "now").mockImplementation(() => now);
