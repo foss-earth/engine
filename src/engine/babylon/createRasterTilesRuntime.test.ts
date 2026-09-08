@@ -1,4 +1,4 @@
-import { NullEngine, Scene, Texture } from "@babylonjs/core";
+import { NullEngine, Scene, StandardMaterial, Texture } from "@babylonjs/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as refinement from "../../terrain/meshRefinement";
 import { createTerrainPerformanceCapture } from "../../terrain/terrainPerformanceCapture";
@@ -87,15 +87,20 @@ describe("raster imagery and terrain lifecycle", () => {
     const elevationRequests = pending.terrain.length;
     const revision = runtime.getRevision();
     const meshes = scene.meshes.filter(mesh => mesh.metadata?.mapSurface);
+    const previousTextures = meshes.map(mesh => (mesh.material as StandardMaterial).diffuseTexture);
     const initialImageRequests = pending.imagery.length;
     runtime.setSource({ ...RASTER_BASE_MAP_SOURCES[0], id: "test-hot-swap", urlTemplate: "https://example.test/{z}/{x}/{y}.png" });
     expect(runtime.source.id).toBe("test-hot-swap");
     expect(pending.terrain).toHaveLength(elevationRequests);
+    // The old texture stays bound while its replacement is still loading, so a
+    // flat-to-flat switch cannot expose the background clear colour.
+    expect(meshes.map(mesh => (mesh.material as StandardMaterial).diffuseTexture)).toEqual(previousTextures);
     expect(pending.imagery.length).toBeGreaterThan(initialImageRequests);
     pending.imagery.slice(initialImageRequests).forEach(loaded => loaded());
     runtime.update();
     expect(runtime.getRevision()).toBe(revision);
     expect(meshes.every(mesh => !mesh.isDisposed())).toBe(true);
+    expect(meshes.some((mesh, index) => (mesh.material as StandardMaterial).diffuseTexture !== previousTextures[index])).toBe(true);
     runtime.dispose(); engine.dispose();
   });
   it("keeps the displayed terrain alive while an elevation provider switches", async () => {

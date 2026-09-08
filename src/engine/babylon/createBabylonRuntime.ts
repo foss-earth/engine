@@ -310,6 +310,9 @@ export async function createBabylonRuntime(
         options.onStatusChange?.({ ...status });
       }
       rasterTilesRuntime?.update();
+      if (status.mode === "raster-basemap" && (rasterTilesRuntime?.getMetrics().visibleTiles ?? 0) > 0) {
+        hideFallbackExperience();
+      }
       // beginFrame/endFrame are normally invoked by engine.runRenderLoop's
       // internal _processFrame. We bypass that loop, so we must bracket the
       // render ourselves — WebGPU only presents the swap chain inside
@@ -482,6 +485,8 @@ export async function createBabylonRuntime(
   }
 
   function enableRasterBaseMapMode(reason: string | null, recreate = false): void {
+    const retainRasterCoverage = status.mode === "raster-basemap"
+      && (rasterTilesRuntime?.getMetrics().visibleTiles ?? 0) > 0;
     releaseStartupHold();
     endStreaming();
     clearGoogleWatchdog();
@@ -496,7 +501,10 @@ export async function createBabylonRuntime(
 
     ensureGeospatialCamera();
     ensureFallbackExperience();
-    hideFallbackExperience();
+    // Switching from Google (or a failed raster load) has no raster coverage
+    // yet. Keep the simple globe visible until actual raster tiles arrive;
+    // otherwise the canvas is just the clear colour during the handoff.
+    if (retainRasterCoverage) hideFallbackExperience();
 
     const rasterBaseMap = activeRasterBaseMap;
     if (!rasterBaseMap) {
@@ -527,6 +535,7 @@ export async function createBabylonRuntime(
         },
         onLoadEnd: (visibleTiles, activeTiles) => {
           status.message = `${activeRasterBaseMap?.label ?? "Raster"} active (visible: ${visibleTiles}, active: ${activeTiles}).`;
+          if (visibleTiles > 0) hideFallbackExperience();
           endStreaming();
           scheduler.requestRender();
           emitStatus();
