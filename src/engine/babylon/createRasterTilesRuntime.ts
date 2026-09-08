@@ -441,6 +441,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
   let revision = 0;
   let retainedFocusZoom = 0;
   let geometryDirty = false;
+  let visibilityDirty = false;
   let lastView: Pick<GlobeViewState, "latDeg" | "lonDeg" | "zoomMeters"> | null = null;
 
   function getMetrics(): RasterTileMetrics {
@@ -476,12 +477,9 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
       retryAfter.set(record.key, performance.now() + 30000);
       lastUsedTick.delete(record.key);
       disposeTile(record);
-    } else {
-      // A new tile just became available — refresh visibility so it can take
-      // over from any ancestor that was standing in for it.
-      recomputeVisibility();
     }
-
+    // Adopt loaded coverage at the next update, before simulation and rendering.
+    visibilityDirty = true;
     options.requestRender?.();
     emitLoadEndIfIdle();
   }
@@ -503,7 +501,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
     };
     const record = createTileRecord(options, tile, finishLoad, loadProgressive, () => {
       geometryDirty = true;
-      recomputeVisibility();
+      visibilityDirty = true;
       options.requestRender?.();
     });
     cache.set(key, record);
@@ -579,6 +577,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
   }
 
   function recomputeVisibility(): void {
+    visibilityDirty = false;
     const { leafKeys, internalKeys, baseZoom } = buildTargetSets();
     const representatives = new Set<string>();
     if (baseZoom !== null) {
@@ -665,47 +664,49 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
     if (visible.some(record => record.refinement !== null)) options.requestRender?.();
   }
 
+  function selectTiles(view: GlobeViewState): void {
+    if (lastView && (Math.abs(lastView.latDeg - view.latDeg) > 1 || Math.abs(lastView.lonDeg - view.lonDeg) > 1)) retainedFocusZoom = 0;
+    lastView = { latDeg: view.latDeg, lonDeg: view.lonDeg, zoomMeters: view.zoomMeters };
+    tick += 1;
+
+    if (options.alwaysRefresh) retainedFocusZoom = Math.max(retainedFocusZoom, chooseTileZoom(view, options.source));
+    const baseZoom = chooseGlobalBaseZoom(options.source, Math.max(retainedFocusZoom, chooseTileZoom(view, options.source)));
+    const desiredTiles = getDesiredTiles(view, options.source, retainedFocusZoom);
+    // Load nearby detail first, so a flight doesn't wait behind distant tiles.
+    desiredTiles.sort((a, b) => b.z - a.z ||
+      Math.hypot(a.x - lonToTileX(view.lonDeg, a.z), a.y - latToTileY(view.latDeg, a.z)) -
+      Math.hypot(b.x - lonToTileX(view.lonDeg, b.z), b.y - latToTileY(view.latDeg, b.z)));
+    lastDesired = desiredTiles.map((tile) => ({ tile, key: tileKey(tile), baseZoom }));
+
+    // Queue loads for any desired tile not yet cached; touch ancestors so
+    // already-loaded coarser tiles survive LRU while we wait for detail.
+    // Real coarse parents are useful immediately while finer leaves stream.
+    const parents = new Map<string, TileCoord>();
+    for (const entry of lastDesired) {
+      let { z, x, y } = entry.tile;
+      while (z > entry.baseZoom) {
+        z--; x = Math.floor(x / 2); y = Math.floor(y / 2);
+        parents.set(`${z}/${x}/${y}`, { z, x, y });
+      }
+    }
+    for (const tile of [...parents.values()].sort((a, b) => a.z - b.z)) ensureCached(tile);
+    for (const entry of lastDesired) {
+      ensureCached(entry.tile);
+      touchAncestors(entry.tile, baseZoom);
+    }
+
+    visibilityDirty = true;
+  }
+
   return {
     source: options.source,
     update(): void {
       if (disposed) return;
-
       const view = options.getViewState();
-      if (!view) return;
-      animateTerrain();
-      if (!options.alwaysRefresh && !hasMeaningfulCameraChange(view)) return;
-      if (![view.latDeg, view.lonDeg, view.zoomMeters].every(Number.isFinite)) return;
-      if (lastView && (Math.abs(lastView.latDeg - view.latDeg) > 1 || Math.abs(lastView.lonDeg - view.lonDeg) > 1)) retainedFocusZoom = 0;
-      lastView = { latDeg: view.latDeg, lonDeg: view.lonDeg, zoomMeters: view.zoomMeters };
-      tick += 1;
-
-      if (options.alwaysRefresh) retainedFocusZoom = Math.max(retainedFocusZoom, chooseTileZoom(view, options.source));
-      const baseZoom = chooseGlobalBaseZoom(options.source, Math.max(retainedFocusZoom, chooseTileZoom(view, options.source)));
-      const desiredTiles = getDesiredTiles(view, options.source, retainedFocusZoom);
-      // Load nearby detail first, so a flight doesn't wait behind distant tiles.
-      desiredTiles.sort((a, b) => b.z - a.z ||
-        Math.hypot(a.x - lonToTileX(view.lonDeg, a.z), a.y - latToTileY(view.latDeg, a.z)) -
-        Math.hypot(b.x - lonToTileX(view.lonDeg, b.z), b.y - latToTileY(view.latDeg, b.z)));
-      lastDesired = desiredTiles.map((tile) => ({ tile, key: tileKey(tile), baseZoom }));
-
-      // Queue loads for any desired tile not yet cached; touch ancestors so
-      // already-loaded coarser tiles survive LRU while we wait for detail.
-      // Real coarse parents are useful immediately while finer leaves stream.
-      const parents = new Map<string, TileCoord>();
-      for (const entry of lastDesired) {
-        let { z, x, y } = entry.tile;
-        while (z > entry.baseZoom) {
-          z--; x = Math.floor(x / 2); y = Math.floor(y / 2);
-          parents.set(`${z}/${x}/${y}`, { z, x, y });
-        }
-      }
-      for (const tile of [...parents.values()].sort((a, b) => a.z - b.z)) ensureCached(tile);
-      for (const entry of lastDesired) {
-        ensureCached(entry.tile);
-        touchAncestors(entry.tile, baseZoom);
-      }
-
-      recomputeVisibility();
+      if (view && [view.latDeg, view.lonDeg, view.zoomMeters].every(Number.isFinite)
+        && (options.alwaysRefresh || hasMeaningfulCameraChange(view))) selectTiles(view);
+      if (visibilityDirty) recomputeVisibility();
+      // One pass after coverage adoption, including stationary/paused frames.
       animateTerrain();
       evictIfNeeded();
       emitLoadEndIfIdle();

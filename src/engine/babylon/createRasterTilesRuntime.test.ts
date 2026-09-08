@@ -1,5 +1,6 @@
 import { NullEngine, Scene, Texture } from "@babylonjs/core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as refinement from "../../terrain/meshRefinement";
 import type { TerrainGrid, TerrainTile } from "../../terrain/terrainTiles";
 import { createRasterTilesRuntime } from "./createRasterTilesRuntime";
 import { RASTER_BASE_MAP_SOURCES } from "./rasterBaseMaps";
@@ -18,7 +19,17 @@ vi.mock("../../terrain/terrainTiles", async importOriginal => ({
     loadPatch: (tile: TerrainTile) => new Promise<TerrainGrid>((resolve, reject) => pending.terrain.push({ tile, resolve, reject })) }),
 }));
 beforeEach(() => { pending.imagery = []; pending.terrain = []; pending.dispose.mockClear(); });
+afterEach(() => vi.restoreAllMocks());
 const view = { latDeg: 0, lonDeg: 0, zoomMeters: 8000000, headingDeg: 0 };
+async function resolveFirstDetail(): Promise<void> {
+  const first = pending.terrain[0];
+  first.resolve({ ...first.tile, size: 2, heights: new Float32Array([100, 100, 100, 100]) });
+  for (let i = 0; i < 6; i++) await Promise.resolve();
+  const detail = pending.terrain.find(item => item.tile.z > 0)!;
+  expect(detail).toBeDefined();
+  detail.resolve({ ...detail.tile, size: 2, heights: new Float32Array([250, 250, 250, 250]) });
+  for (let i = 0; i < 6; i++) await Promise.resolve();
+}
 
 describe("raster imagery and terrain lifecycle", () => {
   it("displays real global fallback and refines the same mesh when terrain arrives", async () => {
@@ -26,13 +37,13 @@ describe("raster imagery and terrain lifecycle", () => {
     const runtime = createRasterTilesRuntime({ scene, source: RASTER_BASE_MAP_SOURCES[0], getViewState: () => view });
     runtime.update();
     pending.imagery.forEach(loaded => loaded());
+    expect(runtime.getMetrics().visibleTiles).toBe(0);
+    runtime.update();
     expect(runtime.getMetrics().visibleTiles).toBeGreaterThan(0);
     const beforeRevision = runtime.getRevision();
     const beforeMeshes = scene.meshes.filter(mesh => mesh.isEnabled());
     expect(beforeMeshes.every(mesh => mesh.metadata?.terrainZoom === 0)).toBe(true);
-    const first = pending.terrain[0];
-    first.resolve({ ...first.tile, size: 2, heights: new Float32Array([250, 250, 250, 250]) });
-    await Promise.resolve(); await Promise.resolve();
+    await resolveFirstDetail();
     runtime.update();
     expect(runtime.getRevision()).toBeGreaterThan(beforeRevision);
     expect(beforeMeshes.every(mesh => !mesh.isDisposed())).toBe(true);
@@ -40,6 +51,37 @@ describe("raster imagery and terrain lifecycle", () => {
     runtime.dispose();
     expect(scene.meshes).toHaveLength(0);
     engine.dispose();
+  });
+  it.each([false, true])("processes one refinement pass per update (alwaysRefresh=%s) and idles when settled", async alwaysRefresh => {
+    let now = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const stitch = vi.spyOn(refinement, "stitchTerrainEdges");
+    const advance = vi.spyOn(refinement, "advanceRefinement");
+    const engine = new NullEngine(); const scene = new Scene(engine);
+    const runtime = createRasterTilesRuntime({ scene, source: RASTER_BASE_MAP_SOURCES[0], alwaysRefresh,
+      getViewState: () => view });
+    runtime.update();
+    pending.imagery.forEach(loaded => loaded());
+    await resolveFirstDetail();
+    // Load callbacks only enqueue adoption; no seam pass between frames.
+    expect(stitch).not.toHaveBeenCalled();
+    now = 600;
+    runtime.update();
+    expect(stitch).toHaveBeenCalledOnce();
+    expect(advance).toHaveBeenCalledOnce();
+    const revision = runtime.getRevision();
+    now = 1300;
+    runtime.update();
+    expect(stitch).toHaveBeenCalledTimes(2);
+    expect(runtime.getRevision()).toBe(revision + 1);
+    const settled = runtime.getRevision();
+    const writes = scene.meshes.map(mesh => vi.spyOn(mesh, "updateVerticesData"));
+    now = 2000;
+    runtime.update(); runtime.update();
+    expect(stitch).toHaveBeenCalledTimes(2);
+    expect(runtime.getRevision()).toBe(settled);
+    expect(writes.every(write => write.mock.calls.length === 0)).toBe(true);
+    runtime.dispose(); engine.dispose();
   });
   it("ignores late terrain completions after disposal", async () => {
     const engine = new NullEngine(); const scene = new Scene(engine);
