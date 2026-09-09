@@ -1,4 +1,5 @@
 import { Texture, type Scene } from "@babylonjs/core";
+import { fetchMapTile } from "../../terrain/mapCache";
 import { measureMapResponse } from "./mapDownloadMeter";
 
 /** Fetch once, count payload chunks, then let Babylon decode the local blob. */
@@ -21,7 +22,7 @@ export function loadMapTexture(
   );
   texture.name = url;
   texture.onDisposeObservable.add(() => { abort.abort(); releaseBlob(); });
-  void fetch(url, { signal: abort.signal, mode: "cors" }).then(async (response) => {
+  void fetchMapTile(url, { signal: abort.signal, mode: "cors" }).then(async (response) => {
     if (!response.ok) throw new Error(`Map tile request failed (${response.status})`);
     const blob = await measureMapResponse(response, onBytes).blob();
     if (abort.signal.aborted) return;

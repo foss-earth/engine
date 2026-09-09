@@ -1,5 +1,9 @@
 import { measureMapResponse } from "./mapDownloadMeter";
-import type { Scene } from "@babylonjs/core";
+import { recordBrowserMapRequest } from "../../terrain/mapCache";
+import type { Scene, TransformNode } from "@babylonjs/core";
+import type { Tile } from "3d-tiles-renderer/core";
+import type { TerrainReadinessFocus } from "../../terrain/terrainReadiness";
+import { createGoogleTerrainFocusRegion } from "./googleTerrainFocus";
 import { TilesRenderer } from "3d-tiles-renderer/babylonjs";
 import { GoogleCloudAuthPlugin } from "3d-tiles-renderer/core/plugins";
 
@@ -16,6 +20,9 @@ export interface GoogleTilesRuntimeOptions {
 
 export interface GoogleTilesRuntime {
   tiles: TilesRenderer;
+  /** Refine this destination independently of the current render camera. */
+  setReadinessFocus(focus: TerrainReadinessFocus | null): void;
+  getReadinessError(): Error | null;
   update(): void;
   dispose(): void;
 }
@@ -35,6 +42,23 @@ export function createGoogleTilesRuntime(options: GoogleTilesRuntimeOptions): Go
 
   const tiles = new TilesRenderer(GOOGLE_3D_TILES_ROOT_URL, scene);
   tiles.fetchOptions.mode = "cors";
+  tiles.fetchOptions.cache = "default";
+  let focus: TerrainReadinessFocus | null = null;
+  let focusRegion: ReturnType<typeof createGoogleTerrainFocusRegion> | null = null;
+  let readinessError: Error | null = null;
+
+  tiles.registerPlugin({
+    name: "FLIGHT_TERRAIN_READINESS",
+    calculateTileViewError(tile: Tile, target: { inView: boolean; error: number; distance: number }) {
+      if (!focus || !focusRegion?.intersects(tile)) return false;
+      target.inView = true;
+      // This composes with normal camera SSE. Stop only when the local mesh
+      // has a physically meaningful error, even if it is outside the frustum.
+      target.error = tile.geometricError > focus.maxGeometricErrorMeters ? tiles.errorTarget + 1 : 0;
+      target.distance = 0;
+      return true;
+    },
+  });
 
   const authPlugin = new GoogleCloudAuthPlugin({
     apiToken: apiKey,
@@ -48,6 +72,7 @@ export function createGoogleTilesRuntime(options: GoogleTilesRuntimeOptions): Go
   };
   const fetchData = downloader.fetchData.bind(downloader);
   downloader.fetchData = async (uri, fetchOptions) => {
+    recordBrowserMapRequest(uri);
     const response = await fetchData(uri, fetchOptions);
     return options.onDownloadBytes ? measureMapResponse(response, options.onDownloadBytes) : response;
   };
@@ -70,7 +95,14 @@ export function createGoogleTilesRuntime(options: GoogleTilesRuntimeOptions): Go
     onLoadEnd?.(visibleTiles, activeTiles);
   };
 
-  const handleLoadError = (event: { error: Error; url: string | URL }): void => {
+  const handleLoadModel = (event: { scene: TransformNode; tile: Tile }): void => {
+    for (const mesh of event.scene.getChildMeshes()) {
+      mesh.metadata = { ...mesh.metadata, googleGeometricErrorMeters: event.tile.geometricError };
+    }
+  };
+
+  const handleLoadError = (event: { error: Error; url: string | URL; tile?: Tile | null }): void => {
+    if (focusRegion && (!event.tile || focusRegion.intersects(event.tile))) readinessError = event.error;
     const url = String(event.url);
     console.error("[tiles] Failed to load Google 3D tile resource", {
       url,
@@ -82,9 +114,17 @@ export function createGoogleTilesRuntime(options: GoogleTilesRuntimeOptions): Go
   tiles.addEventListener("tiles-load-start", handleLoadStart);
   tiles.addEventListener("tiles-load-end", handleLoadEnd);
   tiles.addEventListener("load-error", handleLoadError);
+  tiles.addEventListener("load-model", handleLoadModel);
 
   return {
     tiles,
+    setReadinessFocus(nextFocus) {
+      focus = nextFocus;
+      focusRegion = nextFocus ? createGoogleTerrainFocusRegion(nextFocus) : null;
+      readinessError = null;
+      if (nextFocus) tiles.resetFailedTiles();
+    },
+    getReadinessError() { return readinessError; },
     update() {
       tiles.update();
     },
@@ -92,6 +132,7 @@ export function createGoogleTilesRuntime(options: GoogleTilesRuntimeOptions): Go
       tiles.removeEventListener("tiles-load-start", handleLoadStart);
       tiles.removeEventListener("tiles-load-end", handleLoadEnd);
       tiles.removeEventListener("load-error", handleLoadError);
+      tiles.removeEventListener("load-model", handleLoadModel);
       tiles.dispose();
     },
   };

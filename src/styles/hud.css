@@ -1,15 +1,15 @@
 /* ─── HUD Bar ─────────────────────────────────────────────────────── */
 .hud-bar {
   position: fixed;
-  bottom: 16px;
-  left: 16px;
+  bottom: var(--foss-hud-bottom);
+  left: var(--foss-hud-left);
   z-index: 10;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 3px;
   width: fit-content;
-  max-width: min(1080px, calc(100vw - 32px));
+  max-width: min(1080px, calc(100vw - var(--foss-hud-left) - var(--foss-hud-right)));
   font-family: "SF Mono", "Menlo", "Monaco", monospace;
   pointer-events: auto;
 }
@@ -357,3 +357,15 @@
   display: block;
   font-size: 0.5em;
 }
+
+.foss-earth-map-cache { display: grid; gap: 12px; padding: 16px; font-size: 13px; line-height: 1.5; }
+.foss-earth-map-cache h3, .foss-earth-map-cache h4, .foss-earth-map-cache p { margin: 0; }
+.foss-earth-map-cache h4 { margin-top: 6px; }
+.foss-earth-map-cache progress { width: 100%; height: 8px; accent-color: #38bdf8; }
+.foss-earth-map-cache button { padding: 9px 12px; border: 1px solid #64748b; border-radius: 7px; color: inherit; background: transparent; cursor: pointer; }
+.foss-earth-map-cache button:disabled { opacity: 0.5; cursor: default; }
+.foss-earth-map-cache summary { cursor: pointer; }
+.foss-earth-map-cache ul { padding-left: 18px; margin: 4px 0; }
+.foss-earth-map-cache__tile { display: block; overflow-wrap: anywhere; }
+.foss-earth-map-cache small { display: block; }
+.foss-earth-map-cache__note { opacity: 0.72; font-size: 12px; }

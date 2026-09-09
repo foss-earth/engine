@@ -11,6 +11,8 @@ export interface SurfaceHit {
   /** Changes when displayed raster geometry changes, not when an aircraft moves. */
   revision: number;
   quality: number;
+  /** Geometric error advertised by the Google 3D tile owning this triangle. */
+  geometricErrorMeters?: number;
 }
 
 /** Query only currently visible map triangles. Input/output are always ECEF,
@@ -35,7 +37,8 @@ export function createSurfaceQuery(scene: Scene, getWorldRoot: () => TransformNo
     if (![point.x, point.y, point.z, normal.x, normal.y, normal.z, heightMeters].every(Number.isFinite)) return null;
     return { point: { x: point.x, y: point.y, z: point.z }, normal: { x: normal.x, y: normal.y, z: normal.z },
       distanceMeters: Vector3.Distance(point, ecefRay.origin),
-      heightMeters, meshId: pick.pickedMesh.id, revision: getRevision(), quality: pick.pickedMesh.metadata?.terrainZoom ?? -1 };
+      heightMeters, meshId: pick.pickedMesh.id, revision: getRevision(), quality: pick.pickedMesh.metadata?.terrainZoom ?? -1,
+      geometricErrorMeters: pick.pickedMesh.metadata?.googleGeometricErrorMeters };
   }
   function sample(latDeg: number, lonDeg: number): SurfaceHit | null {
     if (!Number.isFinite(latDeg) || !Number.isFinite(lonDeg) || Math.abs(latDeg) > 90) return null;

@@ -1,3 +1,5 @@
+import { fetchMapTile } from "./mapCache";
+
 /** Streamed elevation data. Values retain the provider's vertical reference. */
 export interface TerrainTile { z: number; x: number; y: number }
 export interface TerrainGrid extends TerrainTile { size: number; heights: Float32Array; neighbors?: TerrainGrid[] }
@@ -115,7 +117,7 @@ export function createTerrainTileLoader(
     await new Promise<void>(resolve => { queue.push(resolve); pump(); });
     try {
       const url = source.urlTemplate.replace("{z}", String(tile.z)).replace("{x}", String(tile.x)).replace("{y}", String(tile.y));
-      const response = await fetch(url, { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(20000)]), mode: "cors" });
+      const response = await fetchMapTile(url, { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(20000)]), mode: "cors" });
       if (!response.ok) {
         if (response.status === 404 && tile.z > 0) return awaitFallback(tile);
         throw new Error(`Terrain request failed (${response.status}): ${url}`);
