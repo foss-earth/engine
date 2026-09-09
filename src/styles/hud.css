@@ -1,4 +1,32 @@
 /* ─── HUD Bar ─────────────────────────────────────────────────────── */
+/*
+ * Screen-edge offsets for fixed HUD clusters.
+ *
+ * Defined here rather than in base.css because this stylesheet is the shared
+ * shell entry point (`foss-earth/shell.css`); downstream apps such as 0SFS
+ * import it without base.css, and an undefined var() would drop `bottom` to
+ * `auto` and unanchor the whole bar.
+ */
+:root {
+  /*
+   * Height of browser chrome overlaying the bottom of the page (Firefox
+   * Android's URL bar, Chrome's dynamic toolbar). Kept up to date by
+   * trackViewportInsets(); 0px whenever nothing is covering the page.
+   */
+  --foss-inset-bottom: 0px;
+
+  /* Gap between the viewport edge and screen-anchored HUD clusters. */
+  --foss-hud-gap: 16px;
+
+  /*
+   * Toolbar inset and notch safe area never stack — whichever is larger is the
+   * unusable strip — so max() rather than a sum.
+   */
+  --foss-hud-bottom: calc(var(--foss-hud-gap) + max(var(--foss-inset-bottom, 0px), env(safe-area-inset-bottom, 0px)));
+  --foss-hud-left: calc(var(--foss-hud-gap) + env(safe-area-inset-left, 0px));
+  --foss-hud-right: calc(var(--foss-hud-gap) + env(safe-area-inset-right, 0px));
+}
+
 .hud-bar {
   position: fixed;
   bottom: var(--foss-hud-bottom);
