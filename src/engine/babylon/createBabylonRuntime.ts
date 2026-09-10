@@ -384,7 +384,9 @@ export async function createBabylonRuntime(
       // simulation's floating origin. Refinement keeps running with no aircraft.
       preparationTick?.(frameNow);
       terrainCapture?.endFrame();
-      recordMapDebugEvent("scene-render", { mode: status.mode, enabledMeshes: scene.meshes.filter(mesh => mesh.isEnabled()).length });
+      if (mapDebugEnabled) {
+        recordMapDebugEvent("scene-render", { mode: status.mode, enabledMeshes: scene.meshes.filter(mesh => mesh.isEnabled()).length });
+      }
     },
     shouldKeepRendering: () => simRunning || (inertialCameraController?.isActive() ?? false),
   });

@@ -94,7 +94,9 @@ export function stitchTerrainEdges(patches: TerrainPatch[], counters?: GeometryW
   for (const patch of [...patches].sort(order)) {
     const { tile, mesh } = patch;
     const segments = mesh.metadata.segments as number;
-    const positions = meshPositions(mesh), origin = mesh.position.asArray();
+    const current = mesh.getVerticesData(VertexBuffer.PositionKind)!;
+    const origin = mesh.position.asArray();
+    let positions: number[] | null = null;
     for (const [cx, cy] of [[0, 0], [1, 0], [0, 1], [1, 1]]) {
       let owner = patch;
       for (let z = 0; z <= tile.z; z++) for (const dx of [-1e-7, 1e-7]) for (const dy of [-1e-7, 1e-7]) {
@@ -108,9 +110,18 @@ export function stitchTerrainEdges(patches: TerrainPatch[], counters?: GeometryW
       if (owner.tile.x === 2 ** owner.tile.z - 1 && x === 0) x = 2 ** tile.z;
       const point = patchPoint(owner, x, tile.y + cy, tile.z);
       const index = (cy * segments * (segments + 1) + cx * segments) * 3;
-      for (let axis = 0; axis < 3; axis++) positions[index + axis] = point[axis] - origin[axis];
+      for (let axis = 0; axis < 3; axis++) {
+        const value = point[axis] - origin[axis];
+        if (value === current[index + axis]) continue;
+        positions ??= Array.from(current);
+        positions[index + axis] = value;
+      }
     }
-    mesh.updateVerticesData(VertexBuffer.PositionKind, positions, true);
-    if (counters) counters.geometryWrites++;
+    // Most patches already have correct corners after the edge pass. Copy and
+    // upload a position buffer only when a corner actually needs repair.
+    if (positions) {
+      mesh.updateVerticesData(VertexBuffer.PositionKind, positions, true);
+      if (counters) counters.geometryWrites++;
+    }
   }
 }

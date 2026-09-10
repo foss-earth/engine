@@ -1,4 +1,4 @@
-import { MeshBuilder, NullEngine, Scene, TransformNode, Vector3 } from "@babylonjs/core";
+import { Matrix, MeshBuilder, NullEngine, Ray, Scene, TransformNode, Vector3, VertexBuffer } from "@babylonjs/core";
 import { describe, expect, it, vi } from "vitest";
 import { createSurfaceQuery } from "./surfaceQuery";
 import { createTerrainMesh } from "../engine/babylon/createRasterTilesRuntime";
@@ -30,6 +30,75 @@ describe("visible map surface queries", () => {
     expect(query.raycast(origin, direction, 30)?.distanceMeters).toBeCloseTo(15);
     wall.setEnabled(false);
     expect(query.raycast(origin, direction, 30)).toBeNull();
+    engine.dispose();
+  });
+  it("skips triangle scans for visible geometry beyond a finite collision ray", () => {
+    const engine = new NullEngine(); const scene = new Scene(engine);
+    const distant = MeshBuilder.CreateGround("distant", { width: 1000, height: 1000, subdivisions: 128 }, scene);
+    distant.position.y = -100;
+    distant.computeWorldMatrix(true);
+    const intersect = vi.spyOn(distant, "intersects");
+    const query = createSurfaceQuery(scene, () => null, () => true);
+    const origin = { x: 0.17, y: 10, z: 0.23 }, direction = { x: 0, y: -1, z: 0 };
+    expect(query.raycast(origin, direction, 5)).toBeNull();
+    expect(intersect).not.toHaveBeenCalled();
+    const local = MeshBuilder.CreateBox("local", { size: 2 }, scene);
+    local.position.y = 6;
+    local.computeWorldMatrix(true);
+    expect(query.raycast(origin, direction, 5)?.distanceMeters).toBeCloseTo(3);
+    expect(intersect).not.toHaveBeenCalled();
+    // A longer segment must still reach that same displayed distant geometry.
+    local.setEnabled(false);
+    expect(query.raycast(origin, direction, 120)?.distanceMeters).toBeCloseTo(110);
+    expect(intersect).toHaveBeenCalledOnce();
+    engine.dispose();
+  });
+  it("refreshes segment bounds after mesh movement and terrain vertex updates", () => {
+    const engine = new NullEngine(); const scene = new Scene(engine);
+    const ground = MeshBuilder.CreateGround("terrain", { width: 10, height: 10, updatable: true }, scene);
+    const query = createSurfaceQuery(scene, () => null, () => true);
+    const origin = { x: 0, y: 10, z: 0 }, direction = { x: 0, y: -1, z: 0 };
+    expect(query.raycast(origin, direction, 5)).toBeNull();
+    ground.position.y = 7;
+    scene.incrementRenderId();
+    expect(query.raycast(origin, direction, 5)?.distanceMeters).toBeCloseTo(3);
+    const positions = ground.getVerticesData(VertexBuffer.PositionKind)!;
+    ground.updateVerticesData(VertexBuffer.PositionKind, positions.map((value, i) => i % 3 === 1 ? value - 6 : value), true);
+    expect(query.raycast(origin, direction, 5)).toBeNull();
+    engine.dispose();
+  });
+  it("agrees with full triangle picking for endpoints, inside starts and transformed oblique rays", () => {
+    const engine = new NullEngine({ useHighPrecisionMatrix: true }); const scene = new Scene(engine);
+    const root = new TransformNode("world", scene);
+    const distant = MeshBuilder.CreateBox("far", { size: 10 }, scene);
+    distant.parent = root; distant.position.x = 50;
+    const box = MeshBuilder.CreateBox("near", { size: 10 }, scene);
+    box.parent = root; box.position.x = 20;
+    distant.computeWorldMatrix(true); box.computeWorldMatrix(true);
+    const query = createSurfaceQuery(scene, () => root, () => true);
+    const origins = [new Vector3(0, 0, 0), new Vector3(20, 0, 0), new Vector3(40, 0, 0), new Vector3(0, 5, 5)];
+    const directions = [new Vector3(1, 0, 0), new Vector3(-1, 0, 0), new Vector3(1, 0.15, -0.1), new Vector3(1, 1e-9, 0)];
+    for (const transformed of [false, true]) {
+      if (transformed) {
+        root.rotation.set(0.2, -0.4, Math.PI / 3);
+        root.position.set(-500000, -866000, 15);
+        root.scaling.set(0.8, 1.2, 1.5);
+      }
+      const world = root.computeWorldMatrix(true);
+      distant.computeWorldMatrix(true); box.computeWorldMatrix(true);
+      const inverse = Matrix.Invert(world);
+      for (const origin of origins) for (const direction of directions) for (const length of [5, 14.9, 15, 40, 100]) {
+        const ray = Ray.Transform(new Ray(origin, direction.clone().normalize(), length), world);
+        const reference = scene.pickWithRay(ray, () => true);
+        const hit = query.raycast(origin, direction, length);
+        expect(hit !== null).toBe(Boolean(reference?.hit));
+        if (hit && reference?.pickedPoint) {
+          const point = Vector3.TransformCoordinates(reference.pickedPoint, inverse);
+          expect(Vector3.Distance(new Vector3(hit.point.x, hit.point.y, hit.point.z), point)).toBeLessThan(1e-6);
+          expect(hit.meshId).toBe(reference.pickedMesh?.id);
+        }
+      }
+    }
     engine.dispose();
   });
   it("returns the same ECEF intersection after a floating-origin rotation and translation", () => {

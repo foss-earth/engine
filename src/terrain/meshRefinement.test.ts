@@ -43,6 +43,33 @@ describe("shared visible/collision refinement geometry", () => {
     }
     expect(patchPoint(fineBottom, 4.75, 3.5, 3)[1]).toBeGreaterThan(500);
   });
+  it("uploads only corners needing repair and repairs a corner changed by a later terrain commit", () => {
+    const scene = setup();
+    // These two patches meet only at a corner, so the edge pass cannot repair it.
+    const coarse = patch(scene, 2, 1, 1, 100), fine = patch(scene, 3, 4, 4, 400);
+    const remote = patch(scene, 3, 6, 6, 700);
+    const coarseBefore = meshPositions(coarse.mesh), remoteBefore = meshPositions(remote.mesh);
+    const target = meshPositions(fine.mesh);
+    const expected = [...target]; expected[1] = 100;
+    const counters = { geometryWrites: 0, seamPasses: 0 };
+
+    stitchTerrainEdges([remote, fine, coarse], counters);
+    expect(counters.geometryWrites).toBe(1);
+    expect(meshPositions(fine.mesh)).toEqual(expected);
+    expect(meshPositions(coarse.mesh)).toEqual(coarseBefore);
+    expect(meshPositions(remote.mesh)).toEqual(remoteBefore);
+
+    counters.geometryWrites = 0;
+    stitchTerrainEdges([coarse, fine, remote], counters);
+    expect(counters.geometryWrites).toBe(0);
+    expect(meshPositions(fine.mesh)).toEqual(expected);
+
+    // Restoring unstitched source geometry must still trigger a corner repair.
+    fine.mesh.updateVerticesData(VertexBuffer.PositionKind, target, true);
+    stitchTerrainEdges([coarse, fine, remote], counters);
+    expect(counters.geometryWrites).toBe(1);
+    expect(meshPositions(fine.mesh)).toEqual(expected);
+  });
   it("contains a finite real global fallback with mountainous relief", () => {
     expect(GLOBAL_TERRAIN.heights).toHaveLength(4096);
     expect([...GLOBAL_TERRAIN.heights].every(Number.isFinite)).toBe(true);
