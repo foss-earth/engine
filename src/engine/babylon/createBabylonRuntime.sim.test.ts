@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { FreeCamera, NullEngine, Scene, Vector3 } from "@babylonjs/core";
+import { FreeCamera, NullEngine, Scene, TransformNode, Vector3 } from "@babylonjs/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -161,6 +161,74 @@ describe("createBabylonRuntime simulation mode", () => {
     const callbacks = mocks.createRasterTilesRuntime.mock.calls.at(-1)?.[0] as { onLoadEnd(visibleTiles: number, activeTiles: number): void };
     callbacks.onLoadEnd(1, 1);
     expect(googleRuntime.dispose).toHaveBeenCalledOnce();
+    runtime.destroy();
+  });
+
+  it("exposes a session-only Google terrain detail override", async () => {
+    const setTerrainDetailTarget = vi.fn();
+    const detail = { defaultErrorTarget: 20, errorTarget: 20, overrideErrorTarget: null };
+    mocks.createGoogleTilesRuntime.mockReturnValue({
+      tiles: { visibleTiles: new Set(), activeTiles: new Set(), group: {} },
+      getTerrainDetailState: () => detail,
+      setTerrainDetailTarget,
+      update: vi.fn(), dispose: vi.fn(),
+    });
+    const { createBabylonRuntime } = await import("./createBabylonRuntime");
+    const runtime = await createBabylonRuntime(document.createElement("canvas"), { googleApiKey: "test", simMode: true });
+
+    expect(runtime.getGoogleTerrainDetailState()).toEqual(detail);
+    runtime.setGoogleTerrainDetailTarget(48);
+    expect(setTerrainDetailTarget).toHaveBeenCalledWith(48);
+    runtime.destroy();
+  });
+
+  it("uses an overhead camera to select normal Google tiles while terrain is preparing", async () => {
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation(() => 1);
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
+    mocks.createGoogleTilesRuntime.mockReturnValue({
+      tiles: { visibleTiles: new Set(), activeTiles: new Set(), group: {} },
+      update: vi.fn(), dispose: vi.fn(),
+    });
+    const { createBabylonRuntime } = await import("./createBabylonRuntime");
+    const runtime = await createBabylonRuntime(document.createElement("canvas"), { googleApiKey: "test", simMode: true });
+    const flightCamera = new FreeCamera("flight-camera", Vector3.Zero(), runtime.scene);
+    runtime.scene.activeCamera = flightCamera;
+    const worldShift = new TransformNode("world-shift", runtime.scene);
+    runtime.getWorldRoot()!.parent = worldShift;
+    const abort = new AbortController();
+    const preparation = runtime.prepareTerrain({ latDeg: 45, lonDeg: -93, radiusMeters: 1000, signal: abort.signal });
+
+    expect(runtime.scene.activeCamera?.name).toBe("terrain-preparation-camera");
+    abort.abort();
+    await expect(preparation).rejects.toMatchObject({ name: "AbortError" });
+    expect(runtime.scene.activeCamera).toBe(flightCamera);
+    runtime.destroy();
+  });
+
+  it("starts once one complete displayed-terrain snapshot is available", async () => {
+    let scheduledFrame: FrameRequestCallback | null = null;
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation(callback => {
+      scheduledFrame = callback;
+      return 1;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
+    mocks.createGoogleTilesRuntime.mockReturnValue({
+      tiles: { visibleTiles: new Set(), activeTiles: new Set(), group: {} },
+      update: vi.fn(), dispose: vi.fn(),
+    });
+    const { createBabylonRuntime } = await import("./createBabylonRuntime");
+    const runtime = await createBabylonRuntime(document.createElement("canvas"), { googleApiKey: "test", simMode: true });
+    vi.spyOn(runtime.surface, "sample").mockReturnValue({
+      point: { x: 0, y: 0, z: 0 }, normal: { x: 0, y: 1, z: 0 }, distanceMeters: 1,
+      heightMeters: 300, meshId: "terrain", revision: 1, quality: 10, geometricErrorMeters: 500_000,
+    });
+    const progress = vi.fn();
+    const preparation = runtime.prepareTerrain({ latDeg: 45, lonDeg: -93, radiusMeters: 1000, onProgress: progress });
+
+    scheduledFrame?.(0);
+    await expect(preparation).resolves.toEqual({ groundHeightMeters: 300, altitudeMeters: 1824 });
+    expect(progress).toHaveBeenLastCalledWith(expect.objectContaining({ phase: "ready", progress: 1 }));
+    expect(runtime.geospatialCamera?.isEnabled()).toBe(true);
     runtime.destroy();
   });
 });

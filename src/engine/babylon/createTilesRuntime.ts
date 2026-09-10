@@ -2,8 +2,6 @@ import { measureMapResponse } from "./mapDownloadMeter";
 import { recordBrowserMapRequest } from "../../terrain/mapCache";
 import type { Scene, TransformNode } from "@babylonjs/core";
 import type { Tile } from "3d-tiles-renderer/core";
-import type { TerrainReadinessFocus } from "../../terrain/terrainReadiness";
-import { createGoogleTerrainFocusRegion } from "./googleTerrainFocus";
 import { TilesRenderer } from "3d-tiles-renderer/babylonjs";
 import { GoogleCloudAuthPlugin } from "3d-tiles-renderer/core/plugins";
 
@@ -20,11 +18,30 @@ export interface GoogleTilesRuntimeOptions {
 
 export interface GoogleTilesRuntime {
   tiles: TilesRenderer;
-  /** Refine this destination independently of the current render camera. */
-  setReadinessFocus(focus: TerrainReadinessFocus | null): void;
-  getReadinessError(): Error | null;
+  /** The renderer's pixel-based detail target, optionally overridden for a session. */
+  getTerrainDetailState(): GoogleTerrainDetailState;
+  setTerrainDetailTarget(errorTarget: number | null): void;
   update(): void;
   dispose(): void;
+}
+
+/**
+ * `errorTarget` is the 3D Tiles renderer's screen-space-error target in
+ * pixels. It changes which children are selected for rendering; it is not an
+ * elevation-accuracy measurement.
+ */
+export interface GoogleTerrainDetailState {
+  defaultErrorTarget: number;
+  errorTarget: number;
+  overrideErrorTarget: number | null;
+}
+
+const MIN_TERRAIN_ERROR_TARGET = 1;
+const MAX_TERRAIN_ERROR_TARGET = 524_288;
+
+function normaliseTerrainDetailTarget(errorTarget: number | null): number | null {
+  if (errorTarget === null || !Number.isFinite(errorTarget)) return null;
+  return Math.max(MIN_TERRAIN_ERROR_TARGET, Math.min(MAX_TERRAIN_ERROR_TARGET, errorTarget));
 }
 
 export function createGoogleTilesRuntime(options: GoogleTilesRuntimeOptions): GoogleTilesRuntime {
@@ -43,24 +60,6 @@ export function createGoogleTilesRuntime(options: GoogleTilesRuntimeOptions): Go
   const tiles = new TilesRenderer(GOOGLE_3D_TILES_ROOT_URL, scene);
   tiles.fetchOptions.mode = "cors";
   tiles.fetchOptions.cache = "default";
-  let focus: TerrainReadinessFocus | null = null;
-  let focusRegion: ReturnType<typeof createGoogleTerrainFocusRegion> | null = null;
-  let readinessError: Error | null = null;
-
-  tiles.registerPlugin({
-    name: "FLIGHT_TERRAIN_READINESS",
-    calculateTileViewError(tile: Tile, target: { inView: boolean; error: number; distanceFromCamera: number }) {
-      if (!focus || !focusRegion?.intersects(tile)) return false;
-      target.inView = true;
-      // This composes with normal camera SSE. Stop only when the local mesh
-      // has a physically meaningful error, even if it is outside the frustum.
-      target.error = tile.geometricError > focus.maxGeometricErrorMeters ? tiles.errorTarget + 1 : 0;
-      // The renderer uses this field to prioritise downloads. Its plugin API
-      // calls it distanceFromCamera (rather than the older `distance` name).
-      target.distanceFromCamera = 0;
-      return true;
-    },
-  });
 
   const authPlugin = new GoogleCloudAuthPlugin({
     apiToken: apiKey,
@@ -79,6 +78,11 @@ export function createGoogleTilesRuntime(options: GoogleTilesRuntimeOptions): Go
     return options.onDownloadBytes ? measureMapResponse(response, options.onDownloadBytes) : response;
   };
   tiles.registerPlugin(authPlugin);
+  // GoogleCloudAuthPlugin applies its recommended 20 px target while it is
+  // registered. Preserve that runtime default so "restore" is exact even if
+  // the dependency changes it in a later release.
+  const defaultErrorTarget = tiles.errorTarget;
+  let overrideErrorTarget: number | null = null;
 
   const handleLoadStart = (): void => {
     console.info("[tiles] Google 3D tiles loading started");
@@ -103,8 +107,7 @@ export function createGoogleTilesRuntime(options: GoogleTilesRuntimeOptions): Go
     }
   };
 
-  const handleLoadError = (event: { error: Error; url: string | URL; tile?: Tile | null }): void => {
-    if (focusRegion && (!event.tile || focusRegion.intersects(event.tile))) readinessError = event.error;
+  const handleLoadError = (event: { error: Error; url: string | URL }): void => {
     const url = String(event.url);
     console.error("[tiles] Failed to load Google 3D tile resource", {
       url,
@@ -120,13 +123,13 @@ export function createGoogleTilesRuntime(options: GoogleTilesRuntimeOptions): Go
 
   return {
     tiles,
-    setReadinessFocus(nextFocus) {
-      focus = nextFocus;
-      focusRegion = nextFocus ? createGoogleTerrainFocusRegion(nextFocus) : null;
-      readinessError = null;
-      if (nextFocus) tiles.resetFailedTiles();
+    getTerrainDetailState() {
+      return { defaultErrorTarget, errorTarget: tiles.errorTarget, overrideErrorTarget };
     },
-    getReadinessError() { return readinessError; },
+    setTerrainDetailTarget(nextErrorTarget) {
+      overrideErrorTarget = normaliseTerrainDetailTarget(nextErrorTarget);
+      tiles.errorTarget = overrideErrorTarget ?? defaultErrorTarget;
+    },
     update() {
       tiles.update();
     },

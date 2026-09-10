@@ -1,8 +1,8 @@
 import { createMapDownloadMeter } from "./mapDownloadMeter";
 import { createSurfaceQuery, type SurfaceQuery } from "../../terrain/surfaceQuery";
 import { resolveTerrainSource, type TerrainSource } from "../../terrain/terrainTiles";
-import { evaluateTerrainReadiness, GOOGLE_FLIGHT_GEOMETRIC_ERROR_METERS, terrainReadinessSamples, validateTerrainPreparation,
-  type TerrainPreparationOptions, type TerrainPreparationResult, type TerrainReadinessFocus } from "../../terrain/terrainReadiness";
+import { evaluateTerrainReadiness, terrainReadinessSamples, validateTerrainPreparation,
+  type TerrainPreparationOptions, type TerrainPreparationResult } from "../../terrain/terrainReadiness";
 import {
   Color3,
   Color4,
@@ -10,17 +10,23 @@ import {
   GeospatialCamera,
   HemisphericLight,
   type AbstractMesh,
+  type Camera,
   MeshBuilder,
   Scene,
   StandardMaterial,
   TransformNode,
+  UniversalCamera,
   Vector3,
   WebGPUEngine,
 } from "@babylonjs/core";
 import { GeospatialClippingBehavior } from "@babylonjs/core/Behaviors/Cameras/geospatialClippingBehavior";
 
 import { bootstrapGlobeRenderer, type RendererMode, type RendererSelection } from "./createRendererMode";
-import { createGoogleTilesRuntime, type GoogleTilesRuntime } from "./createTilesRuntime";
+import {
+  createGoogleTilesRuntime,
+  type GoogleTerrainDetailState,
+  type GoogleTilesRuntime,
+} from "./createTilesRuntime";
 import { createRasterTilesRuntime, type RasterTilesRuntime } from "./createRasterTilesRuntime";
 import type { RasterBaseMapSource } from "./rasterBaseMaps";
 import type { RasterQualitySetting, RasterQualityState } from "./rasterQuality";
@@ -96,6 +102,8 @@ export interface BabylonTileMetrics {
   activeTiles: number;
 }
 
+export type { GoogleTerrainDetailState };
+
 interface MapDebugEvent {
   at: number;
   event: string;
@@ -125,6 +133,14 @@ export interface BabylonRuntime {
   configureOrbitTargetHeight(options: OrbitTargetHeightOptions | null): void;
   /** Return current base-map tile counts, or null when no tile runtime is active. */
   getTileMetrics(): BabylonTileMetrics | null;
+  /** Google renderer detail target, when Google 3D Tiles are active. */
+  getGoogleTerrainDetailState(): GoogleTerrainDetailState | null;
+  /**
+   * Override the Google renderer's screen-space-error target for this session.
+   * A larger number displays a coarser mesh. `null` restores the renderer's
+   * normal adaptive target.
+   */
+  setGoogleTerrainDetailTarget(errorTarget: number | null): void;
   /** Switch imagery without reloading the application or resetting consumers. */
   setRasterBaseMap(source: RasterBaseMapSource): void;
   /** Switch between Google 3D Tiles and a raster basemap without a page reload. */
@@ -276,6 +292,7 @@ export async function createBabylonRuntime(
 
   const downloadMeter = createMapDownloadMeter();
   let tilesRuntime: GoogleTilesRuntime | null = null;
+  let googleTerrainDetailTarget: number | null = null;
   let rasterTilesRuntime: RasterTilesRuntime | null = null;
   let googleTilesStartupWatchdog: number | null = null;
   let fallbackExperienceCreated = false;
@@ -290,7 +307,10 @@ export async function createBabylonRuntime(
   let simTick: ((deltaSeconds: number) => void) | null = null;
   let simViewState: GlobeViewState | null = null;
   let preparationViewState: GlobeViewState | null = null;
-  let preparedFocus: TerrainReadinessFocus | null = null;
+  let preparationRadiusMeters = 0;
+  let preparationCamera: UniversalCamera | null = null;
+  let activePreparationCamera: Camera | null = null;
+  let preparationPreviousCamera: Camera | null = null;
   let preparationTick: ((now: number) => void) | null = null;
   let cancelPreparation: ((error: Error) => void) | null = null;
   let activeRasterBaseMap = options.rasterBaseMap ?? null;
@@ -337,6 +357,7 @@ export async function createBabylonRuntime(
       if (!simMode) {
         inertialCameraController?.update();
       }
+      updateTerrainPreparationCamera();
       tilesRuntime?.update();
       rasterTilesRuntime?.reportFrame(frameNow, frameNow - lastRasterFrameAt, document.hidden);
       lastRasterFrameAt = frameNow;
@@ -470,6 +491,64 @@ export async function createBabylonRuntime(
       : createInputController(canvas, inertialCameraController, { isOrbitMode: () => orbitModeActive });
 
     return geospatialCamera;
+  }
+
+  /**
+   * Preparation must select the same tiles a camera would normally select.
+   * The flight camera can be aimed at the horizon (or temporarily absent), so
+   * use an overhead view only while the loading overlay is present. This is a
+   * camera change, not a tile traversal or download-priority override.
+   */
+  function updateTerrainPreparationCamera(): void {
+    if (!preparationViewState) return;
+
+    let camera: Camera;
+    if (simMode && worldRoot?.parent) {
+      if (!preparationCamera) {
+        preparationCamera = new UniversalCamera("terrain-preparation-camera", Vector3.Zero(), scene);
+        preparationCamera.fov = 1.05;
+        preparationCamera.minZ = 1;
+        preparationCamera.maxZ = 250_000;
+      }
+      const altitudeMeters = Math.max(3000, preparationRadiusMeters * 3);
+      preparationCamera.position.set(0, altitudeMeters, 0);
+      preparationCamera.setTarget(Vector3.Zero());
+      preparationCamera.setEnabled(true);
+      camera = preparationCamera;
+    } else {
+      const geospatial = ensureGeospatialCamera();
+      const center = geodeticToEcef(
+        preparationViewState.latDeg * DEG_TO_RAD,
+        preparationViewState.lonDeg * DEG_TO_RAD,
+        0,
+      );
+      geospatial.center = new Vector3(center.x, center.y, center.z);
+      geospatial.radius = Math.max(3000, preparationRadiusMeters * 3);
+      geospatial.yaw = 0;
+      geospatial.pitch = 0;
+      geospatial.setEnabled(true);
+      camera = geospatial;
+    }
+
+    if (activePreparationCamera !== camera) {
+      activePreparationCamera = camera;
+    }
+    scene.activeCamera = camera;
+  }
+
+  function beginTerrainPreparationCamera(): void {
+    preparationPreviousCamera = scene.activeCamera;
+    updateTerrainPreparationCamera();
+  }
+
+  function endTerrainPreparationCamera(): void {
+    const camera = activePreparationCamera;
+    activePreparationCamera = null;
+    if (camera && scene.activeCamera === camera) {
+      scene.activeCamera = preparationPreviousCamera;
+    }
+    preparationPreviousCamera = null;
+    preparationCamera?.setEnabled(false);
   }
 
   function ensureFallbackExperience(): void {
@@ -720,6 +799,10 @@ export async function createBabylonRuntime(
         },
       });
 
+      if (googleTerrainDetailTarget !== null) {
+        tilesRuntime.setTerrainDetailTarget(googleTerrainDetailTarget);
+      }
+
       tilesRuntime.tiles.checkCollisions = true;
       if (worldRoot) {
         tilesRuntime.tiles.group.parent = worldRoot;
@@ -815,18 +898,15 @@ export async function createBabylonRuntime(
         groundHeightMeters + (request.clearanceMeters ?? 1000)) });
     }
     const radiusMeters = request.radiusMeters ?? 1000;
-    preparedFocus = { latDeg: request.latDeg, lonDeg: request.lonDeg, radiusMeters,
-      maxGeometricErrorMeters: GOOGLE_FLIGHT_GEOMETRIC_ERROR_METERS };
-    tilesRuntime?.setReadinessFocus(preparedFocus);
+    preparationRadiusMeters = radiusMeters;
     preparationViewState = { latDeg: request.latDeg, lonDeg: request.lonDeg, headingDeg: 0, pitchDeg: 90,
       zoomMeters: Math.max(2000, radiusMeters * 2) };
+    beginTerrainPreparationCamera();
     const points = terrainReadinessSamples(request.latDeg, request.lonDeg, radiusMeters);
     scheduler.beginContinuous();
     return new Promise<TerrainPreparationResult>((resolve, reject) => {
       let settled = false;
       let lastSampleAt = -Infinity;
-      let stableSince: number | null = null;
-      let previousResult: TerrainPreparationResult | null = null;
       const abort = () => finish(new DOMException("Terrain preparation cancelled.", "AbortError"));
       const timeout = window.setTimeout(() => finish(new Error("Terrain near the destination did not become ready. Check the map connection and retry.")), request.timeoutMs ?? 120_000);
       function finish(error: Error | null, result?: TerrainPreparationResult): void {
@@ -836,11 +916,9 @@ export async function createBabylonRuntime(
         request.signal?.removeEventListener("abort", abort);
         preparationTick = null;
         cancelPreparation = null;
+        endTerrainPreparationCamera();
         preparationViewState = null;
-        if (error) {
-          preparedFocus = null;
-          tilesRuntime?.setReadinessFocus(null);
-        }
+        preparationRadiusMeters = 0;
         scheduler.endContinuous();
         if (error) reject(error);
         else resolve(result!);
@@ -852,16 +930,14 @@ export async function createBabylonRuntime(
           finish(new Error(status.lastError ?? "Map source changed while preparing the destination. Retry with the selected map."));
           return;
         }
-        const error = sourceMode === "google-tiles" ? tilesRuntime?.getReadinessError() : null;
-        if (error) { finish(new Error(`Terrain near the destination could not load: ${error.message}`)); return; }
         if (now - lastSampleAt < 200) return;
         lastSampleAt = now;
         const evaluation = evaluateTerrainReadiness(request, points.map(point => surface.sample(point.latDeg, point.lonDeg)), sourceMode === "google-tiles");
         const result = evaluation.result;
-        if (!result || !previousResult || Math.abs(result.groundHeightMeters - previousResult.groundHeightMeters) > 2
-          || Math.abs(result.altitudeMeters - previousResult.altitudeMeters) > 2) stableSince = result ? now : null;
-        previousResult = result;
-        if (result && stableSince !== null && now - stableSince >= 400) {
+        // A complete sample set is a coherent snapshot of displayed terrain.
+        // Waiting for subsequent samples made normal tile eviction reset the
+        // loading bar from 95% to zero before a flight could begin.
+        if (result) {
           request.onProgress?.({ ...evaluation.progress, phase: "ready", progress: 1, message: "Terrain ready for flight." });
           finish(null, result);
           return;
@@ -906,6 +982,14 @@ export async function createBabylonRuntime(
         };
       }
       return rasterTilesRuntime?.getMetrics() ?? null;
+    },
+    getGoogleTerrainDetailState(): GoogleTerrainDetailState | null {
+      return tilesRuntime?.getTerrainDetailState() ?? null;
+    },
+    setGoogleTerrainDetailTarget(errorTarget: number | null): void {
+      googleTerrainDetailTarget = errorTarget;
+      tilesRuntime?.setTerrainDetailTarget(errorTarget);
+      scheduler.requestRender();
     },
     setRasterBaseMap(source): void {
       if (activeRasterBaseMap?.id === source.id && status.mode === "raster-basemap") return;
@@ -1003,14 +1087,6 @@ export async function createBabylonRuntime(
         zoomMeters: DEFAULT_CAMERA_ALTITUDE_METERS,
       };
       simViewState = { ...current, ...partial };
-      if (preparedFocus && !preparationTick) {
-        const center = geodeticToEcef(preparedFocus.latDeg * DEG_TO_RAD, preparedFocus.lonDeg * DEG_TO_RAD, 0);
-        const position = geodeticToEcef(simViewState.latDeg * DEG_TO_RAD, simViewState.lonDeg * DEG_TO_RAD, 0);
-        if (Math.hypot(center.x - position.x, center.y - position.y, center.z - position.z) > preparedFocus.radiusMeters) {
-          preparedFocus = null;
-          tilesRuntime?.setReadinessFocus(null);
-        }
-      }
       rasterTilesRuntime?.update();
     },
     setSimRunning(running): void {

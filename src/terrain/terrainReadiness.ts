@@ -4,7 +4,7 @@ import type { SurfaceHit } from "./surfaceQuery";
 export interface TerrainPreparationOptions {
   latDeg: number;
   lonDeg: number;
-  /** Desired height above the refined terrain at the destination. */
+  /** Desired height above the displayed terrain at the destination. */
   altitudeAboveGroundMeters?: number;
   /** Optional minimum ellipsoid-coordinate altitude. */
   altitudeMeters?: number;
@@ -29,16 +29,10 @@ export interface TerrainPreparationResult {
   altitudeMeters: number;
 }
 
-export interface TerrainReadinessFocus {
-  latDeg: number;
-  lonDeg: number;
-  radiusMeters: number;
-  maxGeometricErrorMeters: number;
-}
+/** Above this height, a missing local terrain sample cannot affect the aircraft. */
+export const TERRAIN_CONTACT_IRRELEVANT_AGL_METERS = 100;
 
-export const GOOGLE_FLIGHT_GEOMETRIC_ERROR_METERS = 25;
-
-/** Center plus two rings: readiness is local coverage, never global network idle. */
+/** Center plus two rings. The rings are checked only when terrain is near enough to matter. */
 export function terrainReadinessSamples(latDeg: number, lonDeg: number, radiusMeters: number) {
   const samples = [{ latDeg, lonDeg }];
   // Great-circle offsets work at the dateline and poles as well as Minneapolis.
@@ -69,36 +63,50 @@ export function validateTerrainPreparation(options: TerrainPreparationOptions): 
   if (options.altitudeMeters !== undefined && !Number.isFinite(options.altitudeMeters)) throw new Error("Destination altitude must be finite.");
 }
 
-/** Require real displayed geometry and reject even visible, downloadable coarse Google tiles. */
+/**
+ * Require real displayed geometry before spawning. At 100 m AGL or more the
+ * center sample is sufficient: terrain cannot touch the aircraft. Below that,
+ * require the complete local rings at the renderer's selected LOD.
+ */
 export function evaluateTerrainReadiness(
   options: TerrainPreparationOptions,
   samples: readonly (SurfaceHit | null)[],
   googleTiles: boolean,
 ): { progress: TerrainPreparationProgress; result: TerrainPreparationResult | null } {
-  const isRefined = (hit: SurfaceHit | null): hit is SurfaceHit => Boolean(hit && Number.isFinite(hit.heightMeters)
-    && (googleTiles
-      ? Number.isFinite(hit.geometricErrorMeters) && hit.geometricErrorMeters! <= GOOGLE_FLIGHT_GEOMETRIC_ERROR_METERS
-      : hit.quality >= 10));
-  const readySamples = samples.filter(isRefined).length;
-  const present = samples.filter(Boolean).length;
-  const ready = samples.length > 0 && readySamples === samples.length;
-  const phase = ready ? "checking" : present ? "refining" : "loading";
-  const progress: TerrainPreparationProgress = {
-    phase, readySamples, totalSamples: samples.length,
-    progress: samples.length ? (present * 0.2 + readySamples * 0.75) / samples.length : 0,
-    message: ready ? "Checking terrain clearance…" : present
-      ? `Refining nearby terrain (${readySamples}/${samples.length})…` : "Downloading terrain near your aircraft…",
-  };
-  if (!ready) return { progress, result: null };
-  const groundHeightMeters = samples[0]!.heightMeters;
-  const highestTerrain = Math.max(...samples.map(sample => sample!.heightMeters));
-  // Do not wait forever when the requested altitude is inside a real mountain:
-  // move the spawn up once precision is sufficient to distinguish it from LOD.
-  const geometricMargin = googleTiles && (options.clearanceMeters ?? 1000) > 0 ? GOOGLE_FLIGHT_GEOMETRIC_ERROR_METERS : 0;
-  const altitudeMeters = Math.max(
+  const hasRenderedSurface = (hit: SurfaceHit | null): hit is SurfaceHit => Boolean(hit && Number.isFinite(hit.heightMeters));
+  // Google geometricError is a renderer simplification metric, not a terrain
+  // accuracy promise. Requiring a fixed value here conflicts with normal
+  // camera-driven LOD and can leave preparation waiting indefinitely.
+  const isReady = (hit: SurfaceHit | null): hit is SurfaceHit => Boolean(hasRenderedSurface(hit)
+    && (googleTiles || hit.quality >= 10));
+  const center = samples[0] ?? null;
+  const centerReady = isReady(center);
+  const altitudeFromTerrain = (groundHeightMeters: number, highestTerrainMeters: number): number => Math.max(
     options.altitudeMeters ?? -Infinity,
     groundHeightMeters + (options.altitudeAboveGroundMeters ?? (options.altitudeMeters === undefined ? 1524 : 0)),
-    (options.clearanceMeters === 0 ? groundHeightMeters : highestTerrain) + (options.clearanceMeters ?? 1000) + geometricMargin,
+    (options.clearanceMeters === 0 ? groundHeightMeters : highestTerrainMeters) + (options.clearanceMeters ?? 1000),
   );
+  const centerAltitude = centerReady ? altitudeFromTerrain(center.heightMeters, center.heightMeters) : null;
+  const needsLocalCoverage = !centerReady || centerAltitude === null
+    || centerAltitude - center.heightMeters < TERRAIN_CONTACT_IRRELEVANT_AGL_METERS;
+  const requiredSamples = needsLocalCoverage ? samples : samples.slice(0, 1);
+  const readySamples = requiredSamples.filter(isReady).length;
+  const present = requiredSamples.filter(Boolean).length;
+  const ready = requiredSamples.length > 0 && readySamples === requiredSamples.length;
+  const phase = ready ? "checking" : present ? "refining" : "loading";
+  const progress: TerrainPreparationProgress = {
+    phase, readySamples, totalSamples: requiredSamples.length,
+    progress: requiredSamples.length ? (present * 0.2 + readySamples * 0.75) / requiredSamples.length : 0,
+    message: ready ? "Checking terrain clearance…" : present
+      ? `Refining nearby terrain (${readySamples}/${requiredSamples.length})…` : "Downloading terrain near your aircraft…",
+  };
+  if (!ready) return { progress, result: null };
+  const groundHeightMeters = center!.heightMeters;
+  const highestTerrain = needsLocalCoverage
+    ? Math.max(...samples.map(sample => sample!.heightMeters))
+    : groundHeightMeters;
+  // Do not wait forever when the requested altitude is inside a real mountain:
+  // move the spawn above the highest displayed local surface.
+  const altitudeMeters = altitudeFromTerrain(groundHeightMeters, highestTerrain);
   return { progress, result: { groundHeightMeters, altitudeMeters } };
 }
