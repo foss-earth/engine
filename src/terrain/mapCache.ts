@@ -49,7 +49,7 @@ export function mapResponseExpiresAt(response: Response, receivedAt: number): nu
   // Cross-origin Date and Age are not CORS-safelisted. Without both, freshness
   // cannot be calculated reliably (CDN tiles may already be several days old).
   // Let the browser enforce all HTTP headers in that case.
-  if (response.type === "cors" && (!response.headers.has("date") || !response.headers.has("age"))) return null;
+  if (!response.headers.has("date") || !response.headers.has("age")) return null;
   if (response.headers.get("vary")?.trim() === "*") return null;
   const date = Date.parse(response.headers.get("date") ?? "");
   const ageSeconds = Number(response.headers.get("age") ?? "0");

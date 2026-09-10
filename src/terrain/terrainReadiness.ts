@@ -59,7 +59,8 @@ export function terrainReadinessSamples(latDeg: number, lonDeg: number, radiusMe
 }
 
 export function validateTerrainPreparation(options: TerrainPreparationOptions): void {
-  if (!Number.isFinite(options.latDeg) || Math.abs(options.latDeg) > 90 || !Number.isFinite(options.lonDeg)) {
+  if (!Number.isFinite(options.latDeg) || Math.abs(options.latDeg) > 90
+    || !Number.isFinite(options.lonDeg) || Math.abs(options.lonDeg) > 180) {
     throw new Error("A valid destination latitude and longitude are required.");
   }
   for (const value of [options.radiusMeters, options.clearanceMeters, options.altitudeAboveGroundMeters, options.timeoutMs]) {

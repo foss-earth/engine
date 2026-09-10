@@ -49,13 +49,15 @@ export function createGoogleTilesRuntime(options: GoogleTilesRuntimeOptions): Go
 
   tiles.registerPlugin({
     name: "FLIGHT_TERRAIN_READINESS",
-    calculateTileViewError(tile: Tile, target: { inView: boolean; error: number; distance: number }) {
+    calculateTileViewError(tile: Tile, target: { inView: boolean; error: number; distanceFromCamera: number }) {
       if (!focus || !focusRegion?.intersects(tile)) return false;
       target.inView = true;
       // This composes with normal camera SSE. Stop only when the local mesh
       // has a physically meaningful error, even if it is outside the frustum.
       target.error = tile.geometricError > focus.maxGeometricErrorMeters ? tiles.errorTarget + 1 : 0;
-      target.distance = 0;
+      // The renderer uses this field to prioritise downloads. Its plugin API
+      // calls it distanceFromCamera (rather than the older `distance` name).
+      target.distanceFromCamera = 0;
       return true;
     },
   });
