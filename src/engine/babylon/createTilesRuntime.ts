@@ -18,6 +18,8 @@ export interface GoogleTilesRuntimeOptions {
 
 export interface GoogleTilesRuntime {
   tiles: TilesRenderer;
+  /** Changes when the visible collision surface is replaced or removed. */
+  getRevision(): number;
   /** The renderer's pixel-based detail target, optionally overridden for a session. */
   getTerrainDetailState(): GoogleTerrainDetailState;
   setTerrainDetailTarget(errorTarget: number | null): void;
@@ -83,6 +85,8 @@ export function createGoogleTilesRuntime(options: GoogleTilesRuntimeOptions): Go
   // the dependency changes it in a later release.
   const defaultErrorTarget = tiles.errorTarget;
   let overrideErrorTarget: number | null = null;
+  let surfaceRevision = 0;
+  const handleSurfaceChange = (): void => { surfaceRevision += 1; };
 
   const handleLoadStart = (): void => {
     console.info("[tiles] Google 3D tiles loading started");
@@ -120,9 +124,12 @@ export function createGoogleTilesRuntime(options: GoogleTilesRuntimeOptions): Go
   tiles.addEventListener("tiles-load-end", handleLoadEnd);
   tiles.addEventListener("load-error", handleLoadError);
   tiles.addEventListener("load-model", handleLoadModel);
+  tiles.addEventListener("tile-visibility-change", handleSurfaceChange);
+  tiles.addEventListener("dispose-model", handleSurfaceChange);
 
   return {
     tiles,
+    getRevision: () => surfaceRevision,
     getTerrainDetailState() {
       return { defaultErrorTarget, errorTarget: tiles.errorTarget, overrideErrorTarget };
     },
@@ -138,6 +145,8 @@ export function createGoogleTilesRuntime(options: GoogleTilesRuntimeOptions): Go
       tiles.removeEventListener("tiles-load-end", handleLoadEnd);
       tiles.removeEventListener("load-error", handleLoadError);
       tiles.removeEventListener("load-model", handleLoadModel);
+      tiles.removeEventListener("tile-visibility-change", handleSurfaceChange);
+      tiles.removeEventListener("dispose-model", handleSurfaceChange);
       tiles.dispose();
     },
   };

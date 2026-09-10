@@ -883,7 +883,8 @@ export async function createBabylonRuntime(
   scheduler.requestRender();
 
   const surface = createSurfaceQuery(scene, () => worldRoot, mesh => Boolean(mesh.metadata?.mapSurface)
-    || Boolean(tilesRuntime && mesh.isDescendantOf(tilesRuntime.tiles.group)), () => rasterTilesRuntime?.getRevision() ?? 0,
+    || Boolean(tilesRuntime && mesh.isDescendantOf(tilesRuntime.tiles.group)),
+    () => status.mode === "google-tiles" ? tilesRuntime?.getRevision() ?? 0 : rasterTilesRuntime?.getRevision() ?? 0,
     (lat, lon) => status.mode === "raster-basemap" ? rasterTilesRuntime?.sample(lat, lon) : undefined);
 
   function prepareTerrain(request: TerrainPreparationOptions): Promise<TerrainPreparationResult> {

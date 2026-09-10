@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { FreeCamera, NullEngine, Scene, TransformNode, Vector3 } from "@babylonjs/core";
+import { FreeCamera, MeshBuilder, NullEngine, Scene, TransformNode, Vector3 } from "@babylonjs/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -53,6 +53,29 @@ beforeEach(() => {
 });
 
 describe("createBabylonRuntime simulation mode", () => {
+  it("publishes Google surface revisions to flight contact queries", async () => {
+    vi.spyOn(window, "requestAnimationFrame").mockReturnValue(1);
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
+    let revision = 1;
+    mocks.createGoogleTilesRuntime.mockReturnValue({
+      tiles: { visibleTiles: new Set(), activeTiles: new Set(), group: {} },
+      getRevision: () => revision,
+      update: vi.fn(), dispose: vi.fn(),
+    });
+    const { createBabylonRuntime } = await import("./createBabylonRuntime");
+    const runtime = await createBabylonRuntime(document.createElement("canvas"), { googleApiKey: "test", simMode: true });
+    try {
+      const wall = MeshBuilder.CreateBox("surface", { size: 2 }, runtime.scene);
+      wall.metadata = { mapSurface: true };
+      wall.position.x = 5;
+      wall.parent = runtime.getWorldRoot();
+      wall.computeWorldMatrix(true);
+      const cast = () => runtime.surface.raycast({ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, 10);
+      expect(cast()?.revision).toBe(1);
+      revision = 2;
+      expect(cast()?.revision).toBe(2);
+    } finally { runtime.destroy(); }
+  });
   it("releases streaming and startup holds after Google tiles fail into fallback", async () => {
     let scheduledFrame: FrameRequestCallback | null = null;
     vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
