@@ -104,6 +104,9 @@ export interface BabylonTileMetrics {
 
 export type { GoogleTerrainDetailState };
 
+/** Where Google 3D Tiles measure distance when choosing mesh detail. */
+export type GoogleTerrainDetailAnchor = "camera" | "simulation-origin";
+
 interface MapDebugEvent {
   at: number;
   event: string;
@@ -141,6 +144,13 @@ export interface BabylonRuntime {
    * normal adaptive target.
    */
   setGoogleTerrainDetailTarget(errorTarget: number | null): void;
+  /** Return the point used to choose Google mesh detail. */
+  getGoogleTerrainDetailAnchor(): GoogleTerrainDetailAnchor;
+  /**
+   * Choose the point used to refine Google mesh detail. Visibility remains
+   * based on the active view camera in either mode.
+   */
+  setGoogleTerrainDetailAnchor(anchor: GoogleTerrainDetailAnchor): void;
   /** Switch imagery without reloading the application or resetting consumers. */
   setRasterBaseMap(source: RasterBaseMapSource): void;
   /** Switch between Google 3D Tiles and a raster basemap without a page reload. */
@@ -293,6 +303,7 @@ export async function createBabylonRuntime(
   const downloadMeter = createMapDownloadMeter();
   let tilesRuntime: GoogleTilesRuntime | null = null;
   let googleTerrainDetailTarget: number | null = null;
+  let googleTerrainDetailAnchor: GoogleTerrainDetailAnchor = simMode ? "simulation-origin" : "camera";
   let rasterTilesRuntime: RasterTilesRuntime | null = null;
   let googleTilesStartupWatchdog: number | null = null;
   let fallbackExperienceCreated = false;
@@ -318,6 +329,7 @@ export async function createBabylonRuntime(
   let activeRasterQuality: RasterQualitySetting | undefined = options.rasterQuality;
   let lastRasterFrameAt = performance.now();
   const worldRoot = simMode ? new TransformNode("sim-world-root", scene) : null;
+  const simulationOrigin = Vector3.Zero();
 
   // Held while Google tiles are initializing so the scheduler pumps
   // tiles.update() every frame even when the user hasn't moved the camera.
@@ -759,6 +771,14 @@ export async function createBabylonRuntime(
         onDownloadBytes: downloadMeter.addBytes,
         scene,
         apiKey: normalizedApiKey,
+        // Flight attaches the simulation world to a floating-origin parent.
+        // Before that happens, terrain preparation owns the active camera and
+        // its normal camera-based detail selection remains the safe behavior.
+        getTerrainDetailAnchor: () => (
+          googleTerrainDetailAnchor === "simulation-origin" && worldRoot?.parent
+            ? simulationOrigin
+            : null
+        ),
         onLoadError: (error, url) => {
           if (status.mode !== "google-tiles") return;
           recordMapDebugEvent("google-load-error", { error: error.message, url });
@@ -992,6 +1012,13 @@ export async function createBabylonRuntime(
     setGoogleTerrainDetailTarget(errorTarget: number | null): void {
       googleTerrainDetailTarget = errorTarget;
       tilesRuntime?.setTerrainDetailTarget(errorTarget);
+      scheduler.requestRender();
+    },
+    getGoogleTerrainDetailAnchor(): GoogleTerrainDetailAnchor {
+      return googleTerrainDetailAnchor;
+    },
+    setGoogleTerrainDetailAnchor(anchor: GoogleTerrainDetailAnchor): void {
+      googleTerrainDetailAnchor = anchor;
       scheduler.requestRender();
     },
     setRasterBaseMap(source): void {

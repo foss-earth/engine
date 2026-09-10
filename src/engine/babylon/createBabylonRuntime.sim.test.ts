@@ -187,7 +187,7 @@ describe("createBabylonRuntime simulation mode", () => {
     runtime.destroy();
   });
 
-  it("exposes a session-only Google terrain detail override", async () => {
+  it("exposes Google terrain detail controls and uses the simulation origin once flight attaches it", async () => {
     const setTerrainDetailTarget = vi.fn();
     const detail = { defaultErrorTarget: 20, errorTarget: 20, overrideErrorTarget: null };
     mocks.createGoogleTilesRuntime.mockReturnValue({
@@ -202,6 +202,18 @@ describe("createBabylonRuntime simulation mode", () => {
     expect(runtime.getGoogleTerrainDetailState()).toEqual(detail);
     runtime.setGoogleTerrainDetailTarget(48);
     expect(setTerrainDetailTarget).toHaveBeenCalledWith(48);
+    expect(runtime.getGoogleTerrainDetailAnchor()).toBe("simulation-origin");
+
+    const callbacks = mocks.createGoogleTilesRuntime.mock.calls[0][0] as {
+      getTerrainDetailAnchor(): Vector3 | null;
+    };
+    expect(callbacks.getTerrainDetailAnchor()).toBeNull();
+    runtime.getWorldRoot()!.parent = new TransformNode("world-shift", runtime.scene);
+    expect(callbacks.getTerrainDetailAnchor()).toEqual(Vector3.Zero());
+
+    runtime.setGoogleTerrainDetailAnchor("camera");
+    expect(runtime.getGoogleTerrainDetailAnchor()).toBe("camera");
+    expect(callbacks.getTerrainDetailAnchor()).toBeNull();
     runtime.destroy();
   });
 
