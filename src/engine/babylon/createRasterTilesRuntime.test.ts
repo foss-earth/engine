@@ -8,11 +8,12 @@ import { RASTER_BASE_MAP_SOURCES } from "./rasterBaseMaps";
 
 const pending = vi.hoisted(() => ({
   imagery: [] as Array<() => void>,
+  imageryErrors: [] as Array<(message?: string) => void>,
   terrain: [] as Array<{ tile: TerrainTile; resolve(grid: TerrainGrid): void; reject(error: Error): void }>,
   dispose: vi.fn(),
 }));
-vi.mock("./loadMapTexture", () => ({ loadMapTexture: (_url: string, scene: Scene, loaded: () => void) => {
-  pending.imagery.push(loaded); return new Texture(null, scene);
+vi.mock("./loadMapTexture", () => ({ loadMapTexture: (_url: string, scene: Scene, loaded: () => void, failed: (message?: string) => void) => {
+  pending.imagery.push(loaded); pending.imageryErrors.push(failed); return new Texture(null, scene);
 } }));
 vi.mock("../../terrain/terrainTiles", async importOriginal => ({
   ...await importOriginal<typeof import("../../terrain/terrainTiles")>(),
@@ -20,9 +21,12 @@ vi.mock("../../terrain/terrainTiles", async importOriginal => ({
     getMetrics: () => ({ active: 0, queued: 0, decodedBytes: 0 }),
     loadPatch: (tile: TerrainTile) => new Promise<TerrainGrid>((resolve, reject) => pending.terrain.push({ tile, resolve, reject })) }),
 }));
-beforeEach(() => { pending.imagery = []; pending.terrain = []; pending.dispose.mockClear(); });
+beforeEach(() => { pending.imagery = []; pending.imageryErrors = []; pending.terrain = []; pending.dispose.mockClear(); });
 afterEach(() => vi.restoreAllMocks());
 const view = { latDeg: 0, lonDeg: 0, zoomMeters: 8000000, headingDeg: 0 };
+async function flush(): Promise<void> {
+  for (let i = 0; i < 6; i++) await Promise.resolve();
+}
 async function resolveFirstDetail(): Promise<void> {
   const first = pending.terrain[0];
   first.resolve({ ...first.tile, size: 2, heights: new Float32Array([100, 100, 100, 100]) });
@@ -147,6 +151,50 @@ describe("raster imagery and terrain lifecycle", () => {
     expect(stitch).toHaveBeenCalledOnce();
     expect(runtime.getRevision()).toBe(settled);
     expect(writes.every(write => write.mock.calls.length === 0)).toBe(true);
+    runtime.dispose(); engine.dispose();
+  });
+  // Terrain preparation holds the camera still. A failed load must still be
+  // asked for again, or the readiness gate waits on coarse terrain forever.
+  it("retries failed detail elevation while the camera holds still", async () => {
+    let now = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const engine = new NullEngine(); const scene = new Scene(engine);
+    const runtime = createRasterTilesRuntime({ scene, source: RASTER_BASE_MAP_SOURCES[0], getViewState: () => view });
+    runtime.update();
+    pending.imagery.forEach(loaded => loaded());
+    const coarse = pending.terrain[0];
+    coarse.resolve({ ...coarse.tile, size: 2, heights: new Float32Array([100, 100, 100, 100]) });
+    await flush();
+    const detail = pending.terrain.find(item => item.tile.z > 0)!;
+    detail.reject(new Error("Terrain request failed (503)"));
+    await flush();
+    const requests = pending.terrain.length;
+    runtime.update();
+    expect(pending.terrain).toHaveLength(requests);
+    now = 60_000;
+    runtime.update();
+    const retried = pending.terrain.slice(requests).find(item => item.tile.z === detail.tile.z
+      && item.tile.x === detail.tile.x && item.tile.y === detail.tile.y);
+    expect(retried).toBeDefined();
+    retried!.resolve({ ...retried!.tile, size: 2, heights: new Float32Array([250, 250, 250, 250]) });
+    await flush();
+    expect(scene.meshes.some(mesh => mesh.metadata?.terrainZoom === detail.tile.z)).toBe(true);
+    runtime.dispose(); engine.dispose();
+  });
+  it("retries failed imagery while the camera holds still", () => {
+    let now = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const engine = new NullEngine(); const scene = new Scene(engine);
+    const runtime = createRasterTilesRuntime({ scene, source: RASTER_BASE_MAP_SOURCES[0], getViewState: () => view });
+    runtime.update();
+    const requests = pending.imagery.length;
+    expect(requests).toBeGreaterThan(0);
+    pending.imageryErrors.forEach(fail => fail("503"));
+    runtime.update();
+    expect(pending.imagery).toHaveLength(requests);
+    now = 60_000;
+    runtime.update();
+    expect(pending.imagery.length).toBeGreaterThan(requests);
     runtime.dispose(); engine.dispose();
   });
   it("ignores late terrain completions after disposal", async () => {

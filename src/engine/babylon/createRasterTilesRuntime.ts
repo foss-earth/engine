@@ -98,10 +98,18 @@ interface RasterTileRecord {
   terrainGeneration: number;
   appliedTerrainGeneration: number;
   replaceTerrain(loadTerrain: (tile: TileCoord, progress: (grid: TerrainGrid) => void) => Promise<TerrainGrid>, generation: number): void;
+  /** When failed detail elevation is requested again; Infinity when none failed. */
+  terrainRetryAt: number;
+  terrainFailures: number;
 }
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+/** Failed tile loads back off from 2 s to at most 30 s between requests. */
+function retryDelayMs(failures: number): number {
+  return Math.min(30_000, 2000 * 2 ** Math.max(0, failures - 1));
 }
 
 function wrapTileX(x: number, z: number): number {
@@ -339,6 +347,7 @@ function createTileRecord(
   onSettled: (record: RasterTileRecord) => void,
   loadTerrain: (tile: TileCoord, progress: (grid: TerrainGrid) => void) => Promise<TerrainGrid>,
   onChanged: (record: RasterTileRecord) => void,
+  onRetryScheduled: (at: number) => void,
 ): RasterTileRecord {
   const { scene } = options;
   const key = tileKey(tile);
@@ -360,6 +369,8 @@ function createTileRecord(
     terrainGeneration: 0,
     appliedTerrainGeneration: 0,
     replaceTerrain: () => {},
+    terrainRetryAt: Infinity,
+    terrainFailures: 0,
   };
 
   let imageryReady = false;
@@ -388,10 +399,12 @@ function createTileRecord(
     settlesInitialRecord: boolean,
   ) => {
     record.terrainGeneration = generation;
+    record.terrainRetryAt = Infinity;
     const terrain = options.getSurfaceHeightMeters ? Promise.resolve(undefined) : nextLoadTerrain(tile, grid => applyGrid(grid, generation));
     void terrain.then(grid => {
       applyGrid(grid, generation);
       if (record.mesh.isDisposed() || generation !== record.terrainGeneration) return;
+      record.terrainFailures = 0;
       if (settlesInitialRecord) {
         terrainReady = true;
         finish();
@@ -399,7 +412,11 @@ function createTileRecord(
     }).catch(error => {
       if (record.mesh.isDisposed() || generation !== record.terrainGeneration) return;
       options.onLoadError?.(error instanceof Error ? error : new Error(String(error)), `terrain:${key}`);
-      // Keep the best geometry already available when detail fails.
+      // Keep the best geometry already available when detail fails, and ask
+      // again later: coarse startup terrain must not become permanent.
+      record.terrainFailures += 1;
+      record.terrainRetryAt = performance.now() + retryDelayMs(record.terrainFailures);
+      onRetryScheduled(record.terrainRetryAt);
       if (settlesInitialRecord) {
         terrainReady = true;
         finish();
@@ -509,6 +526,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
   const cache = new Map<string, RasterTileRecord>();
   const lastUsedTick = new Map<string, number>();
   const retryAfter = new Map<string, number>();
+  const imageryFailures = new Map<string, number>();
   let visibleTileKeys = new Set<string>();
   let tick = 0;
   let lastDesired: DesiredEntry[] = [];
@@ -546,6 +564,17 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
     options.onLoadEnd?.(metrics.visibleTiles, metrics.activeTiles);
   }
 
+  // Failed loads are requested again through tile selection, which otherwise
+  // runs only when the camera moves. Terrain preparation holds it still.
+  let nextRetryAt = Infinity;
+  let retryTimer: ReturnType<typeof setTimeout> | undefined;
+  function scheduleRetry(at: number): void {
+    if (disposed || at >= nextRetryAt) return;
+    nextRetryAt = at;
+    clearTimeout(retryTimer);
+    retryTimer = setTimeout(() => { retryTimer = undefined; options.requestRender?.(); }, Math.max(0, at - performance.now()));
+  }
+
   function finishLoad(record: RasterTileRecord): void {
     if (disposed || record.settled) return;
     record.settled = true;
@@ -553,9 +582,15 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
     if (record.failed) {
       // Drop failed tiles from the cache so we can retry on next request.
       cache.delete(record.key);
-      retryAfter.set(record.key, performance.now() + 30000);
+      const failures = (imageryFailures.get(record.key) ?? 0) + 1;
+      imageryFailures.set(record.key, failures);
+      const retryAt = performance.now() + retryDelayMs(failures);
+      retryAfter.set(record.key, retryAt);
+      scheduleRetry(retryAt);
       lastUsedTick.delete(record.key);
       disposeTile(record);
+    } else {
+      imageryFailures.delete(record.key);
     }
     // Adopt loaded coverage at the next update, before simulation and rendering.
     visibilityDirty = true;
@@ -568,17 +603,30 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
     const existing = cache.get(key);
     if (existing) {
       if (existing.terrainGeneration !== terrainGeneration) existing.replaceTerrain(loadProgressive, terrainGeneration);
+      else if (existing.terrainRetryAt !== Infinity) {
+        // The coarse surface stays displayed; only the failed detail is requested.
+        if (performance.now() >= existing.terrainRetryAt) existing.replaceTerrain(loadDetail, terrainGeneration);
+        else scheduleRetry(existing.terrainRetryAt);
+      }
       return;
     }
-    if (performance.now() < (retryAfter.get(key) ?? 0)) return;
+    const retryAt = retryAfter.get(key) ?? 0;
+    if (performance.now() < retryAt) {
+      scheduleRetry(retryAt);
+      return;
+    }
     beginLoad();
     const record = createTileRecord(meshOptions, imagerySource, tile, finishLoad, loadProgressive, changed => {
       geometryDirty = true;
       dirtyGeometryKeys.add(changed.key);
       visibilityDirty = true;
       options.requestRender?.();
-    });
+    }, scheduleRetry);
     cache.set(key, record);
+  }
+
+  function loadDetail(requested: TileCoord): Promise<TerrainGrid> {
+    return terrain.loadPatch(requested);
   }
 
   function loadProgressive(requested: TileCoord, progress: (grid: TerrainGrid) => void): Promise<TerrainGrid> {
@@ -835,10 +883,15 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
       const started = capture ? performance.now() : 0, oldRevision = revision;
       const previousPreparation = capture?.counters.preparationCpuMs ?? 0;
       const view = options.getViewState();
+      const retryDue = nextRetryAt !== Infinity && performance.now() >= nextRetryAt;
       // Simulation ticks still advance active refinement every frame, but a
-      // stationary (or sub-threshold) aircraft has no new coverage to select.
+      // stationary (or sub-threshold) aircraft has no new coverage to select
+      // unless a failed load is due to be requested again.
       if (view && [view.latDeg, view.lonDeg, view.zoomMeters].every(Number.isFinite)
-        && hasMeaningfulCameraChange(view)) selectTiles(view);
+        && (retryDue || hasMeaningfulCameraChange(view))) {
+        nextRetryAt = Infinity;
+        selectTiles(view);
+      }
       if (visibilityDirty) recomputeVisibility();
       processMeshRebuilds();
       // One atomic terrain replacement after coverage adoption, including
@@ -921,7 +974,9 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
       cache.clear();
       surfaceSampler.setCoverage([]);
       lastUsedTick.clear();
+      clearTimeout(retryTimer);
       retryAfter.clear();
+      imageryFailures.clear();
       dirtyGeometryKeys.clear();
       meshRebuildQueue.clear();
       lastDesired = [];
