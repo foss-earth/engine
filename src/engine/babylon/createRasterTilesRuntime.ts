@@ -846,11 +846,14 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
         parents.set(`${z}/${x}/${y}`, { z, x, y });
       }
     }
-    for (const tile of [...parents.values()].sort((a, b) => a.z - b.z)) ensureCached(tile);
+    // Preserve the focus-first ordering above. Enqueuing every ancestor
+    // first makes cold-cache flight preparation download the globe before
+    // the terrain under the aircraft can become ready.
     for (const entry of lastDesired) {
       ensureCached(entry.tile);
       touchAncestors(entry.tile, baseZoom);
     }
+    for (const tile of [...parents.values()].sort((a, b) => a.z - b.z)) ensureCached(tile);
 
     visibilityDirty = true;
   }

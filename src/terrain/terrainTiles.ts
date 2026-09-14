@@ -112,9 +112,14 @@ export function createTerrainTileLoader(
   const settled = new Set<string>();
   const decodedArrays = trackMemory ? new Map<string, Float32Array>() : null;
   let active = 0;
-  const queue: Array<() => void> = [];
-  async function download(tile: TerrainTile): Promise<TerrainGrid> {
-    await new Promise<void>(resolve => { queue.push(resolve); pump(); });
+  const queue: Array<{ key: string; start: () => void }> = [];
+  async function download(tile: TerrainTile, prioritize: boolean): Promise<TerrainGrid> {
+    await new Promise<void>(resolve => {
+      const entry = { key: `${tile.z}/${tile.x}/${tile.y}`, start: resolve };
+      if (prioritize) queue.unshift(entry);
+      else queue.push(entry);
+      pump();
+    });
     try {
       const url = source.urlTemplate.replace("{z}", String(tile.z)).replace("{x}", String(tile.x)).replace("{y}", String(tile.y));
       const response = await fetchMapTile(url, { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(20000)]), mode: "cors" });
@@ -129,17 +134,25 @@ export function createTerrainTileLoader(
   }
   // Release the download slot before awaiting a parent (avoid queue deadlock).
   function awaitFallback(tile: TerrainTile): Promise<TerrainGrid> {
-    return load({ z: tile.z - 1, x: Math.floor(tile.x / 2), y: Math.floor(tile.y / 2) });
+    return load({ z: tile.z - 1, x: Math.floor(tile.x / 2), y: Math.floor(tile.y / 2) }, true);
   }
-  function pump() { while (active < 6 && queue.length) { active++; queue.shift()!(); } }
-  function load(tile: TerrainTile): Promise<TerrainGrid> {
+  function pump() { while (active < 6 && queue.length) { active++; queue.shift()!.start(); } }
+  function load(tile: TerrainTile, prioritize = false): Promise<TerrainGrid> {
     if (controller.signal.aborted) return Promise.reject(new Error("Terrain loader disposed"));
     const shift = Math.max(0, tile.z - source.maxZoom);
     tile = { z: tile.z - shift, x: Math.floor(tile.x / 2 ** shift), y: Math.floor(tile.y / 2 ** shift) };
     const key = `${tile.z}/${tile.x}/${tile.y}`;
     const found = cache.get(key);
-    if (found) { cache.delete(key); cache.set(key, found); return found; }
-    const pending = download(tile).catch(error => { cache.delete(key); settled.delete(key); decodedArrays?.delete(key); throw error; });
+    if (found) {
+      // A neighbor may already be queued as another tile's center. Promote
+      // that same request rather than issuing a duplicate download.
+      if (prioritize) {
+        const index = queue.findIndex(entry => entry.key === key);
+        if (index > 0) queue.unshift(queue.splice(index, 1)[0]);
+      }
+      cache.delete(key); cache.set(key, found); return found;
+    }
+    const pending = download(tile, prioritize).catch(error => { cache.delete(key); settled.delete(key); decodedArrays?.delete(key); throw error; });
     cache.set(key, pending);
     // Settled arrays are small and bounded; geometry retains its own samples.
     void pending.then(grid => {
@@ -159,7 +172,10 @@ export function createTerrainTileLoader(
     const n = 2 ** grid.z;
     for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
       if ((!dx && !dy) || grid.y + dy < 0 || grid.y + dy >= n) continue;
-      neighbors.push(load({ z: grid.z, x: (grid.x + dx + n) % n, y: grid.y + dy }));
+      // Finish this already-started patch before downloading unrelated
+      // centers. Otherwise a displayed tile can wait behind the whole globe
+      // even though its own elevation request completed long ago.
+      neighbors.push(load({ z: grid.z, x: (grid.x + dx + n) % n, y: grid.y + dy }, true));
     }
     return { ...grid, neighbors: await Promise.all(neighbors) };
   }
