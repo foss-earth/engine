@@ -58,6 +58,11 @@ export interface RasterTilesRuntimeOptions {
 export interface RasterTilesRuntime {
   readonly source: RasterBaseMapSource;
   update(): void;
+  getLoadingDiagnostics?(): {
+    activeElevationRequests: number;
+    queuedElevationRequests: number;
+    pendingTiles: number;
+  };
   /** Replace imagery in-place; elevation grids and displayed terrain stay put. */
   setSource(source: RasterBaseMapSource): void;
   /** Stream a replacement elevation source onto the current displayed mesh. */
@@ -881,6 +886,14 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
 
   return {
     get source(): RasterBaseMapSource { return imagerySource; },
+    getLoadingDiagnostics() {
+      const requests = terrain.getMetrics();
+      return {
+        activeElevationRequests: requests.active,
+        queuedElevationRequests: requests.queued,
+        pendingTiles: loadingCount,
+      };
+    },
     update(): void {
       if (disposed) return;
       const started = capture ? performance.now() : 0, oldRevision = revision;

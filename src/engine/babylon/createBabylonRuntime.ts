@@ -926,6 +926,51 @@ export async function createBabylonRuntime(
       zoomMeters: Math.max(2000, radiusMeters * 2) };
     beginTerrainPreparationCamera();
     const points = terrainReadinessSamples(request.latDeg, request.lonDeg, radiusMeters);
+    const preparationStartedAt = performance.now();
+    let lastTerrainProgressAt = preparationStartedAt;
+    let lastTerrainSignature = "";
+    let centerQuality: number | null = null;
+    let latestProgress: Parameters<NonNullable<TerrainPreparationOptions["onProgress"]>>[0] = {
+      phase: "loading", readySamples: 0, totalSamples: points.length, progress: 0,
+      message: "Waiting for terrain to cover the aircraft's location.",
+    };
+    const publishPreparationProgress = (progress: typeof latestProgress, failure?: Error): void => {
+      const now = performance.now();
+      const raster = sourceMode === "raster-basemap" ? rasterTilesRuntime : null;
+      const requests = raster?.getLoadingDiagnostics?.();
+      const visibleTiles = raster?.getMetrics().visibleTiles ?? tilesRuntime?.tiles.visibleTiles.size ?? 0;
+      // Queue churn and retries are activity, not improvement in usable ground.
+      const signature = `${progress.readySamples}/${centerQuality}/${visibleTiles}`;
+      if (signature !== lastTerrainSignature) {
+        lastTerrainSignature = signature;
+        lastTerrainProgressAt = now;
+      }
+      const stalledForMs = now - lastTerrainProgressAt;
+      // Provider errors can contain signed URLs or API keys. Reports retain
+      // the endpoint and error, never URL credentials or query strings.
+      const lastError = (failure?.message ?? status.lastError)?.replace(/https?:\/\/[^\s)]+/g, value => {
+        try { const url = new URL(value); return url.origin + url.pathname; }
+        catch { return "[provider URL]"; }
+      }) ?? null;
+      latestProgress = {
+        ...progress,
+        diagnostics: {
+          status: failure ? "failed" : progress.phase === "ready" ? "ready" : stalledForMs >= 15_000 ? "stalled" : "loading",
+          provider: sourceMode === "google-tiles" ? "Google 3D Tiles" : activeTerrainSource.label,
+          elapsedMs: now - preparationStartedAt,
+          stalledForMs,
+          timeoutMs: request.timeoutMs ?? 120_000,
+          activeElevationRequests: requests?.activeElevationRequests ?? null,
+          queuedElevationRequests: requests?.queuedElevationRequests ?? null,
+          pendingTiles: requests?.pendingTiles ?? null,
+          visibleTiles,
+          centerQuality,
+          requiredQuality: sourceMode === "google-tiles" ? null : 10,
+          lastError,
+        },
+      };
+      request.onProgress?.(latestProgress);
+    };
     scheduler.beginContinuous();
     return new Promise<TerrainPreparationResult>((resolve, reject) => {
       let settled = false;
@@ -935,6 +980,7 @@ export async function createBabylonRuntime(
       function finish(error: Error | null, result?: TerrainPreparationResult): void {
         if (settled) return;
         settled = true;
+        if (error) publishPreparationProgress({ ...latestProgress, message: error.message }, error);
         window.clearTimeout(timeout);
         request.signal?.removeEventListener("abort", abort);
         preparationTick = null;
@@ -955,20 +1001,21 @@ export async function createBabylonRuntime(
         }
         if (now - lastSampleAt < 200) return;
         lastSampleAt = now;
-        const evaluation = evaluateTerrainReadiness(request, points.map(point => surface.sample(point.latDeg, point.lonDeg)), sourceMode === "google-tiles");
+        const samples = points.map(point => surface.sample(point.latDeg, point.lonDeg));
+        centerQuality = samples[0]?.quality ?? null;
+        const evaluation = evaluateTerrainReadiness(request, samples, sourceMode === "google-tiles");
         const result = evaluation.result;
         // A complete sample set is a coherent snapshot of displayed terrain.
         // Waiting for subsequent samples made normal tile eviction reset the
         // loading bar from 95% to zero before a flight could begin.
         if (result) {
-          request.onProgress?.({ ...evaluation.progress, phase: "ready", progress: 1, message: "Terrain ready for flight." });
+          publishPreparationProgress({ ...evaluation.progress, phase: "ready", progress: 1, message: "Terrain ready for flight." });
           finish(null, result);
           return;
         }
-        request.onProgress?.(evaluation.progress);
+        publishPreparationProgress(evaluation.progress);
       };
-      request.onProgress?.({ phase: "loading", readySamples: 0, totalSamples: points.length, progress: 0,
-        message: "Downloading terrain near your aircraft…" });
+      publishPreparationProgress(latestProgress);
       scheduler.requestRender();
     });
   }

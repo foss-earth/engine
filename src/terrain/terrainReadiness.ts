@@ -22,6 +22,21 @@ export interface TerrainPreparationProgress {
   totalSamples: number;
   progress: number;
   message: string;
+  /** Live startup telemetry, retained by hosts even if preparation fails. */
+  diagnostics?: {
+    status: "loading" | "stalled" | "ready" | "failed";
+    provider: string;
+    elapsedMs: number;
+    stalledForMs: number;
+    timeoutMs: number;
+    activeElevationRequests: number | null;
+    queuedElevationRequests: number | null;
+    pendingTiles: number | null;
+    visibleTiles: number;
+    centerQuality: number | null;
+    requiredQuality: number | null;
+    lastError: string | null;
+  };
 }
 
 export interface TerrainPreparationResult {
@@ -98,7 +113,8 @@ export function evaluateTerrainReadiness(
     phase, readySamples, totalSamples: requiredSamples.length,
     progress: requiredSamples.length ? (present * 0.2 + readySamples * 0.75) / requiredSamples.length : 0,
     message: ready ? "Checking terrain clearance…" : present
-      ? `Refining nearby terrain (${readySamples}/${requiredSamples.length})…` : "Downloading terrain near your aircraft…",
+      ? "Waiting for finer elevation data before flight can start safely."
+      : "Waiting for terrain to cover the aircraft's location.",
   };
   if (!ready) return { progress, result: null };
   const groundHeightMeters = center!.heightMeters;
