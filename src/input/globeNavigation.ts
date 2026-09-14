@@ -1,7 +1,12 @@
-import type {
-  ActionDescriptor,
-  ActionIntentFrame,
-  HostInputAdapter,
+import {
+  DEFAULT_BINDING_TRANSFORM,
+  createDefaultProfile,
+  type ActionDescriptor,
+  type ActionIntentFrame,
+  type BindingProfile,
+  type BindingSource,
+  type BindingSpec,
+  type HostInputAdapter,
 } from "@felipegalind0/gamepad-tools/core";
 
 export type GlobeNavigationActionId =
@@ -62,7 +67,9 @@ export function createGlobeGamepadAdapter(
       }
       const intents: GlobeNavigationIntent[] = [];
       for (const intent of frame.intents) {
-        if (intent.kind !== "rate" || !Number.isFinite(intent.value)) {
+        // A resting stick reports zero on every poll. Forwarding it would wake
+        // the on-demand renderer each time without moving the camera.
+        if (intent.kind !== "rate" || !Number.isFinite(intent.value) || intent.value === 0) {
           continue;
         }
         if (intent.actionId === "globe.panX"
@@ -80,5 +87,80 @@ export function createGlobeGamepadAdapter(
     setBindingCapture(active: boolean): void {
       captureActive = active;
     },
+  };
+}
+
+export const STANDARD_GLOBE_PROFILE_ID = "foss-earth-standard-globe";
+export const STANDARD_GLOBE_PROFILE_NAME = "Standard controller";
+
+// Navigation actions are rates, so any stick drift outside the deadzone keeps
+// the camera creeping and the scene rendering.
+const GLOBE_STICK_DEADZONE = 0.15;
+
+function axisSource(slot: number, axisIndex: number): BindingSource {
+  return { selector: { kind: "gamepad-axis", gamepadSlot: slot, axisIndex } };
+}
+
+function buttonSource(slot: number, buttonIndex: number): BindingSource {
+  return { selector: { kind: "gamepad-button", gamepadSlot: slot, buttonIndex } };
+}
+
+function stickRate(id: string, actionId: GlobeNavigationActionId, source: BindingSource, invert = false): BindingSpec {
+  return {
+    id,
+    actionId,
+    kind: "single",
+    semantics: "rate",
+    contexts: ["globe"],
+    enabled: true,
+    precedence: 0,
+    transform: { ...DEFAULT_BINDING_TRANSFORM, deadzone: GLOBE_STICK_DEADZONE, invert },
+    source,
+  };
+}
+
+/**
+ * Bindings for a controller that reports the browser's "standard" layout.
+ * Directions match the mouse: the right stick orbits the way a right drag
+ * does, and the left stick moves the view the way it points.
+ */
+export function createStandardGlobeProfile(slot = 0): BindingProfile {
+  return {
+    ...createDefaultProfile("foss-earth"),
+    profileId: STANDARD_GLOBE_PROFILE_ID,
+    name: STANDARD_GLOBE_PROFILE_NAME,
+    contexts: ["globe"],
+    bindings: [
+      stickRate("standard-pan-x", "globe.panX", axisSource(slot, 0)),
+      // Stick Y reads negative when pushed up; up should move forward.
+      stickRate("standard-pan-y", "globe.panY", axisSource(slot, 1), true),
+      stickRate("standard-orbit-heading", "globe.orbitHeading", axisSource(slot, 2)),
+      stickRate("standard-orbit-pitch", "globe.orbitPitch", axisSource(slot, 3)),
+      {
+        id: "standard-zoom",
+        actionId: "globe.zoom",
+        kind: "paired",
+        semantics: "rate",
+        contexts: ["globe"],
+        enabled: true,
+        precedence: 0,
+        transform: { ...DEFAULT_BINDING_TRANSFORM, inputRange: [0, 1], outputRange: [-1, 1] },
+        // Right trigger zooms in, left trigger zooms out.
+        positiveSource: buttonSource(slot, 7),
+        negativeSource: buttonSource(slot, 6),
+      },
+      {
+        id: "standard-reset-north",
+        actionId: "globe.resetNorth",
+        kind: "single",
+        semantics: "command",
+        contexts: ["globe"],
+        enabled: true,
+        precedence: 0,
+        transform: { ...DEFAULT_BINDING_TRANSFORM, inputRange: [0, 1], outputRange: [0, 1] },
+        // The top face button: Y on an Xbox layout.
+        source: buttonSource(slot, 3),
+      },
+    ],
   };
 }

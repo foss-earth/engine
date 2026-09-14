@@ -1,7 +1,7 @@
 import { attachMapDownloadSpeed, setMapSourceLabel } from "../shell/mapDownloadHud";
 import { attachRendererActivity, attachTileStreamingActivity } from "../shell/rendererActivity";
 import { createBrowserInputSource } from "@felipegalind0/gamepad-tools/browser";
-import { BindingRuntime, createDefaultProfile, createProfileStore } from "@felipegalind0/gamepad-tools/core";
+import { BindingRuntime, createProfileStore } from "@felipegalind0/gamepad-tools/core";
 import { mountBindingEditor, type BindingEditorHandle } from "@felipegalind0/gamepad-tools/ui";
 import "@felipegalind0/gamepad-tools/styles.css";
 import { Matrix, Vector3 } from "@babylonjs/core";
@@ -38,7 +38,11 @@ import { createPoiSpriteSizeTuner } from "../hud/poiSpriteSizeTuner";
 import { createCompassScaleTuner } from "../hud/compassScaleTuner";
 import { createInputModeHud, type InputModeHudHandle } from "../hud/inputModeHud";
 import { loadGlobeAnchorRotationPreference } from "../input/inputSettings";
-import { createGlobeGamepadAdapter } from "../input/globeNavigation";
+import {
+  createGlobeGamepadAdapter,
+  createStandardGlobeProfile,
+  STANDARD_GLOBE_PROFILE_NAME,
+} from "../input/globeNavigation";
 import { createHudBar } from "../shell/hudBar";
 import type { PoiSpriteSizeParams } from "../hud/poiSpriteSizeTuner";
 import type { OrbitCompassScaleParams } from "../visualization/orbitCompass";
@@ -386,6 +390,7 @@ export async function createGlobeApp(
                 <span class="help-trigger">Left drag</span>
                 <span class="help-trigger">2-finger swipe</span>
                 <span class="help-trigger">1-finger <small>(mobile)</small></span>
+                <span class="help-trigger">Left stick <small>(controller)</small></span>
               </div>
               <div class="help-axis-note">Changes Lat\u202F/\u202FLon</div>
             </div>
@@ -395,11 +400,13 @@ export async function createGlobeApp(
                 <span class="help-trigger">Right drag</span>
                 <span class="help-trigger">\u21E7\u202F+\u202F2-finger swipe</span>
                 <span class="help-trigger">2-finger <small>(mobile)</small></span>
+                <span class="help-trigger">Right stick <small>(controller)</small></span>
               </div>
               <div class="help-axis-note">Changes Heading\u202F/\u202FPitch</div>
             </div>
           </div>
-          <p class="help-zoom">Zoom \u2014 Scroll wheel\u00B7Pinch</p>
+          <p class="help-zoom">Zoom \u2014 Scroll wheel\u00B7Pinch\u00B7Triggers <small>(controller)</small></p>
+          <p class="help-zoom">Controller \u2014 top face button resets north-up\u00B7Change bindings under Controller bindings</p>
           <button id="helpModalDismiss" class="modal-dismiss" type="button">Got it</button>
         </div>
       </div>
@@ -911,9 +918,10 @@ export async function createGlobeApp(
 
   const gamepadSource = createBrowserInputSource({ target: window });
   const gamepadAdapter = createGlobeGamepadAdapter(runtime, { onResetNorth: resetNorth });
+  const selectedGamepadSlot = (): number => gamepadSource.getSelectedDevice()?.slot ?? 0;
   const gamepadRuntime = new BindingRuntime({
     adapter: gamepadAdapter,
-    profile: createDefaultProfile("foss-earth"),
+    profile: createStandardGlobeProfile(selectedGamepadSlot()),
   });
   const gamepadStore = createProfileStore();
   const offGamepadFrame = gamepadSource.subscribe((frame) => gamepadRuntime.dispatch(frame));
@@ -936,6 +944,13 @@ export async function createGlobeApp(
       runtime: gamepadRuntime,
       source: gamepadSource,
       store: gamepadStore,
+      builtInProfiles: [
+        {
+          id: "standard",
+          label: STANDARD_GLOBE_PROFILE_NAME,
+          create: () => createStandardGlobeProfile(selectedGamepadSlot()),
+        },
+      ],
     });
   };
   const onGamepadToggle = (): void => {
