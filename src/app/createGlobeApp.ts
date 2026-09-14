@@ -1,5 +1,9 @@
 import { attachMapDownloadSpeed, setMapSourceLabel } from "../shell/mapDownloadHud";
 import { attachRendererActivity, attachTileStreamingActivity } from "../shell/rendererActivity";
+import { createBrowserInputSource } from "@felipegalind0/gamepad-tools/browser";
+import { BindingRuntime, createDefaultProfile, createProfileStore } from "@felipegalind0/gamepad-tools/core";
+import { mountBindingEditor, type BindingEditorHandle } from "@felipegalind0/gamepad-tools/ui";
+import "@felipegalind0/gamepad-tools/styles.css";
 import { Matrix, Vector3 } from "@babylonjs/core";
 import { createBabylonRuntime, type BabylonRuntime, type RendererMode } from "../engine/babylon/createBabylonRuntime";
 import { clearRendererPreference } from "../engine/babylon/rendererPreference";
@@ -34,6 +38,7 @@ import { createPoiSpriteSizeTuner } from "../hud/poiSpriteSizeTuner";
 import { createCompassScaleTuner } from "../hud/compassScaleTuner";
 import { createInputModeHud, type InputModeHudHandle } from "../hud/inputModeHud";
 import { loadGlobeAnchorRotationPreference } from "../input/inputSettings";
+import { createGlobeGamepadAdapter } from "../input/globeNavigation";
 import { createHudBar } from "../shell/hudBar";
 import type { PoiSpriteSizeParams } from "../hud/poiSpriteSizeTuner";
 import type { OrbitCompassScaleParams } from "../visualization/orbitCompass";
@@ -41,6 +46,7 @@ import type { OrbitCompassScaleParams } from "../visualization/orbitCompass";
 export interface GlobeAppHandle extends GlobeHandle {
   runtime: BabylonRuntime;
   inputModeHud: InputModeHudHandle | null;
+  openControllerBindings(): void;
 }
 
 export interface GlobeAppOptions {
@@ -897,9 +903,62 @@ export async function createGlobeApp(
   compassHeightSliderEl?.addEventListener("input", onCompassHeightInput);
   document.addEventListener("pointerdown", onDocumentPointerDown, { capture: true });
 
-  northBtnEl?.addEventListener("click", () => {
+  const resetNorth = (): void => {
     poiTracking.exitTracking();
     runtime.setViewState({ headingDeg: 0, pitchDeg: MAX_PITCH_DEG });
+  };
+  northBtnEl?.addEventListener("click", resetNorth);
+
+  const gamepadSource = createBrowserInputSource({ target: window });
+  const gamepadAdapter = createGlobeGamepadAdapter(runtime, { onResetNorth: resetNorth });
+  const gamepadRuntime = new BindingRuntime({
+    adapter: gamepadAdapter,
+    profile: createDefaultProfile("foss-earth"),
+  });
+  const gamepadStore = createProfileStore();
+  const offGamepadFrame = gamepadSource.subscribe((frame) => gamepadRuntime.dispatch(frame));
+  const stopGamepadSource = gamepadSource.start({ intervalMs: 33 });
+  const gamepadPanel = document.createElement("section");
+  gamepadPanel.className = "gt-host-panel";
+  gamepadPanel.hidden = true;
+  const gamepadToggle = document.createElement("button");
+  gamepadToggle.className = "gt-launcher";
+  gamepadToggle.type = "button";
+  gamepadToggle.textContent = "Controller bindings";
+  gamepadToggle.setAttribute("aria-expanded", "false");
+  rootElement.append(gamepadToggle, gamepadPanel);
+  let gamepadEditor: BindingEditorHandle | null = null;
+  const openControllerBindings = (): void => {
+    gamepadPanel.hidden = false;
+    gamepadToggle.setAttribute("aria-expanded", "true");
+    gamepadEditor ??= mountBindingEditor({
+      root: gamepadPanel,
+      runtime: gamepadRuntime,
+      source: gamepadSource,
+      store: gamepadStore,
+    });
+  };
+  const onGamepadToggle = (): void => {
+    if (gamepadPanel.hidden) {
+      openControllerBindings();
+      return;
+    }
+    gamepadPanel.hidden = true;
+    gamepadToggle.setAttribute("aria-expanded", "false");
+  };
+  gamepadToggle.addEventListener("click", onGamepadToggle);
+  void gamepadStore.listProfileIds("foss-earth").then(async (ids) => {
+    const stored = ids.length > 0 ? await gamepadStore.loadProfile("foss-earth", ids[0]) : null;
+    if (!stored || stored.hostNamespace !== "foss-earth") {
+      return;
+    }
+    gamepadRuntime.setProfile(stored);
+    if (stored.selectedDeviceSlot !== undefined || stored.selectedDeviceSessionId !== undefined) {
+      gamepadSource.selectDevice({
+        slot: stored.selectedDeviceSlot,
+        sessionId: stored.selectedDeviceSessionId,
+      });
+    }
   });
   helpBtnEl?.addEventListener("click", () => helpModal?.show());
   settingsBtnEl?.addEventListener("click", () => settingsModal?.show());
@@ -1009,6 +1068,7 @@ export async function createGlobeApp(
   return {
     runtime,
     inputModeHud,
+    openControllerBindings,
     addLayer,
     removeLayer,
     getViewState(): GlobeViewState | null {
@@ -1035,6 +1095,15 @@ export async function createGlobeApp(
       spriteTuner?.destroy();
       compassScaleTuner?.destroy();
       inputModeHud?.destroy();
+      northBtnEl?.removeEventListener("click", resetNorth);
+      gamepadToggle.removeEventListener("click", onGamepadToggle);
+      gamepadEditor?.destroy();
+      gamepadPanel.remove();
+      gamepadToggle.remove();
+      offGamepadFrame();
+      stopGamepadSource();
+      gamepadRuntime.dispose();
+      gamepadSource.dispose();
       runtimeModePill?.removeEventListener("click", onMapSourceClick);
       mapSourceMenu?.removeEventListener("click", onMapSourceMenuClick);
       settingsPerformanceMetricsEl?.removeEventListener("change", onPerformanceMetricChange);

@@ -55,6 +55,7 @@ import { geodeticToEcef, DEG_TO_RAD } from "../../camera/cameraMath";
 import { CameraController, type OrbitTargetHeightOptions } from "../../camera/cameraState";
 import { createInputController, type InputController } from "../../input/createInputController";
 import { createInertialCameraController, type InertialCameraController } from "../../input/inertialCameraController";
+import type { GlobeNavigationIntentFrame } from "../../input/globeNavigation";
 import type { InputModePreference, InputSensitivitySettings } from "../../input/inputSettings";
 import type { GlobeViewState } from "../types";
 
@@ -169,6 +170,12 @@ export interface BabylonRuntime {
   setInputMode(mode: InputModePreference): void;
   /** Set movement sensitivity multipliers for mouse, trackpad, and touch. */
   setInputSensitivity(sensitivity: Partial<InputSensitivitySettings>): void;
+  /**
+   * Apply host-owned, normalized navigation rates through the same inertial
+   * camera path used by pointer input. This avoids repeated setViewState calls
+   * that would cancel existing inertia.
+   */
+  applyGlobeNavigationIntents(frame: GlobeNavigationIntentFrame): void;
   /** Toggle anchor-based globe drag pan (grabbed surface point follows cursor). */
   setGlobeAnchorRotation(enabled: boolean): void;
   getGlobeAnchorRotation(): boolean;
@@ -1020,6 +1027,37 @@ export async function createBabylonRuntime(
     });
   }
 
+  const applyGlobeNavigationIntents = (frame: GlobeNavigationIntentFrame): void => {
+    if (simMode || !inertialCameraController) {
+      return;
+    }
+    const dt = Number.isFinite(frame.dt) ? Math.max(0, Math.min(0.1, frame.dt)) : 0;
+    if (dt === 0) {
+      return;
+    }
+    const canvasHeight = Math.max(1, canvas.clientHeight || canvas.height || 1);
+    for (const intent of frame.intents) {
+      const value = Number.isFinite(intent.value) ? Math.max(-1, Math.min(1, intent.value)) : 0;
+      switch (intent.actionId) {
+        case "globe.panX":
+          inertialCameraController.panBy(value * 900 * dt, 0, canvasHeight);
+          break;
+        case "globe.panY":
+          inertialCameraController.panBy(0, -value * 900 * dt, canvasHeight);
+          break;
+        case "globe.orbitHeading":
+          inertialCameraController.orbitBy(0, value * 75 * dt);
+          break;
+        case "globe.orbitPitch":
+          inertialCameraController.orbitBy(value * 65 * dt, 0);
+          break;
+        case "globe.zoom":
+          inertialCameraController.zoomBy(Math.exp(-value * 1.5 * dt));
+          break;
+      }
+    }
+  };
+
   return {
     surface,
     prepareTerrain,
@@ -1116,6 +1154,7 @@ export async function createBabylonRuntime(
     setInputSensitivity(sensitivity: Partial<InputSensitivitySettings>): void {
       inputController?.setSensitivity(sensitivity);
     },
+    applyGlobeNavigationIntents,
     setGlobeAnchorRotation(enabled: boolean): void {
       inputController?.setGlobeAnchorRotation(enabled);
     },
