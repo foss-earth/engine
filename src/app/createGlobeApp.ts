@@ -6,6 +6,7 @@ import { mountBindingEditor, type BindingEditorHandle } from "@felipegalind0/gam
 import "@felipegalind0/gamepad-tools/styles.css";
 import { Matrix, Vector3 } from "@babylonjs/core";
 import { createBabylonRuntime, type BabylonRuntime, type RendererMode } from "../engine/babylon/createBabylonRuntime";
+import { createGameLog, type GameLogTone } from "../log/createGameLog";
 import { clearRendererPreference } from "../engine/babylon/rendererPreference";
 import {
   DEFAULT_RASTER_BASE_MAP_ID,
@@ -373,12 +374,6 @@ export async function createGlobeApp(
 
       <div id="hudBarRoot"></div>
 
-      <div id="runtimeNotice" class="runtime-notice" hidden>
-        <strong id="runtimeNoticeTitle" class="runtime-notice-title"></strong>
-        <p id="runtimeNoticeText" class="runtime-notice-text"></p>
-        <button id="runtimeNoticeDismiss" class="runtime-notice-dismiss" type="button">Dismiss</button>
-      </div>
-
       <div id="helpModal" class="modal-overlay" hidden aria-modal="true" role="dialog"
         aria-labelledby="helpModalTitle">
         <div class="modal-card">
@@ -539,14 +534,17 @@ export async function createGlobeApp(
   const runtimeModePill = rootElement.querySelector<HTMLButtonElement>("#runtimeModePill");
   const mapSourceMenu = rootElement.querySelector<HTMLElement>("#mapSourceMenu");
   const perfMetricsPill = rootElement.querySelector<HTMLElement>("#perfMetricsPill");
-  const runtimeNotice = rootElement.querySelector<HTMLElement>("#runtimeNotice");
-  const runtimeNoticeTitle = rootElement.querySelector<HTMLElement>("#runtimeNoticeTitle");
-  const runtimeNoticeText = rootElement.querySelector<HTMLElement>("#runtimeNoticeText");
-  const runtimeNoticeDismiss = rootElement.querySelector<HTMLButtonElement>("#runtimeNoticeDismiss");
   const settingsDeployLine = rootElement.querySelector<HTMLElement>("#settingsDeployLine");
   hydrateDeployShaLine(settingsDeployLine);
 
-  let runtimeNoticeDismissed = false;
+  const gameLog = createGameLog();
+  let lastLoggedStatus = "";
+  const logStatus = (text: string, tone: GameLogTone): void => {
+    if (text === lastLoggedStatus) return;
+    lastLoggedStatus = text;
+    gameLog.print({ text, tone });
+  };
+
   const configuredBaseMap = resolveRasterBaseMapSource(options.baseMap ?? DEFAULT_RASTER_BASE_MAP_ID);
 
   const applyRuntimeStatus = (status: BabylonRuntime["status"]): void => {
@@ -566,49 +564,18 @@ export async function createGlobeApp(
       runtimeModePill.classList.toggle("hud-chip--raster", status.mode === "raster-basemap");
     }
 
-    if (!runtimeNotice || !runtimeNoticeTitle || !runtimeNoticeText) {
-      return;
-    }
-
-    if (runtimeNoticeDismissed) {
-      runtimeNotice.hidden = true;
-      return;
-    }
-
     if (status.mode === "fallback") {
-      runtimeNotice.hidden = false;
-      runtimeNoticeTitle.textContent = "Fallback Mode";
-      runtimeNoticeText.textContent = getFallbackNoticeMessage(status);
+      logStatus(getFallbackNoticeMessage(status), "warning");
       return;
     }
-
-    if (status.mode === "raster-basemap") {
-      if (!status.lastError) {
-        runtimeNotice.hidden = true;
-        return;
-      }
-      runtimeNotice.hidden = false;
-      runtimeNoticeTitle.textContent = "Raster Basemap Warning";
-      runtimeNoticeText.textContent = getRasterWarningMessage(status);
+    if (status.mode === "raster-basemap" && status.lastError) {
+      logStatus(getRasterWarningMessage(status), "warning");
       return;
     }
-
     if (status.lastError) {
-      runtimeNotice.hidden = false;
-      runtimeNoticeTitle.textContent = "Google Tiles Warning";
-      runtimeNoticeText.textContent = getGoogleWarningMessage(status);
-      return;
+      logStatus(getGoogleWarningMessage(status), "warning");
     }
-
-    runtimeNotice.hidden = true;
   };
-
-  runtimeNoticeDismiss?.addEventListener("click", () => {
-    runtimeNoticeDismissed = true;
-    if (runtimeNotice) {
-      runtimeNotice.hidden = true;
-    }
-  });
 
   const sourcePreference = getMapSourcePreferenceFromUrl();
   const urlGoogleApiKey = options.googleApiKey ?? getGoogleApiKeyFromUrl();
@@ -1132,6 +1099,7 @@ export async function createGlobeApp(
       offTilesStreaming();
       offRendererActivity();
       offRenderActive();
+      gameLog.destroy();
       hudBar.destroy();
       document.removeEventListener("pointerdown", onDocumentPointerDown, { capture: true });
 

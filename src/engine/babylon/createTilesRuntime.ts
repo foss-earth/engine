@@ -1,4 +1,4 @@
-import { measureMapResponse } from "./mapDownloadMeter";
+import { describeGoogleTileFailure, latestResourceTiming, readGoogleTileHttpFailure, type GoogleTileHttpFailure } from "./describeGoogleTileFailure";
 import { recordBrowserMapRequest } from "../../terrain/mapCache";
 import { Matrix, Vector3, type Scene, type TransformNode } from "@babylonjs/core";
 import type { Tile } from "3d-tiles-renderer/core";
@@ -163,10 +163,19 @@ export function createGoogleTilesRuntime(options: GoogleTilesRuntimeOptions): Go
   const downloader = authPlugin as GoogleCloudAuthPlugin & {
     fetchData(uri: string, options: RequestInit): Promise<Response>;
   };
+  const fetchFailures = new Map<string, GoogleTileHttpFailure>();
   const fetchData = downloader.fetchData.bind(downloader);
   downloader.fetchData = async (uri, fetchOptions) => {
     recordBrowserMapRequest(uri);
     const response = await fetchData(uri, fetchOptions);
+    if (response instanceof Response && !response.ok) {
+      try {
+        const pathname = new URL(uri, "https://tile.googleapis.com").pathname;
+        fetchFailures.set(pathname, await readGoogleTileHttpFailure(response.clone()));
+      } catch {
+        // The status line is still on the response the renderer will reject.
+      }
+    }
     return options.onDownloadBytes ? measureMapResponse(response, options.onDownloadBytes) : response;
   };
   tiles.registerPlugin(authPlugin);
@@ -203,11 +212,22 @@ export function createGoogleTilesRuntime(options: GoogleTilesRuntimeOptions): Go
 
   const handleLoadError = (event: { error: Error; url: string | URL }): void => {
     const url = String(event.url);
-    console.error("[tiles] Failed to load Google 3D tile resource", {
-      url,
+    let pathname = url;
+    try {
+      pathname = new URL(url).pathname;
+    } catch {
+      // The library sometimes reports a relative tile uri.
+    }
+    const report = describeGoogleTileFailure({
       error: event.error,
+      url,
+      http: fetchFailures.get(pathname) ?? null,
+      resource: latestResourceTiming(url),
+      online: typeof navigator === "undefined" ? undefined : navigator.onLine,
+      origin: typeof location === "undefined" ? undefined : location.origin,
     });
-    onLoadError?.(event.error, url);
+    console.error("[tiles] Failed to load Google 3D tile resource", report);
+    onLoadError?.(new Error(report), url);
   };
 
   tiles.addEventListener("tiles-load-start", handleLoadStart);

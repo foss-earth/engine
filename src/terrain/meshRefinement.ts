@@ -44,6 +44,52 @@ export function inheritParent(child: TerrainPatch, parent: TerrainPatch): number
   return positions;
 }
 
+function tileKeyOf(tile: TerrainTile): string {
+  return `${tile.z}/${tile.x}/${tile.y}`;
+}
+
+function neighborLookupKeys(tile: TerrainTile): string[] {
+  const keys: string[] = [];
+  for (let side = 0; side < 4; side += 1) {
+    const x = tile.x + (side === 0 ? -1e-6 : side === 1 ? 1 + 1e-6 : 0.5);
+    const y = tile.y + (side === 2 ? -1e-6 : side === 3 ? 1 + 1e-6 : 0.5);
+    for (let z = 0; z <= tile.z; z += 1) {
+      const factor = 2 ** (z - tile.z);
+      const n = 2 ** z;
+      const nx = ((Math.floor(x * factor) % n) + n) % n;
+      const ny = Math.floor(y * factor);
+      if (ny >= 0 && ny < n) keys.push(`${z}/${nx}/${ny}`);
+    }
+  }
+  return keys;
+}
+
+/**
+ * Seam stitching only has to revisit tiles whose stored vertices can change:
+ * the tiles that just committed, every visible tile whose edge reads one of
+ * those commits, and the neighbors those tiles sample. A remote tile is left
+ * out of the upload.
+ */
+export function patchesForGeometryCommit(visible: readonly TerrainPatch[], dirtyKeys: ReadonlySet<string>): TerrainPatch[] {
+  if (dirtyKeys.size === 0) return [];
+  const byKey = new Map(visible.map((patch) => [tileKeyOf(patch.tile), patch]));
+  const selected = new Set<string>();
+  for (const patch of visible) {
+    const key = tileKeyOf(patch.tile);
+    if (dirtyKeys.has(key) || neighborLookupKeys(patch.tile).some((neighbor) => dirtyKeys.has(neighbor))) {
+      selected.add(key);
+    }
+  }
+  for (const key of [...selected]) {
+    const patch = byKey.get(key);
+    if (!patch) continue;
+    for (const neighbor of neighborLookupKeys(patch.tile)) {
+      if (byKey.has(neighbor)) selected.add(neighbor);
+    }
+  }
+  return [...selected].map((key) => byKey.get(key)!);
+}
+
 /** Fine boundary vertices lie on the adjacent coarser triangles, including
  * during refinement. A short interior band blends the seam into fine detail. */
 export function stitchTerrainEdges(patches: TerrainPatch[], counters?: GeometryWriteCounters): void {

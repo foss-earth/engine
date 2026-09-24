@@ -21,7 +21,7 @@ import { GLOBAL_TERRAIN } from "../../terrain/globalTerrain";
 import { createRasterSurfaceSampler } from "../../terrain/rasterSurfaceSampler";
 import type { SurfaceHit } from "../../terrain/surfaceQuery";
 import type { TerrainPerformanceCapture } from "../../terrain/terrainPerformanceCapture";
-import { meshPositions, stitchTerrainEdges } from "../../terrain/meshRefinement";
+import { meshPositions, patchesForGeometryCommit, stitchTerrainEdges } from "../../terrain/meshRefinement";
 import type { GlobeViewState } from "../types";
 import type { RasterBaseMapSource } from "./rasterBaseMaps";
 import { createRasterQualityController, RASTER_QUALITY_PROFILES, resolveRasterQualityState, type RasterQualityProfile, type RasterQualitySetting, type RasterQualityState } from "./rasterQuality";
@@ -740,7 +740,11 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
     visibleTileKeys = representatives;
     for (const [key, record] of cache) {
       const visible = representatives.has(key) && record.loaded && !record.failed;
-      if (visible && !record.mesh.isEnabled()) options.onDebugEvent?.("tile-visible", { key });
+      if (visible === record.mesh.isEnabled()) {
+        if (visible) lastUsedTick.set(key, tick);
+        continue;
+      }
+      if (visible) options.onDebugEvent?.("tile-visible", { key });
       record.mesh.setEnabled(visible);
       if (visible) lastUsedTick.set(key, tick);
     }
@@ -786,10 +790,10 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
       if (capture) capture.counters.geometryWrites++;
       dirtyGeometryKeys.delete(record.key);
     }
-    // A replacement is a discrete commit. The shared seam pass still uses all
-    // adopted neighbors, but it runs only on a data/coverage change, never for a
-    // 1.2-second morph on every render frame.
-    stitchTerrainEdges(visible, capture?.counters);
+    // A replacement is a discrete commit. Stitch the committed tiles and the
+    // visible neighbors that read them. Unrelated tiles keep their last upload.
+    const dirtyKeys = new Set(changed.map(record => record.key));
+    stitchTerrainEdges(patchesForGeometryCommit(visible, dirtyKeys), capture?.counters);
     revision++;
     geometryDirty = false;
   }

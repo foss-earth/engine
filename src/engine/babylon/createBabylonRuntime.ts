@@ -789,7 +789,7 @@ export async function createBabylonRuntime(
         onLoadError: (error, url) => {
           if (status.mode !== "google-tiles") return;
           recordMapDebugEvent("google-load-error", { error: error.message, url });
-          status.lastError = `${error.message} (${url})`;
+          status.lastError = error.message;
           status.message = "Google tiles reported load errors.";
           emitStatus();
 

@@ -1,6 +1,6 @@
 import { Mesh, NullEngine, Scene, Vector3, VertexBuffer, VertexData } from "@babylonjs/core";
 import { afterEach, describe, expect, it } from "vitest";
-import { advanceRefinement, inheritParent, meshPositions, patchPoint, refineMesh, stitchTerrainEdges, type TerrainPatch } from "./meshRefinement";
+import { advanceRefinement, inheritParent, meshPositions, patchPoint, patchesForGeometryCommit, refineMesh, stitchTerrainEdges, type TerrainPatch } from "./meshRefinement";
 import { GLOBAL_TERRAIN } from "./globalTerrain";
 
 const engines: NullEngine[] = [];
@@ -42,6 +42,21 @@ describe("shared visible/collision refinement geometry", () => {
       expect(patchPoint(fineTop, 4 + fraction, 3, 3)[1]).toBeCloseTo(patchPoint(fineBottom, 4 + fraction, 3, 3)[1]);
     }
     expect(patchPoint(fineBottom, 4.75, 3.5, 3)[1]).toBeGreaterThan(500);
+  });
+  it("restitches a committed tile and the tiles that read it, and leaves a remote tile out", () => {
+    const scene = setup();
+    const coarse = patch(scene, 2, 1, 1, 100);
+    const fineTop = patch(scene, 3, 4, 2, 400);
+    const fineBottom = patch(scene, 3, 4, 3, 700);
+    const remote = patch(scene, 3, 0, 0, 50);
+    const visible = [coarse, fineTop, fineBottom, remote];
+    const selected = patchesForGeometryCommit(visible, new Set(["2/1/1"]));
+    expect(selected.map(item => `${item.tile.z}/${item.tile.x}/${item.tile.y}`).sort()).toEqual(["2/1/1", "3/4/2", "3/4/3"]);
+    stitchTerrainEdges(selected);
+    for (const fine of [fineTop, fineBottom]) {
+      expect(patchPoint(fine, 4, fine.tile.y, 3)[1]).toBeCloseTo(100);
+    }
+    expect(meshPositions(remote.mesh)[1]).toBe(50);
   });
   it("uploads only corners needing repair and repairs a corner changed by a later terrain commit", () => {
     const scene = setup();
