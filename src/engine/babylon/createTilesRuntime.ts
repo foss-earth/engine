@@ -1,4 +1,5 @@
 import { describeGoogleTileFailure, latestResourceTiming, readGoogleTileHttpFailure, type GoogleTileHttpFailure } from "./describeGoogleTileFailure";
+import { measureMapResponse } from "./mapDownloadMeter";
 import { recordBrowserMapRequest } from "../../terrain/mapCache";
 import { Matrix, Vector3, type Scene, type TransformNode } from "@babylonjs/core";
 import type { Tile } from "3d-tiles-renderer/core";
