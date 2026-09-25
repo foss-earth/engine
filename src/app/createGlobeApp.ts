@@ -15,8 +15,8 @@ import {
   resolveRasterBaseMapSource,
   type RasterBaseMapSource,
 } from "../engine/babylon/rasterBaseMaps";
-import { getRasterQualityPreferenceFromSearchParams, getTerrainSourcePreferenceFromSearchParams } from "../engine/babylon/resolveMapRuntimeConfig";
 import { resolveTerrainSource, type TerrainSource } from "../terrain/terrainTiles";
+import { getRasterQualityPreferenceFromSearchParams, getRasterImageryPreferenceFromSearchParams, getTerrainSourcePreferenceFromSearchParams } from "../engine/babylon/resolveMapRuntimeConfig";
 import type { RasterQualitySetting } from "../engine/babylon/rasterQuality";
 import type {
   GlobeHandle,
@@ -588,6 +588,7 @@ export async function createGlobeApp(
   const mapSearchParams = new URLSearchParams(window.location.search);
   const terrainSource = resolveTerrainSource(options.terrainSource ?? getTerrainSourcePreferenceFromSearchParams(mapSearchParams));
   const rasterQuality = options.rasterQuality ?? getRasterQualityPreferenceFromSearchParams(mapSearchParams);
+  const rasterImagery = getRasterImageryPreferenceFromSearchParams(mapSearchParams);
 
   const runtime = await createBabylonRuntime(canvas, {
     googleApiKey: urlGoogleApiKey,
@@ -595,6 +596,7 @@ export async function createGlobeApp(
     rasterBaseMap,
     terrainSource,
     rasterQuality,
+    rasterImagery,
     getSurfaceHeightMeters: options.getSurfaceHeightMeters,
     rendererForce,
     onStatusChange: applyRuntimeStatus,

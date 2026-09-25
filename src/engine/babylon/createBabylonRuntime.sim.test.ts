@@ -47,6 +47,10 @@ beforeEach(() => {
     sample: () => null,
     getQualityState: () => ({ setting: "auto", activeProfile: "balanced" }),
     setQuality: vi.fn(),
+    setDetailTarget: vi.fn(),
+    getDetailFeedback: () => ({ support: "unavailable", pending: false, limits: [], effectiveTarget: null }),
+    getImageryDiagnostics: () => ({ mode: "legacy", atlas: null }),
+    getDisplayedSourceId: () => options.source.id,
     reportFrame: vi.fn(),
     dispose: vi.fn(),
   }));

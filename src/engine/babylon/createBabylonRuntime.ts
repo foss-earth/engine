@@ -27,7 +27,8 @@ import {
   type GoogleTerrainDetailState,
   type GoogleTilesRuntime,
 } from "./createTilesRuntime";
-import { createRasterTilesRuntime, type RasterTilesRuntime } from "./createRasterTilesRuntime";
+import { createRasterTilesRuntime, type RasterDetailFeedback, type RasterTilesRuntime } from "./createRasterTilesRuntime";
+import { DEFAULT_RASTER_IMAGERY } from "./resolveMapRuntimeConfig";
 import type { RasterBaseMapSource } from "./rasterBaseMaps";
 import type { RasterQualitySetting, RasterQualityState } from "./rasterQuality";
 import { createTerrainPerformanceCapture, type TerrainPerformanceCapture } from "../../terrain/terrainPerformanceCapture";
@@ -76,6 +77,8 @@ export interface BabylonRuntimeOptions {
   getSurfaceHeightMeters?: (latDeg: number, lonDeg: number) => number | null;
   terrainSource?: TerrainSource;
   rasterQuality?: RasterQualitySetting;
+  /** How 2D basemap imagery is selected and drawn. */
+  rasterImagery?: "atlas" | "legacy";
   /** Explicit opt-in; no per-query timings or capture buffers by default. */
   terrainPerformanceCapture?: TerrainPerformanceCapture;
   rendererForce?: RendererMode | null;
@@ -93,6 +96,11 @@ export interface BabylonRuntimeStatus {
   message: string;
   googleApiKeyProvided: boolean;
   rasterBaseMap: RasterBaseMapSource | null;
+  /**
+   * The basemap whose imagery is on screen. During a switch it stays the old
+   * one until the new source can cover the globe, so its credit stays shown.
+   */
+  displayedRasterBaseMap?: RasterBaseMapSource | null;
   terrainSource: TerrainSource | null;
   rasterQuality: RasterQualityState | null;
   lastError: string | null;
@@ -152,6 +160,18 @@ export interface BabylonRuntime {
    * based on the active view camera in either mode.
    */
   setGoogleTerrainDetailAnchor(anchor: GoogleTerrainDetailAnchor): void;
+  /**
+   * Request raster imagery detail as a signed offset in binary resolution
+   * steps, positive for finer imagery. Only imagery changes; elevation and
+   * terrain geometry do not.
+   */
+  setRasterDetailTarget(offset: number): void;
+  /** Whether raster detail is supported and what limits its delivery; null without a raster basemap. */
+  getRasterDetailFeedback(): RasterDetailFeedback | null;
+  /** Called when raster detail delivery changes. Returns an unsubscribe fn. */
+  onRasterDetailFeedback(listener: () => void): () => void;
+  /** Called after every status change, while paused too. Returns an unsubscribe fn. */
+  subscribeStatus(listener: (status: BabylonRuntimeStatus) => void): () => void;
   /** Switch imagery without reloading the application or resetting consumers. */
   setRasterBaseMap(source: RasterBaseMapSource): void;
   /** Switch between Google 3D Tiles and a raster basemap without a page reload. */
@@ -383,7 +403,7 @@ export async function createBabylonRuntime(
       const rasterQuality = rasterTilesRuntime?.getQualityState() ?? null;
       if (status.rasterQuality !== rasterQuality) {
         status.rasterQuality = rasterQuality;
-        options.onStatusChange?.({ ...status });
+        emitStatus();
       }
       rasterTilesRuntime?.update();
       if (status.mode === "raster-basemap" && (rasterTilesRuntime?.getMetrics().visibleTiles ?? 0) > 0) {
@@ -419,9 +439,23 @@ export async function createBabylonRuntime(
   terrainCredit.hidden = true;
   canvas.parentElement?.appendChild(terrainCredit);
 
+  const statusListeners = new Set<(status: BabylonRuntimeStatus) => void>();
+  const rasterDetailListeners = new Set<() => void>();
+  let rasterDetailOffset = 0;
   const emitStatus = (): void => {
     terrainCredit.hidden = status.mode !== "raster-basemap" || Boolean(options.getSurfaceHeightMeters);
     options.onStatusChange?.({ ...status });
+    for (const listener of [...statusListeners]) listener({ ...status });
+  };
+  const knownRasterBaseMaps = new Map<string, RasterBaseMapSource>();
+  const emitRasterDetailFeedback = (): void => {
+    const displayedId = rasterTilesRuntime?.getDisplayedSourceId() ?? null;
+    const displayed = displayedId ? knownRasterBaseMaps.get(displayedId) ?? status.rasterBaseMap : null;
+    if (status.mode === "raster-basemap" && displayed && status.displayedRasterBaseMap?.id !== displayed.id) {
+      status.displayedRasterBaseMap = displayed;
+      emitStatus();
+    }
+    for (const listener of [...rasterDetailListeners]) listener();
   };
 
   function clearGoogleWatchdog(): void {
@@ -683,6 +717,9 @@ export async function createBabylonRuntime(
         getSurfaceHeightMeters: options.getSurfaceHeightMeters,
         terrainSource: activeTerrainSource,
         quality: activeRasterQuality,
+        detailOffset: rasterDetailOffset,
+        imagery: options.rasterImagery ?? DEFAULT_RASTER_IMAGERY,
+        onDetailFeedback: emitRasterDetailFeedback,
         performanceCapture: terrainCapture,
         requestRender: () => scheduler.requestRender(),
         onDebugEvent: recordMapDebugEvent,
@@ -722,6 +759,9 @@ export async function createBabylonRuntime(
 
     status.mode = "raster-basemap";
     status.rasterBaseMap = rasterBaseMap;
+    knownRasterBaseMaps.set(rasterBaseMap.id, rasterBaseMap);
+    const displayedId = rasterTilesRuntime.getDisplayedSourceId();
+    status.displayedRasterBaseMap = knownRasterBaseMaps.get(displayedId) ?? rasterBaseMap;
     status.terrainSource = activeTerrainSource;
     status.rasterQuality = rasterTilesRuntime.getQualityState();
     status.lastError = reason;
@@ -1106,6 +1146,23 @@ export async function createBabylonRuntime(
       googleTerrainDetailAnchor = anchor;
       scheduler.requestRender();
     },
+    setRasterDetailTarget(offset: number): void {
+      if (!Number.isFinite(offset) || offset === rasterDetailOffset) return;
+      rasterDetailOffset = offset;
+      rasterTilesRuntime?.setDetailTarget(offset);
+      scheduler.requestRender();
+    },
+    getRasterDetailFeedback(): RasterDetailFeedback | null {
+      return status.mode === "raster-basemap" ? rasterTilesRuntime?.getDetailFeedback() ?? null : null;
+    },
+    onRasterDetailFeedback(listener: () => void): () => void {
+      rasterDetailListeners.add(listener);
+      return () => { rasterDetailListeners.delete(listener); };
+    },
+    subscribeStatus(listener: (status: BabylonRuntimeStatus) => void): () => void {
+      statusListeners.add(listener);
+      return () => { statusListeners.delete(listener); };
+    },
     setRasterBaseMap(source): void {
       if (activeRasterBaseMap?.id === source.id && status.mode === "raster-basemap") return;
       activeRasterBaseMap = source;
@@ -1220,6 +1277,8 @@ export async function createBabylonRuntime(
         else delete window.fossTerrainPerformance;
       }
       terrainCredit.remove();
+      statusListeners.clear();
+      rasterDetailListeners.clear();
       downloadMeter.destroy();
       scheduler.stop();
       clearGoogleWatchdog();

@@ -12,8 +12,22 @@ export interface MapRuntimeConfig {
   rasterBaseMap: RasterBaseMapSource;
   terrainSource: TerrainSource;
   rasterQuality: RasterQualitySetting;
+  /** How 2D basemap imagery is selected and drawn; see RasterImageryMode. */
+  rasterImagery: RasterImageryMode;
   preferGoogleTiles: boolean;
 }
+
+/**
+ * "atlas" selects 2D imagery by its projected pixel size, independently of
+ * terrain; "legacy" binds one image to each terrain tile.
+ */
+export type RasterImageryMode = "atlas" | "legacy";
+
+/**
+ * Projected imagery, released with the evidence in
+ * validation/evidence/map-detail/. `?rasterImagery=legacy` rolls back.
+ */
+export const DEFAULT_RASTER_IMAGERY: RasterImageryMode = "atlas";
 
 export interface ResolveMapRuntimeConfigOptions {
   googleApiKey?: string | null;
@@ -21,6 +35,7 @@ export interface ResolveMapRuntimeConfigOptions {
   preferGoogleTiles?: boolean;
   terrainSource?: string | TerrainSource | null;
   rasterQuality?: RasterQualitySetting | null;
+  rasterImagery?: RasterImageryMode | null;
   searchParams?: URLSearchParams;
 }
 
@@ -61,6 +76,12 @@ export function getRasterQualityPreferenceFromSearchParams(searchParams: URLSear
   return value === "low" || value === "balanced" || value === "high" || value === "auto" ? value : "auto";
 }
 
+/** A development and rollback switch: `?rasterImagery=atlas` or `legacy`; anything else is the default. */
+export function getRasterImageryPreferenceFromSearchParams(searchParams: URLSearchParams): RasterImageryMode {
+  const value = (searchParams.get("rasterImagery") ?? "").trim().toLowerCase();
+  return value === "atlas" || value === "legacy" ? value : DEFAULT_RASTER_IMAGERY;
+}
+
 export function setRasterQualityPreference(setting: RasterQualitySetting): void {
   const url = new URL(window.location.href);
   url.searchParams.set("terrainQuality", setting);
@@ -87,6 +108,7 @@ export function resolveMapRuntimeConfig(
       : resolveRasterBaseMapSource(sourcePreference ?? configuredBaseMap),
     terrainSource: resolveTerrainSource(options.terrainSource ?? getTerrainSourcePreferenceFromSearchParams(searchParams)),
     rasterQuality: options.rasterQuality ?? getRasterQualityPreferenceFromSearchParams(searchParams),
+    rasterImagery: options.rasterImagery ?? getRasterImageryPreferenceFromSearchParams(searchParams),
     preferGoogleTiles: shouldUseGoogle,
   };
 }

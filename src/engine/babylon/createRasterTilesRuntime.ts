@@ -22,12 +22,35 @@ import type { SurfaceHit } from "../../terrain/surfaceQuery";
 import type { TerrainPerformanceCapture } from "../../terrain/terrainPerformanceCapture";
 import { meshPositions, patchesForGeometryCommit, stitchTerrainEdges, updateTerrainPositions } from "../../terrain/meshRefinement";
 import type { GlobeViewState } from "../types";
+import type { DetailLimit } from "../../terrain/mapDetailPolicy";
+import { lonLatToTileXY } from "../../terrain/imagery/imageryGeometry";
+import { createImageryRuntime, type ImageryDiagnostics, type ImageryRuntime } from "./imagery/createImageryRuntime";
+import { IMAGERY_TABLE_MAX_CELLS_LOG2 } from "./imagery/imageryAtlasLayout";
+import type { ImageryLoader } from "./imagery/imageryResidency";
 import type { RasterBaseMapSource } from "./rasterBaseMaps";
 import { createRasterQualityController, RASTER_QUALITY_PROFILES, resolveRasterQualityState, type RasterQualityProfile, type RasterQualitySetting, type RasterQualityState } from "./rasterQuality";
 
 const WEB_MERCATOR_MAX_LAT_DEG = 85.05112878;
 const EARTH_CIRCUMFERENCE_METERS = 2 * Math.PI * WGS84_A;
 const TILE_REQUEST_DEBOUNCE_METERS = 5;
+const UNAVAILABLE_DETAIL: RasterDetailFeedback = Object.freeze({
+  support: "unavailable",
+  reason: "Detail for 2D basemaps is not available yet.",
+  pending: false,
+  limits: [],
+  effectiveTarget: null,
+});
+
+/** How the runtime is delivering the requested raster detail. */
+export interface RasterDetailFeedback {
+  support: "ready" | "unavailable";
+  /** Why detail is unavailable, for the rail and the Map tab. */
+  reason?: string;
+  pending: boolean;
+  limits: readonly DetailLimit[];
+  /** The one delivered offset when every region meets the request, otherwise null. */
+  effectiveTarget: number | null;
+}
 
 export interface RasterTileMetrics {
   visibleTiles: number;
@@ -44,6 +67,18 @@ export interface RasterTilesRuntimeOptions {
   terrainSource?: TerrainSource;
   performanceCapture?: TerrainPerformanceCapture;
   quality?: RasterQualitySetting;
+  /** Requested imagery detail offset; see RasterDetailPolicy. */
+  detailOffset?: number;
+  /**
+   * "atlas" selects imagery by projected pixel size and draws it from a paged
+   * atlas, independently of terrain. "legacy" binds one image to each terrain
+   * mesh. Legacy when omitted; applications pass DEFAULT_RASTER_IMAGERY.
+   */
+  imagery?: "atlas" | "legacy";
+  /** Loads atlas imagery; the browser loader when omitted. For tests and embedded hosts. */
+  imageryLoader?: ImageryLoader;
+  /** Called when detail delivery or support changes. */
+  onDetailFeedback?: () => void;
   /** Internal active profile used by the runtime's Auto controller. */
   activeQualityProfile?: Exclude<RasterQualitySetting, "auto">;
   requestRender?: () => void;
@@ -71,6 +106,13 @@ export interface RasterTilesRuntime {
   sample(latDeg: number, lonDeg: number): SurfaceHit | null;
   getQualityState(): RasterQualityState;
   setQuality(setting: RasterQualitySetting): void;
+  /** Request imagery detail as an offset; imagery changes, terrain does not. */
+  setDetailTarget(offset: number): void;
+  getDetailFeedback(): RasterDetailFeedback;
+  /** The imagery path in use and, for the atlas, what it is doing. */
+  getImageryDiagnostics(): { mode: "atlas" | "legacy"; atlas: ImageryDiagnostics | null };
+  /** The source whose imagery is on screen; it lags a switch until the new source can cover the globe. */
+  getDisplayedSourceId(): string;
   reportFrame(now: number, frameMs: number, suspended: boolean): void;
   dispose(): void;
 }
@@ -105,6 +147,10 @@ interface RasterTileRecord {
   /** When failed detail elevation is requested again; Infinity when none failed. */
   terrainRetryAt: number;
   terrainFailures: number;
+  /** Atlas imagery only: checks whether fallback coverage can now draw this patch. */
+  refreshImagery(): void;
+  /** Lowest and highest adopted heights, for imagery culling. */
+  heightBounds: { min: number; max: number } | null;
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -142,7 +188,15 @@ function tileYToLat(y: number, z: number): number {
   return Math.atan(Math.sinh(n)) / DEG_TO_RAD;
 }
 
-function chooseTileZoom(view: GlobeViewState, source: RasterBaseMapSource, profile: RasterQualityProfile): number {
+type ZoomLimits = Pick<RasterBaseMapSource, "minZoom" | "maxZoom">;
+
+/**
+ * Terrain levels when imagery is independent of it: the imagery provider's
+ * cap and tile size no longer decide terrain detail.
+ */
+const TERRAIN_ZOOM_LIMITS: ZoomLimits = { minZoom: 0, maxZoom: 16 };
+
+function chooseTileZoom(view: GlobeViewState, source: ZoomLimits, profile: RasterQualityProfile): number {
   const minZoom = source.minZoom ?? 0;
   const maxZoom = source.maxZoom ?? 18;
   const targetTileMeters = clamp(view.zoomMeters * 0.65, 250, 8_000_000);
@@ -150,7 +204,7 @@ function chooseTileZoom(view: GlobeViewState, source: RasterBaseMapSource, profi
   return clamp(zoom, minZoom, maxZoom);
 }
 
-function chooseGlobalBaseZoom(source: RasterBaseMapSource, focusZoom: number, profile: RasterQualityProfile): number {
+function chooseGlobalBaseZoom(source: ZoomLimits, focusZoom: number, profile: RasterQualityProfile): number {
   const minZoom = source.minZoom ?? 0;
   const maxZoom = source.maxZoom ?? 18;
   return clamp(Math.min(profile.baseZoom, focusZoom), minZoom, maxZoom);
@@ -167,7 +221,7 @@ function buildTileUrl(source: RasterBaseMapSource, tile: TileCoord): string {
     .replace(/\{y\}/g, String(tile.y));
 }
 
-function getDesiredTiles(view: GlobeViewState, source: RasterBaseMapSource, profile = RASTER_QUALITY_PROFILES.balanced): TileCoord[] {
+function getDesiredTiles(view: GlobeViewState, source: ZoomLimits, profile = RASTER_QUALITY_PROFILES.balanced): TileCoord[] {
   const z = chooseTileZoom(view, source, profile);
   const baseZoom = chooseGlobalBaseZoom(source, z, profile);
   const n = 2 ** z;
@@ -284,6 +338,7 @@ export function createTerrainMesh(options: RasterTilesRuntimeOptions, tile: Tile
     ?? (options.quality === "low" || options.quality === "balanced" || options.quality === "high" ? options.quality : "high");
   const segments = chooseTilePatchSegments(tile, RASTER_QUALITY_PROFILES[quality]);
   const center = geodeticToEcef(tileYToLat(tile.y + 0.5, tile.z) * DEG_TO_RAD, tileXToLon(tile.x + 0.5, tile.z) * DEG_TO_RAD, 0);
+  let minHeight = Infinity, maxHeight = -Infinity;
 
   for (let row = 0; row <= segments; row += 1) {
     const v = row / segments;
@@ -298,6 +353,8 @@ export function createTerrainMesh(options: RasterTilesRuntimeOptions, tile: Tile
       const altitudeMeters = grid
         ? sampleTerrainGrid(grid, mercatorX * scale, mercatorY * scale)
         : options.getSurfaceHeightMeters?.(latDeg, lonDeg) ?? 0;
+      if (altitudeMeters < minHeight) minHeight = altitudeMeters;
+      if (altitudeMeters > maxHeight) maxHeight = altitudeMeters;
       const ecef = geodeticToEcef(latDeg * DEG_TO_RAD, lonDeg * DEG_TO_RAD, altitudeMeters);
       positions.push(ecef.x - center.x, ecef.y - center.y, ecef.z - center.z);
       uvs.push(u, v);
@@ -326,7 +383,8 @@ export function createTerrainMesh(options: RasterTilesRuntimeOptions, tile: Tile
   data.applyToMesh(mesh, true);
 
   mesh.position = new Vector3(center.x, center.y, center.z);
-  mesh.metadata = { mapSurface: true, terrainZoom: grid?.z ?? -1, segments };
+  // The displayed height range, whatever the terrain came from; imagery culls with it.
+  mesh.metadata = { mapSurface: true, terrainZoom: grid?.z ?? -1, segments, heightBounds: { min: minHeight, max: maxHeight } };
 
   mesh.isPickable = true;
   mesh.renderingGroupId = 0;
@@ -352,6 +410,7 @@ function createTileRecord(
   loadTerrain: (tile: TileCoord, progress: (grid: TerrainGrid) => void) => Promise<TerrainGrid>,
   onChanged: (record: RasterTileRecord) => void,
   onRetryScheduled: (at: number) => void,
+  imagery: ImageryRuntime | null = null,
 ): RasterTileRecord {
   const { scene } = options;
   const key = tileKey(tile);
@@ -375,6 +434,8 @@ function createTileRecord(
     replaceTerrain: () => {},
     terrainRetryAt: Infinity,
     terrainFailures: 0,
+    refreshImagery: () => {},
+    heightBounds: mesh.metadata.heightBounds,
   };
 
   let imageryReady = false;
@@ -391,6 +452,7 @@ function createTileRecord(
     const started = options.performanceCapture ? performance.now() : 0;
     record.target = meshPositions(readyMesh);
     record.grid = grid;
+    record.heightBounds = readyMesh.metadata.heightBounds;
     record.appliedTerrainGeneration = generation;
     record.mesh.metadata.terrainZoom = grid?.z ?? -1;
     readyMesh.dispose();
@@ -478,11 +540,23 @@ function createTileRecord(
       material.diffuseTexture = texture;
     }
   };
-  record.replaceImagery = (nextSource, generation) => {
-    record.imageryGeneration = generation;
-    loadImagery(nextSource, generation);
-  };
-  record.replaceImagery(source, 0);
+  if (imagery) {
+    // Imagery comes from the atlas: the patch is drawable once fallback
+    // coverage is resident, and no image is ever bound to this mesh.
+    imagery.attachPatch(key, tile, material);
+    record.refreshImagery = () => {
+      if (imageryReady || record.mesh.isDisposed() || !imagery.hasCoverage(tile)) return;
+      imageryReady = true;
+      finish();
+    };
+    record.refreshImagery();
+  } else {
+    record.replaceImagery = (nextSource, generation) => {
+      record.imageryGeneration = generation;
+      loadImagery(nextSource, generation);
+    };
+    record.replaceImagery(source, 0);
+  }
 
   material.specularColor = Color3.Black();
   material.emissiveColor = Color3.White();
@@ -544,6 +618,84 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
   let visibilityDirty = false;
   const meshRebuildQueue = new Set<string>();
   let lastView: Pick<GlobeViewState, "latDeg" | "lonDeg" | "zoomMeters"> | null = null;
+  // Adopted terrain levels, finest first, for imagery height queries.
+  let visibleLevels: number[] = [];
+
+  const coveringVisibleRecord = (tile: TileCoord): RasterTileRecord | null => {
+    let { z, x, y } = tile;
+    for (;;) {
+      const key = `${z}/${x}/${y}`;
+      if (visibleTileKeys.has(key)) return cache.get(key) ?? null;
+      if (z === 0) return null;
+      z -= 1; x >>= 1; y >>= 1;
+    }
+  };
+  // What imagery selection may know about the surface: adopted terrain only.
+  // It never asks for finer heights to decide imagery.
+  const imagerySurface = {
+    heightAt(latDeg: number, lonDeg: number): number | null {
+      for (const z of visibleLevels) {
+        const at = lonLatToTileXY(lonDeg, latDeg, z);
+        const key = `${z}/${Math.floor(at.x)}/${Math.floor(at.y)}`;
+        if (!visibleTileKeys.has(key)) continue;
+        const record = cache.get(key);
+        if (!record) continue;
+        if (record.grid) {
+          const scale = 2 ** (record.grid.z - z);
+          return sampleTerrainGrid(record.grid, at.x * scale, at.y * scale);
+        }
+        break;
+      }
+      return options.getSurfaceHeightMeters?.(latDeg, lonDeg) ?? null;
+    },
+    boundsFor(tile: TileCoord): { min: number; max: number } {
+      const bounds = coveringVisibleRecord(tile)?.heightBounds;
+      return bounds ? { min: bounds.min - 50, max: bounds.max + 50 } : { min: -500, max: 9000 };
+    },
+    maxLevelFor(tile: TileCoord): number {
+      const record = coveringVisibleRecord(tile);
+      return record ? record.tile.z + IMAGERY_TABLE_MAX_CELLS_LOG2 : Infinity;
+    },
+    getRevision: () => revision,
+  };
+
+  let imageryRuntime: ImageryRuntime | null = null;
+  let imageryUnavailableReason: string | null = null;
+  if (options.imagery === "atlas") {
+    const created = createImageryRuntime({
+      scene: options.scene,
+      worldRoot: options.worldRoot ?? null,
+      source: imagerySource,
+      offset: options.detailOffset ?? 0,
+      profile: qualityState.activeProfile,
+      surface: imagerySurface,
+      loader: options.imageryLoader,
+      requestRender: () => options.requestRender?.(),
+      onDownloadBytes: options.onDownloadBytes,
+      onError: (error, url) => options.onLoadError?.(error, url),
+      onFeedback: () => options.onDetailFeedback?.(),
+      onCoverageChange: () => {
+        for (const record of cache.values()) record.refreshImagery();
+        visibilityDirty = true;
+        options.requestRender?.();
+        // The displayed source may have changed: its credit follows.
+        options.onDetailFeedback?.();
+      },
+    });
+    if (created.supported) {
+      imageryRuntime = created;
+    } else {
+      // Report it rather than hide it: the map still draws, but detail is unavailable.
+      imageryUnavailableReason = created.getFeedback().reason ?? "Projected imagery is not supported by this renderer.";
+      console.warn("[imagery]", imageryUnavailableReason, "Using per-tile imagery.");
+      created.dispose();
+    }
+  }
+  const zoomLimits = (): ZoomLimits => (imageryRuntime ? TERRAIN_ZOOM_LIMITS : imagerySource);
+  const disposeRecord = (record: RasterTileRecord): void => {
+    imageryRuntime?.detachPatch(record.key);
+    disposeTile(record);
+  };
 
   function getMetrics(): RasterTileMetrics {
     let visibleTiles = 0;
@@ -592,7 +744,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
       retryAfter.set(record.key, retryAt);
       scheduleRetry(retryAt);
       lastUsedTick.delete(record.key);
-      disposeTile(record);
+      disposeRecord(record);
     } else {
       imageryFailures.delete(record.key);
     }
@@ -625,7 +777,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
       dirtyGeometryKeys.add(changed.key);
       visibilityDirty = true;
       options.requestRender?.();
-    }, scheduleRetry);
+    }, scheduleRetry, imageryRuntime);
     cache.set(key, record);
   }
 
@@ -745,8 +897,10 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
       }
       if (visible) options.onDebugEvent?.("tile-visible", { key });
       record.mesh.setEnabled(visible);
+      imageryRuntime?.setPatchVisible(key, visible);
       if (visible) lastUsedTick.set(key, tick);
     }
+    visibleLevels = [...new Set([...representatives].map(key => Number(key.split("/")[0])))].sort((a, b) => b - a);
     if (changed) surfaceSampler.setCoverage([...representatives].map(key => cache.get(key)!));
   }
 
@@ -769,7 +923,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
       if (!record) continue;
       cache.delete(key);
       lastUsedTick.delete(key);
-      disposeTile(record);
+      disposeRecord(record);
       toEvict -= 1;
     }
   }
@@ -816,6 +970,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
       replacement.setEnabled(oldMesh.isEnabled());
       record.mesh = replacement;
       record.target = meshPositions(replacement);
+      record.heightBounds = replacement.metadata.heightBounds;
       oldMesh.dispose();
       dirtyGeometryKeys.add(key);
       geometryDirty = true;
@@ -835,8 +990,9 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
     tick += 1;
 
     const profile = RASTER_QUALITY_PROFILES[qualityState.activeProfile];
-    const baseZoom = chooseGlobalBaseZoom(imagerySource, chooseTileZoom(view, imagerySource, profile), profile);
-    const desiredTiles = getDesiredTiles(view, imagerySource, profile);
+    const limits = zoomLimits();
+    const baseZoom = chooseGlobalBaseZoom(limits, chooseTileZoom(view, limits, profile), profile);
+    const desiredTiles = getDesiredTiles(view, limits, profile);
     // Load nearby detail first, so a flight doesn't wait behind distant tiles.
     desiredTiles.sort((a, b) => b.z - a.z ||
       Math.hypot(a.x - lonToTileX(view.lonDeg, a.z), a.y - latToTileY(view.latDeg, a.z)) -
@@ -881,6 +1037,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
         textureBytes += size.width * size.height * 4 * 4 / 3;
       }
     }
+    textureBytes += imageryRuntime?.getDiagnostics().atlas?.estimatedGpuBytes ?? 0;
     const dem = terrain.getMetrics();
     capture.recordResources({ adoptedTiles: visibleTileKeys.size, cachedTiles: cache.size, adoptedTriangles,
       cachedTriangles, meshBytes, textureBytes, decodedDemBytes: dem.decodedBytes, pendingTiles: loadingCount,
@@ -912,6 +1069,10 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
         selectTiles(view);
       }
       if (visibilityDirty) recomputeVisibility();
+      // Imagery follows the camera and only uploads pages and page tables; it
+      // never writes terrain buffers or changes the adopted surface.
+      imageryRuntime?.update();
+      if (visibilityDirty) recomputeVisibility();
       processMeshRebuilds();
       // One atomic terrain replacement after coverage adoption, including
       // stationary/paused frames. There is no continuous CPU morph.
@@ -927,6 +1088,13 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
     },
     setSource(source): void {
       if (source.id === imagerySource.id) return;
+      if (imageryRuntime) {
+        // Imagery only: no mesh, grid or selection of terrain changes.
+        imagerySource = source;
+        imageryRuntime.setSource(source);
+        options.requestRender?.();
+        return;
+      }
       imagerySource = source;
       imageryGeneration += 1;
       for (const record of cache.values()) record.replaceImagery(source, imageryGeneration);
@@ -953,11 +1121,19 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
     },
     getMetrics,
     getRevision: () => revision,
+    setDetailTarget(offset): void {
+      imageryRuntime?.setOffset(offset);
+    },
+    getDetailFeedback: () => imageryRuntime?.getFeedback()
+      ?? (imageryUnavailableReason ? { ...UNAVAILABLE_DETAIL, reason: imageryUnavailableReason, limits: ["backend"] } : UNAVAILABLE_DETAIL),
+    getImageryDiagnostics: () => ({ mode: imageryRuntime ? "atlas" : "legacy", atlas: imageryRuntime?.getDiagnostics() ?? null }),
+    getDisplayedSourceId: () => imageryRuntime?.getDisplayedSourceId() ?? imagerySource.id,
     getQualityState: () => qualityState,
     setQuality(setting): void {
       const next = qualityController.setSetting(setting);
       if (next.activeProfile === qualityState.activeProfile && next.setting === qualityState.setting) return;
       qualityState = next;
+      imageryRuntime?.setProfile(next.activeProfile);
       meshOptions.activeQualityProfile = next.activeProfile;
       lastView = null;
       for (const key of cache.keys()) meshRebuildQueue.add(key);
@@ -967,6 +1143,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
       const next = qualityController.observe(now, frameMs, suspended);
       if (next) {
         qualityState = next;
+        imageryRuntime?.setProfile(next.activeProfile);
         meshOptions.activeQualityProfile = next.activeProfile;
         lastView = null;
         for (const key of cache.keys()) meshRebuildQueue.add(key);
@@ -983,12 +1160,13 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
     dispose(): void {
       disposed = true;
       terrain.dispose();
+      imageryRuntime?.dispose();
       for (const record of cache.values()) {
         if (!record.settled) {
           record.settled = true;
           loadingCount = Math.max(0, loadingCount - 1);
         }
-        disposeTile(record);
+        disposeRecord(record);
       }
       cache.clear();
       surfaceSampler.setCoverage([]);

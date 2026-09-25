@@ -4,6 +4,12 @@ Status: Implementation appendix to [Flat-basemap performance recovery](raster-te
 Date: 2026-09-07  
 Scope: raster imagery, raster elevation, and the terrain mesh built from them
 
+The [Map detail control implementation specification](map-detail-control.md)
+(2026-09-24, implemented 2026-09-25) applies these provider distinctions to the imagery selector.
+It specifies source-kind and image-variant handling and assigns generic detail
+UI/preferences to FOSS Earth's Map tab. Older references below to host-owned
+generic selector UI do not define the new implementation's ownership.
+
 ## Three independent levels of detail
 
 Low/Balanced/High are resource policies. They are not data levels. A displayed

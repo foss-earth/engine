@@ -1,0 +1,621 @@
+import type { Material, Scene, TransformNode } from "@babylonjs/core";
+import type { TileId } from "../../../terrain/imagery/imageryGeometry";
+import {
+  createImagerySelector,
+  imageKey,
+  imageSourceKey,
+  type ImageryPlan,
+  type ImagerySelectionInput,
+  type ImagerySourceCapabilities,
+  type ImagerySurface,
+} from "../../../terrain/imagery/imagerySelector";
+import { imagerySourceSupport, imageryTileUrl, type ImageryDescriptor } from "../../../terrain/imagery/imagerySources";
+import type { DetailLimit } from "../../../terrain/mapDetailPolicy";
+import { createImageryAtlas, planAtlasForBackend, readAtlasCapabilities, type AtlasCapabilities, type ImageryAtlas } from "./imageryAtlas";
+import { slotBytes } from "./imageryAtlasLayout";
+import { buildImageryDisplay, buildPatchTable, type ImageryDisplay } from "./imageryBinding";
+import { createBrowserImageryLoader } from "./imageryLoader";
+import { ImageryAtlasMaterialPlugin } from "./imageryMaterialPlugin";
+import {
+  createImageryResidency,
+  IMAGERY_RESOURCE_PROFILES,
+  type ImageryLoader,
+  type ImageryRequest,
+  type ImageryResidency,
+  type ImageryResidencyStats,
+  type ImageryResourceLimits,
+} from "./imageryResidency";
+import { imageryViewChanged, readImageryView } from "./imageryView";
+
+export type ImageryResourceProfile = keyof typeof IMAGERY_RESOURCE_PROFILES;
+
+export interface ImageryFeedback {
+  support: "ready" | "unavailable";
+  reason?: string;
+  pending: boolean;
+  limits: DetailLimit[];
+  effectiveTarget: number | null;
+}
+
+export interface ImageryDiagnostics {
+  requestedSource: string;
+  displayedSource: string | null;
+  offset: number;
+  backend: AtlasCapabilities["backend"];
+  plan: {
+    leaves: number;
+    levels: Record<number, number>;
+    variants: number;
+    limits: DetailLimit[];
+    nodesEvaluated: number;
+    truncated: boolean;
+    cpuMs: number;
+    /** Leaves by projected footprint in physical px per image px: <=0.5, <=1, <=2, <=4, >4. */
+    footprints: [number, number, number, number, number];
+    /** Per region: requested level and variant, delivered page level, footprint and limit. */
+    regions: Array<{ key: string; variant: string | null; delivered: number | null; footprintPx: number; screenArea: number; limit: DetailLimit | null }>;
+  } | null;
+  residency: ImageryResidencyStats;
+  atlas: { capacity: number; freeSlots: number; estimatedGpuBytes: number; width: number; height: number; tableBlocks: number } | null;
+  binding: { patches: number; blocks: number; fallbackPatches: number; fallbackLeaves: number; capped: number; emptyCells: number };
+  counters: { selections: number; selectionCpuMs: number; publishes: number; tableWrites: number; uploads: number; uploadBytes: number };
+}
+
+export interface ImageryRuntimeOptions {
+  scene: Scene;
+  worldRoot?: TransformNode | null;
+  source: ImageryDescriptor;
+  offset?: number;
+  profile?: ImageryResourceProfile;
+  /** Injectable limits for tests; otherwise from the profile. */
+  limits?: ImageryResourceLimits;
+  surface: ImagerySurface & {
+    /** The finest imagery a region's terrain binding can show. */
+    maxLevelFor?(tile: TileId): number;
+    /** Changes when the adopted surface changes. */
+    getRevision(): number;
+  };
+  requestRender(): void;
+  onDownloadBytes?(bytes: number): void;
+  onError?(error: Error, url: string): void;
+  /** Delivery or support changed. */
+  onFeedback?(): void;
+  /** Fallback coverage became usable or changed: terrain may show more patches. */
+  onCoverageChange?(): void;
+  loader?: ImageryLoader;
+  capabilities?: AtlasCapabilities;
+  now?: () => number;
+}
+
+export interface ImageryRuntime {
+  readonly supported: boolean;
+  /** Follow a resource profile change; the atlas keeps its size. */
+  setProfile(profile: ImageryResourceProfile): void;
+  setSource(source: ImageryDescriptor): void;
+  setOffset(offset: number): void;
+  /** Draws a terrain patch's material from the atlas. */
+  attachPatch(key: string, tile: TileId, material: Material): void;
+  detachPatch(key: string): void;
+  /** Patches drawn this frame get page-table blocks; hidden ones give theirs back. */
+  setPatchVisible(key: string, visible: boolean): void;
+  /** True when fallback coverage for this terrain tile is resident, so it can be drawn. */
+  hasCoverage(tile: TileId): boolean;
+  /** The source whose pages are displayed, for attribution during a switch. */
+  getDisplayedSourceId(): string | null;
+  update(): void;
+  getFeedback(): ImageryFeedback;
+  getDiagnostics(): ImageryDiagnostics;
+  dispose(): void;
+}
+
+interface PatchState {
+  tile: TileId;
+  plugin: ImageryAtlasMaterialPlugin;
+  visible: boolean;
+  block: number | null;
+  tableSignature: string | null;
+  table: Uint8Array | null;
+}
+
+interface SourceState {
+  descriptor: ImageryDescriptor;
+  capabilities: ImagerySourceCapabilities;
+}
+
+const COVERAGE_PRIORITY = 1e12;
+/**
+ * A leaf whose region would otherwise show a page this many levels coarser
+ * (often the level-2 coverage, a flat colour) asks first for its ancestor
+ * FALLBACK_STEP levels up: one small image that stands in for 64 leaves.
+ */
+const FALLBACK_GAP = 4;
+const FALLBACK_STEP = 3;
+/** New traversals for a moving view start at most this often; the last view is always selected. */
+const MOTION_SELECTION_INTERVAL_MS = 100;
+
+function signature(data: Uint8Array, cellsLog2: number): string {
+  // A cheap content signature: FNV-1a over the used cells.
+  let hash = 2166136261;
+  const side = 2 ** cellsLog2;
+  for (let row = 0; row < side; row++) {
+    for (let index = row * 64 * 4; index < (row * 64 + side) * 4; index++) {
+      hash ^= data[index];
+      hash = Math.imul(hash, 16777619);
+    }
+  }
+  return `${cellsLog2}:${hash >>> 0}`;
+}
+
+/**
+ * Raster imagery chosen by its projected pixel size and drawn from a paged
+ * atlas, independently of terrain. Imagery changes never touch terrain
+ * buffers, coverage or surface revisions: they only upload pages and rewrite
+ * page tables.
+ */
+export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRuntime {
+  const now = options.now ?? (() => performance.now());
+  const worldRoot = options.worldRoot ?? null;
+  // The atlas is sized once for the profile active at creation. Later profile
+  // changes move admission limits and the selection budget within it.
+  let limits = options.limits ?? IMAGERY_RESOURCE_PROFILES[options.profile ?? "balanced"];
+  const capabilities = options.capabilities ?? readAtlasCapabilities(options.scene);
+  const layout = planAtlasForBackend(capabilities, limits.gpuBytes, 256);
+  let atlas: ImageryAtlas | null = null;
+  let unsupportedReason: string | null = null;
+  if (!layout) {
+    unsupportedReason = "This renderer cannot hold the imagery atlas.";
+  } else {
+    try {
+      atlas = createImageryAtlas(options.scene, layout);
+    } catch (error) {
+      unsupportedReason = `The imagery atlas could not be created: ${error instanceof Error ? error.message : String(error)}`;
+    }
+  }
+  const backendLimited = capabilities.backend === "webgl" && !capabilities.explicitGradients;
+  // A texture-size cap can hold the atlas well below the profile's budget; a
+  // memory limit that follows is then the renderer's.
+  const atlasCappedByBackend = layout !== null && layout.estimatedBytes < limits.gpuBytes * 0.75;
+  /** Pages the current profile allows selection to use inside the atlas. */
+  const pageBudget = (): number => {
+    const capacity = atlas?.capacity ?? 0;
+    const byBytes = Math.floor((limits.gpuBytes - (layout ? layout.tableSize ** 2 * 4 : 0)) / slotBytes());
+    const usable = Math.min(capacity, byBytes);
+    return Math.max(16, usable - 16 - Math.ceil(usable * 0.15));
+  };
+
+  const resolveSource = (descriptor: ImageryDescriptor): SourceState | null => {
+    const support = imagerySourceSupport(descriptor);
+    for (const problem of support.problems) console.warn("[imagery]", problem);
+    return support.capabilities ? { descriptor, capabilities: support.capabilities } : null;
+  };
+  let requested = resolveSource(options.source);
+  if (!requested) unsupportedReason ??= `${options.source.id} tiles are not a supported size.`;
+  let displayed: SourceState | null = null;
+  let offset = options.offset ?? 0;
+
+  const loader = options.loader ?? createBrowserImageryLoader({ onBytes: options.onDownloadBytes });
+  let wakeTimer: ReturnType<typeof setTimeout> | undefined;
+  let wakeAt = Infinity;
+  let disposed = false;
+  const residency: ImageryResidency = createImageryResidency({
+    loader,
+    store: atlas ?? { capacity: 0, allocate: () => null, release: () => {}, upload: () => {} },
+    limits,
+    now,
+    onChange: () => { if (!disposed) options.requestRender(); },
+    onError: options.onError,
+  });
+
+  const selector = createImagerySelector();
+  let plan: ImageryPlan | null = null;
+  let restartSelection = true;
+  let lastView: ReturnType<typeof readImageryView> = null;
+  let lastSurfaceRevision = -1;
+  let lastMissingRevision = -1;
+  let lastMergeResidency = -1;
+  let lastTraversalStart = -Infinity;
+  // What the running traversal measured; a traversal can span several frames.
+  let traversalInputs: { view: NonNullable<ReturnType<typeof readImageryView>>; surfaceRevision: number; missingRevision: number } | null = null;
+  let lastPublishedResidency = -1;
+  let planChangedSincePublish = true;
+  let patchesChanged = true;
+  let display: ImageryDisplay | null = null;
+  let capped = 0;
+  let emptyCells = 0;
+  let fallbackPatches = 0;
+  let feedback: ImageryFeedback = { support: "unavailable", reason: unsupportedReason ?? undefined, pending: false, limits: [], effectiveTarget: null };
+  const patches = new Map<string, PatchState>();
+  const counters = { selections: 0, selectionCpuMs: 0, publishes: 0, tableWrites: 0, uploads: 0, uploadBytes: 0 };
+
+  const scheduleWake = (at: number | null): void => {
+    if (disposed || at === null || !Number.isFinite(at) || at >= wakeAt) return;
+    wakeAt = at;
+    clearTimeout(wakeTimer);
+    wakeTimer = setTimeout(() => {
+      wakeTimer = undefined;
+      wakeAt = Infinity;
+      options.requestRender();
+    }, Math.max(0, at - now()));
+  };
+
+  const standardKey = (source: SourceState, tile: TileId) => imageKey(source.capabilities, tile, null);
+
+  function rootsCovering(source: SourceState, tile: TileId): TileId[] {
+    const root = plan?.coverage[0]?.z ?? Math.max(source.capabilities.minLevel, Math.min(2, source.capabilities.maxLevel));
+    if (tile.z >= root) {
+      const shift = tile.z - root;
+      return [{ z: root, x: tile.x >> shift, y: tile.y >> shift }];
+    }
+    const shift = root - tile.z;
+    const tiles: TileId[] = [];
+    for (let y = 0; y < 2 ** shift; y++) for (let x = 0; x < 2 ** shift; x++) tiles.push({ z: root, x: (tile.x << shift) + x, y: (tile.y << shift) + y });
+    return tiles;
+  }
+
+  function coverageComplete(source: SourceState, roots: readonly TileId[]): boolean {
+    return roots.every(root => residency.isResident(standardKey(source, root)) || residency.isMissing(standardKey(source, root)));
+  }
+
+  function selectionInput(view: NonNullable<ReturnType<typeof readImageryView>>, source: SourceState): ImagerySelectionInput {
+    return {
+      view,
+      source: source.capabilities,
+      offset,
+      surface: options.surface,
+      availability: { isResident: residency.isResident, isMissing: residency.isMissing },
+      maxLevelFor: options.surface.maxLevelFor,
+      maxPages: pageBudget(),
+      now: now(),
+    };
+  }
+
+  function demand(source: SourceState, current: ImageryPlan): void {
+    const requests: ImageryRequest[] = [];
+    const sourceKey = imageSourceKey(source.capabilities);
+    const request = (tile: TileId, variant: string | null, priority: number, coverage: boolean): ImageryRequest => {
+      const size = variant === null
+        ? { width: source.capabilities.tileWidth, height: source.capabilities.tileHeight }
+        : source.capabilities.variants.find(candidate => candidate.id === variant) ?? { width: 256, height: 256 };
+      return {
+        imageKey: imageKey(source.capabilities, tile, variant),
+        url: imageryTileUrl(source.descriptor, tile, variant),
+        width: size.width,
+        height: size.height,
+        priority,
+        coverage,
+        sourceKey,
+      };
+    };
+    for (const root of current.coverage) requests.push(request(root, null, COVERAGE_PRIORITY, true));
+    const target = current.physicalTarget;
+    const exceed = (footprint: number) => Math.max(0, footprint / target - 1);
+    for (const leaf of current.leaves) {
+      if (residency.isMissing(leaf.imageKey)) continue;
+      const pages = leaf.pages;
+      const pageLevel = leaf.tile.z + Math.log2(Math.sqrt(pages));
+      // Improvement over what the display shows there now, per byte to decode and upload.
+      let shownLevel = 0;
+      let { z, x, y } = leaf.tile;
+      while (z >= 0) {
+        const page = display?.pages.get(`${z}/${x}/${y}`);
+        if (page) { shownLevel = page.z; break; }
+        if (z === 0) break;
+        z -= 1; x >>= 1; y >>= 1;
+      }
+      const before = leaf.footprintPx * 2 ** Math.max(0, pageLevel - shownLevel);
+      const benefit = leaf.screenArea * (exceed(before) - exceed(leaf.footprintPx)) + leaf.screenArea * 1e-3 + 1e-6;
+      const priority = benefit / (pages * slotBytes());
+      requests.push(request(leaf.tile, leaf.variant, priority, false));
+      const stepUp = Math.min(FALLBACK_STEP, leaf.tile.z - source.capabilities.minLevel);
+      if (pageLevel - shownLevel >= FALLBACK_GAP && stepUp > 0 && !residency.isResident(leaf.imageKey)) {
+        const ancestor = { z: leaf.tile.z - stepUp, x: leaf.tile.x >> stepUp, y: leaf.tile.y >> stepUp };
+        if (ancestor.z > shownLevel && !residency.isMissing(standardKey(source, ancestor))) {
+          requests.push(request(ancestor, null, priority * 2, false));
+        }
+      }
+    }
+    for (const tile of current.mergeCandidates) requests.push(request(tile, null, 1e-9, false));
+    residency.setDemand(requests);
+  }
+
+  function select(): void {
+    if (!requested || !atlas) return;
+    const view = readImageryView(options.scene, worldRoot);
+    if (!view) return;
+    const surfaceRevision = options.surface.getRevision();
+    const missingRevision = residency.getMissingRevision();
+    const due = plan?.wakeAt !== null && plan?.wakeAt !== undefined && now() >= plan.wakeAt;
+    const mergeReady = (plan?.mergeCandidates.length ?? 0) > 0 && residency.getRevision() !== lastMergeResidency;
+    const wanted = restartSelection || selector.isRunning() || !plan
+      || imageryViewChanged(lastView, view) || surfaceRevision !== lastSurfaceRevision
+      || missingRevision !== lastMissingRevision || due || mergeReady;
+    if (!wanted) return;
+    // During continuous motion, start a traversal at most every 100 ms and
+    // wake once more afterwards so the final view is always selected.
+    const throttled = !restartSelection && !selector.isRunning() && plan !== null && now() - lastTraversalStart < MOTION_SELECTION_INTERVAL_MS;
+    if (throttled) {
+      scheduleWake(lastTraversalStart + MOTION_SELECTION_INTERVAL_MS);
+      return;
+    }
+    const started = now();
+    if (!selector.isRunning() || restartSelection) {
+      lastTraversalStart = started;
+      traversalInputs = { view, surfaceRevision, missingRevision };
+    }
+    const step = selector.step(selectionInput(view, requested), started + limits.cpuMsPerUpdate, now, restartSelection);
+    counters.selectionCpuMs += now() - started;
+    restartSelection = false;
+    if (step.running) {
+      options.requestRender();
+      return;
+    }
+    counters.selections += 1;
+    // Anything that changed while the traversal ran is selected next time.
+    lastView = traversalInputs?.view ?? view;
+    lastSurfaceRevision = traversalInputs?.surfaceRevision ?? surfaceRevision;
+    lastMissingRevision = traversalInputs?.missingRevision ?? missingRevision;
+    traversalInputs = null;
+    lastMergeResidency = residency.getRevision();
+    plan = step.plan;
+    planChangedSincePublish = true;
+    if (plan) {
+      demand(requested, plan);
+      scheduleWake(plan.wakeAt);
+    }
+  }
+
+  function publish(): void {
+    if (!atlas || !requested || !plan) return;
+    const residencyRevision = residency.getRevision();
+    if (!planChangedSincePublish && !patchesChanged && residencyRevision === lastPublishedResidency) return;
+    // Keep showing the old source until the new one's fallback coverage is resident.
+    if (displayed !== requested && coverageComplete(requested, plan.coverage)) {
+      displayed = requested;
+      options.onCoverageChange?.();
+    }
+    if (displayed === requested && (planChangedSincePublish || residencyRevision !== lastPublishedResidency)) {
+      const source = displayed;
+      const wasComplete = display !== null;
+      display = buildImageryDisplay({
+        leaves: plan.leaves.map(leaf => ({ tile: leaf.tile, imageKey: leaf.imageKey, pagesPerSide: Math.round(Math.sqrt(leaf.pages)) })),
+        coverage: plan.coverage,
+        slotsFor: residency.slotsFor,
+        standardKey: tile => standardKey(source, tile),
+        isMissing: residency.isMissing,
+      });
+      if (!wasComplete) options.onCoverageChange?.();
+    }
+    lastPublishedResidency = residencyRevision;
+    planChangedSincePublish = false;
+    patchesChanged = false;
+    if (!display) return;
+    counters.publishes += 1;
+    capped = 0;
+    emptyCells = 0;
+    fallbackPatches = 0;
+    for (const [, patch] of patches) {
+      if (!patch.visible) {
+        if (patch.block !== null) {
+          atlas.releaseBlock(patch.block);
+          patch.block = null;
+          patch.tableSignature = null;
+          patch.table = null;
+        }
+        continue;
+      }
+      if (patch.block === null) patch.block = atlas.allocateBlock();
+      patch.table ??= new Uint8Array(64 * 64 * 4);
+      const table = buildPatchTable(display, patch.tile, patch.table);
+      if (table.capped) capped += 1;
+      emptyCells += table.emptyCells;
+      if (patch.block === null) {
+        // No block left: show the one page that covers the whole patch.
+        fallbackPatches += 1;
+        let page: { slot: number; z: number } | undefined;
+        let { z, x, y } = patch.tile;
+        for (;;) {
+          page = display.pages.get(`${z}/${x}/${y}`);
+          if (page || z === 0) break;
+          z -= 1; x >>= 1; y >>= 1;
+        }
+        patch.plugin.setTable(null, page ? { slot: page.slot, level: page.z } : null);
+        continue;
+      }
+      const tableSignature = signature(table.data, table.cellsLog2);
+      if (tableSignature !== patch.tableSignature) {
+        atlas.writeBlock(patch.block, table.data);
+        patch.tableSignature = tableSignature;
+        counters.tableWrites += 1;
+      }
+      const origin = atlas.blockOrigin(patch.block);
+      patch.plugin.setTable({ x: origin.x, y: origin.y, cellsLog2: table.cellsLog2 }, null);
+    }
+    residency.setPinned(display.slots);
+  }
+
+  function refreshFeedback(): void {
+    let next: ImageryFeedback;
+    if (!atlas || !requested) {
+      next = { support: "unavailable", reason: unsupportedReason ?? "Imagery is unavailable.", pending: false, limits: [], effectiveTarget: null };
+    } else {
+      const stats = residency.stats();
+      const limitSet = new Set<DetailLimit>([...(plan?.limits ?? []), ...stats.limits]);
+      if (capped > 0 || backendLimited || (atlasCappedByBackend && limitSet.has("memory"))) limitSet.add("backend");
+      const pending = selector.isRunning() || residency.isBusy() || (display?.fallbackLeaves ?? 0) > 0 || displayed !== requested || !plan;
+      if (pending) limitSet.add("loading");
+      const limitsList = (["source", "backend", "memory", "loading"] as const).filter(limit => limitSet.has(limit));
+      next = {
+        support: "ready",
+        pending,
+        limits: limitsList,
+        effectiveTarget: !pending && limitsList.length === 0 ? offset : null,
+      };
+    }
+    if (JSON.stringify(next) !== JSON.stringify(feedback)) {
+      feedback = next;
+      options.onFeedback?.();
+    }
+  }
+
+  const onContextRestored = (): void => {
+    // Raw textures come back empty: drop residency and tables and load again.
+    atlas?.clear();
+    residency.reset();
+    display = null;
+    displayed = null;
+    for (const patch of patches.values()) {
+      patch.block = null;
+      patch.tableSignature = null;
+    }
+    restartSelection = true;
+    options.requestRender();
+  };
+  const engine = options.scene.getEngine() as unknown as { onContextRestoredObservable?: { add(callback: () => void): unknown; removeCallback(callback: () => void): void } };
+  engine.onContextRestoredObservable?.add(onContextRestored);
+
+  return {
+    get supported() { return atlas !== null && requested !== null; },
+    setProfile(profile) {
+      if (options.limits) return;
+      const next = IMAGERY_RESOURCE_PROFILES[profile];
+      if (next === limits) return;
+      limits = next;
+      residency.setLimits(next);
+      restartSelection = true;
+      options.requestRender();
+    },
+    setSource(source) {
+      const next = resolveSource(source);
+      if (!next) {
+        unsupportedReason = `${source.id} tiles are not a supported size.`;
+        requested = null;
+        refreshFeedback();
+        return;
+      }
+      if (requested && imageSourceKey(requested.capabilities) === imageSourceKey(next.capabilities)) return;
+      requested = next;
+      selector.reset();
+      plan = null;
+      restartSelection = true;
+      options.requestRender();
+    },
+    setOffset(next) {
+      if (!Number.isFinite(next) || next === offset) return;
+      offset = next;
+      restartSelection = true;
+      options.requestRender();
+    },
+    attachPatch(key, tile, material) {
+      if (!atlas) return;
+      const existing = patches.get(key);
+      if (existing) return;
+      const plugin = new ImageryAtlasMaterialPlugin(material);
+      plugin.setAtlas(atlas);
+      plugin.setPatch(tile.z, tile.x, tile.y);
+      patches.set(key, { tile, plugin, visible: false, block: null, tableSignature: null, table: null });
+      patchesChanged = true;
+    },
+    detachPatch(key) {
+      const patch = patches.get(key);
+      if (!patch) return;
+      if (patch.block !== null) atlas?.releaseBlock(patch.block);
+      patches.delete(key);
+      patchesChanged = true;
+    },
+    setPatchVisible(key, visible) {
+      const patch = patches.get(key);
+      if (!patch || patch.visible === visible) return;
+      patch.visible = visible;
+      patchesChanged = true;
+    },
+    hasCoverage(tile) {
+      const source = displayed;
+      if (!source || !display) return false;
+      return coverageComplete(source, rootsCovering(source, tile));
+    },
+    getDisplayedSourceId: () => displayed?.descriptor.id ?? null,
+    update() {
+      if (disposed || !atlas || !requested) {
+        refreshFeedback();
+        return;
+      }
+      select();
+      residency.pump();
+      const uploadStarted = now();
+      const bytes = residency.upload(uploadStarted + limits.cpuMsPerUpdate);
+      if (bytes > 0) {
+        counters.uploads += 1;
+        counters.uploadBytes += bytes;
+      }
+      publish();
+      refreshFeedback();
+      // Admitted work that is waiting only on this thread asks for another update.
+      const stats = residency.stats();
+      if (selector.isRunning() || (stats.staged > 0 && bytes > 0)) options.requestRender();
+      scheduleWake(residency.nextWakeAt());
+    },
+    getFeedback: () => feedback,
+    getDiagnostics() {
+      const levels: Record<number, number> = {};
+      const footprints: [number, number, number, number, number] = [0, 0, 0, 0, 0];
+      for (const leaf of plan?.leaves ?? []) {
+        levels[leaf.tile.z] = (levels[leaf.tile.z] ?? 0) + 1;
+        const f = leaf.footprintPx;
+        footprints[f <= 0.5 ? 0 : f <= 1 ? 1 : f <= 2 ? 2 : f <= 4 ? 3 : 4] += 1;
+      }
+      let blocks = 0;
+      for (const patch of patches.values()) if (patch.block !== null) blocks += 1;
+      return {
+        requestedSource: requested?.descriptor.id ?? options.source.id,
+        displayedSource: displayed?.descriptor.id ?? null,
+        offset,
+        backend: capabilities.backend,
+        plan: plan && {
+          leaves: plan.leaves.length,
+          levels,
+          variants: plan.leaves.filter(leaf => leaf.variant !== null).length,
+          limits: plan.limits,
+          nodesEvaluated: plan.nodesEvaluated,
+          truncated: plan.truncated,
+          cpuMs: plan.cpuMs,
+          footprints,
+          regions: plan.leaves.map(leaf => {
+            let delivered: number | null = null;
+            let { z, x, y } = leaf.tile;
+            for (;;) {
+              const page = display?.pages.get(`${z}/${x}/${y}`);
+              if (page) { delivered = page.z; break; }
+              if (z === 0) break;
+              z -= 1; x >>= 1; y >>= 1;
+            }
+            // A variant's pages sit one level below its tile.
+            if (delivered === null && leaf.pages > 1) delivered = display?.pages.has(`${leaf.tile.z + 1}/${leaf.tile.x * 2}/${leaf.tile.y * 2}`) ? leaf.tile.z + 1 : null;
+            return { key: leaf.key, variant: leaf.variant, delivered, footprintPx: leaf.footprintPx, screenArea: Math.round(leaf.screenArea), limit: leaf.limit };
+          }),
+        },
+        residency: residency.stats(),
+        atlas: atlas && layout && {
+          capacity: atlas.capacity,
+          freeSlots: atlas.freeSlots(),
+          estimatedGpuBytes: layout.estimatedBytes,
+          width: layout.width,
+          height: layout.height,
+          tableBlocks: layout.tableBlocks,
+        },
+        binding: { patches: patches.size, blocks, fallbackPatches, fallbackLeaves: display?.fallbackLeaves ?? 0, capped, emptyCells },
+        counters: { ...counters },
+      };
+    },
+    dispose() {
+      disposed = true;
+      clearTimeout(wakeTimer);
+      engine.onContextRestoredObservable?.removeCallback(onContextRestored);
+      residency.dispose();
+      (loader as { dispose?: () => void }).dispose?.();
+      for (const patch of patches.values()) patch.plugin.setAtlas(null);
+      patches.clear();
+      atlas?.dispose();
+      atlas = null;
+    },
+  };
+}
