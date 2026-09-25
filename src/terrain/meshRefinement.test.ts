@@ -1,4 +1,4 @@
-import { Mesh, NullEngine, Scene, Vector3, VertexBuffer, VertexData } from "@babylonjs/core";
+import { Mesh, NullEngine, Scene, TransformNode, Vector3, VertexBuffer, VertexData } from "@babylonjs/core";
 import { afterEach, describe, expect, it } from "vitest";
 import { advanceRefinement, inheritParent, meshPositions, patchPoint, patchesForGeometryCommit, refineMesh, stitchTerrainEdges, type TerrainPatch } from "./meshRefinement";
 import { GLOBAL_TERRAIN } from "./globalTerrain";
@@ -18,6 +18,31 @@ function patch(scene: Scene, z: number, x: number, y: number, height: number): T
   return { mesh, tile: { z, x, y } };
 }
 
+function placePatches(patches: TerrainPatch[], placement: "frozen" | "parented"): void {
+  const origin = new Vector3(-1_945_532, -4_792_825, 3_719_025);
+  const parent = placement === "parented" ? new TransformNode("terrain-root", patches[0].mesh.getScene()) : null;
+  if (parent) parent.position.copyFrom(origin);
+  for (const { mesh } of patches) {
+    if (parent) {
+      mesh.parent = parent;
+      mesh.computeWorldMatrix(true);
+    } else {
+      mesh.position.copyFrom(origin);
+      mesh.freezeWorldMatrix();
+    }
+    // Reading the initial bounds models the first culling pass. Later vertex
+    // writes must preserve their world transform even when it stays cached.
+    expectWorldBounds(mesh);
+  }
+}
+
+function expectWorldBounds(mesh: Mesh): void {
+  const bounds = mesh.getBoundingInfo();
+  const world = mesh.getWorldMatrix();
+  expect(bounds.boundingSphere.centerWorld.asArray()).toEqual(Vector3.TransformCoordinates(bounds.boundingSphere.center, world).asArray());
+  expect(bounds.boundingBox.centerWorld.asArray()).toEqual(Vector3.TransformCoordinates(bounds.boundingBox.center, world).asArray());
+}
+
 describe("shared visible/collision refinement geometry", () => {
   it("starts on the old triangles and moves monotonically to the refined geometry", () => {
     const scene = setup(), parent = patch(scene, 2, 1, 1, 100), child = patch(scene, 3, 2, 2, 400);
@@ -29,6 +54,29 @@ describe("shared visible/collision refinement geometry", () => {
     expect(patchPoint(child, 2.5, 2.5, 3)[1]).toBe(250);
     expect(advanceRefinement(child.mesh, refinement, 1000)).toBe(false);
     expect(patchPoint(child, 2.5, 2.5, 3)[1]).toBe(400);
+  });
+  it.each(["frozen", "parented"] as const)("keeps world bounds transformed during refinement (%s)", placement => {
+    const scene = setup(), terrain = patch(scene, 14, 3090, 6439, 100);
+    placePatches([terrain], placement);
+    const target = meshPositions(terrain.mesh).map((value, index) => index % 3 === 1 ? value + 200 : value);
+    const refinement = refineMesh(terrain.mesh, target, 0, 1000);
+    expect(advanceRefinement(terrain.mesh, refinement, 500)).toBe(true);
+    expectWorldBounds(terrain.mesh);
+    expect(advanceRefinement(terrain.mesh, refinement, 1000)).toBe(false);
+    expectWorldBounds(terrain.mesh);
+  });
+  it.each([
+    { contact: "edge", fineY: 2 },
+    { contact: "corner", fineY: 4 },
+  ])("keeps frozen world bounds transformed after $contact stitching", ({ fineY }) => {
+    const scene = setup(), coarse = patch(scene, 2, 1, 1, 100), fine = patch(scene, 3, 4, fineY, 400);
+    placePatches([coarse, fine], "frozen");
+    const counters = { geometryWrites: 0, seamPasses: 0 };
+    stitchTerrainEdges([coarse, fine], counters);
+    expect(counters.geometryWrites).toBeGreaterThan(0);
+    expect(patchPoint(fine, 4, fineY, 3)[1]).toBeCloseTo(coarse.mesh.position.y + 100);
+    expectWorldBounds(coarse.mesh);
+    expectWorldBounds(fine.mesh);
   });
   it("stitches fine/coarse and same-level seams, including the T-junction corner", () => {
     const scene = setup();

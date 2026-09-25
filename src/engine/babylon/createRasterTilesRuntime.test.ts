@@ -1,5 +1,6 @@
-import { NullEngine, Scene, StandardMaterial, Texture } from "@babylonjs/core";
+import { Frustum, GeospatialCamera, GeospatialClippingBehavior, NullEngine, Scene, StandardMaterial, Texture } from "@babylonjs/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { CameraController } from "../../camera/cameraState";
 import * as refinement from "../../terrain/meshRefinement";
 import { createTerrainPerformanceCapture } from "../../terrain/terrainPerformanceCapture";
 import type { TerrainGrid, TerrainTile } from "../../terrain/terrainTiles";
@@ -38,6 +39,50 @@ async function resolveFirstDetail(): Promise<void> {
 }
 
 describe("raster imagery and terrain lifecycle", () => {
+  it("keeps fine raster tiles in the camera frustum after zooming in and committing terrain", async () => {
+    const engine = new NullEngine(); const scene = new Scene(engine);
+    scene.useRightHandedSystem = true;
+    const camera = new GeospatialCamera("raster-camera", scene, { planetRadius: 6378137 });
+    camera.addBehavior(new GeospatialClippingBehavior());
+    const controller = new CameraController(camera);
+    const currentView = { latDeg: 36.1, lonDeg: -112.14, zoomMeters: 80_000_000, pitchDeg: 55, headingDeg: 0 };
+    const runtime = createRasterTilesRuntime({ scene, source: RASTER_BASE_MAP_SOURCES[0], getViewState: () => currentView });
+    try {
+      for (const zoomMeters of [80_000_000, 1200]) {
+        currentView.zoomMeters = zoomMeters;
+        controller.applyViewState(currentView);
+        runtime.update();
+        pending.imagery.splice(0).forEach(loaded => loaded());
+        runtime.update();
+        scene.render();
+      }
+      const fineTiles = scene.meshes.filter(mesh => mesh.isEnabled() && Number(mesh.name.split("-").at(-1)!.split("/")[0]) >= 14);
+      expect(fineTiles.length).toBeGreaterThan(0);
+      const assertFineCoverage = () => {
+        const planes = Frustum.GetPlanes(camera.getTransformationMatrix());
+        expect(fineTiles.some(mesh => mesh.isInFrustum(planes))).toBe(true);
+        for (const mesh of fineTiles) {
+          const bounds = mesh.getBoundingInfo();
+          // Each fine tile's local origin is its ECEF center on the globe.
+          expect(bounds.boundingSphere.centerWorld.subtract(mesh.position).length()).toBeLessThan(10_000);
+        }
+      };
+      assertFineCoverage();
+      const coarse = pending.terrain.find(item => item.tile.z >= 10)!;
+      expect(coarse).toBeDefined();
+      coarse.resolve({ ...coarse.tile, size: 2, heights: new Float32Array([100, 100, 100, 100]) });
+      await flush();
+      const detail = pending.terrain.find(item => item.tile.z >= 14)!;
+      expect(detail).toBeDefined();
+      detail.resolve({ ...detail.tile, size: 2, heights: new Float32Array([250, 250, 250, 250]) });
+      await flush();
+      runtime.update();
+      scene.render();
+      assertFineCoverage();
+    } finally {
+      runtime.dispose(); engine.dispose();
+    }
+  });
   it("captures asynchronous preparation and queries when requested", async () => {
     const engine = new NullEngine(); const scene = new Scene(engine);
     const capture = createTerrainPerformanceCapture(4);

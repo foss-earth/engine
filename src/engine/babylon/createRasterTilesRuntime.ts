@@ -6,7 +6,6 @@ import {
   Texture,
   TransformNode,
   Vector3,
-  VertexBuffer,
   VertexData,
   type Scene,
 } from "@babylonjs/core";
@@ -21,7 +20,7 @@ import { GLOBAL_TERRAIN } from "../../terrain/globalTerrain";
 import { createRasterSurfaceSampler } from "../../terrain/rasterSurfaceSampler";
 import type { SurfaceHit } from "../../terrain/surfaceQuery";
 import type { TerrainPerformanceCapture } from "../../terrain/terrainPerformanceCapture";
-import { meshPositions, patchesForGeometryCommit, stitchTerrainEdges } from "../../terrain/meshRefinement";
+import { meshPositions, patchesForGeometryCommit, stitchTerrainEdges, updateTerrainPositions } from "../../terrain/meshRefinement";
 import type { GlobeViewState } from "../types";
 import type { RasterBaseMapSource } from "./rasterBaseMaps";
 import { createRasterQualityController, RASTER_QUALITY_PROFILES, resolveRasterQualityState, type RasterQualityProfile, type RasterQualitySetting, type RasterQualityState } from "./rasterQuality";
@@ -786,7 +785,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
     const changed = visible.filter(record => dirtyGeometryKeys.has(record.key));
     if (!geometryDirty || changed.length === 0) return;
     for (const record of changed) {
-      record.mesh.updateVerticesData(VertexBuffer.PositionKind, record.target, true);
+      updateTerrainPositions(record.mesh, record.target);
       if (capture) capture.counters.geometryWrites++;
       dirtyGeometryKeys.delete(record.key);
     }

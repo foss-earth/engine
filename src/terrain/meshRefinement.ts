@@ -6,6 +6,17 @@ export interface MeshRefinement { from: number[]; to: number[]; started: number;
 export interface GeometryWriteCounters { geometryWrites: number; seamPasses: number }
 const order = (a: TerrainPatch, b: TerrainPatch) => a.tile.z - b.tile.z || a.tile.x - b.tile.x || a.tile.y - b.tile.y;
 export function meshPositions(mesh: Mesh): number[] { return Array.from(mesh.getVerticesData(VertexBuffer.PositionKind)!); }
+export function updateTerrainPositions(mesh: Mesh, positions: number[]): void {
+  mesh.updateVerticesData(VertexBuffer.PositionKind, positions, true);
+  // Babylon rebuilds the bounds in local space on a position upload. Frozen
+  // tile transforms will not run the usual world-bounds update at render time.
+  // Reapply the transform to those bounds without scanning the vertices again.
+  const world = mesh.getWorldMatrix();
+  mesh.getBoundingInfo().update(world);
+  for (const subMesh of mesh.subMeshes) {
+    if (!subMesh.IsGlobal) subMesh.updateBoundingInfo(world);
+  }
+}
 export function refineMesh(mesh: Mesh, to: number[], now: number, duration = 1200): MeshRefinement {
   return { from: meshPositions(mesh), to, started: now, duration };
 }
@@ -13,7 +24,7 @@ export function advanceRefinement(mesh: Mesh, refinement: MeshRefinement, now: n
   const t = Math.max(0, Math.min(1, (now - refinement.started) / refinement.duration));
   const blend = t * t * (3 - 2 * t);
   const positions = refinement.from.map((value, i) => value + (refinement.to[i] - value) * blend);
-  mesh.updateVerticesData(VertexBuffer.PositionKind, positions, true);
+  updateTerrainPositions(mesh, positions);
   if (counters) counters.geometryWrites++;
   return t < 1;
 }
@@ -132,7 +143,7 @@ export function stitchTerrainEdges(patches: TerrainPatch[], counters?: GeometryW
       }
     }
     if (positions) {
-      mesh.updateVerticesData(VertexBuffer.PositionKind, positions, true);
+      updateTerrainPositions(mesh, positions);
       if (counters) counters.geometryWrites++;
     }
   }
@@ -166,7 +177,7 @@ export function stitchTerrainEdges(patches: TerrainPatch[], counters?: GeometryW
     // Most patches already have correct corners after the edge pass. Copy and
     // upload a position buffer only when a corner actually needs repair.
     if (positions) {
-      mesh.updateVerticesData(VertexBuffer.PositionKind, positions, true);
+      updateTerrainPositions(mesh, positions);
       if (counters) counters.geometryWrites++;
     }
   }
