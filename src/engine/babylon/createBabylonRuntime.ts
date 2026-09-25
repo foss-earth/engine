@@ -430,20 +430,12 @@ export async function createBabylonRuntime(
     shouldKeepRendering: () => simRunning || (inertialCameraController?.isActive() ?? false),
   });
 
-  const terrainCredit = document.createElement("a");
-  terrainCredit.href = activeTerrainSource.attribution;
-  terrainCredit.textContent = "Terrain attribution";
-  terrainCredit.target = "_blank";
-  terrainCredit.rel = "noopener noreferrer";
-  terrainCredit.style.cssText = "position:absolute;bottom:4px;right:8px;z-index:20;font:11px sans-serif;color:white;background:#0009;padding:3px 6px;pointer-events:auto";
-  terrainCredit.hidden = true;
-  canvas.parentElement?.appendChild(terrainCredit);
-
+  // Credits are the shell's to show: the map source HUD links the basemap's,
+  // and the Map tab the elevation provider's.
   const statusListeners = new Set<(status: BabylonRuntimeStatus) => void>();
   const rasterDetailListeners = new Set<() => void>();
   let rasterDetailOffset = 0;
   const emitStatus = (): void => {
-    terrainCredit.hidden = status.mode !== "raster-basemap" || Boolean(options.getSurfaceHeightMeters);
     options.onStatusChange?.({ ...status });
     for (const listener of [...statusListeners]) listener({ ...status });
   };
@@ -1182,7 +1174,6 @@ export async function createBabylonRuntime(
       const nextSource = resolveTerrainSource(source);
       if (activeTerrainSource.id === nextSource.id) return;
       activeTerrainSource = nextSource;
-      terrainCredit.href = nextSource.attribution;
       status.terrainSource = nextSource;
       if (status.mode === "raster-basemap") {
         rasterTilesRuntime?.setTerrainSource(nextSource);
@@ -1276,7 +1267,6 @@ export async function createBabylonRuntime(
         if (previousCapture) window.fossTerrainPerformance = previousCapture;
         else delete window.fossTerrainPerformance;
       }
-      terrainCredit.remove();
       statusListeners.clear();
       rasterDetailListeners.clear();
       downloadMeter.destroy();

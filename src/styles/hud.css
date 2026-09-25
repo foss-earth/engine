@@ -29,18 +29,26 @@
   --foss-hud-right: calc(var(--foss-hud-gap) + env(safe-area-inset-right, 0px));
 }
 
+/*
+ * The bar spans the bottom edge so its last slot, the map source, can sit at
+ * the right end and wrap with the rest on a narrow screen. Only its items take
+ * pointer input; the gap between them passes through to the map.
+ */
 .hud-bar {
   position: fixed;
   bottom: var(--foss-hud-bottom);
   left: var(--foss-hud-left);
+  right: var(--foss-hud-right);
   z-index: 10;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 3px;
-  width: fit-content;
-  max-width: min(1080px, calc(100vw - var(--foss-hud-left) - var(--foss-hud-right)));
   font-family: "SF Mono", "Menlo", "Monaco", monospace;
+  pointer-events: none;
+}
+
+.hud-bar > * {
   pointer-events: auto;
 }
 
@@ -88,24 +96,19 @@
 }
 
 .hud-chip-button,
-.hud-circle-button,
-.map-source-option {
+.hud-circle-button {
   appearance: none;
   cursor: pointer;
 }
 
 .hud-chip-button:hover,
-.hud-circle-button:hover,
-.map-source-option:hover,
-.renderer-option:hover {
+.hud-circle-button:hover {
   border-color: rgba(255, 255, 255, 0.32);
   background: rgba(20, 26, 36, 0.9);
 }
 
 .hud-chip-button:active,
-.hud-circle-button:active,
-.map-source-option:active,
-.renderer-option:active {
+.hud-circle-button:active {
   background: rgba(30, 40, 56, 0.95);
 }
 
@@ -118,112 +121,268 @@
   flex-shrink: 0;
 }
 
-.map-source-control {
-  position: relative;
+/* ─── Map source: the bottom-right end of the bar ──────────────── */
+.map-source-hud-slot {
+  margin-left: auto;
+}
+
+.map-source-hud {
   display: inline-flex;
+  align-items: center;
+  gap: 3px;
 }
 
-/* Keep the download readout close to the basemap button's right edge. */
-.map-source-control > .hud-chip-button {
-  padding-right: 2px;
+/*
+ * Two halves that each fill the chip to its rounded edge, so a hover lights the
+ * whole half: the provider button (speed, logo, name) and the credit link.
+ */
+.hud-chip.map-source-hud__chip {
+  align-items: stretch;
+  padding: 0;
 }
 
-.map-source-menu {
-  position: absolute;
-  left: 0;
-  bottom: calc(100% + 8px);
-  display: grid;
-  gap: 4px;
-  min-width: 172px;
-  padding: 6px;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: 8px;
-  background: rgba(10, 14, 22, 0.94);
-  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.36);
-  backdrop-filter: blur(10px);
-}
-
-.map-source-menu[hidden] {
-  display: none;
-}
-
-.renderer-control {
-  position: relative;
+.map-source-hud__provider {
   display: inline-flex;
-}
-
-.renderer-menu {
-  position: absolute;
-  left: 0;
-  bottom: calc(100% + 8px);
-  display: grid;
-  gap: 4px;
-  min-width: 172px;
-  padding: 6px;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: 8px;
-  background: rgba(10, 14, 22, 0.94);
-  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.36);
-  backdrop-filter: blur(10px);
-  z-index: 10;
-}
-
-.renderer-menu[hidden] {
-  display: none;
-}
-
-.renderer-option {
-  appearance: none;
-  cursor: pointer;
-  min-height: 28px;
-  padding: 6px 9px;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  background: transparent;
-  color: rgba(239, 246, 255, 0.88);
+  align-items: center;
+  gap: 5px;
+  padding: 0 9px 0 6px;
+  border: 0;
+  border-radius: 7px 0 0 7px;
+  background: none;
+  color: inherit;
   font: inherit;
-  font-size: 11px;
-  line-height: 1.1;
-  letter-spacing: 0;
-  text-align: left;
+  cursor: pointer;
 }
 
-.renderer-option.is-active,
-.map-source-option.is-active {
-  border-color: rgba(255, 255, 255, 0.22);
-  background: rgba(255, 255, 255, 0.08);
-  font-weight: 600;
+.map-source-hud__provider .map-download-speed {
+  margin-left: 0;
 }
 
-.renderer-debug-sep {
-  height: 1px;
-  margin: 4px 0;
+/* A square mark the size of a letter, as an emoji would sit in the text. */
+.map-source-hud__logo {
+  flex: none;
+  width: 1.25em;
+  height: 1.25em;
+  border-radius: 2px;
+  object-fit: contain;
+}
+
+.map-source-hud__credit {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 6px;
+  border-radius: 0 7px 7px 0;
+  color: rgba(147, 197, 253, 0.92);
+  text-decoration: none;
+}
+
+/* The size of a letter, beside the text it links. */
+.foss-earth-external-link-icon {
+  flex: none;
+  width: 1.15em;
+  height: 1.15em;
+}
+
+.map-source-hud__provider:hover,
+.map-source-hud__credit:hover {
   background: rgba(255, 255, 255, 0.12);
 }
 
-.renderer-debug {
-  padding: 5px 9px;
-  color: rgba(239, 246, 255, 0.55);
-  font-size: 10px;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  word-break: break-all;
-  user-select: text;
-  -webkit-user-select: text;
+.map-source-hud__credit:hover {
+  color: rgba(191, 219, 254, 1);
 }
 
-.map-source-option {
-  min-height: 28px;
-  padding: 6px 9px;
-  border: 1px solid transparent;
-  border-radius: 6px;
+/*
+ * A logo with the provider's name in it, followed by the basemap's own name.
+ * CARTO's letters fill the middle third of its height, so it stands taller
+ * than the text and the chip's padding absorbs it.
+ */
+.map-source-hud__wordmark {
+  display: inline-flex;
+  align-items: center;
+  margin: -5px 0;
+}
+
+.map-source-hud__wordmark img {
+  height: 24px;
+  width: auto;
+}
+
+.map-source-hud__wordmark-on-light,
+:root[data-theme="light"] .map-source-hud__wordmark-on-dark {
+  display: none;
+}
+
+:root[data-theme="light"] .map-source-hud__wordmark-on-light {
+  display: inline;
+}
+
+.map-source-hud__logo[hidden],
+.map-source-hud__credit[hidden],
+.map-source-hud__wordmark[hidden] {
+  display: none;
+}
+
+.map-source-hud__provider:focus-visible,
+.map-source-hud__credit:focus-visible {
+  outline: 2px solid var(--globe-accent, #60a5fa);
+  outline-offset: -2px;
+}
+
+:root[data-theme="light"] .map-source-hud__credit {
+  color: #1d4ed8;
+}
+
+:root[data-theme="light"] .map-source-hud__provider:hover,
+:root[data-theme="light"] .map-source-hud__credit:hover {
+  background: rgba(15, 23, 42, 0.08);
+}
+
+/* ─── Map detail rail, left of the map source chip ─────────────── */
+.map-detail-control {
+  flex: 0 0 41px;
+  width: 41px;
+  margin: 0 4px;
+}
+
+.map-detail-control__rail {
+  position: relative;
+  display: block;
+  height: 28px;
+}
+
+.map-detail-control__valid-range {
+  position: absolute;
+  z-index: 1;
+  top: 12px;
+  right: 0;
+  left: 0;
+  height: 4px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #46db8f 0%, #f6d365 55%, #ff6b6b 100%);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.14), 0 0 8px rgba(246, 211, 101, 0.28);
+}
+
+.map-detail-control__active-marker {
+  position: absolute;
+  z-index: 3;
+  top: 3px;
+  width: 2px;
+  height: 18px;
+  border-radius: 999px;
+  background: #4eb9ff;
+  box-shadow: 0 0 0 1px rgba(6, 20, 34, 0.82), 0 0 8px rgba(78, 185, 255, 0.9);
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
+.map-detail-control__active-marker::before {
+  position: absolute;
+  top: -3px;
+  left: -3px;
+  width: 0;
+  height: 0;
+  border-right: 3px solid transparent;
+  border-bottom: 4px solid #4eb9ff;
+  border-left: 3px solid transparent;
+  content: "";
+}
+
+.map-detail-control__slider {
+  position: absolute;
+  z-index: 4;
+  top: 4px;
+  left: 0;
+  width: 100%;
+  height: 20px;
+  margin: 0;
+  padding: 0;
+  appearance: none;
   background: transparent;
-  color: rgba(239, 246, 255, 0.88);
-  font: inherit;
-  font-size: 11px;
-  line-height: 1.1;
-  letter-spacing: 0;
-  text-align: left;
+  cursor: ew-resize;
+}
+
+.map-detail-control__slider::-webkit-slider-runnable-track {
+  height: 4px;
+  background: transparent;
+}
+
+.map-detail-control__slider::-webkit-slider-thumb {
+  width: 12px;
+  height: 12px;
+  margin-top: -4px;
+  border: 2px solid #f7fafc;
+  border-radius: 50%;
+  appearance: none;
+  background: #111820;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
+}
+
+.map-detail-control__slider::-moz-range-track {
+  height: 4px;
+  background: transparent;
+}
+
+.map-detail-control__slider::-moz-range-thumb {
+  width: 8px;
+  height: 8px;
+  border: 2px solid #f7fafc;
+  border-radius: 50%;
+  background: #111820;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
+}
+
+.map-detail-control__slider:focus-visible {
+  outline: 2px solid rgba(78, 185, 255, 0.92);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+.map-detail-control.is-unavailable {
+  opacity: 0.35;
+}
+
+.map-detail-control__default-tick {
+  position: absolute;
+  z-index: 2;
+  top: 17px;
+  width: 2px;
+  height: 6px;
+  border-radius: 1px;
+  background: rgba(247, 250, 252, 0.85);
+  box-shadow: 0 0 0 1px rgba(6, 20, 34, 0.6);
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
+.map-detail-control__default-tick[hidden],
+.map-detail-control__active-marker[hidden] {
+  display: none;
+}
+
+/* An app holds the renderer finer than the rail reaches: pin the marker to the left end. */
+.map-detail-control__active-marker.is-beyond-range {
+  left: 0 !important;
+  opacity: 0.85;
+}
+
+.map-detail-control.is-limited .map-detail-control__valid-range {
+  box-shadow: 0 0 0 1px rgba(246, 173, 85, 0.95), 0 0 8px rgba(246, 173, 85, 0.45);
+}
+
+.map-detail-control.is-pending .map-detail-control__valid-range {
+  animation: map-detail-pending 1.2s ease-in-out infinite alternate;
+}
+
+@keyframes map-detail-pending {
+  from { opacity: 1; }
+  to { opacity: 0.5; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .map-detail-control.is-pending .map-detail-control__valid-range {
+    animation: none;
+  }
 }
 
 .north-button {
@@ -248,49 +407,14 @@
 }
 
 :root[data-theme="light"] .hud-chip-button:hover,
-:root[data-theme="light"] .hud-circle-button:hover,
-:root[data-theme="light"] .map-source-option:hover,
-:root[data-theme="light"] .renderer-option:hover {
+:root[data-theme="light"] .hud-circle-button:hover {
   border-color: rgba(15, 23, 42, 0.32);
   background: rgba(226, 232, 240, 0.94);
 }
 
 :root[data-theme="light"] .hud-chip-button:active,
-:root[data-theme="light"] .hud-circle-button:active,
-:root[data-theme="light"] .map-source-option:active,
-:root[data-theme="light"] .renderer-option:active {
+:root[data-theme="light"] .hud-circle-button:active {
   background: rgba(203, 213, 225, 0.96);
-}
-
-:root[data-theme="light"] .map-source-menu {
-  border-color: rgba(15, 23, 42, 0.18);
-  background: rgba(248, 250, 252, 0.97);
-}
-
-:root[data-theme="light"] .map-source-option {
-  color: rgba(15, 23, 42, 0.88);
-}
-
-:root[data-theme="light"] .renderer-menu {
-  border-color: rgba(15, 23, 42, 0.18);
-  background: rgba(248, 250, 252, 0.97);
-}
-
-:root[data-theme="light"] .renderer-option {
-  color: rgba(15, 23, 42, 0.88);
-}
-
-:root[data-theme="light"] .renderer-option.is-active {
-  border-color: rgba(15, 23, 42, 0.22);
-  background: rgba(15, 23, 42, 0.08);
-}
-
-:root[data-theme="light"] .renderer-debug-sep {
-  background: rgba(15, 23, 42, 0.14);
-}
-
-:root[data-theme="light"] .renderer-debug {
-  color: rgba(15, 23, 42, 0.5);
 }
 
 /* ── Render-on-demand activity indicators ───────────────────────── */
@@ -399,3 +523,404 @@
 .foss-earth-map-cache__tile { display: block; overflow-wrap: anywhere; }
 .foss-earth-map-cache small { display: block; }
 .foss-earth-map-cache__note { opacity: 0.72; font-size: 12px; }
+
+/* A toolbar button hidden in Settings. Its own display rule would otherwise win. */
+.hud-circle-button[hidden],
+.input-mode-control[hidden] {
+  display: none;
+}
+
+/* Settings and Controls tabs: one collapsible section per group. */
+.foss-earth-panel-sections {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+}
+
+.foss-earth-panel-section {
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.foss-earth-panel-section__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  list-style: none;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  user-select: none;
+}
+
+.foss-earth-panel-section__title::-webkit-details-marker {
+  display: none;
+}
+
+.foss-earth-panel-section__title::before {
+  content: "\25B8";
+  color: var(--globe-accent, #60a5fa);
+  transition: transform 120ms ease;
+}
+
+.foss-earth-panel-section[open] > .foss-earth-panel-section__title::before {
+  transform: rotate(90deg);
+}
+
+.foss-earth-panel-section__title:focus-visible {
+  outline: 2px solid var(--globe-accent, #60a5fa);
+  outline-offset: -2px;
+  border-radius: 8px;
+}
+
+.foss-earth-panel-section__body {
+  padding: 0 12px 12px;
+}
+
+:root[data-theme="light"] .foss-earth-panel-section {
+  border-color: rgba(71, 85, 105, 0.22);
+  background: rgba(15, 23, 42, 0.02);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .foss-earth-panel-section__title::before {
+    transition: none;
+  }
+}
+
+/* ─── Choice tabs: Map and Renderer ─────────────────────────────── */
+/* Headings and notes take a whole line; the pills flow as a paragraph grid. */
+.foss-earth-element-tab {
+  padding: 12px;
+}
+
+.foss-earth-choice-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.foss-earth-choices {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.foss-earth-choices[hidden] {
+  display: none;
+}
+
+.foss-earth-choices__heading,
+.foss-earth-choices__note {
+  flex-basis: 100%;
+}
+
+.foss-earth-choices__heading {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.72;
+}
+
+.foss-earth-choices__note {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.35;
+  opacity: 0.72;
+}
+
+.foss-earth-choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  box-sizing: border-box;
+  min-height: 28px;
+  padding: 4px 11px;
+  border: 1px solid rgba(148, 163, 184, 0.32);
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 1.2;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.foss-earth-choice input {
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  accent-color: var(--globe-accent, #60a5fa);
+}
+
+.foss-earth-choice:has(input:checked) {
+  border-color: var(--globe-accent, #60a5fa);
+  background: rgba(96, 165, 250, 0.12);
+  font-weight: 600;
+}
+
+.foss-earth-choice:has(input:focus-visible) {
+  outline: 2px solid var(--globe-accent, #60a5fa);
+  outline-offset: 2px;
+}
+
+/* The credit link fills the pill's right end, as it fills the corner chip's. */
+.foss-earth-choice__credit {
+  display: inline-flex;
+  align-items: center;
+  align-self: stretch;
+  margin: -4px -11px -4px -2px;
+  padding: 0 9px 0 7px;
+  border-radius: 0 999px 999px 0;
+  color: rgba(147, 197, 253, 0.92);
+  font-weight: 400;
+}
+
+.foss-earth-choice__credit[hidden] {
+  display: none;
+}
+
+.foss-earth-choice__credit:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: rgba(191, 219, 254, 1);
+}
+
+.foss-earth-choice__credit:focus-visible {
+  outline: 2px solid var(--globe-accent, #60a5fa);
+  outline-offset: -2px;
+}
+
+/* Map tab, Detail: the range track and sentences take whole lines; choices and actions wrap as pills. */
+.map-detail-panel__range {
+  display: grid;
+  flex-basis: 100%;
+  gap: 2px;
+  font-size: 12px;
+}
+
+.map-detail-panel__range[hidden],
+.map-detail-panel__thumb[hidden],
+.map-detail-panel__status[hidden],
+.map-detail-panel__storage[hidden],
+.map-detail-panel .foss-earth-choice[hidden] {
+  display: none;
+}
+
+.map-detail-panel__readouts,
+.map-detail-panel__scale {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 2px 12px;
+}
+
+.map-detail-panel__readout {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.map-detail-panel__scale {
+  font-size: 11px;
+  opacity: 0.6;
+}
+
+/* Thumbs are native range inputs stacked on one track; only their thumbs take the pointer. */
+.map-detail-panel__track {
+  --thumb: 16px;
+  position: relative;
+  height: 28px;
+}
+
+.map-detail-panel__colours,
+.map-detail-panel__shade {
+  position: absolute;
+  top: 11px;
+  height: 6px;
+}
+
+/* The HUD rail's ramp, over every value the source allows, finer to coarser. */
+.map-detail-panel__colours {
+  right: calc(var(--thumb) / 2);
+  left: calc(var(--thumb) / 2);
+  border-radius: 999px;
+  background: linear-gradient(90deg, #46db8f 0%, #f6d365 55%, #ff6b6b 100%);
+}
+
+/* Values outside the range stay visible but dimmed. */
+.map-detail-panel__shade {
+  background: rgba(10, 14, 22, 0.72);
+}
+
+.map-detail-panel__shade--finer {
+  left: 0;
+}
+
+.map-detail-panel__shade--coarser {
+  right: 0;
+}
+
+.map-detail-panel__default-tick {
+  position: absolute;
+  top: 5px;
+  width: 2px;
+  height: 18px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.85);
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
+.map-detail-panel__thumb {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 28px;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  pointer-events: none;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.map-detail-panel__thumb--default {
+  z-index: 4;
+}
+
+.map-detail-panel__thumb::-webkit-slider-runnable-track {
+  height: 28px;
+  background: transparent;
+}
+
+.map-detail-panel__thumb::-moz-range-track {
+  height: 28px;
+  background: transparent;
+}
+
+.map-detail-panel__thumb::-webkit-slider-thumb {
+  width: var(--thumb);
+  height: var(--thumb);
+  margin-top: 6px;
+  border: 2px solid #101518;
+  border-radius: 50%;
+  background: var(--thumb-colour, #cad3d5);
+  cursor: grab;
+  pointer-events: auto;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.map-detail-panel__thumb::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border: 2px solid #101518;
+  border-radius: 50%;
+  background: var(--thumb-colour, #cad3d5);
+  cursor: grab;
+  pointer-events: auto;
+}
+
+/* The saved default: a smaller square thumb, outlined in white. */
+.map-detail-panel__thumb--default::-webkit-slider-thumb {
+  width: 12px;
+  height: 12px;
+  margin-top: 8px;
+  border: 2px solid #fff;
+  border-radius: 3px;
+}
+
+.map-detail-panel__thumb--default::-moz-range-thumb {
+  width: 8px;
+  height: 8px;
+  border: 2px solid #fff;
+  border-radius: 3px;
+}
+
+.map-detail-panel__thumb:active::-webkit-slider-thumb {
+  cursor: grabbing;
+}
+
+.map-detail-panel__thumb:active::-moz-range-thumb {
+  cursor: grabbing;
+}
+
+.map-detail-panel__thumb:focus-visible {
+  outline: none;
+}
+
+.map-detail-panel__thumb:focus-visible::-webkit-slider-thumb {
+  outline: 2px solid var(--globe-accent, #60a5fa);
+  outline-offset: 2px;
+}
+
+.map-detail-panel__thumb:focus-visible::-moz-range-thumb {
+  outline: 2px solid var(--globe-accent, #60a5fa);
+  outline-offset: 2px;
+}
+
+.map-detail-panel__thumb:disabled::-webkit-slider-thumb {
+  cursor: default;
+}
+
+.map-detail-panel__value {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.8;
+}
+
+.map-detail-panel__subheading {
+  margin-top: 4px;
+}
+
+.map-detail-panel__action {
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+}
+
+.map-detail-panel__action:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.map-detail-panel__action:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.map-detail-panel.is-unavailable .map-detail-panel__range,
+.map-detail-panel.is-unavailable .foss-earth-choice {
+  opacity: 0.5;
+}
+
+.foss-earth-renderer-diagnostics {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(148, 163, 184, 0.1);
+  font: 11px/1.5 "SF Mono", "Menlo", "Monaco", monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+:root[data-theme="light"] .foss-earth-choice {
+  border-color: rgba(71, 85, 105, 0.3);
+}
+
+:root[data-theme="light"] .foss-earth-choice:has(input:checked) {
+  border-color: #1d4ed8;
+  background: rgba(29, 78, 216, 0.08);
+}
+
+:root[data-theme="light"] .foss-earth-choice__credit {
+  color: #1d4ed8;
+}
+
+:root[data-theme="light"] .foss-earth-choice__credit:hover {
+  background: rgba(15, 23, 42, 0.08);
+}

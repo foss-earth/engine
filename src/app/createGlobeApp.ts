@@ -1,5 +1,5 @@
-import { attachMapDownloadSpeed, setMapSourceLabel } from "../shell/mapDownloadHud";
-import { attachRendererActivity, attachTileStreamingActivity } from "../shell/rendererActivity";
+import { createMapSourceHud } from "../shell/mapSourceHud";
+import { attachRendererActivity } from "../shell/rendererActivity";
 import { createBrowserInputSource } from "@felipegalind0/gamepad-tools/browser";
 import { BindingRuntime, createProfileStore } from "@felipegalind0/gamepad-tools/core";
 import { mountBindingEditor, type BindingEditorHandle } from "@felipegalind0/gamepad-tools/ui";
@@ -15,8 +15,13 @@ import {
   resolveRasterBaseMapSource,
   type RasterBaseMapSource,
 } from "../engine/babylon/rasterBaseMaps";
-import { resolveTerrainSource, type TerrainSource } from "../terrain/terrainTiles";
-import { getRasterQualityPreferenceFromSearchParams, getRasterImageryPreferenceFromSearchParams, getTerrainSourcePreferenceFromSearchParams } from "../engine/babylon/resolveMapRuntimeConfig";
+import {
+  getRasterQualityPreferenceFromSearchParams,
+  getRasterImageryPreferenceFromSearchParams,
+  getTerrainSourcePreferenceFromSearchParams,
+  setTerrainSourcePreference,
+} from "../engine/babylon/resolveMapRuntimeConfig";
+import { TERRAIN_SOURCES, resolveTerrainSource, type TerrainSource } from "../terrain/terrainTiles";
 import type { RasterQualitySetting } from "../engine/babylon/rasterQuality";
 import type {
   GlobeHandle,
@@ -30,7 +35,13 @@ import { MAX_PITCH_DEG } from "../camera/cameraState";
 import { createStatusHud, type StatusHudHandle } from "../hud/statusHud";
 import { createNorthButton, type NorthButtonHandle } from "../hud/northButton";
 import { createHelpModal, type HelpModalHandle } from "../hud/helpModal";
-import { createSettingsModal, type SettingsModalHandle } from "../hud/settingsModal";
+import { HUD_BUTTON_IDS, loadHudButtonVisibility, saveHudButtonVisibility, type HudButtonId } from "../hud/hudButtonVisibility";
+import type { PanelSection } from "../shell/SectionsPanel";
+import type { WindowOverlayHandle } from "../shell/WindowOverlay";
+import { createMapSourcePanel } from "../shell/mapSourcePanel";
+import { createMapDetailController, type MapDetailController } from "../shell/mapDetailController";
+import { connectMapDetailRuntime } from "../shell/connectMapDetailRuntime";
+import { createRendererPanel, getRendererLabel } from "../shell/rendererPanel";
 import { createOrbitCompass, type OrbitCompassHandle } from "../visualization/orbitCompass";
 import { createHemisphereCulling } from "../perf/culling";
 import { createPerformanceMetrics, type PerformanceSnapshot } from "../perf/metrics";
@@ -51,7 +62,16 @@ import type { OrbitCompassScaleParams } from "../visualization/orbitCompass";
 export interface GlobeAppHandle extends GlobeHandle {
   runtime: BabylonRuntime;
   inputModeHud: InputModeHudHandle | null;
+  /** Shows the host's Controls tab, where the controller bindings live. */
   openControllerBindings(): void;
+  /** The globe's input and controller settings, for the host's Controls tab. */
+  controlsSections: readonly PanelSection[];
+  /** The globe's settings, for the host's Settings tab. */
+  settingsSections: readonly PanelSection[];
+  /** The basemap and elevation choice, for the host's Map tab. */
+  mapTab: HTMLElement;
+  /** The GPU renderer choice, for the host's Renderer tab. */
+  rendererTab: HTMLElement;
 }
 
 export interface GlobeAppOptions {
@@ -63,6 +83,14 @@ export interface GlobeAppOptions {
   rasterQuality?: RasterQualitySetting;
   onPoiSpriteSizeChange?: (params: PoiSpriteSizeParams) => void;
   onCompassScaleChange?: (params: OrbitCompassScaleParams) => void;
+  /** A detail controller the host configured; the app creates one otherwise. */
+  mapDetail?: MapDetailController;
+  /**
+   * The host's tab overlay, filled once it mounts. The toolbar buttons toggle
+   * its tabs: \u2699 Settings, input method Controls, the position Location,
+   * and the renderer and map chips their own tabs.
+   */
+  overlayApiRef?: { current: WindowOverlayHandle | null };
 }
 
 const COMPASS_HEIGHT_OFFSET_METERS = 0;
@@ -230,12 +258,6 @@ function setRendererForce(force: RendererMode | null): void {
   window.location.assign(url.toString());
 }
 
-function getRendererApiLabel(mode: RendererMode): string {
-  if (mode === "webgpu") return "WebGPU";
-  if (mode === "webgl2") return "WebGL2";
-  return "WebGL";
-}
-
 function getPerformanceMetricSettingsMarkup(): string {
   return PERFORMANCE_METRIC_DEFINITIONS.map((metric) => `
             <label class="settings-checkbox" title="${metric.tooltip}">
@@ -401,18 +423,56 @@ export async function createGlobeApp(
             </div>
           </div>
           <p class="help-zoom">Zoom \u2014 Scroll wheel\u00B7Pinch\u00B7Triggers <small>(controller)</small></p>
-          <p class="help-zoom">Controller \u2014 top face button resets north-up\u00B7Change bindings under Controller bindings</p>
+          <p class="help-zoom">Controller \u2014 top face button resets north-up\u00B7Change bindings in Controls \u2192 Controller</p>
           <button id="helpModalDismiss" class="modal-dismiss" type="button">Got it</button>
         </div>
       </div>
 
-      <div id="settingsModal" class="modal-overlay" hidden aria-modal="true" role="dialog"
-        aria-labelledby="settingsModalTitle">
-        <div class="modal-card">
-          <h2 id="settingsModalTitle" class="modal-title">Settings</h2>
+      <div id="settingsSectionsHolder" hidden>
+        <div id="settingsToolbarSection" class="settings-section-content">
+          <div class="settings-metric-menu" aria-label="Toolbar buttons">
+            <label class="settings-checkbox" title="Show the ? button that opens the controls help.">
+              <input type="checkbox" data-hud-button="help">
+              <span>Help (?)</span>
+            </label>
+            <label class="settings-checkbox" title="Show the \u2699 button that opens this tab.">
+              <input type="checkbox" data-hud-button="settings">
+              <span>Settings (\u2699)</span>
+            </label>
+            <label class="settings-checkbox" title="Show the light and dark theme button.">
+              <input type="checkbox" data-hud-button="theme">
+              <span>Theme</span>
+            </label>
+            <label class="settings-checkbox" title="Show the input method button, which opens the Controls tab.">
+              <input type="checkbox" data-hud-button="inputMode">
+              <span>Input method</span>
+            </label>
+          </div>
+          <p class="settings-line">Settings stays available from + in either panel.</p>
+        </div>
+
+        <div id="settingsCameraSection" class="settings-section-content">
           <p class="settings-line">Camera model: state-driven orbit geometry.</p>
           <p class="settings-line">Pitch: 0\u00B0\u202F=\u202Fhorizon, 90\u00B0\u202F=\u202Fstraight down.</p>
-          <p id="settingsRendererLine" class="settings-renderer-line"></p>
+          <div class="settings-metric-menu">
+            <label class="settings-checkbox" title="Drag the globe so the point under your cursor stays grabbed, like Google Earth. When off, pan uses a flat screen translation instead. Enabled by default.">
+              <input type="checkbox" id="globeAnchorRotationToggle" checked>
+              <span>Globe anchor rotation pan</span>
+            </label>
+            <label class="settings-slider-row">
+              <span style="display:flex;justify-content:space-between">
+                <span>Compass orbit height</span>
+                <span id="compassHeightValue"></span>
+              </span>
+              <input id="compassHeightSlider" type="range" min="-1000" max="1000" step="10">
+            </label>
+          </div>
+        </div>
+
+        <div id="controlsInputMethodSection" class="settings-section-content"></div>
+        <div id="controlsControllerSection" class="settings-section-content"></div>
+
+        <div id="settingsPerformanceSection" class="settings-section-content">
           <div id="settingsPerformanceMetrics" class="settings-metric-menu" aria-label="Performance HUD visibility">
             <div class="settings-section-title">Performance HUD</div>${getPerformanceMetricSettingsMarkup()}
           </div>
@@ -427,26 +487,13 @@ export async function createGlobeApp(
               <span>Compass scale tuner</span>
             </label>
           </div>
-          <div class="settings-metric-menu">
-            <div class="settings-section-title">Camera</div>
-            <label class="settings-checkbox" title="Drag the globe so the point under your cursor stays grabbed, like Google Earth. When off, pan uses a flat screen translation instead. Enabled by default.">
-              <input type="checkbox" id="globeAnchorRotationToggle" checked>
-              <span>Globe anchor rotation pan</span>
-            </label>
-            <label class="settings-checkbox settings-slider-row" style="grid-column:1/-1;flex-direction:column;align-items:stretch;gap:4px">
-              <span style="display:flex;justify-content:space-between">
-                <span>Compass orbit height</span>
-                <span id="compassHeightValue"></span>
-              </span>
-              <input id="compassHeightSlider" type="range" min="-1000" max="1000" step="10"
-                style="width:100%;accent-color:var(--globe-accent);cursor:pointer">
-            </label>
-          </div>
+        </div>
+
+        <div id="settingsAboutSection" class="settings-section-content">
           <p id="settingsBuildLine" class="settings-line">Build: ${BUILD_TIME}</p>
-           <p id="settingsSourceLine" class="settings-line">Source: ${SOURCE_VERSION}</p>
-           <p id="settingsBundleLine" class="settings-line">Bundle: ${getLoadedBundleName()}</p>
-           <p id="settingsDeployLine" class="settings-line">Deploy: loading</p>
-          <button id="settingsModalDismiss" class="modal-dismiss" type="button">Close</button>
+          <p id="settingsSourceLine" class="settings-line">Source: ${SOURCE_VERSION}</p>
+          <p id="settingsBundleLine" class="settings-line">Bundle: ${getLoadedBundleName()}</p>
+          <p id="settingsDeployLine" class="settings-line">Deploy: loading</p>
         </div>
       </div>
 
@@ -492,35 +539,10 @@ export async function createGlobeApp(
           return icon;
         },
       },
-      {
-        kind: "menu",
-        id: "rendererControl",
-        className: "renderer-control",
-        button: { kind: "button", id: "rendererModePill", title: "GPU renderer API. Click to change.", ariaLabel: "GPU renderer API", appearance: "chip", className: "hud-chip-button hud-chip--gpu", text: "GPU" },
-        menuId: "rendererMenu",
-        menuClassName: "renderer-menu",
-        optionClassName: "renderer-option",
-        optionDataAttribute: "renderer",
-        options: [
-          { id: "", label: "Auto-detect" },
-          { id: "webgpu", label: "Force WebGPU" },
-          { id: "webgl2", label: "Force WebGL2" },
-          { id: "webgl", label: "Force WebGL" },
-        ],
-      },
-      {
-        kind: "menu",
-        id: "mapSourceControl",
-        className: "map-source-control",
-        button: { kind: "button", id: "runtimeModePill", title: "Map data source. Click to switch between Google 3D Tiles and free raster basemaps.", ariaLabel: "Map data source", appearance: "chip", className: "hud-chip-button hud-chip--source", text: "Map Source" },
-        menuId: "mapSourceMenu",
-        menuClassName: "map-source-menu",
-        optionClassName: "map-source-option",
-        optionDataAttribute: "mapSource",
-        options: [{ id: "google", label: "Google 3D Tiles" }, ...RASTER_BASE_MAP_SOURCES],
-      },
+      { kind: "button", id: "rendererModePill", title: "GPU renderer API. Click to show or hide the Renderer tab.", ariaLabel: "GPU renderer API", appearance: "chip", className: "hud-chip-button hud-chip--gpu", text: "GPU" },
       { kind: "slot", id: "perfMetricsPill", className: "hud-chip-group perf-chip-group", ariaLabel: "Performance metrics" },
-      { kind: "slot", id: "hudStatus", className: "hud-chip hud-status-text", ariaLive: "polite", ariaLabel: "Camera status", title: "Camera status: latitude, longitude, heading, pitch, and zoom distance." },
+      { kind: "button", id: "hudStatus", appearance: "chip", className: "hud-chip-button hud-status-text", ariaLive: "polite", ariaLabel: "Camera position", title: "Latitude, longitude, heading, pitch and zoom distance. Click to show or hide the Location tab." },
+      { kind: "slot", id: "mapSourceSlot", className: "map-source-hud-slot" },
     ],
   });
 
@@ -530,9 +552,6 @@ export async function createGlobeApp(
   }
 
   const rendererModePill = rootElement.querySelector<HTMLButtonElement>("#rendererModePill");
-  const rendererMenu = rootElement.querySelector<HTMLElement>("#rendererMenu");
-  const runtimeModePill = rootElement.querySelector<HTMLButtonElement>("#runtimeModePill");
-  const mapSourceMenu = rootElement.querySelector<HTMLElement>("#mapSourceMenu");
   const perfMetricsPill = rootElement.querySelector<HTMLElement>("#perfMetricsPill");
   const settingsDeployLine = rootElement.querySelector<HTMLElement>("#settingsDeployLine");
   hydrateDeployShaLine(settingsDeployLine);
@@ -547,23 +566,9 @@ export async function createGlobeApp(
 
   const configuredBaseMap = resolveRasterBaseMapSource(options.baseMap ?? DEFAULT_RASTER_BASE_MAP_ID);
 
+  let onMapStatus: ((status: BabylonRuntime["status"]) => void) | null = null;
   const applyRuntimeStatus = (status: BabylonRuntime["status"]): void => {
-    if (runtimeModePill) {
-      const hasWarning = Boolean(status.lastError);
-      if (status.mode === "google-tiles") {
-        setMapSourceLabel(runtimeModePill, hasWarning ? "Google 3D Tiles warning" : "Google 3D Tiles");
-      } else if (status.mode === "raster-basemap") {
-        setMapSourceLabel(runtimeModePill, hasWarning
-          ? `${status.rasterBaseMap?.label ?? "Raster"} warning`
-          : status.rasterBaseMap?.label ?? "Raster Basemap");
-      } else {
-        setMapSourceLabel(runtimeModePill, "Fallback Globe");
-      }
-
-      runtimeModePill.classList.toggle("hud-chip--fallback", status.mode === "fallback");
-      runtimeModePill.classList.toggle("hud-chip--raster", status.mode === "raster-basemap");
-    }
-
+    onMapStatus?.(status);
     if (status.mode === "fallback") {
       logStatus(getFallbackNoticeMessage(status), "warning");
       return;
@@ -639,47 +644,49 @@ export async function createGlobeApp(
   });
 
   if (rendererModePill) {
-    const rendererLabel = getRendererApiLabel(runtime.renderer.mode);
+    const rendererLabel = getRendererLabel(runtime.renderer.mode);
     const forceFailed =
       runtime.renderer.requested !== "auto" && runtime.renderer.requested !== runtime.renderer.mode;
     rendererModePill.textContent = forceFailed ? `${rendererLabel}*` : rendererLabel;
     rendererModePill.classList.toggle("hud-chip--good", runtime.renderer.mode === "webgpu");
     rendererModePill.classList.toggle("hud-chip--bad", runtime.renderer.mode !== "webgpu");
   }
-  // Mark the active option in the renderer menu
-  rendererMenu?.querySelectorAll<HTMLElement>("[data-renderer]").forEach((btn) => {
-    btn.classList.toggle("is-active", (btn.dataset.renderer ?? "") === (rendererForce ?? ""));
-  });
-  // Inject diagnostics block into the renderer menu when a forced renderer fell back
-  if (rendererMenu && runtime.renderer.diagnostics) {
-    const d = runtime.renderer.diagnostics;
-    const lines: string[] = [
-      `Secure context: ${d.isSecureContext ? "✓ yes" : "✗ no — WebGPU requires HTTPS"}`,
-      `navigator.gpu: ${d.navigatorGpuPresent ? "✓ present" : "✗ missing"}`,
-      d.isSupportedAsyncResult !== null
-        ? `IsSupportedAsync: ${d.isSupportedAsyncResult}`
-        : null,
-      runtime.renderer.fallbackReason ? `Error: ${runtime.renderer.fallbackReason}` : null,
-    ].filter((l): l is string => l !== null);
-    if (lines.length) {
-      const hr = document.createElement("div");
-      hr.className = "renderer-debug-sep";
-      rendererMenu.appendChild(hr);
-      const dbg = document.createElement("div");
-      dbg.className = "renderer-debug";
-      dbg.textContent = lines.join("\n");
-      rendererMenu.appendChild(dbg);
-    }
-  }
-
-  mapSourceMenu?.querySelectorAll<HTMLElement>("[data-map-source]").forEach((btn) => {
-    const value = btn.dataset.mapSource ?? "";
-    const isActive = runtime.status.mode === "google-tiles"
-      ? value === "google"
-      : value === (runtime.status.rasterBaseMap?.id ?? configuredBaseMap.id);
-    btn.classList.toggle("is-active", isActive);
+  const toggleTab = (tabId: Parameters<WindowOverlayHandle["toggleTab"]>[0]): void => {
+    options.overlayApiRef?.current?.toggleTab(tabId);
+  };
+  const rendererPanel = createRendererPanel({ renderer: runtime.renderer, onChange: setRendererForce });
+  // One detail controller: the HUD rail and the Map tab's Detail group both
+  // observe it, and it is the only writer of the renderer's detail target.
+  const mapDetail: MapDetailController = options.mapDetail ?? createMapDetailController();
+  const disconnectMapDetail = connectMapDetailRuntime(mapDetail, runtime);
+  const mapPanel = createMapSourcePanel({
+    detail: mapDetail,
+    rasterSources: RASTER_BASE_MAP_SOURCES,
+    terrainSources: TERRAIN_SOURCES,
+    onMapSourceChange: (selected) => {
+      runtime.setMapSource(selected === "google" ? "google" : resolveRasterBaseMapSource(selected));
+      setMapSourcePreference(selected);
+    },
+    onTerrainSourceChange: (selected) => {
+      runtime.setTerrainSource(resolveTerrainSource(selected));
+      setTerrainSourcePreference(selected);
+    },
   });
 
+  // The map source sits at the bar's right end: the basemap's name and credit
+  // link, the download speed, and a detail rail for Google 3D Tiles.
+  const mapSourceSlot = rootElement.querySelector<HTMLElement>("#mapSourceSlot");
+  const mapSourceHud = mapSourceSlot
+    ? createMapSourceHud(mapSourceSlot, {
+        activity: runtime,
+        onProviderClick: () => toggleTab("map"),
+        detail: { controller: mapDetail },
+      })
+    : null;
+  onMapStatus = (status) => {
+    mapPanel.update(status);
+    mapSourceHud?.update(status);
+  };
   applyRuntimeStatus(runtime.status);
 
   // ── HUD setup ────────────────────────────────────────────────────
@@ -691,7 +698,6 @@ export async function createGlobeApp(
   const settingsBtnEl = rootElement.querySelector<HTMLButtonElement>("#settingsButton");
   const themeBtnEl = rootElement.querySelector<HTMLButtonElement>("#themeButton");
   const themeBtnIconEl = themeBtnEl?.querySelector<HTMLElement>(".theme-button-icon") ?? null;
-  const settingsModalEl = rootElement.querySelector<HTMLElement>("#settingsModal");
   const settingsPerformanceMetricsEl = rootElement.querySelector<HTMLElement>("#settingsPerformanceMetrics");
   const compassHeightSliderEl = rootElement.querySelector<HTMLInputElement>("#compassHeightSlider");
   const compassHeightValueEl = rootElement.querySelector<HTMLElement>("#compassHeightValue");
@@ -704,9 +710,6 @@ export async function createGlobeApp(
   const statusHud: StatusHudHandle | null = hudStatusEl ? createStatusHud(hudStatusEl) : null;
   const northButton: NorthButtonHandle | null = northBtnSvgEl ? createNorthButton(northBtnSvgEl) : null;
   const helpModal: HelpModalHandle | null = helpModalEl ? createHelpModal(helpModalEl) : null;
-  const settingsModal: SettingsModalHandle | null = settingsModalEl ? createSettingsModal(settingsModalEl) : null;
-
-  settingsModal?.setRendererMode(getRendererApiLabel(runtime.renderer.mode));
 
   let visiblePerformanceMetrics = loadPerformanceMetricVisibility();
   let lastPerfSnapshot: PerformanceSnapshot | null = null;
@@ -787,60 +790,12 @@ export async function createGlobeApp(
     ? createInputModeHud(rootElement, themeBtnEl, {
         onModeChange: (mode) => runtime.setInputMode?.(mode),
         onSensitivityChange: (sensitivity) => runtime.setInputSensitivity?.(sensitivity),
+        onToggle: () => toggleTab("controls"),
       })
     : null;
 
-  function setMapSourceMenuOpen(open: boolean): void {
-    if (!mapSourceMenu || !runtimeModePill) return;
-    mapSourceMenu.hidden = !open;
-    runtimeModePill.setAttribute("aria-expanded", String(open));
-  }
-
-  const onMapSourceClick = (e: MouseEvent): void => {
-    e.stopPropagation();
-    setMapSourceMenuOpen(Boolean(mapSourceMenu?.hidden));
-  };
-  const onMapSourceMenuClick = (e: MouseEvent): void => {
-    const option = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-map-source]");
-    if (!option) return;
-    const selected = option.dataset.mapSource ?? DEFAULT_RASTER_BASE_MAP_ID;
-    const current = runtime.status.mode === "google-tiles"
-      ? "google"
-      : runtime.status.rasterBaseMap?.id ?? DEFAULT_RASTER_BASE_MAP_ID;
-    setMapSourceMenuOpen(false);
-    if (selected !== current) {
-      runtime.setMapSource(selected === "google" ? "google" : resolveRasterBaseMapSource(selected));
-      setMapSourcePreference(selected);
-    }
-  };
-  function setRendererMenuOpen(open: boolean): void {
-    if (!rendererMenu || !rendererModePill) return;
-    rendererMenu.hidden = !open;
-    rendererModePill.setAttribute("aria-expanded", String(open));
-  }
-  const onRendererPillClick = (e: MouseEvent): void => {
-    e.stopPropagation();
-    setRendererMenuOpen(Boolean(rendererMenu?.hidden));
-    setMapSourceMenuOpen(false);
-  };
-  const onRendererMenuClick = (e: MouseEvent): void => {
-    const option = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-renderer]");
-    if (!option) return;
-    const val = option.dataset.renderer ?? "";
-    const force: RendererMode | null = (val === "webgpu" || val === "webgl2" || val === "webgl") ? val : null;
-    setRendererMenuOpen(false);
-    setRendererForce(force);
-  };
-  const onDocumentPointerDown = (e: PointerEvent): void => {
-    if (mapSourceMenu && !mapSourceMenu.hidden) {
-      if (!runtimeModePill?.contains(e.target as Node) && !mapSourceMenu.contains(e.target as Node))
-        setMapSourceMenuOpen(false);
-    }
-    if (rendererMenu && !rendererMenu.hidden) {
-      if (!rendererModePill?.contains(e.target as Node) && !rendererMenu.contains(e.target as Node))
-        setRendererMenuOpen(false);
-    }
-  };
+  const onRendererPillClick = (): void => toggleTab("renderer");
+  const onStatusClick = (): void => toggleTab("location");
   const onPerformanceMetricChange = (e: Event): void => {
     const input = (e.target as HTMLElement).closest<HTMLInputElement>("[data-perf-metric]");
     if (!input || !isPerformanceMetricId(input.dataset.perfMetric)) return;
@@ -860,9 +815,7 @@ export async function createGlobeApp(
   };
 
   rendererModePill?.addEventListener("click", onRendererPillClick);
-  rendererMenu?.addEventListener("click", onRendererMenuClick);
-  runtimeModePill?.addEventListener("click", onMapSourceClick);
-  mapSourceMenu?.addEventListener("click", onMapSourceMenuClick);
+  hudStatusEl?.addEventListener("click", onStatusClick);
   settingsPerformanceMetricsEl?.addEventListener("change", onPerformanceMetricChange);
 
   const onCompassHeightInput = (): void => {
@@ -877,7 +830,6 @@ export async function createGlobeApp(
     try { window.localStorage.setItem(COMPASS_HEIGHT_STORAGE_KEY, String(meters)); } catch { /* ignore */ }
   };
   compassHeightSliderEl?.addEventListener("input", onCompassHeightInput);
-  document.addEventListener("pointerdown", onDocumentPointerDown, { capture: true });
 
   const resetNorth = (): void => {
     poiTracking.exitTracking();
@@ -895,42 +847,77 @@ export async function createGlobeApp(
   const gamepadStore = createProfileStore();
   const offGamepadFrame = gamepadSource.subscribe((frame) => gamepadRuntime.dispatch(frame));
   const stopGamepadSource = gamepadSource.start({ intervalMs: 33 });
-  const gamepadPanel = document.createElement("section");
-  gamepadPanel.className = "gt-host-panel";
-  gamepadPanel.hidden = true;
-  const gamepadToggle = document.createElement("button");
-  gamepadToggle.className = "gt-launcher";
-  gamepadToggle.type = "button";
-  gamepadToggle.textContent = "Controller bindings";
-  gamepadToggle.setAttribute("aria-expanded", "false");
-  rootElement.append(gamepadToggle, gamepadPanel);
-  let gamepadEditor: BindingEditorHandle | null = null;
-  const openControllerBindings = (): void => {
-    gamepadPanel.hidden = false;
-    gamepadToggle.setAttribute("aria-expanded", "true");
-    gamepadEditor ??= mountBindingEditor({
-      root: gamepadPanel,
-      runtime: gamepadRuntime,
-      source: gamepadSource,
-      store: gamepadStore,
-      builtInProfiles: [
-        {
-          id: "standard",
-          label: STANDARD_GLOBE_PROFILE_NAME,
-          create: () => createStandardGlobeProfile(selectedGamepadSlot()),
-        },
-      ],
-    });
+  // Controller bindings live in the Controls tab, mounted once and kept, so a
+  // rebinding in progress survives closing the tab.
+  const controllerSectionEl = rootElement.querySelector<HTMLElement>("#controlsControllerSection");
+  const gamepadEditor: BindingEditorHandle | null = controllerSectionEl
+    ? mountBindingEditor({
+        root: controllerSectionEl,
+        runtime: gamepadRuntime,
+        source: gamepadSource,
+        store: gamepadStore,
+        builtInProfiles: [
+          {
+            id: "standard",
+            label: STANDARD_GLOBE_PROFILE_NAME,
+            create: () => createStandardGlobeProfile(selectedGamepadSlot()),
+          },
+        ],
+      })
+    : null;
+  const openControllerBindings = (): void => options.overlayApiRef?.current?.openOrSelectTab("controls");
+
+  // ── Settings tab ──────────────────────────────────────────────
+  // The toolbar buttons stay on by default: a first-time visitor may not know
+  // that + opens the same things. Hiding one here never hides its content,
+  // because every one of them has a home in these sections or under +.
+  const settingsToolbarEl = rootElement.querySelector<HTMLElement>("#settingsToolbarSection");
+  const hudButtonElements: Record<HudButtonId, HTMLElement | null> = {
+    help: helpBtnEl,
+    settings: settingsBtnEl,
+    theme: themeBtnEl,
+    inputMode: rootElement.querySelector<HTMLElement>(".input-mode-control"),
   };
-  const onGamepadToggle = (): void => {
-    if (gamepadPanel.hidden) {
-      openControllerBindings();
-      return;
+  let hudButtonVisibility = loadHudButtonVisibility();
+  const applyHudButtonVisibility = (): void => {
+    for (const id of HUD_BUTTON_IDS) {
+      const element = hudButtonElements[id];
+      if (element) element.hidden = !hudButtonVisibility[id];
+      const input = settingsToolbarEl?.querySelector<HTMLInputElement>(`[data-hud-button="${id}"]`);
+      if (input) input.checked = hudButtonVisibility[id];
     }
-    gamepadPanel.hidden = true;
-    gamepadToggle.setAttribute("aria-expanded", "false");
   };
-  gamepadToggle.addEventListener("click", onGamepadToggle);
+  const onHudButtonToggle = (event: Event): void => {
+    const input = event.target;
+    if (!(input instanceof HTMLInputElement)) return;
+    const id = input.dataset.hudButton as HudButtonId | undefined;
+    if (!id || !HUD_BUTTON_IDS.includes(id)) return;
+    hudButtonVisibility = { ...hudButtonVisibility, [id]: input.checked };
+    saveHudButtonVisibility(hudButtonVisibility);
+    applyHudButtonVisibility();
+  };
+  applyHudButtonVisibility();
+  settingsToolbarEl?.addEventListener("change", onHudButtonToggle);
+
+  const inputMethodSectionEl = rootElement.querySelector<HTMLElement>("#controlsInputMethodSection");
+  const unmountInlineInputMode = inputMethodSectionEl ? inputModeHud?.mountInline(inputMethodSectionEl) : undefined;
+
+  const sectionsFrom = (entries: ReadonlyArray<readonly [string, string, string, boolean]>): PanelSection[] =>
+    entries.flatMap(([id, title, selector, defaultOpen]) => {
+      const element = rootElement.querySelector<HTMLElement>(selector);
+      return element ? [{ id, title, element, defaultOpen }] : [];
+    });
+  // The input-method button lands here, so its section starts open.
+  const controlsSections = sectionsFrom([
+    ["input-method", "Input method", "#controlsInputMethodSection", true],
+    ["controller", "Controller", "#controlsControllerSection", false],
+  ]);
+  const settingsSections = sectionsFrom([
+    ["toolbar", "Toolbar", "#settingsToolbarSection", false],
+    ["camera", "Camera", "#settingsCameraSection", false],
+    ["performance", "Performance debug", "#settingsPerformanceSection", false],
+    ["about", "About", "#settingsAboutSection", false],
+  ]);
   void gamepadStore.listProfileIds("foss-earth").then(async (ids) => {
     const stored = ids.length > 0 ? await gamepadStore.loadProfile("foss-earth", ids[0]) : null;
     if (!stored || stored.hostNamespace !== "foss-earth") {
@@ -945,7 +932,8 @@ export async function createGlobeApp(
     }
   });
   helpBtnEl?.addEventListener("click", () => helpModal?.show());
-  settingsBtnEl?.addEventListener("click", () => settingsModal?.show());
+  const onSettingsButtonClick = (): void => toggleTab("settings");
+  settingsBtnEl?.addEventListener("click", onSettingsButtonClick);
 
   // ── Theme button ────────────────────────────────────────────
   // Shows sun in dark mode (click to go light), moon in light mode (click to go dark).
@@ -982,6 +970,7 @@ export async function createGlobeApp(
   let lastPoiTrackingActive = false;
   hudObserver = runtime.scene.onBeforeRenderObservable.add(() => {
     const state = runtime.getViewState();
+    mapSourceHud?.update(runtime.status);
     if (state) {
       statusHud?.update(state);
       northButton?.update(state.headingDeg);
@@ -1034,13 +1023,11 @@ export async function createGlobeApp(
     `[app] runtime initialized renderer=${runtime.renderer.mode} mode=${runtime.status.mode} googleApiKeyProvided=${runtime.status.googleApiKeyProvided}`,
   );
 
-  // Visual feedback for render-on-demand state:
-  // - .is-streaming on the map-source pill while Google tiles are loading
-  //   (drives the spinning outline animation)
-  // - .is-active on the perf metrics group while the scheduler is pumping
-  //   frames (drives the FPS chip's green tint)
-  const offMapDownload = runtimeModePill ? attachMapDownloadSpeed(runtimeModePill, runtime) : () => {};
-  const offTilesStreaming = runtimeModePill ? attachTileStreamingActivity(runtimeModePill, runtime) : () => {};
+  // Visual feedback for render-on-demand state (the map source HUD shows tile
+  // streaming itself):
+  // - .is-rendering on the renderer chip while the scheduler is pumping frames
+  // - .is-active on the perf metrics group at the same time (drives the FPS
+  //   chip's green tint)
   const offRendererActivity = rendererModePill ? attachRendererActivity(rendererModePill, runtime) : () => {};
   const offRenderActive = runtime.onActiveRenderChange((active) => {
     perfMetricsPill?.classList.toggle("is-active", active);
@@ -1053,6 +1040,10 @@ export async function createGlobeApp(
     runtime,
     inputModeHud,
     openControllerBindings,
+    controlsSections,
+    settingsSections,
+    mapTab: mapPanel.element,
+    rendererTab: rendererPanel.element,
     addLayer,
     removeLayer,
     getViewState(): GlobeViewState | null {
@@ -1075,21 +1066,26 @@ export async function createGlobeApp(
       statusHud?.destroy();
       northButton?.destroy();
       helpModal?.destroy();
-      settingsModal?.destroy();
+      settingsBtnEl?.removeEventListener("click", onSettingsButtonClick);
+      settingsToolbarEl?.removeEventListener("change", onHudButtonToggle);
+      unmountInlineInputMode?.();
       spriteTuner?.destroy();
       compassScaleTuner?.destroy();
       inputModeHud?.destroy();
       northBtnEl?.removeEventListener("click", resetNorth);
-      gamepadToggle.removeEventListener("click", onGamepadToggle);
       gamepadEditor?.destroy();
-      gamepadPanel.remove();
-      gamepadToggle.remove();
       offGamepadFrame();
       stopGamepadSource();
       gamepadRuntime.dispose();
       gamepadSource.dispose();
-      runtimeModePill?.removeEventListener("click", onMapSourceClick);
-      mapSourceMenu?.removeEventListener("click", onMapSourceMenuClick);
+      rendererModePill?.removeEventListener("click", onRendererPillClick);
+      hudStatusEl?.removeEventListener("click", onStatusClick);
+      onMapStatus = null;
+      mapSourceHud?.destroy();
+      mapPanel.destroy();
+      disconnectMapDetail();
+      if (!options.mapDetail) mapDetail.dispose();
+      rendererPanel.destroy();
       settingsPerformanceMetricsEl?.removeEventListener("change", onPerformanceMetricChange);
       compassHeightSliderEl?.removeEventListener("input", onCompassHeightInput);
       poiSpriteTunerToggleEl?.removeEventListener("change", onPoiSpriteTunerToggleChange);
@@ -1097,13 +1093,10 @@ export async function createGlobeApp(
       globeAnchorRotationToggleEl?.removeEventListener("change", onGlobeAnchorRotationToggleChange);
       themeBtnEl?.removeEventListener("click", onThemeButtonClick);
       offThemeChangeForButton();
-      offMapDownload();
-      offTilesStreaming();
       offRendererActivity();
       offRenderActive();
       gameLog.destroy();
       hudBar.destroy();
-      document.removeEventListener("pointerdown", onDocumentPointerDown, { capture: true });
 
       poiTracking.destroy();
       registry.destroy();

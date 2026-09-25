@@ -97,36 +97,29 @@
   padding-top: 1px;
 }
 
-.input-mode-menu {
-  position: absolute;
-  right: 0;
-  bottom: calc(100% + 8px);
-  z-index: 20;
-  width: max-content;
-  max-width: min(340px, calc(100vw - 16px));
-  max-height: min(560px, calc(100dvh - 96px - var(--foss-inset-bottom, 0px)));
-  overflow-y: auto;
-  padding: 6px;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: 8px;
-  background: rgba(10, 14, 22, 0.92);
-  color: rgba(239, 246, 255, 0.9);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
-  backdrop-filter: blur(10px);
+/* The Input method section, a paragraph grid: see docs/ui-layout.md. */
+.input-mode-inline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
 }
 
-.input-mode-menu[hidden] {
-  display: none;
+.input-mode-heading {
+  flex-basis: 100%;
+  color: var(--globe-accent, #60a5fa);
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .input-mode-debug-toggle {
-  width: 100%;
-  min-height: 32px;
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 7px 8px;
-  border-radius: 6px;
+  gap: 6px;
+  min-height: 26px;
+  padding: 4px 10px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 999px;
   color: inherit;
   font-family: system-ui, -apple-system, sans-serif;
   font-size: 12px;
@@ -140,18 +133,16 @@
 }
 
 .input-mode-toggle-row {
-  display: flex;
+  display: inline-flex;
   gap: 3px;
   padding: 3px;
   background: rgba(0, 0, 0, 0.3);
   border-radius: 7px;
-  margin-bottom: 2px;
-  width: 100%;
 }
 
 .input-mode-toggle-option {
   appearance: none;
-  flex: 1;
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -202,18 +193,19 @@
 }
 
 .input-mode-sensitivity-panel {
-  margin-top: 6px;
-  padding-top: 6px;
-  border-top: 1px solid rgba(255, 255, 255, 0.1);
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
   gap: 6px;
 }
 
 .gesture-card {
   position: relative;
+  flex: 0 0 auto;
+  width: 94px;
   aspect-ratio: 1 / 1;
   min-height: 94px;
+  box-sizing: border-box;
   padding: 6px;
   border-radius: 6px;
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -445,25 +437,16 @@
   letter-spacing: 0.04em;
 }
 
-.input-mode-debug-toggle {
-  justify-content: space-between;
-  margin-top: 4px;
-  border-top: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 0;
-  padding-top: 10px;
-}
-
 .input-mode-debug-toggle input {
-  width: 16px;
-  height: 16px;
+  width: 13px;
+  height: 13px;
+  margin: 0;
   flex-shrink: 0;
   accent-color: var(--globe-accent);
 }
 
-:root[data-theme="light"] .input-mode-menu {
-  border-color: rgba(15, 23, 42, 0.18);
-  background: rgba(248, 250, 252, 0.97);
-  color: rgba(15, 23, 42, 0.88);
+:root[data-theme="light"] .input-mode-debug-toggle {
+  border-color: rgba(71, 85, 105, 0.3);
 }
 
 :root[data-theme="light"] .input-mode-toggle-row {

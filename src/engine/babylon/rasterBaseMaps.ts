@@ -1,3 +1,7 @@
+import cartoLogoOnDark from "../../assets/providers/carto-logo-on-dark.svg";
+import cartoLogoOnLight from "../../assets/providers/carto-logo-on-light.svg";
+import openStreetMapLogo from "../../assets/providers/openstreetmap.png";
+
 export type RasterBaseMapProtocol = "xyz" | "arcgis-tile";
 
 /** Photographic imagery, or a cartographic map with baked labels, contours or symbols. */
@@ -34,6 +38,16 @@ export interface RasterBaseMapSource {
   protocol: RasterBaseMapProtocol;
   urlTemplate: string;
   attribution: string;
+  /** The provider's page on how to credit its data, linked from the map's credit. */
+  attributionUrl?: string;
+  /** A square mark shown beside the provider's name at the size of a letter. */
+  logo?: string;
+  /**
+   * A logo that spells the provider's name, shown instead of the mark and the
+   * name: the provider's own artwork for dark and for light backgrounds, then
+   * `label`, the basemap's name without the provider's.
+   */
+  wordmark?: { onDark: string; onLight: string; label: string };
   /** Photographic or cartographic; see RasterImageryKind. Cartographic when omitted. */
   kind?: RasterImageryKind;
   /** Changes when the provider's content or URL scheme changes; caches and missing-tile records key on it. */
@@ -69,6 +83,7 @@ export const RASTER_BASE_MAP_SOURCES: readonly RasterBaseMapSource[] = [
     tileSize: { width: 256, height: 256 },
     requestPolicy: { prefetch: true },
     attribution: "USGS The National Map",
+    attributionUrl: "https://www.usgs.gov/information-policies-and-instructions/acknowledging-or-crediting-usgs",
     minZoom: 0,
     maxZoom: 16,
     bounds: { west: -180, south: -14, east: 180, north: 72 },
@@ -85,6 +100,7 @@ export const RASTER_BASE_MAP_SOURCES: readonly RasterBaseMapSource[] = [
     tileSize: { width: 256, height: 256 },
     requestPolicy: { prefetch: true },
     attribution: "USGS The National Map",
+    attributionUrl: "https://www.usgs.gov/information-policies-and-instructions/acknowledging-or-crediting-usgs",
     minZoom: 0,
     maxZoom: 16,
     bounds: { west: -180, south: -14, east: 180, north: 72 },
@@ -100,6 +116,7 @@ export const RASTER_BASE_MAP_SOURCES: readonly RasterBaseMapSource[] = [
     tileSize: { width: 256, height: 256 },
     requestPolicy: { prefetch: true },
     attribution: "USGS The National Map",
+    attributionUrl: "https://www.usgs.gov/information-policies-and-instructions/acknowledging-or-crediting-usgs",
     minZoom: 0,
     maxZoom: 16,
     bounds: { west: -180, south: -14, east: 180, north: 72 },
@@ -116,6 +133,8 @@ export const RASTER_BASE_MAP_SOURCES: readonly RasterBaseMapSource[] = [
     // The OSM tile policy forbids bulk prefetch: visible demand only.
     requestPolicy: { prefetch: false },
     attribution: "OpenStreetMap contributors",
+    attributionUrl: "https://www.openstreetmap.org/copyright",
+    logo: openStreetMapLogo,
     minZoom: 0,
     maxZoom: 19,
   },
@@ -132,6 +151,8 @@ export const RASTER_BASE_MAP_SOURCES: readonly RasterBaseMapSource[] = [
     variants: [{ id: "2x", width: 512, height: 512, urlTemplate: "https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png", preservesContent: true }],
     requestPolicy: { prefetch: true },
     attribution: "OpenStreetMap contributors, CARTO",
+    attributionUrl: "https://carto.com/attributions",
+    wordmark: { onDark: cartoLogoOnDark, onLight: cartoLogoOnLight, label: "Positron" },
     minZoom: 0,
     maxZoom: 20,
   },
@@ -147,6 +168,8 @@ export const RASTER_BASE_MAP_SOURCES: readonly RasterBaseMapSource[] = [
     variants: [{ id: "2x", width: 512, height: 512, urlTemplate: "https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png", preservesContent: true }],
     requestPolicy: { prefetch: true },
     attribution: "OpenStreetMap contributors, CARTO",
+    attributionUrl: "https://carto.com/attributions",
+    wordmark: { onDark: cartoLogoOnDark, onLight: cartoLogoOnLight, label: "Dark Matter" },
     minZoom: 0,
     maxZoom: 20,
   },
@@ -161,6 +184,7 @@ export const RASTER_BASE_MAP_SOURCES: readonly RasterBaseMapSource[] = [
     tileSize: { width: 256, height: 256 },
     requestPolicy: { prefetch: true },
     attribution: "OpenTopoMap, OpenStreetMap contributors",
+    attributionUrl: "https://opentopomap.org/about",
     minZoom: 0,
     maxZoom: 17,
   },
