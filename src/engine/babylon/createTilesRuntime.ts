@@ -61,6 +61,8 @@ export interface GoogleFocus {
 export interface GoogleLoadingState {
   cachedTiles: number;
   cachedBytes: number;
+  /** Tiles waiting for a download slot. */
+  queued: number;
   downloading: number;
   parsing: number;
 }
@@ -358,9 +360,11 @@ export function createGoogleTilesRuntime(options: GoogleTilesRuntimeOptions): Go
       // Present at run time in 0.4.24, though its declarations leave them out.
       const cache = tiles.lruCache as unknown as { itemSet?: Set<unknown>; cachedBytes?: number };
       const queue = (value: unknown): number => (value as { currJobs?: number }).currJobs ?? 0;
+      const stats = (tiles as unknown as { stats?: { queued?: number } }).stats;
       return {
         cachedTiles: cache.itemSet?.size ?? 0,
         cachedBytes: cache.cachedBytes ?? 0,
+        queued: stats?.queued ?? 0,
         downloading: queue(tiles.downloadQueue),
         parsing: queue(tiles.parseQueue),
       };

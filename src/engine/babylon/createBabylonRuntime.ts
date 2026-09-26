@@ -1216,6 +1216,13 @@ export async function createBabylonRuntime(
     let lastTerrainProgressAt = preparationStartedAt;
     let lastTerrainSignature = "";
     let centerQuality: number | null = null;
+    let settledChecks = 0;
+    /** Google tiles queued, downloading or parsing; null when not on Google or not known. */
+    const googlePendingTiles = (): number | null => {
+      if (sourceMode !== "google-tiles") return null;
+      const loading = tilesRuntime?.getLoadingState?.();
+      return loading ? loading.queued + loading.downloading + loading.parsing : null;
+    };
     let latestProgress: Parameters<NonNullable<TerrainPreparationOptions["onProgress"]>>[0] = {
       phase: "loading", readySamples: 0, totalSamples: points.length, progress: 0,
       message: "Waiting for terrain to cover the aircraft's location.",
@@ -1248,7 +1255,7 @@ export async function createBabylonRuntime(
           timeoutMs: request.timeoutMs ?? 120_000,
           activeElevationRequests: requests?.activeElevationRequests ?? null,
           queuedElevationRequests: requests?.queuedElevationRequests ?? null,
-          pendingTiles: requests?.pendingTiles ?? null,
+          pendingTiles: requests?.pendingTiles ?? googlePendingTiles(),
           visibleTiles,
           centerQuality,
           requiredQuality: sourceMode === "google-tiles" ? null : 10,
@@ -1289,7 +1296,12 @@ export async function createBabylonRuntime(
         lastSampleAt = now;
         const samples = points.map(point => surface.sample(point.latDeg, point.lonDeg));
         centerQuality = samples[0]?.quality ?? null;
-        const evaluation = evaluateTerrainReadiness(request, samples, sourceMode === "google-tiles");
+        // Google is ready once its renderer has loaded what it chose for the
+        // preparation view, on two checks in a row: before that, its surface
+        // can be a coarse tile far from the ground.
+        const pending = googlePendingTiles();
+        settledChecks = pending === 0 ? settledChecks + 1 : 0;
+        const evaluation = evaluateTerrainReadiness(request, samples, sourceMode === "google-tiles", pending === null || settledChecks >= 2);
         const result = evaluation.result;
         // A complete sample set is a coherent snapshot of displayed terrain.
         // Waiting for subsequent samples made normal tile eviction reset the

@@ -82,18 +82,24 @@ export function validateTerrainPreparation(options: TerrainPreparationOptions): 
  * Require real displayed geometry before spawning. At 100 m AGL or more the
  * center sample is sufficient: terrain cannot touch the aircraft. Below that,
  * require the complete local rings at the renderer's selected LOD.
+ *
+ * `rendererSettled` says the Google renderer has nothing left to load for the
+ * preparation view. Until then its surface can be a coarse tile kilometres
+ * from the ground, so no Google sample is ready.
  */
 export function evaluateTerrainReadiness(
   options: TerrainPreparationOptions,
   samples: readonly (SurfaceHit | null)[],
   googleTiles: boolean,
+  rendererSettled = true,
 ): { progress: TerrainPreparationProgress; result: TerrainPreparationResult | null } {
   const hasRenderedSurface = (hit: SurfaceHit | null): hit is SurfaceHit => Boolean(hit && Number.isFinite(hit.heightMeters));
   // Google geometricError is a renderer simplification metric, not a terrain
   // accuracy promise. Requiring a fixed value here conflicts with normal
-  // camera-driven LOD and can leave preparation waiting indefinitely.
+  // camera-driven LOD and can leave preparation waiting indefinitely; waiting
+  // for the renderer to finish what it chose for this view does not.
   const isReady = (hit: SurfaceHit | null): hit is SurfaceHit => Boolean(hasRenderedSurface(hit)
-    && (googleTiles || hit.quality >= 10));
+    && (googleTiles ? rendererSettled : hit.quality >= 10));
   const center = samples[0] ?? null;
   const centerReady = isReady(center);
   const altitudeFromTerrain = (groundHeightMeters: number, highestTerrainMeters: number): number => Math.max(
@@ -113,7 +119,9 @@ export function evaluateTerrainReadiness(
     phase, readySamples, totalSamples: requiredSamples.length,
     progress: requiredSamples.length ? (present * 0.2 + readySamples * 0.75) / requiredSamples.length : 0,
     message: ready ? "Checking terrain clearance…" : present
-      ? "Waiting for finer elevation data before flight can start safely."
+      ? googleTiles
+        ? "Waiting for Google tiles near the destination to finish loading."
+        : "Waiting for finer elevation data before flight can start safely."
       : "Waiting for terrain to cover the aircraft's location.",
   };
   if (!ready) return { progress, result: null };

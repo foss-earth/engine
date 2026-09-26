@@ -377,6 +377,53 @@ describe("createBabylonRuntime simulation mode", () => {
     runtime.destroy();
   });
 
+  it("on Google, waits until the renderer has loaded what it chose before taking its surface as ground", async () => {
+    let scheduledFrame: FrameRequestCallback | null = null;
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation(callback => {
+      scheduledFrame = callback;
+      return 1;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
+    const loading = { cachedTiles: 10, cachedBytes: 0, queued: 3, downloading: 2, parsing: 1 };
+    mocks.createGoogleTilesRuntime.mockReturnValue({
+      tiles: { visibleTiles: new Set(), activeTiles: new Set(), group: {} },
+      getLoadingState: () => loading,
+      update: vi.fn(), dispose: vi.fn(),
+    });
+    const { createBabylonRuntime } = await import("./createBabylonRuntime");
+    const runtime = await createBabylonRuntime(document.createElement("canvas"), { googleApiKey: "test", simMode: true });
+    // A coarse tile's surface, kilometres above the ground, until the renderer refines.
+    const sample = vi.spyOn(runtime.surface, "sample").mockReturnValue({
+      point: { x: 0, y: 0, z: 0 }, normal: { x: 0, y: 1, z: 0 }, distanceMeters: 1,
+      heightMeters: 4200, meshId: "terrain", revision: 1, quality: 10, geometricErrorMeters: 20_000,
+    });
+    let clock = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => clock);
+    const preparation = runtime.prepareTerrain({ latDeg: 45, lonDeg: -93, radiusMeters: 1000 });
+    let settled = false;
+    void preparation.then(() => { settled = true; }, () => { settled = true; });
+    const frame = async () => {
+      clock += 250;
+      const callback = scheduledFrame;
+      scheduledFrame = null;
+      callback?.(clock);
+      await Promise.resolve();
+    };
+    for (let i = 0; i < 4; i++) await frame();
+    expect(settled).toBe(false);
+    // Loaded: the refined surface is the ground, once two checks agree the renderer is idle.
+    Object.assign(loading, { queued: 0, downloading: 0, parsing: 0 });
+    sample.mockReturnValue({
+      point: { x: 0, y: 0, z: 0 }, normal: { x: 0, y: 1, z: 0 }, distanceMeters: 1,
+      heightMeters: 300, meshId: "terrain", revision: 2, quality: 10, geometricErrorMeters: 4,
+    });
+    await frame();
+    expect(settled).toBe(false);
+    await frame();
+    await expect(preparation).resolves.toEqual({ groundHeightMeters: 300, altitudeMeters: 1824 });
+    runtime.destroy();
+  });
+
   it("starts once one complete displayed-terrain snapshot is available", async () => {
     let scheduledFrame: FrameRequestCallback | null = null;
     vi.spyOn(window, "requestAnimationFrame").mockImplementation(callback => {
