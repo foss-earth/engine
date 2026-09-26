@@ -8,6 +8,7 @@ import { GoogleCloudAuthPlugin } from "3d-tiles-renderer/core/plugins";
 import { getAppSettings } from "../../settings/appSettings";
 import type { SettingsRegistry } from "../../settings/registry";
 import type { NumberRange } from "../../settings/types";
+import { isSphereBelowHorizon } from "../../terrain/imagery/imageryGeometry";
 
 const GOOGLE_3D_TILES_ROOT_URL = "https://tile.googleapis.com/v1/3dtiles/root.json";
 
@@ -19,6 +20,11 @@ export interface GoogleTilesRuntimeOptions {
    * active Babylon camera still controls the visible frustum.
    */
   getTerrainDetailAnchor?: () => Vector3 | null;
+  /**
+   * A region loaded around a focus point, beyond or instead of the view:
+   * `map.focus.*`. Read once per update. Null or omitted: the view only.
+   */
+  getFocus?: () => GoogleFocus | null;
   onDownloadBytes?: (bytes: number) => void;
   onLoadError?: (error: Error, url: string) => void;
   onLoadStart?: () => void;
@@ -38,6 +44,18 @@ export interface GoogleTilesRuntime {
   setTerrainDetailTarget(errorTarget: number | null): void;
   update(): void;
   dispose(): void;
+}
+
+/** What to load around a focus point. */
+export interface GoogleFocus {
+  /** "around": everything within the radius by distance from the point, the rest only coarsely. "both": that and the view. */
+  mode: "around" | "both";
+  /** ECEF metres, which is the tileset's own space. */
+  position: { x: number; y: number; z: number };
+  radiusMeters: number;
+  /** The smallest error target the region may ask for, in px; null follows the renderer's. */
+  finestErrorPx: number | null;
+  horizonCull: boolean;
 }
 
 export interface GoogleLoadingState {
@@ -86,8 +104,28 @@ interface TileWithBabylonBounds extends Tile {
   engineData: {
     boundingVolume: {
       distanceToPoint(point: Vector3): number;
+      sphere?: { centerWorld: Vector3; radiusWorld: number } | null;
+      obb?: { points?: Vector3[] } | null;
     };
   };
+}
+
+/** A tile's bounding sphere in tileset space, from its sphere or the corners of its box. */
+const tileSpheres = new WeakMap<object, { center: { x: number; y: number; z: number }; radius: number } | null>();
+function tileSphere(tile: TileWithBabylonBounds): { center: { x: number; y: number; z: number }; radius: number } | null {
+  const volume = tile.engineData.boundingVolume;
+  if (tileSpheres.has(volume)) return tileSpheres.get(volume)!;
+  let sphere: { center: { x: number; y: number; z: number }; radius: number } | null = null;
+  if (volume.sphere) {
+    const { centerWorld, radiusWorld } = volume.sphere;
+    sphere = { center: { x: centerWorld.x, y: centerWorld.y, z: centerWorld.z }, radius: radiusWorld };
+  } else if (volume.obb?.points?.length) {
+    const points = volume.obb.points;
+    const center = points.reduce((sum, p) => ({ x: sum.x + p.x / points.length, y: sum.y + p.y / points.length, z: sum.z + p.z / points.length }), { x: 0, y: 0, z: 0 });
+    sphere = { center, radius: Math.max(...points.map(p => Math.hypot(p.x - center.x, p.y - center.y, p.z - center.z))) };
+  }
+  tileSpheres.set(volume, sphere);
+  return sphere;
 }
 
 interface TilesRendererWithViewError extends TilesRenderer {
@@ -100,35 +138,49 @@ interface TilesRendererWithViewError extends TilesRenderer {
  * independent: a chase camera can sit far behind the aircraft, while tiles
  * must still refine around the aircraft. Keep the adapter's frustum result,
  * then replace only its distance-derived error.
+ *
+ * A focus region changes what loads as well. Around a focus point, the view
+ * decides nothing: tiles within the radius refine by their distance from the
+ * point (never nearer than the camera is to it), in every direction, and the
+ * rest of the globe shows only the tiles that cover it coarsely. With the view
+ * as well, the region is added to what the camera sees. Rendering still culls
+ * by the camera; only what is loaded changes.
  */
-function applyTerrainDetailAnchor(
+function applyViewMeasure(
   tiles: TilesRenderer,
   scene: Scene,
   getTerrainDetailAnchor: (() => Vector3 | null) | undefined,
+  getFocus: (() => GoogleFocus | null) | undefined,
 ): void {
-  if (!getTerrainDetailAnchor) return;
+  if (!getTerrainDetailAnchor && !getFocus) return;
 
   const renderer = tiles as TilesRendererWithViewError;
   const nativeCalculateTileViewError = renderer.calculateTileViewError.bind(renderer);
   const nativeUpdate = tiles.update.bind(tiles);
   const worldToTiles = Matrix.Identity();
   const anchorInTiles = Vector3.Zero();
+  const cameraInTiles = Vector3.Zero();
+  const focusInTiles = Vector3.Zero();
   let hasDetailAnchor = false;
+  let focus: GoogleFocus | null = null;
+  let focusMinDistance = 0;
+  let focusErrorScale = 1;
+  let focusViewer = { x: 0, y: 0, z: 0 };
   let isOrthographic = false;
   let orthographicPixelSize = 0;
   let screenSpaceErrorDenominator = 0;
 
-  // A renderer update traverses many tiles. The anchor, tile-group transform,
-  // camera projection, and render size remain fixed for that traversal, so
-  // calculate them once rather than repeating a matrix inversion per tile.
+  // A renderer update traverses many tiles. The anchor, focus, tile-group
+  // transform, camera projection, and render size remain fixed for that
+  // traversal, so calculate them once rather than per tile.
   tiles.update = () => {
     hasDetailAnchor = false;
-    const anchor = getTerrainDetailAnchor();
+    focus = null;
+    const anchor = getTerrainDetailAnchor?.() ?? null;
+    const nextFocus = getFocus?.() ?? null;
     const camera = scene.activeCamera;
-    if (anchor && camera) {
+    if ((anchor || nextFocus) && camera) {
       tiles.group.getWorldMatrix().invertToRef(worldToTiles);
-      Vector3.TransformCoordinatesToRef(anchor, worldToTiles, anchorInTiles);
-
       const engine = scene.getEngine();
       const hardwareScaling = engine.getHardwareScalingLevel();
       const width = engine.getRenderWidth() * hardwareScaling;
@@ -137,26 +189,52 @@ function applyTerrainDetailAnchor(
       isOrthographic = projection[15] === 1;
       orthographicPixelSize = Math.max(2 / projection[5] / height, 2 / projection[0] / width);
       screenSpaceErrorDenominator = 2 / projection[5] / height;
-      hasDetailAnchor = true;
+      if (anchor) {
+        Vector3.TransformCoordinatesToRef(anchor, worldToTiles, anchorInTiles);
+        hasDetailAnchor = true;
+      }
+      if (nextFocus) {
+        focus = nextFocus;
+        focusInTiles.set(nextFocus.position.x, nextFocus.position.y, nextFocus.position.z);
+        Vector3.TransformCoordinatesToRef(camera.globalPosition, worldToTiles, cameraInTiles);
+        focusMinDistance = Vector3.Distance(cameraInTiles, focusInTiles);
+        const finest = nextFocus.finestErrorPx ?? tiles.errorTarget;
+        focusErrorScale = tiles.errorTarget / Math.max(tiles.errorTarget, finest);
+        const lift = 1 + focusMinDistance / Math.max(1, focusInTiles.length());
+        focusViewer = { x: focusInTiles.x * lift, y: focusInTiles.y * lift, z: focusInTiles.z * lift };
+      }
     }
     nativeUpdate();
   };
 
+  const errorAt = (tile: TileWithBabylonBounds, distance: number): number => {
+    if (isOrthographic) return tile.geometricError / orthographicPixelSize;
+    return distance === 0 ? Infinity : tile.geometricError / (distance * screenSpaceErrorDenominator);
+  };
+
   renderer.calculateTileViewError = (tile, target) => {
     nativeCalculateTileViewError(tile, target);
-    if (!hasDetailAnchor) return;
-
-    const distance = tile.engineData.boundingVolume.distanceToPoint(anchorInTiles);
-
-    target.distanceFromCamera = distance;
-    if (isOrthographic) {
-      target.error = tile.geometricError / orthographicPixelSize;
-      return;
+    if (hasDetailAnchor) {
+      const distance = tile.engineData.boundingVolume.distanceToPoint(anchorInTiles);
+      target.distanceFromCamera = distance;
+      target.error = errorAt(tile, distance);
     }
-
-    target.error = distance === 0
-      ? Infinity
-      : tile.geometricError / (distance * screenSpaceErrorDenominator);
+    if (!focus) return;
+    const distance = tile.engineData.boundingVolume.distanceToPoint(focusInTiles);
+    const sphere = focus.horizonCull ? tileSphere(tile) : null;
+    const hidden = sphere !== null && isSphereBelowHorizon(focusViewer, sphere.center, sphere.radius);
+    const within = !hidden && distance <= focus.radiusMeters;
+    const focusError = errorAt(tile, Math.max(1, distance, focusMinDistance)) * focusErrorScale;
+    if (focus.mode === "around") {
+      // Every tile the point can see takes part; only those within the radius refine.
+      target.inView = !hidden;
+      target.error = within ? focusError : 0;
+      target.distanceFromCamera = distance;
+    } else if (within) {
+      target.inView = true;
+      target.error = Math.max(target.error, focusError);
+      target.distanceFromCamera = Math.min(target.distanceFromCamera, distance);
+    }
   };
 }
 
@@ -179,7 +257,7 @@ export function createGoogleTilesRuntime(options: GoogleTilesRuntimeOptions): Go
   }
 
   const tiles = new TilesRenderer(GOOGLE_3D_TILES_ROOT_URL, scene);
-  applyTerrainDetailAnchor(tiles, scene, options.getTerrainDetailAnchor);
+  applyViewMeasure(tiles, scene, options.getTerrainDetailAnchor, options.getFocus);
   const settings = options.settings ?? getAppSettings();
   applyLoadingParameters(tiles, settings);
   const loadingIds = new Set<string>(GOOGLE_LOADING_IDS);

@@ -24,7 +24,7 @@ import { meshPositions, patchesForGeometryCommit, stitchTerrainEdges, updateTerr
 import type { GlobeViewState } from "../types";
 import type { DetailLimit } from "../../terrain/mapDetailPolicy";
 import { lonLatToTileXY } from "../../terrain/imagery/imageryGeometry";
-import { createImageryRuntime, type ImageryDiagnostics, type ImageryRuntime } from "./imagery/createImageryRuntime";
+import { createImageryRuntime, type ImageryDiagnostics, type ImageryFocusRequest, type ImageryRuntime } from "./imagery/createImageryRuntime";
 import { IMAGERY_TABLE_MAX_CELLS_LOG2 } from "./imagery/imageryAtlasLayout";
 import type { ImageryLoader } from "./imagery/imageryResidency";
 import type { RasterBaseMapSource } from "./rasterBaseMaps";
@@ -86,6 +86,8 @@ export interface RasterTilesRuntimeOptions {
    * `map.imagery.*` and `map.terrain.*`. The app's when omitted.
    */
   settings?: SettingsRegistry;
+  /** A region of imagery to load around a focus point, beyond or instead of the view. */
+  getFocus?: () => ImageryFocusRequest | null;
   /** Internal active profile used by the runtime's Auto controller. */
   activeQualityProfile?: Exclude<RasterQualitySetting, "auto">;
   /** Texture samples for per-tile imagery; read when a texture is created. */
@@ -225,7 +227,11 @@ function buildTileUrl(source: RasterBaseMapSource, tile: TileCoord): string {
     .replace(/\{y\}/g, String(tile.y));
 }
 
-function getDesiredTiles(view: GlobeViewState, source: ZoomLimits, profile = RASTER_QUALITY_PROFILES.balanced): TileCoord[] {
+/**
+ * `corridor` prefetches a few tiles ahead along the view's heading. A focus
+ * region turns it off: it follows the camera's heading, so orbiting would load.
+ */
+function getDesiredTiles(view: GlobeViewState, source: ZoomLimits, profile = RASTER_QUALITY_PROFILES.balanced, corridor = true): TileCoord[] {
   const z = chooseTileZoom(view, source, profile);
   const baseZoom = chooseGlobalBaseZoom(source, z, profile);
   const n = 2 ** z;
@@ -258,7 +264,7 @@ function getDesiredTiles(view: GlobeViewState, source: ZoomLimits, profile = RAS
       }
     }
     // Prefetch a short corridor ahead without changing the central resident ring.
-    if (Number.isFinite(view.headingDeg)) {
+    if (corridor && Number.isFinite(view.headingDeg)) {
       const heading = view.headingDeg * DEG_TO_RAD;
       for (let step = 1; step <= profile.corridorSteps; step++) for (let offset = -1; offset <= 1; offset++) {
         const x = wrapTileX(centerX + Math.round(Math.sin(heading) * (radius + step) + Math.cos(heading) * offset), z);
@@ -682,6 +688,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
       offset: options.detailOffset ?? 0,
       limits: imageryLimitsFrom(settings),
       tuning: imageryTuningFrom(settings),
+      getFocus: options.getFocus,
       surface: imagerySurface,
       loader: options.imageryLoader,
       requestRender: () => options.requestRender?.(),
@@ -1032,7 +1039,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
     const profile = RASTER_QUALITY_PROFILES[qualityState.activeProfile];
     const limits = zoomLimits();
     const baseZoom = chooseGlobalBaseZoom(limits, chooseTileZoom(view, limits, profile), profile);
-    const desiredTiles = getDesiredTiles(view, limits, profile);
+    const desiredTiles = getDesiredTiles(view, limits, profile, !options.getFocus?.());
     // Load nearby detail first, so a flight doesn't wait behind distant tiles.
     desiredTiles.sort((a, b) => b.z - a.z ||
       Math.hypot(a.x - lonToTileX(view.lonDeg, a.z), a.y - latToTileY(view.latDeg, a.z)) -

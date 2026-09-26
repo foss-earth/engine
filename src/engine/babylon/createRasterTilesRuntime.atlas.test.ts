@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CameraController } from "../../camera/cameraState";
 import * as refinement from "../../terrain/meshRefinement";
 import type { TerrainGrid, TerrainTile } from "../../terrain/terrainTiles";
-import { createRasterTilesRuntime } from "./createRasterTilesRuntime";
+import { createRasterTilesRuntime, type RasterTilesRuntimeOptions } from "./createRasterTilesRuntime";
 import type { ImageryLoader, PreparedImage } from "./imagery/imageryResidency";
 import { getAppSettings } from "../../settings/appSettings";
 import { RASTER_BASE_MAP_SOURCES } from "./rasterBaseMaps";
@@ -36,7 +36,7 @@ function imageryLoader() {
   return { loader, urls };
 }
 
-async function setup(sourceIndex = 0, loaderOverride?: ImageryLoader) {
+async function setup(sourceIndex = 0, loaderOverride?: ImageryLoader, getFocus?: RasterTilesRuntimeOptions["getFocus"]) {
   const engine = new NullEngine({ renderWidth: 1280, renderHeight: 720, textureSize: 8192, deterministicLockstep: false, lockstepMaxSteps: 1 });
   // NullEngine has no sub-image upload; the atlas only needs it to exist.
   Object.assign(engine, { updateTextureData: vi.fn() });
@@ -54,7 +54,7 @@ async function setup(sourceIndex = 0, loaderOverride?: ImageryLoader) {
   const onDetailFeedback = vi.fn();
   const runtime = createRasterTilesRuntime({
     scene, source: RASTER_BASE_MAP_SOURCES[sourceIndex], getViewState: () => view,
-    imagery: "atlas", imageryLoader: loader, onDetailFeedback,
+    imagery: "atlas", imageryLoader: loader, onDetailFeedback, getFocus,
   });
   const settle = async () => {
     for (let round = 0; round < 40; round++) {
@@ -197,6 +197,40 @@ describe("raster runtime with atlas imagery", () => {
     const generous = await visit(4096);
     const small = await visit(32);
     expect(small).toBeLessThan(generous);
+  });
+
+  it("orbiting a fixed focus point requests nothing new once the region around it is loaded", async () => {
+    // Reselect at once after each turn, however fast the test runs.
+    getAppSettings().set("map.imagery.reselectWhileMoving", 0);
+    const orbit = async (mode: "view" | "around") => {
+      let focus: { x: number; y: number; z: number } | null = null;
+      const { runtime, settle, engine, urls, camera, controller, view } = await setup(0, undefined, () => (
+        mode === "view" || !focus ? null : { mode, position: focus, radiusMeters: 10_000, offsetCap: null, horizonCull: true }
+      ));
+      // Low over the Grand Canyon, looking toward the horizon: turning shows new ground.
+      Object.assign(view, { zoomMeters: 3000, pitchDeg: 75 });
+      controller.applyViewState(view);
+      // The orbit target, in ECEF as the scene is here.
+      focus = { x: camera.center.x, y: camera.center.y, z: camera.center.z };
+      await settle();
+      const settled = { images: urls.length, elevation: pending.terrain.length };
+      for (const headingDeg of [60, 120, 180, 240, 300]) {
+        Object.assign(view, { headingDeg });
+        controller.applyViewState(view);
+        await settle();
+      }
+      const turned = { images: urls.length - settled.images, elevation: pending.terrain.length - settled.elevation, pages: runtime.getImageryDiagnostics().atlas?.focus };
+      runtime.dispose();
+      engine.dispose();
+      return turned;
+    };
+    // The view alone loads what each turn reveals: the check below means something.
+    expect((await orbit("view")).images).toBeGreaterThan(0);
+    const around = await orbit("around");
+    expect(around).toMatchObject({ images: 0, elevation: 0 });
+    // The region's pages are counted and estimated from this view.
+    expect(around.pages?.pages).toBeGreaterThan(0);
+    expect(around.pages?.estimatedPages).toBeGreaterThan(0);
   });
 
   it("asks first for a near ancestor where a new region could only show the root coverage", async () => {

@@ -117,3 +117,70 @@ describe("Google collision surface revisions", () => {
     expect(runtime.getRevision()).toBe(disposed);
   });
 });
+
+describe("Google focus region", () => {
+  const EARTH = 6_378_137;
+  // Tiles as spheres in tileset space (ECEF), measured the way the renderer measures its volumes.
+  const tile = (center: Vector3, radius: number, geometricError = 20) => ({
+    geometricError,
+    engineData: {
+      boundingVolume: {
+        distanceToPoint: (point: Vector3) => Math.max(0, Vector3.Distance(center, point) - radius),
+        sphere: { centerWorld: center, radiusWorld: radius },
+      },
+    },
+  });
+  const setup = (focus: { mode: "around" | "both"; finestErrorPx?: number | null }) => {
+    const scene = {
+      activeCamera: {
+        getProjectionMatrix: () => Matrix.PerspectiveFovLH(Math.PI / 2, 1, 1, 1e7),
+        // 1 km above the focus point, which is on the ground at 0° N 0° E.
+        globalPosition: new Vector3(EARTH + 1000, 0, 0),
+      },
+      getEngine: () => ({ getHardwareScalingLevel: () => 1, getRenderWidth: () => 100, getRenderHeight: () => 100 }),
+    } as unknown as Scene;
+    const runtime = createGoogleTilesRuntime({
+      scene, apiKey: "test",
+      getFocus: () => ({ mode: focus.mode, position: { x: EARTH, y: 0, z: 0 }, radiusMeters: 10_000, finestErrorPx: focus.finestErrorPx ?? null, horizonCull: true }),
+    });
+    const renderer = runtime.tiles as unknown as {
+      errorTarget: number;
+      calculateTileViewError(tile: ReturnType<typeof tile>, target: { inView: boolean; error: number; distanceFromCamera: number }): void;
+    };
+    runtime.update();
+    const measure = (value: ReturnType<typeof tile>) => {
+      const target = { inView: true, error: 0, distanceFromCamera: 0 };
+      renderer.calculateTileViewError(value, target);
+      return target;
+    };
+    return { runtime, renderer, measure };
+  };
+
+  it("around the point, loads every direction within the radius by distance from the point, and nothing it cannot see", () => {
+    const { runtime, measure } = setup({ mode: "around" });
+    // Behind the camera for the frustum (the mock says out of view), 500 m from the point:
+    // measured from the camera's 1 km distance, the floor. 20 m / (1000 m × 2/100 px⁻¹) = 1 px.
+    expect(measure(tile(new Vector3(EARTH, 500, 0), 0))).toEqual({ inView: true, error: 1, distanceFromCamera: 500 });
+    // Outside the radius: kept for coverage, never refined.
+    expect(measure(tile(new Vector3(EARTH, 20_000, 0), 0))).toMatchObject({ inView: true, error: 0 });
+    // The far side of the Earth is below the point's horizon.
+    expect(measure(tile(new Vector3(-EARTH, 0, 0), 1000)).inView).toBe(false);
+    runtime.dispose();
+  });
+
+  it("with the view, adds the region to what the camera sees and keeps the camera's measure elsewhere", () => {
+    const { runtime, measure } = setup({ mode: "both" });
+    expect(measure(tile(new Vector3(EARTH, 500, 0), 0))).toEqual({ inView: true, error: 1, distanceFromCamera: 500 });
+    // Outside the radius the renderer's own frustum result stands.
+    expect(measure(tile(new Vector3(EARTH, 20_000, 0), 0))).toEqual({ inView: false, error: 1, distanceFromCamera: 999 });
+    runtime.dispose();
+  });
+
+  it("asks the region for no finer than its own error target", () => {
+    const { runtime, renderer, measure } = setup({ mode: "around", finestErrorPx: 80 });
+    const scale = renderer.errorTarget / Math.max(renderer.errorTarget, 80);
+    expect(scale).toBeLessThan(1);
+    expect(measure(tile(new Vector3(EARTH, 500, 0), 0)).error).toBeCloseTo(scale);
+    runtime.dispose();
+  });
+});

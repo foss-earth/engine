@@ -2,8 +2,10 @@ import type { Material, Scene, TransformNode } from "@babylonjs/core";
 import type { TileId } from "../../../terrain/imagery/imageryGeometry";
 import {
   createImagerySelector,
+  estimateFocusPages,
   imageKey,
   imageSourceKey,
+  type ImageryFocus,
   type ImageryHysteresis,
   type ImageryPlan,
   type ImagerySelectionInput,
@@ -26,6 +28,17 @@ import {
   type ImageryResourceLimits,
 } from "./imageryResidency";
 import { imageryViewChanged, readImageryView } from "./imageryView";
+
+/** What to load around a focus point, beyond the view: `map.focus.*`. */
+export interface ImageryFocusRequest {
+  mode: "around" | "both";
+  /** ECEF metres. */
+  position: { x: number; y: number; z: number };
+  radiusMeters: number;
+  /** The finest offset the region may ask for; null follows the view's. */
+  offsetCap: number | null;
+  horizonCull: boolean;
+}
 
 /** How imagery is chosen and drawn, beyond its budgets: the `map.imagery.*` parameters. */
 export interface ImageryTuning {
@@ -76,6 +89,11 @@ export interface ImageryDiagnostics {
   atlas: { capacity: number; freeSlots: number; estimatedGpuBytes: number; width: number; height: number; tableBlocks: number } | null;
   /** Why the last budget change could not reallocate the atlas, when it could not. */
   allocationError: string | null;
+  /**
+   * The focus region, while one is loaded: the pages its regions hold in the
+   * last plan, and about how many the current radius needs from this view.
+   */
+  focus: { pages: number; estimatedPages: number } | null;
   binding: { patches: number; blocks: number; fallbackPatches: number; fallbackLeaves: number; capped: number; emptyCells: number };
   counters: { selections: number; selectionCpuMs: number; publishes: number; tableWrites: number; uploads: number; uploadBytes: number };
 }
@@ -95,6 +113,8 @@ export interface ImageryRuntimeOptions {
     getRevision(): number;
   };
   requestRender(): void;
+  /** The focus region to load as well as, or instead of, the view; null or omitted: the view only. */
+  getFocus?(): ImageryFocusRequest | null;
   onDownloadBytes?(bytes: number): void;
   onError?(error: Error, url: string): void;
   /** Delivery or support changed. */
@@ -241,8 +261,9 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
   let lastMissingRevision = -1;
   let lastMergeResidency = -1;
   let lastTraversalStart = -Infinity;
+  let lastFocus: ImageryFocus | null = null;
   // What the running traversal measured; a traversal can span several frames.
-  let traversalInputs: { view: NonNullable<ReturnType<typeof readImageryView>>; surfaceRevision: number; missingRevision: number } | null = null;
+  let traversalInputs: { view: NonNullable<ReturnType<typeof readImageryView>>; surfaceRevision: number; missingRevision: number; focus: ImageryFocus | null } | null = null;
   let lastPublishedResidency = -1;
   let planChangedSincePublish = true;
   let patchesChanged = true;
@@ -283,7 +304,40 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
     return roots.every(root => residency.isResident(standardKey(source, root)) || residency.isMissing(standardKey(source, root)));
   }
 
-  function selectionInput(view: NonNullable<ReturnType<typeof readImageryView>>, source: SourceState): ImagerySelectionInput {
+  /** The focus region as the selector measures it: from the camera's distance to the point, at this view's pixel size. */
+  function currentFocus(view: NonNullable<ReturnType<typeof readImageryView>>): ImageryFocus | null {
+    const request = options.getFocus?.();
+    if (!request) return null;
+    const { position } = request;
+    return {
+      mode: request.mode,
+      position: { ...position },
+      radiusMeters: request.radiusMeters,
+      minDistanceMeters: Math.hypot(view.camera.x - position.x, view.camera.y - position.y, view.camera.z - position.z),
+      pixelAngle: view.pixelAngle ?? 1 / view.renderHeight,
+      offset: request.offsetCap === null ? offset : Math.min(offset, request.offsetCap),
+      horizonCull: request.horizonCull,
+    };
+  }
+
+  /** A change in the focus region worth a new selection: the point moved, or what it asks for changed. */
+  function focusChanged(a: ImageryFocus | null, b: ImageryFocus | null): boolean {
+    if (!a || !b) return a !== b;
+    const moved = Math.hypot(a.position.x - b.position.x, a.position.y - b.position.y, a.position.z - b.position.z);
+    const nearer = Math.abs(a.minDistanceMeters - b.minDistanceMeters) > 0.02 * Math.max(1, a.minDistanceMeters);
+    return a.mode !== b.mode || moved > 0.5 || nearer || a.radiusMeters !== b.radiusMeters
+      || a.pixelAngle !== b.pixelAngle || a.offset !== b.offset || a.horizonCull !== b.horizonCull;
+  }
+
+  function focusDiagnostics(): ImageryDiagnostics["focus"] {
+    const focus = lastView ? currentFocus(lastView) : null;
+    if (!focus) return null;
+    let pages = 0;
+    for (const leaf of plan?.leaves ?? []) if (leaf.inFocus) pages += leaf.pages;
+    return { pages, estimatedPages: Math.round(estimateFocusPages(focus)) };
+  }
+
+  function selectionInput(view: NonNullable<ReturnType<typeof readImageryView>>, source: SourceState, focus: ImageryFocus | null): ImagerySelectionInput {
     return {
       view,
       source: source.capabilities,
@@ -294,6 +348,7 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
       maxPages: pageBudget(),
       maxNodes: tuning.maxNodes,
       hysteresis: tuning.hysteresis,
+      focus,
       now: now(),
     };
   }
@@ -353,10 +408,14 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
     if (!view) return;
     const surfaceRevision = options.surface.getRevision();
     const missingRevision = residency.getMissingRevision();
+    const focus = currentFocus(view);
     const due = plan?.wakeAt !== null && plan?.wakeAt !== undefined && now() >= plan.wakeAt;
     const mergeReady = (plan?.mergeCandidates.length ?? 0) > 0 && residency.getRevision() !== lastMergeResidency;
+    // Around a focus point the view decides nothing: turning the camera selects nothing again.
+    const viewMatters = focus?.mode !== "around";
     const wanted = restartSelection || selector.isRunning() || !plan
-      || imageryViewChanged(lastView, view) || surfaceRevision !== lastSurfaceRevision
+      || (viewMatters && imageryViewChanged(lastView, view)) || focusChanged(lastFocus, focus)
+      || surfaceRevision !== lastSurfaceRevision
       || missingRevision !== lastMissingRevision || due || mergeReady;
     if (!wanted) return;
     // During continuous motion, start a traversal at most every 100 ms and
@@ -369,9 +428,9 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
     const started = now();
     if (!selector.isRunning() || restartSelection) {
       lastTraversalStart = started;
-      traversalInputs = { view, surfaceRevision, missingRevision };
+      traversalInputs = { view, surfaceRevision, missingRevision, focus };
     }
-    const step = selector.step(selectionInput(view, requested), started + limits.cpuMsPerUpdate, now, restartSelection);
+    const step = selector.step(selectionInput(view, requested, traversalInputs?.focus ?? focus), started + limits.cpuMsPerUpdate, now, restartSelection);
     counters.selectionCpuMs += now() - started;
     restartSelection = false;
     if (step.running) {
@@ -381,6 +440,7 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
     counters.selections += 1;
     // Anything that changed while the traversal ran is selected next time.
     lastView = traversalInputs?.view ?? view;
+    lastFocus = traversalInputs?.focus ?? focus;
     lastSurfaceRevision = traversalInputs?.surfaceRevision ?? surfaceRevision;
     lastMissingRevision = traversalInputs?.missingRevision ?? missingRevision;
     traversalInputs = null;
@@ -679,6 +739,7 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
             return { key: leaf.key, variant: leaf.variant, delivered, footprintPx: leaf.footprintPx, screenArea: Math.round(leaf.screenArea), limit: leaf.limit };
           }),
         },
+        focus: focusDiagnostics(),
         residency: residency.stats(),
         atlas: atlas && layout && {
           capacity: atlas.capacity,

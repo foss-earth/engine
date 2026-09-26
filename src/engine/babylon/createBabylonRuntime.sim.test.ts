@@ -191,7 +191,7 @@ describe("createBabylonRuntime simulation mode", () => {
     runtime.destroy();
   });
 
-  it("exposes Google terrain detail controls and uses the simulation origin once flight attaches it", async () => {
+  it("exposes Google terrain detail controls and refines from the simulation origin once flight attaches it", async () => {
     const setTerrainDetailTarget = vi.fn();
     const detail = { defaultErrorTarget: 20, errorTarget: 20, overrideErrorTarget: null };
     mocks.createGoogleTilesRuntime.mockReturnValue({
@@ -209,7 +209,7 @@ describe("createBabylonRuntime simulation mode", () => {
     expect(runtime.getGoogleTerrainDetailState()).toEqual(detail);
     runtime.setGoogleTerrainDetailTarget(48);
     expect(setTerrainDetailTarget).toHaveBeenCalledWith(48);
-    expect(runtime.getGoogleTerrainDetailAnchor()).toBe("simulation-origin");
+    expect(runtime.getGoogleTerrainDetailAnchor()).toBe("focus-point");
 
     const callbacks = mocks.createGoogleTilesRuntime.mock.calls[0][0] as {
       getTerrainDetailAnchor(): Vector3 | null;
@@ -221,6 +221,94 @@ describe("createBabylonRuntime simulation mode", () => {
     getAppSettings().set("map.focus.refineFrom", "camera");
     expect(runtime.getGoogleTerrainDetailAnchor()).toBe("camera");
     expect(callbacks.getTerrainDetailAnchor()).toBeNull();
+    runtime.destroy();
+  });
+
+  it("lists a host's focus points and hands the selected one's region to the map", async () => {
+    mocks.createGoogleTilesRuntime.mockReturnValue({
+      tiles: { visibleTiles: new Set(), activeTiles: new Set(), group: {} },
+      update: vi.fn(), dispose: vi.fn(),
+    });
+    const { createBabylonRuntime } = await import("./createBabylonRuntime");
+    const { getAppSettings } = await import("../../settings/appSettings");
+    const settings = getAppSettings();
+    const runtime = await createBabylonRuntime(document.createElement("canvas"), { googleApiKey: "test", simMode: true });
+    const google = mocks.createGoogleTilesRuntime.mock.calls[0][0] as {
+      getTerrainDetailAnchor(): Vector3 | null;
+      getFocus(): { mode: string; position: { x: number; y: number; z: number }; radiusMeters: number; finestErrorPx: number | null; horizonCull: boolean } | null;
+    };
+    const choices = () => settings.inspect("map.focus.point")?.choices.map(choice => choice.id);
+    expect(choices()).toEqual(["orbit-target"]);
+
+    let position: { x: number; y: number; z: number } | null = { x: 6_378_137, y: 10, z: 20 };
+    const getPosition = vi.fn(() => position);
+    const unregister = runtime.registerFocusPoint({ id: "aircraft", label: "Aircraft", getPosition });
+    expect(choices()).toEqual(["orbit-target", "aircraft"]);
+    // Before flight attaches the floating origin, the simulation origin is not known.
+    expect(runtime.getFocusPosition()).toBeNull();
+    settings.set("map.focus.point", "aircraft");
+    expect(runtime.getFocusPosition()).toEqual(position);
+
+    // The view alone decides what loads until the mode asks for a region.
+    expect(google.getFocus()).toBeNull();
+    settings.set("map.focus.mode", "around");
+    settings.set("map.focus.radius", 5000);
+    settings.set("map.focus.detailBelow.google", 64);
+    expect(google.getFocus()).toEqual({ mode: "around", position, radiusMeters: 5000, finestErrorPx: 64, horizonCull: true });
+
+    // Mesh detail can be measured from the same point; the world root is not shifted, so scene is ECEF.
+    settings.set("map.focus.refineFrom", "focus");
+    expect(google.getTerrainDetailAnchor()).toEqual(new Vector3(6_378_137, 10, 20));
+
+    // A point that cannot say where it is gives no region, rather than a wrong one.
+    position = { x: Number.NaN, y: 0, z: 0 };
+    expect(google.getFocus()).toBeNull();
+    getPosition.mockImplementation(() => { throw new Error("no aircraft"); });
+    expect(runtime.getFocusPosition()).toBeNull();
+
+    // Removed, the saved choice waits for the point to come back.
+    unregister();
+    expect(choices()).toEqual(["orbit-target"]);
+    expect(settings.get("map.focus.point")).toBe("orbit-target");
+    runtime.registerFocusPoint({ id: "aircraft", label: "Aircraft", getPosition: () => ({ x: 1, y: 2, z: 3 }) });
+    expect(settings.get("map.focus.point")).toBe("aircraft");
+    expect(() => runtime.registerFocusPoint({ id: "orbit-target", label: "Mine", getPosition: () => null })).toThrow();
+    runtime.destroy();
+  });
+
+  it("reads the focus point once per frame and gives 2D imagery its finest offset", async () => {
+    let scheduledFrame: FrameRequestCallback | null = null;
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation(callback => {
+      scheduledFrame = callback;
+      return 1;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
+    const { createBabylonRuntime } = await import("./createBabylonRuntime");
+    const { resolveRasterBaseMapSource } = await import("./rasterBaseMaps");
+    const { getAppSettings } = await import("../../settings/appSettings");
+    const settings = getAppSettings();
+    const runtime = await createBabylonRuntime(document.createElement("canvas"), {
+      preferGoogleTiles: false, rasterBaseMap: resolveRasterBaseMapSource("usgs-topo"), simMode: true,
+    });
+    const raster = mocks.createRasterTilesRuntime.mock.calls[0][0] as {
+      getFocus(): { mode: string; position: { x: number; y: number; z: number }; offsetCap: number | null } | null;
+    };
+    const getPosition = vi.fn(() => ({ x: 6_378_137, y: 0, z: 0 }));
+    runtime.registerFocusPoint({ id: "aircraft", label: "Aircraft", getPosition });
+    settings.set("map.focus.point", "aircraft");
+    settings.set("map.focus.mode", "both");
+    // "As the detail setting" leaves the offset to the view.
+    expect(raster.getFocus()).toMatchObject({ mode: "both", offsetCap: null });
+    settings.set("map.focus.detailBelow.imagery", -1);
+    expect(raster.getFocus()).toMatchObject({ offsetCap: -1 });
+
+    // Within a frame both maps see one position; the tick reads it once.
+    const rasterRuntime = mocks.createRasterTilesRuntime.mock.results[0].value as { update: ReturnType<typeof vi.fn> };
+    rasterRuntime.update.mockImplementation(() => { raster.getFocus(); raster.getFocus(); });
+    getPosition.mockClear();
+    runtime.requestRender();
+    (scheduledFrame as FrameRequestCallback | null)?.(performance.now());
+    expect(getPosition).toHaveBeenCalledOnce();
     runtime.destroy();
   });
 

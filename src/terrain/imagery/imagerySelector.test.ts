@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { tileContains, type TileId } from "./imageryGeometry";
 import {
   createImagerySelector,
+  estimateFocusPages,
   imageKey,
   type ImageryPlan,
   type ImagerySelectionInput,
@@ -348,5 +349,74 @@ describe("bounded work", () => {
   it("keys residency by source, version, variant and tile", () => {
     expect(imageKey(CARTO, { z: 3, x: 1, y: 2 }, "2x")).toBe("carto@1/2x/3/1/2");
     expect(imageKey(PHOTO, { z: 3, x: 1, y: 2 }, null)).toBe("photo@1/std/3/1/2");
+  });
+});
+
+describe("imagery around a focus point", () => {
+  const focusAt = (latDeg: number, lonDeg: number, heightMeters = 0) => {
+    const lat = (latDeg * Math.PI) / 180, lon = (lonDeg * Math.PI) / 180;
+    const a = 6378137, e2 = 6.69437999014e-3;
+    const n = a / Math.sqrt(1 - e2 * Math.sin(lat) ** 2);
+    return { x: (n + heightMeters) * Math.cos(lat) * Math.cos(lon), y: (n + heightMeters) * Math.cos(lat) * Math.sin(lon), z: (n * (1 - e2) + heightMeters) * Math.sin(lat) };
+  };
+  const focus = (mode: "around" | "both", overrides: Partial<import("./imagerySelector").ImageryFocus> = {}) => ({
+    mode, position: focusAt(36.1, -112.1), radiusMeters: 5000, minDistanceMeters: 1500,
+    pixelAngle: 0.8 / 720, offset: 0, horizonCull: true, ...overrides,
+  });
+  const leaves = (plan: ImageryPlan) => plan.leaves.map(leaf => `${leaf.key}:${leaf.variant ?? ""}`).sort();
+
+  it("loads the same imagery whichever way the camera turns around the point", () => {
+    const plans = [0, 90, 200, 310].map(headingDeg => select(input({ ...OBLIQUE, headingDeg }, { focus: focus("around") })));
+    expect(plans[0].leaves.length).toBeGreaterThan(16);
+    for (const plan of plans.slice(1)) expect(leaves(plan)).toEqual(leaves(plans[0]));
+    // A camera looking away from the point changes nothing either.
+    const away = select(input({ latDeg: 36.2, lonDeg: -112.0, altitudeMeters: 1500, pitchDeg: 80, headingDeg: 45 }, { focus: focus("around") }));
+    expect(leaves(away)).toEqual(leaves(plans[0]));
+  });
+
+  it("refines nothing beyond the radius", () => {
+    const plan = select(input(OBLIQUE, { focus: focus("around", { radiusMeters: 2000 }) }));
+    const wide = select(input(OBLIQUE, { focus: focus("around", { radiusMeters: 50_000 }) }));
+    expect(plan.leaves.length).toBeLessThan(wide.leaves.length);
+    expect(Math.max(...plan.leaves.map(leaf => leaf.tile.z))).toBeGreaterThan(8);
+  });
+
+  it("adds the region to the view, never coarsening what the view asked for", () => {
+    const view = select(input(OBLIQUE));
+    const both = select(input(OBLIQUE, { focus: focus("both") }));
+    expectRefinementOf(view, both);
+    expect(both.leaves.length).toBeGreaterThan(view.leaves.length);
+  });
+
+  it("asks the region for less where its own offset is coarser, and measures it no nearer than the camera", () => {
+    const normal = select(input(OBLIQUE, { focus: focus("around") }));
+    const coarser = select(input(OBLIQUE, { focus: focus("around", { offset: -2 }) }));
+    const farther = select(input(OBLIQUE, { focus: focus("around", { minDistanceMeters: 15_000 }) }));
+    expect(coarser.leaves.length).toBeLessThan(normal.leaves.length);
+    expect(farther.leaves.length).toBeLessThan(normal.leaves.length);
+  });
+});
+
+describe("the focus region's page estimate", () => {
+  const EARTH = 6_378_137;
+  const region = (overrides: Partial<Parameters<typeof estimateFocusPages>[0]> = {}) => ({
+    position: { x: EARTH, y: 0, z: 0 }, radiusMeters: 10_000, minDistanceMeters: 1000,
+    pixelAngle: 1e-3, offset: 0, horizonCull: false, ...overrides,
+  });
+
+  it("grows with the square of the radius inside the camera's distance, and with its log beyond", () => {
+    const perRing = (2 * Math.PI) / (256 * 1e-3) ** 2;
+    expect(estimateFocusPages(region({ radiusMeters: 500 }))).toBeCloseTo(perRing / 4);
+    expect(estimateFocusPages(region({ radiusMeters: 1000 }))).toBeCloseTo(perRing);
+    expect(estimateFocusPages(region({ radiusMeters: 20_000 })) - estimateFocusPages(region()))
+      .toBeCloseTo(perRing * 2 * Math.log(2));
+  });
+
+  it("costs four times the pages one level finer, and stops at the horizon when that is culled", () => {
+    expect(estimateFocusPages(region({ offset: 1 }))).toBeCloseTo(4 * estimateFocusPages(region()));
+    // 1 km up, the horizon is about 113 km away.
+    const horizon = Math.sqrt(2 * EARTH * 1000 + 1000 ** 2);
+    expect(estimateFocusPages(region({ radiusMeters: 200_000, horizonCull: true })))
+      .toBeCloseTo(estimateFocusPages(region({ radiusMeters: horizon })));
   });
 });

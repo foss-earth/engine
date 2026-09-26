@@ -147,6 +147,8 @@ export function sagittaMeters(angle: number): number {
  */
 export interface ImageryView {
   ecefToClip: ArrayLike<number>;
+  /** Radians one physical pixel spans at the centre of a perspective view. */
+  pixelAngle?: number;
   /** The near plane as `z * nearPlane.z + w * nearPlane.w >= 0` in clip space. */
   nearPlane: { z: number; w: number };
   camera: Vec3;

@@ -17,7 +17,8 @@ export function readImageryView(scene: Scene, worldRoot: TransformNode | null): 
   const renderWidth = engine.getRenderWidth();
   const renderHeight = engine.getRenderHeight();
   if (renderWidth <= 0 || renderHeight <= 0) return null;
-  const viewProjection = multiplyMatrices(camera.getViewMatrix().m, camera.getProjectionMatrix().m);
+  const projection = camera.getProjectionMatrix().m;
+  const viewProjection = multiplyMatrices(camera.getViewMatrix().m, projection);
   const world = worldRoot ? worldRoot.computeWorldMatrix(true) : null;
   const ecefToClip = world ? multiplyMatrices(world.m, viewProjection) : viewProjection;
   eye.copyFrom(camera.globalPosition);
@@ -34,6 +35,7 @@ export function readImageryView(scene: Scene, worldRoot: TransformNode | null): 
   const nearPlane = reverse ? { z: -1, w: 1 } : halfZ ? { z: 1, w: 0 } : { z: 1, w: 1 };
   return {
     ecefToClip,
+    pixelAngle: 2 / (Math.abs(projection[5]) * renderHeight),
     nearPlane,
     camera: { x: eye.x, y: eye.y, z: eye.z },
     renderWidth,

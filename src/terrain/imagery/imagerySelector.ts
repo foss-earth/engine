@@ -31,6 +31,7 @@ import {
   type ImageryView,
   type SurfaceSample,
   type TileId,
+  type Vec3,
 } from "./imageryGeometry";
 
 export type ImagerySourceKind = "photographic" | "cartographic";
@@ -90,7 +91,30 @@ export interface ImagerySelectionInput {
   maxNodes: number;
   /** When a region changes level: the `map.imagery.*` hysteresis parameters. */
   hysteresis: ImageryHysteresis;
+  /** What else to load around a focus point: `map.focus.*`. Null: only the view. */
+  focus?: ImageryFocus | null;
   now: number;
+}
+
+/**
+ * A region around a focus point loaded in every direction, refined by its
+ * distance from that point rather than by the view, so turning the camera
+ * around the point loads nothing new.
+ */
+export interface ImageryFocus {
+  /** "around": only the region loads. "both": it loads as well as the view. */
+  mode: "around" | "both";
+  /** ECEF metres. */
+  position: Vec3;
+  radiusMeters: number;
+  /** The region is never measured nearer than this, the camera's distance to the point. */
+  minDistanceMeters: number;
+  /** Radians one physical pixel spans at the centre of the view. */
+  pixelAngle: number;
+  /** The region's offset: never finer than the view's. */
+  offset: number;
+  /** Skip regions below the horizon of a viewer `minDistanceMeters` above the point. */
+  horizonCull: boolean;
 }
 
 /** Keeps level changes bounded when the view or the target jitters around a threshold. */
@@ -122,6 +146,8 @@ export interface ImageryPlanLeaf {
   /** Estimated visible screen area in physical pixels, for ranking loads. */
   screenArea: number;
   limit: DetailLimit | null;
+  /** Within the focus region, so kept whatever the view. */
+  inFocus: boolean;
 }
 
 export interface ImageryPlan {
@@ -177,6 +203,8 @@ interface Evaluated {
   screenArea: number;
   outsideCoverage: boolean;
   limit: DetailLimit | null;
+  /** Inside the focus region: loaded whatever the view. */
+  inFocus: boolean;
 }
 
 interface Job {
@@ -188,6 +216,10 @@ interface Job {
   camera: { lonDeg: number; latDeg: number };
   /** Where rays across the screen meet the ground, to measure tiles that surround the view. */
   screenGround: Array<{ latDeg: number; lonDeg: number }>;
+  focus: ImageryFocus | null;
+  focusLonLat: { lonDeg: number; latDeg: number };
+  /** Where the focus region's horizon is seen from. */
+  focusViewer: Vec3;
   heap: Evaluated[];
   leaves: Evaluated[];
   coverage: TileId[];
@@ -303,13 +335,99 @@ function surfaceSample(input: ImagerySelectionInput, tile: TileId, u: number, v:
   return sampleTileSurface(tile, u, v, h, slopeU, slopeV);
 }
 
+/**
+ * How the focus region needs a tile: whether any of it lies within the radius
+ * (and above the viewer's horizon), and its worst footprint as seen from the
+ * focus point, facing it, in the selection's units scaled to the view's target.
+ */
+function measureFocus(job: Job, tile: TileId): { within: boolean; footprint: number; physicalFootprint: number } {
+  const { input } = job;
+  const focus = job.focus!;
+  const bounds = input.surface.boundsFor(tile);
+  const points: Array<{ u: number; v: number }> = [];
+  for (const v of GRID) for (const u of GRID) points.push({ u, v });
+  points.push(nearestLocal(tile, job.focusLonLat));
+  let nearest = Infinity;
+  let worst = 0;
+  for (const point of points) {
+    const sample = surfaceSample(input, tile, point.u, point.v, bounds.max);
+    const d = Math.hypot(sample.position.x - focus.position.x, sample.position.y - focus.position.y, sample.position.z - focus.position.z);
+    nearest = Math.min(nearest, d);
+    const pixelMeters = Math.max(
+      Math.hypot(sample.du.x, sample.du.y, sample.du.z) / input.source.tileWidth,
+      Math.hypot(sample.dv.x, sample.dv.y, sample.dv.z) / input.source.tileHeight,
+    );
+    worst = Math.max(worst, pixelMeters / Math.max(1, d, focus.minDistanceMeters) / focus.pixelAngle);
+  }
+  let within = nearest <= focus.radiusMeters;
+  if (within && focus.horizonCull) {
+    const span = tileAngularSpan(tile);
+    const lift = sagittaMeters(span / 2);
+    const hull: Vec3[] = [];
+    for (const point of points) for (const height of [bounds.min, bounds.max + lift]) hull.push(sampleTileSurface(tile, point.u, point.v, height).position);
+    const center = hull.reduce((sum, p) => ({ x: sum.x + p.x / hull.length, y: sum.y + p.y / hull.length, z: sum.z + p.z / hull.length }), { x: 0, y: 0, z: 0 });
+    const radius = Math.max(...hull.map(p => Math.hypot(p.x - center.x, p.y - center.y, p.z - center.z))) * 1.1;
+    if (isSphereBelowHorizon(job.focusViewer, center, radius)) within = false;
+  }
+  // The region's own offset, expressed against the view's target so one traversal ranks both.
+  const view = input.view;
+  const toSelection = job.cartographic ? view.logicalHeight / view.renderHeight : 1;
+  const focusSelectionTarget = job.cartographic ? 2 ** Math.max(0, -focus.offset) : 2 ** -focus.offset;
+  return {
+    within,
+    footprint: worst * toSelection * (job.target / focusSelectionTarget),
+    physicalFootprint: worst * (job.physicalTarget / 2 ** -focus.offset),
+  };
+}
+
+/**
+ * About how many standard pages the focus region needs, before any is
+ * selected. Ground at distance d wants image pixels of d·α·t metres (α the
+ * pixel angle, t the target, 2^−offset), and a leaf lands between half and all
+ * of that, so a ring of width dd holds 2π·d·dd / (W·d·α·t/√2)² pages of W px.
+ * Nearer than the camera's distance D the density stays at D's, and with the
+ * horizon culled nothing past the raised viewer's horizon counts. On flat
+ * ground that sums to 2π/(W·α·t)² · (1 + 2·ln(R/D)).
+ */
+export function estimateFocusPages(focus: Pick<ImageryFocus, "position" | "radiusMeters" | "minDistanceMeters" | "pixelAngle" | "offset" | "horizonCull">): number {
+  const distance = Math.max(1, focus.minDistanceMeters);
+  const earth = Math.hypot(focus.position.x, focus.position.y, focus.position.z);
+  const horizon = Math.sqrt(2 * earth * distance + distance * distance);
+  const radius = focus.horizonCull ? Math.min(focus.radiusMeters, horizon) : focus.radiusMeters;
+  const perRing = (2 * Math.PI) / (STANDARD_PAGE_SIZE * focus.pixelAngle * 2 ** -focus.offset) ** 2;
+  return radius <= distance ? perRing * (radius / distance) ** 2 : perRing * (1 + 2 * Math.log(radius / distance));
+}
+
 function evaluate(job: Job, tile: TileId): Evaluated {
+  if (!job.focus) return evaluateView(job, tile);
+  if (job.focus.mode === "around") {
+    // Only the focus region: the view does not decide what loads.
+    job.nodes += 1;
+    const focus = measureFocus(job, tile);
+    return {
+      tile, key: tileKey(tile), visible: focus.within, footprint: focus.within ? focus.footprint : 0,
+      physicalFootprint: focus.within ? focus.physicalFootprint : 0, screenArea: 0,
+      outsideCoverage: outsideCoverage(job.input.source, tile), limit: null, inFocus: focus.within,
+    };
+  }
+  const result = evaluateView(job, tile);
+  const focus = measureFocus(job, tile);
+  if (focus.within) {
+    result.visible = true;
+    result.inFocus = true;
+    result.footprint = Math.max(result.footprint, focus.footprint);
+    result.physicalFootprint = Math.max(result.physicalFootprint, focus.physicalFootprint);
+  }
+  return result;
+}
+
+function evaluateView(job: Job, tile: TileId): Evaluated {
   const { input } = job;
   const { view, source } = input;
   job.nodes += 1;
   const result: Evaluated = {
     tile, key: tileKey(tile), visible: false, footprint: 0, physicalFootprint: 0, screenArea: 0,
-    outsideCoverage: outsideCoverage(source, tile), limit: null,
+    outsideCoverage: outsideCoverage(source, tile), limit: null, inFocus: false,
   };
   const bounds = input.surface.boundsFor(tile);
   const span = tileAngularSpan(tile);
@@ -471,10 +589,18 @@ export function createImagerySelector(): ImagerySelector {
     // Cartographic levels keep readable map scale in logical pixels: finer
     // offsets never advance them, coarser ones may choose parents.
     const target = cartographic ? 2 ** Math.max(0, -input.offset) : physicalTarget;
+    const focus = input.focus ?? null;
+    const focusPosition = focus?.position ?? { x: 0, y: 0, z: 0 };
+    const focusGeo = ecefToGeodetic(focusPosition.x, focusPosition.y, focusPosition.z);
+    const up = Math.hypot(focusPosition.x, focusPosition.y, focusPosition.z) || 1;
+    const lift = focus ? focus.minDistanceMeters / up : 0;
     const next: Job = {
       input, sourceKey: imageSourceKey(input.source), target, physicalTarget, cartographic,
       camera: cameraLonLat(input.view),
       screenGround: [],
+      focus,
+      focusLonLat: { lonDeg: (focusGeo.lonRad * 180) / Math.PI, latDeg: (focusGeo.latRad * 180) / Math.PI },
+      focusViewer: { x: focusPosition.x * (1 + lift), y: focusPosition.y * (1 + lift), z: focusPosition.z * (1 + lift) },
       heap: [], leaves: [], coverage: [], mergeCandidates: [], leafCount: 0, nodes: 0, limits: new Set(),
       nextMemory: new Map(), wakeAt: null, truncated: false, cpuMs: 0,
     };
@@ -631,7 +757,8 @@ export function createImagerySelector(): ImagerySelector {
       // Cartographic leaves meet the physical sampling target with verified
       // same-zoom variants; photographic ones only where no finer level exists.
       // Nothing on screen gains from a denser image; it only costs pages.
-      const onScreen = node.screenArea > 0;
+      // The focus region counts as seen: its images must not depend on the view.
+      const onScreen = node.screenArea > 0 || node.inFocus;
       const mayUseVariant = (current.cartographic || atCeiling) && onScreen && Number.isFinite(node.physicalFootprint);
       if (mayUseVariant && (footprintPx > current.physicalTarget || standardMissing)) {
         for (const candidate of input.source.variants) {
@@ -666,6 +793,7 @@ export function createImagerySelector(): ImagerySelector {
         selectionFootprint: node.footprint,
         screenArea: node.screenArea,
         limit,
+        inFocus: node.inFocus,
       });
     }
     memory = current.nextMemory;

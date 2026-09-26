@@ -124,11 +124,32 @@ export type { GoogleTerrainDetailState };
 
 /**
  * Where Google 3D Tiles measure distance when choosing mesh detail: the
- * camera, a simulation's floating origin, or the globe camera's orbit target.
- * The `map.focus.refineFrom` parameter chooses between the camera and the
- * focus point, which is the simulation origin in simulation mode.
+ * camera or the selected focus point, which in a simulation is its floating
+ * origin unless the host registers another. `map.focus.refineFrom` chooses.
  */
-export type GoogleTerrainDetailAnchor = "camera" | "simulation-origin" | "orbit-target";
+export type GoogleTerrainDetailAnchor = "camera" | "focus-point";
+
+/**
+ * A point the map can be loaded around (`map.focus.point`), such as an
+ * aircraft. Its position is read at most once per rendered frame.
+ */
+export interface FocusPoint {
+  /** Stable: saved as the parameter's value. */
+  id: string;
+  label: string;
+  /** ECEF metres, or null while it is not known. */
+  getPosition(): { x: number; y: number; z: number } | null;
+}
+
+/** The parameters that decide the focus region, read by both maps each frame. */
+const FOCUS_PARAMETER_IDS = [
+  "map.focus.mode",
+  "map.focus.point",
+  "map.focus.radius",
+  "map.focus.horizonCull",
+  "map.focus.detailBelow.imagery",
+  "map.focus.detailBelow.google",
+] as const;
 
 interface MapDebugEvent {
   at: number;
@@ -167,6 +188,13 @@ export interface BabylonRuntime {
    * normal adaptive target.
    */
   setGoogleTerrainDetailTarget(errorTarget: number | null): void;
+  /**
+   * Adds a point the map can be loaded around, listed in Map → Detail's Focus
+   * point. Returns a function that removes it.
+   */
+  registerFocusPoint(point: FocusPoint): () => void;
+  /** The selected focus point in ECEF metres, or null while it is not known. */
+  getFocusPosition(): { x: number; y: number; z: number } | null;
   /** Return the point used to choose Google mesh detail. */
   getGoogleTerrainDetailAnchor(): GoogleTerrainDetailAnchor;
   /**
@@ -352,9 +380,7 @@ export async function createBabylonRuntime(
   const downloadMeter = createMapDownloadMeter();
   let tilesRuntime: GoogleTilesRuntime | null = null;
   let googleTerrainDetailTarget: number | null = null;
-  const anchorForRefinement = (value: unknown): GoogleTerrainDetailAnchor => (
-    value === "focus" ? (simMode ? "simulation-origin" : "orbit-target") : "camera"
-  );
+  const anchorForRefinement = (value: unknown): GoogleTerrainDetailAnchor => (value === "focus" ? "focus-point" : "camera");
   let googleTerrainDetailAnchor: GoogleTerrainDetailAnchor = anchorForRefinement(settings.get("map.focus.refineFrom"));
   let rasterTilesRuntime: RasterTilesRuntime | null = null;
   let googleTilesStartupWatchdog: number | null = null;
@@ -377,6 +403,54 @@ export async function createBabylonRuntime(
   let preparationTick: ((now: number) => void) | null = null;
   let cancelPreparation: ((error: Error) => void) | null = null;
   let activeRasterBaseMap = options.rasterBaseMap ?? null;
+  // Focus points: the built-in orbit target and those a host registers.
+  const focusPoints = new Map<string, FocusPoint>();
+  const syncFocusChoices = (): void => settings.setChoices("map.focus.point", [
+    { id: "orbit-target", label: simMode ? "Simulation origin" : "Orbit target" },
+    ...[...focusPoints.values()].map(point => ({ id: point.id, label: point.label })),
+  ]);
+  syncFocusChoices();
+  const worldMatrix = (): ReturnType<TransformNode["computeWorldMatrix"]> | null => (worldRoot ? worldRoot.computeWorldMatrix(true) : null);
+  const ecefToScene = (ecef: { x: number; y: number; z: number }): Vector3 => {
+    const world = worldMatrix();
+    const point = new Vector3(ecef.x, ecef.y, ecef.z);
+    return world ? Vector3.TransformCoordinates(point, world) : point;
+  };
+  /** The orbit target in ECEF: the globe camera's target, or a simulation's floating origin. */
+  const orbitTarget = (): { x: number; y: number; z: number } | null => {
+    if (worldRoot) {
+      if (!worldRoot.parent) return null;
+      const origin = Vector3.TransformCoordinates(Vector3.Zero(), worldRoot.computeWorldMatrix(true).clone().invert());
+      return { x: origin.x, y: origin.y, z: origin.z };
+    }
+    const center = geospatialCamera?.center;
+    return center ? { x: center.x, y: center.y, z: center.z } : null;
+  };
+  // Both maps' updates in one frame see the same focus position; outside a
+  // frame, such as a host's own update, it is read fresh.
+  let inFrame = false;
+  let focusCache: { value: { x: number; y: number; z: number } | null } | null = null;
+  /** The selected focus point, read at most once per rendered frame. */
+  const focusPosition = (): { x: number; y: number; z: number } | null => {
+    if (inFrame && focusCache) return focusCache.value;
+    const id = String(settings.get("map.focus.point"));
+    const point = focusPoints.get(id);
+    let value: { x: number; y: number; z: number } | null = null;
+    try { value = point ? point.getPosition() : orbitTarget(); } catch { value = null; }
+    value = value && [value.x, value.y, value.z].every(Number.isFinite) ? { x: value.x, y: value.y, z: value.z } : null;
+    if (inFrame) focusCache = { value };
+    return value;
+  };
+  /** The region to load around the focus point, when the focus mode asks for one. */
+  const focusRequest = (): { mode: "around" | "both"; position: { x: number; y: number; z: number }; radiusMeters: number; horizonCull: boolean } | null => {
+    const mode = settings.get("map.focus.mode");
+    if (mode !== "around" && mode !== "both") return null;
+    const position = focusPosition();
+    if (!position) return null;
+    const radius = settings.get("map.focus.radius");
+    return { mode, position, radiusMeters: typeof radius === "number" ? radius : 0, horizonCull: settings.get("map.focus.horizonCull") !== false };
+  };
+
   // A provider's key goes into its requests only: the source the rest of the app sees has none.
   const keyedSource = (source: RasterBaseMapSource): RasterBaseMapSource => {
     const key = source.apiKey ? settings.get(source.apiKey.parameter) : "";
@@ -386,7 +460,6 @@ export async function createBabylonRuntime(
   let activeRasterQuality: RasterQualitySetting | undefined = options.rasterQuality;
   let lastRasterFrameAt = performance.now();
   const worldRoot = simMode ? new TransformNode("sim-world-root", scene) : null;
-  const simulationOrigin = Vector3.Zero();
 
   // Held while Google tiles are initializing so the scheduler pumps
   // tiles.update() every frame even when the user hasn't moved the camera.
@@ -421,6 +494,8 @@ export async function createBabylonRuntime(
   };
   const scheduler: RenderScheduler = createRenderScheduler({
     tick: () => {
+      inFrame = true;
+      focusCache = null;
       const frameNow = performance.now();
       terrainCapture?.beginFrame(frameNow);
       if (!simMode) {
@@ -453,6 +528,8 @@ export async function createBabylonRuntime(
       // simulation's floating origin. Refinement keeps running with no aircraft.
       preparationTick?.(frameNow);
       terrainCapture?.endFrame();
+      inFrame = false;
+      focusCache = null;
       if (mapDebugEnabled) {
         recordMapDebugEvent("scene-render", { mode: status.mode, enabledMeshes: scene.meshes.filter(mesh => mesh.isEnabled()).length });
       }
@@ -732,6 +809,12 @@ export async function createBabylonRuntime(
         scene,
         source: keyedSource(rasterBaseMap),
         settings,
+        getFocus: () => {
+          const request = focusRequest();
+          if (!request) return null;
+          const finest = settings.get("map.focus.detailBelow.imagery");
+          return { ...request, offsetCap: typeof finest === "number" ? finest : null };
+        },
         worldRoot: worldRoot ?? undefined,
         alwaysRefresh: simMode,
         getViewState: () => preparationViewState ?? (simMode && simViewState
@@ -846,10 +929,17 @@ export async function createBabylonRuntime(
         // its normal camera-based detail selection remains the safe behavior.
         settings,
         getTerrainDetailAnchor: () => {
-          if (googleTerrainDetailAnchor === "simulation-origin") return worldRoot?.parent ? simulationOrigin : null;
-          // Without a simulation the scene is in ECEF, so the orbit target is a scene point.
-          if (googleTerrainDetailAnchor === "orbit-target" && !worldRoot) return geospatialCamera?.center ?? null;
+          if (googleTerrainDetailAnchor === "focus-point") {
+            const focus = focusPosition();
+            return focus ? ecefToScene(focus) : null;
+          }
           return null;
+        },
+        getFocus: () => {
+          const request = focusRequest();
+          if (!request) return null;
+          const finest = settings.get("map.focus.detailBelow.google");
+          return { ...request, finestErrorPx: typeof finest === "number" ? finest : null };
         },
         onLoadError: (error, url) => {
           if (status.mode !== "google-tiles") return;
@@ -985,6 +1075,11 @@ export async function createBabylonRuntime(
       rasterTilesRuntime.setSource(keyedSource(source));
       scheduler.requestRender();
     }),
+    // Both maps read the focus region each frame; a change needs one drawn.
+    ...FOCUS_PARAMETER_IDS.map(id => settings.watch(id, () => {
+      focusCache = null;
+      scheduler.requestRender();
+    })),
   ];
 
   // The HTTP tile cache is shared by every map on the page; its limits are parameters.
@@ -1043,6 +1138,13 @@ export async function createBabylonRuntime(
     ["map.imagery.maxNodes", () => {
       const plan = imagery()?.plan;
       return plan ? `${plan.nodesEvaluated} examined${plan.truncated ? ", limit reached" : ""}` : null;
+    }],
+    ["map.focus.radius", () => {
+      const diagnostics = imagery();
+      const focus = diagnostics?.focus;
+      if (!focus) return null;
+      const limited = diagnostics.plan?.limits.includes("memory") ? "; the GPU budget limits its detail" : "";
+      return `${focus.pages} imagery pages in the region, about ${focus.estimatedPages} expected from this view${limited}`;
     }],
     ["map.terrain.cachedTiles", () => {
       const metrics = status.mode === "raster-basemap" ? rasterTilesRuntime?.getMetrics() : null;
@@ -1276,6 +1378,21 @@ export async function createBabylonRuntime(
       tilesRuntime?.setTerrainDetailTarget(errorTarget);
       scheduler.requestRender();
     },
+    registerFocusPoint(point: FocusPoint): () => void {
+      if (point.id === "orbit-target") throw new Error("The focus point id orbit-target is built in.");
+      focusPoints.set(point.id, point);
+      syncFocusChoices();
+      focusCache = null;
+      scheduler.requestRender();
+      return () => {
+        if (focusPoints.get(point.id) !== point) return;
+        focusPoints.delete(point.id);
+        syncFocusChoices();
+        focusCache = null;
+        scheduler.requestRender();
+      };
+    },
+    getFocusPosition: focusPosition,
     getGoogleTerrainDetailAnchor(): GoogleTerrainDetailAnchor {
       return googleTerrainDetailAnchor;
     },
