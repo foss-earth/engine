@@ -595,6 +595,14 @@ export async function createGlobeApp(
     });
   };
   const stopWatchingSettings = [
+    // What automatic adjustment did, and why, goes in the log as it happens.
+    runtime.onDetailAdjusted(decision => {
+      const levels = Math.round(Math.abs(decision.to - decision.from) * 100) / 100;
+      const why = `frames averaged ${decision.meanFrameMs.toFixed(1)} ms against a ${decision.goalMs.toFixed(1)} ms goal`;
+      gameLog.print(decision.to > decision.from
+        ? { text: `Map detail coarsened ${levels} level${levels === 1 ? "" : "s"} to hold the frame time: ${why}.`, tone: "warning" }
+        : { text: `Map detail returned ${levels} level${levels === 1 ? "" : "s"} toward what you asked for: ${why}.`, tone: "info" });
+    }),
     ...HUD_BUTTON_IDS.map(id => settings.watch(hudButtonParameterId(id), applyHudButtonVisibility)),
     ...PERFORMANCE_HUD_METRICS.map(([metric]) => settings.watch(`interface.performanceHud.${metric}`, () => {
       visiblePerformanceMetrics = readVisiblePerformanceMetrics();
