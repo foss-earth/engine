@@ -2,13 +2,13 @@ import { DEFAULT_RASTER_BASE_MAP_ID, isKnownRasterBaseMapId } from "../../engine
 import type { UrlAliasResult } from "../registry";
 import type { LegacyMigration, ParameterSpec, ParameterValue } from "../types";
 import { CONTROLS_PARAMETERS, CONTROLS_TAB } from "./controls";
-import { INTERFACE_PARAMETERS, PERFORMANCE_HUD_METRICS, SETTINGS_TAB, TOOLBAR_BUTTONS } from "./interface";
+import { INTERFACE_PARAMETERS, INTERFACE_TAB, PERFORMANCE_HUD_METRICS, SETTINGS_TAB, TOOLBAR_BUTTONS } from "./interface";
 import { MAP_AUTO_PARAMETERS } from "./auto";
 import { MAP_LOADING_PARAMETERS, MAP_SELECTION_PARAMETERS, MAP_TERRAIN_SELECTION_PARAMETERS } from "./loading";
 import { MAP_DETAIL_PARAMETERS, MAP_SOURCE_PARAMETERS, MAP_TAB } from "./map";
 import { RENDERER_PARAMETERS, RENDERER_TAB } from "./renderer";
 
-export { CONTROLS_TAB, MAP_TAB, RENDERER_TAB, SETTINGS_TAB, PERFORMANCE_HUD_METRICS, TOOLBAR_BUTTONS };
+export { CONTROLS_TAB, INTERFACE_TAB, MAP_TAB, RENDERER_TAB, SETTINGS_TAB, PERFORMANCE_HUD_METRICS, TOOLBAR_BUTTONS };
 export { INPUT_RATE_IDS, INPUT_SENSITIVITY_IDS } from "./controls";
 export { atlasLimitMiB } from "./loading";
 
@@ -41,8 +41,8 @@ export const FOSS_EARTH_SECTION_TITLES: ReadonlyArray<readonly [string, string, 
   [CONTROLS_TAB, "mouse", "Mouse and trackpad"],
   [CONTROLS_TAB, "touch", "Touch"],
   [CONTROLS_TAB, "controller", "Controller"],
-  [SETTINGS_TAB, "toolbar", "Toolbar"],
-  [SETTINGS_TAB, "performance", "Performance debug"],
+  [RENDERER_TAB, "performance", "Performance debug"],
+  [INTERFACE_TAB, "toolbar", "Toolbar"],
 ];
 
 function parseJson(raw: string): unknown {

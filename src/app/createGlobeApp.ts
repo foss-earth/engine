@@ -64,7 +64,9 @@ export interface GlobeAppHandle extends GlobeHandle {
   openControllerBindings(): void;
   /** The globe's input and controller settings, for the host's Controls tab. */
   controlsSections: readonly PanelSection[];
-  /** The globe's settings, for the host's Settings tab. */
+  /** The toolbar and theme, for the host's Interface tab. */
+  interfaceSections: readonly PanelSection[];
+  /** Saved settings and About, for the host's Settings tab. */
   settingsSections: readonly PanelSection[];
   /** The basemap and elevation choice, for the host's Map tab. */
   mapTab: HTMLElement;
@@ -480,7 +482,6 @@ export async function createGlobeApp(
   const toggleTab = (tabId: Parameters<WindowOverlayHandle["toggleTab"]>[0]): void => {
     options.overlayApiRef?.current?.toggleTab(tabId);
   };
-  const rendererPanel = createRendererPanel({ renderer: runtime.renderer, onChange: force => applyRendererChoice(force, settings), settings });
   // One detail controller: the HUD rail and the Map tab's Detail group both
   // observe it, and it is the only writer of the renderer's detail target.
   const mapDetail: MapDetailController = options.mapDetail ?? createMapDetailController();
@@ -709,12 +710,26 @@ export async function createGlobeApp(
     { id: "controller", title: settings.getSectionTitle("controls", "controller"),
       element: sectionOf("controls", "controller", { main: controllerSectionEl ?? undefined }), defaultOpen: false },
   ];
+  const interfaceSections: PanelSection[] = [
+    { id: "toolbar", title: settings.getSectionTitle("interface", "toolbar"), element: sectionOf("interface", "toolbar", {
+      footer: note("Hiding a button never hides its tab: every tab stays under +."),
+    }), defaultOpen: false },
+  ];
   const settingsSections: PanelSection[] = [
-    { id: "toolbar", title: "Toolbar", element: sectionOf("settings", "toolbar", { footer: note("Settings stays available from + in either panel.") }), defaultOpen: false },
-    { id: "performance", title: "Performance debug", element: sectionOf("settings", "performance", { main: performanceMain, covers: [...performanceIds, "interface.poiSpriteTuner", "interface.compassScaleTuner"] }), defaultOpen: false },
     { id: "saved-settings", title: "Saved settings", element: savedSettings.element, defaultOpen: false },
     ...(aboutElement ? [{ id: "about", title: "About", element: aboutElement, defaultOpen: false }] : []),
   ];
+  // Performance debug is about what the renderer does, so it is the Renderer tab's.
+  const rendererPanel = createRendererPanel({
+    renderer: runtime.renderer,
+    onChange: force => applyRendererChoice(force, settings),
+    settings,
+    sections: [{
+      id: "performance",
+      title: settings.getSectionTitle("renderer", "performance"),
+      element: sectionOf("renderer", "performance", { main: performanceMain, covers: [...performanceIds, "interface.poiSpriteTuner", "interface.compassScaleTuner"] }),
+    }],
+  });
   void gamepadStore.listProfileIds("foss-earth").then(async (ids) => {
     const stored = ids.length > 0 ? await gamepadStore.loadProfile("foss-earth", ids[0]) : null;
     if (!stored || stored.hostNamespace !== "foss-earth") {
@@ -838,6 +853,7 @@ export async function createGlobeApp(
     inputModeHud,
     openControllerBindings,
     controlsSections,
+    interfaceSections,
     settingsSections,
     mapTab: mapPanel.element,
     rendererTab: rendererPanel.element,

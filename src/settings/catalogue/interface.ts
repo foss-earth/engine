@@ -1,7 +1,11 @@
 import type { ParameterSpec } from "../types";
 
-/** Sections that stay in the Settings tab until the tabs they affect exist. */
+/** The Settings tab: saved settings and About, which have no parameters. */
 export const SETTINGS_TAB = "settings";
+/** The Interface tab: the toolbar and theme. */
+export const INTERFACE_TAB = "interface";
+/** Performance debug, in the Renderer tab: what the performance HUD shows, and the tuners. */
+const PERFORMANCE = { tab: "renderer", section: "performance" } as const;
 
 export const TOOLBAR_BUTTONS = [
   ["help", "Help (?)", "the ? button that opens the controls help"],
@@ -21,7 +25,7 @@ export const PERFORMANCE_HUD_METRICS = [
   ["memory", "Memory", true, "Approximate JavaScript heap memory currently used by the page."],
 ] as const;
 
-function toggle(id: string, label: string, description: string, fallback: boolean, reason: string, section: string, source: string, level: "main" | "all" = "main"): ParameterSpec {
+function toggle(id: string, label: string, description: string, fallback: boolean, reason: string, home: { tab: string; section: string }, source: string, level: "main" | "all" = "main"): ParameterSpec {
   return {
     id,
     label,
@@ -30,13 +34,13 @@ function toggle(id: string, label: string, description: string, fallback: boolea
     kind: "boolean",
     default: fallback,
     defaultReason: reason,
-    home: { tab: SETTINGS_TAB, section, level },
+    home: { ...home, level },
     appliesLive: true,
     source,
   };
 }
 
-function metres(id: string, label: string, description: string, fallback: number, min: number, max: number, section: string, source: string): ParameterSpec {
+function metres(id: string, label: string, description: string, fallback: number, min: number, max: number, source: string): ParameterSpec {
   return {
     id,
     label,
@@ -47,7 +51,7 @@ function metres(id: string, label: string, description: string, fallback: number
     scale: "log2",
     default: fallback,
     defaultReason: "The value it was drawn with before it became a setting.",
-    home: { tab: SETTINGS_TAB, section, level: "all" },
+    home: { ...PERFORMANCE, level: "all" },
     appliesLive: true,
     source,
   };
@@ -66,22 +70,22 @@ export const INTERFACE_PARAMETERS: readonly ParameterSpec[] = [
     ],
     default: "dark",
     defaultReason: "A dark frame keeps attention on the map.",
-    home: { tab: SETTINGS_TAB, section: "toolbar", level: "all" },
+    home: { tab: INTERFACE_TAB, section: "toolbar", level: "all" },
     appliesLive: true,
     source: "src/theme/theme.ts",
   },
   ...TOOLBAR_BUTTONS.map(([button, label, what]) => toggle(
     `interface.toolbar.${button}`, label, `Shows ${what}. Hiding it never hides what it opens: that stays under +.`,
-    true, "A first-time visitor does not know that + opens the same things.", "toolbar", "src/hud/hudButtonVisibility.ts",
+    true, "A first-time visitor does not know that + opens the same things.", { tab: INTERFACE_TAB, section: "toolbar" }, "src/hud/hudButtonVisibility.ts",
   )),
   ...PERFORMANCE_HUD_METRICS.map(([metric, label, visible, tooltip]) => toggle(
     `interface.performanceHud.${metric}`, `${label} on the toolbar`, tooltip,
-    visible, visible ? "Shown by default: it is the first thing to look at." : "Hidden by default: a debugging reading.", "performance", "src/app/createGlobeApp.ts",
+    visible, visible ? "Shown by default: it is the first thing to look at." : "Hidden by default: a debugging reading.", PERFORMANCE, "src/app/createGlobeApp.ts",
   )),
   toggle("interface.poiSpriteTuner", "POI sprite size tuner", "Shows the panel that tunes the size of point-of-interest sprites.",
-    false, "A debugging panel.", "performance", "src/hud/poiSpriteSizeTuner.ts"),
+    false, "A debugging panel.", PERFORMANCE, "src/hud/poiSpriteSizeTuner.ts"),
   toggle("interface.compassScaleTuner", "Compass scale tuner", "Shows the panel that tunes the orbit compass's size.",
-    false, "A debugging panel.", "performance", "src/hud/compassScaleTuner.ts"),
+    false, "A debugging panel.", PERFORMANCE, "src/hud/compassScaleTuner.ts"),
   {
     id: "visualization.compass.heightOffset",
     label: "Compass orbit height",
@@ -107,12 +111,12 @@ export const INTERFACE_PARAMETERS: readonly ParameterSpec[] = [
     scale: "log2",
     default: 0.035,
     defaultReason: "The value it was drawn with before it became a setting.",
-    home: { tab: SETTINGS_TAB, section: "performance", level: "all" },
+    home: { ...PERFORMANCE, level: "all" },
     appliesLive: true,
     source: "src/visualization/orbitCompass.ts",
   },
-  metres("visualization.compass.minRadius", "Compass smallest radius", "The orbit compass never gets smaller than this.", 750, 1, 1_000_000, "performance", "src/visualization/orbitCompass.ts"),
-  metres("visualization.compass.maxRadius", "Compass largest radius", "The orbit compass never gets larger than this.", 240_000, 1, 10_000_000, "performance", "src/visualization/orbitCompass.ts"),
+  metres("visualization.compass.minRadius", "Compass smallest radius", "The orbit compass never gets smaller than this.", 750, 1, 1_000_000, "src/visualization/orbitCompass.ts"),
+  metres("visualization.compass.maxRadius", "Compass largest radius", "The orbit compass never gets larger than this.", 240_000, 1, 10_000_000, "src/visualization/orbitCompass.ts"),
   {
     id: "visualization.compass.labelSizeScale",
     label: "Compass label size",
@@ -123,12 +127,12 @@ export const INTERFACE_PARAMETERS: readonly ParameterSpec[] = [
     scale: "log2",
     default: 0.16,
     defaultReason: "The value it was drawn with before it became a setting.",
-    home: { tab: SETTINGS_TAB, section: "performance", level: "all" },
+    home: { ...PERFORMANCE, level: "all" },
     appliesLive: true,
     source: "src/visualization/orbitCompass.ts",
   },
-  metres("visualization.poiSprite.maxSize", "POI sprite largest size", "Point-of-interest sprites never get larger than this.", 40_000, 1, 10_000_000, "performance", "src/hud/poiSpriteSizeTuner.ts"),
-  metres("visualization.poiSprite.minSize", "POI sprite smallest size", "Point-of-interest sprites never get smaller than this.", 200, 1, 10_000_000, "performance", "src/hud/poiSpriteSizeTuner.ts"),
-  metres("visualization.poiSprite.minRefZoom", "POI sprite near distance", "At this camera distance or closer, sprites are at their smallest.", 100, 1, 100_000_000, "performance", "src/hud/poiSpriteSizeTuner.ts"),
-  metres("visualization.poiSprite.maxRefZoom", "POI sprite far distance", "At this camera distance or farther, sprites are at their largest.", 1_000_000, 1, 100_000_000, "performance", "src/hud/poiSpriteSizeTuner.ts"),
+  metres("visualization.poiSprite.maxSize", "POI sprite largest size", "Point-of-interest sprites never get larger than this.", 40_000, 1, 10_000_000, "src/hud/poiSpriteSizeTuner.ts"),
+  metres("visualization.poiSprite.minSize", "POI sprite smallest size", "Point-of-interest sprites never get smaller than this.", 200, 1, 10_000_000, "src/hud/poiSpriteSizeTuner.ts"),
+  metres("visualization.poiSprite.minRefZoom", "POI sprite near distance", "At this camera distance or closer, sprites are at their smallest.", 100, 1, 100_000_000, "src/hud/poiSpriteSizeTuner.ts"),
+  metres("visualization.poiSprite.maxRefZoom", "POI sprite far distance", "At this camera distance or farther, sprites are at their largest.", 1_000_000, 1, 100_000_000, "src/hud/poiSpriteSizeTuner.ts"),
 ];
