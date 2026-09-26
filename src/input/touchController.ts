@@ -1,28 +1,12 @@
 import type { CameraInputTarget } from "./inertialCameraController";
-import type { InputSettings } from "./inputSettings";
+import { DEFAULT_INPUT_RATES, type InputSettings } from "./inputSettings";
 import { attachTouchDebugOverlay, isTouchDebugEnabled, type TouchDebugEvent } from "./touchDebugOverlay";
 
-// ─── Tuning constants ────────────────────────────────────────────────
-// These encode "what sensitivity=1 feels like" for each gesture.
-// They are intentionally hidden from the user — the user-facing sensitivity
-// slider is a pure multiplier on top of these values (0.5 = half, 2 = double).
+// ─── Gesture recognition ─────────────────────────────────────────────
+// These filter noise out of the touch stream; they decide nothing about how
+// far a gesture moves the camera. The rates are parameters (`input.touch.*`),
+// and the sensitivity slider multiplies them (0.5 = half, 2 = double).
 
-/**
- * Camera units panned per pixel of finger movement at sensitivity=1.
- * Tuned so that a typical one-finger swipe feels 1:1 with the globe surface.
- */
-const TOUCH_PAN_SPEED = 0.48;
-/**
- * Degrees of orbit per pixel of two-finger centroid movement at sensitivity=1.
- * Combined from the old TOUCH_ORBIT_DEG_PER_PX(0.5) × default_orbit_sens(2) × BASE(0.1).
- */
-const TOUCH_ORBIT_DEG_PER_PX = 0.1;
-/**
- * Exponent applied to the pinch scale factor at sensitivity=1.
- * Combined from old default_zoom_sens(12) × BASE(0.1).
- * Higher = faster zoom per unit of finger spread.
- */
-const TOUCH_ZOOM_EXPONENT = 0.24;
 /** Maximum accepted centroid movement per frame (px). Orbit jitter guard. */
 const TOUCH_MAX_DELTA_PX = 80;
 /**
@@ -118,6 +102,8 @@ export function attachTouchController(
   camera: CameraInputTarget,
   options: { isOrbitMode?: () => boolean; getSettings?: () => InputSettings; onDebug?: (event: TouchDebugEvent) => void } = {},
 ): () => void {
+  // Pan, orbit and pinch rates at sensitivity 1: `input.touch.*`.
+  const rates = () => options.getSettings?.().rates ?? DEFAULT_INPUT_RATES;
   // ── Debug overlay wiring ────────────────────────────────────────
   let debugOverlayDestroy: (() => void) | null = null;
   let debugSink: ((event: TouchDebugEvent) => void) | null = options.onDebug ?? null;
@@ -270,8 +256,8 @@ export function attachTouchController(
     }
 
     camera.panBy(
-      -dx * sensitivity * TOUCH_PAN_SPEED,
-      -dy * sensitivity * TOUCH_PAN_SPEED,
+      -dx * sensitivity * rates().touchPanRate,
+      -dy * sensitivity * rates().touchPanRate,
       canvas.clientHeight,
     );
   }
@@ -339,8 +325,8 @@ export function attachTouchController(
       const sensitivity = options.getSettings?.().sensitivity.touch.orbit ?? 1;
       const pitchSign = options.isOrbitMode?.() ? -1 : 1;
       camera.orbitBy(
-        pitchSign * dCy * TOUCH_ORBIT_DEG_PER_PX * sensitivity,
-        dCx * TOUCH_ORBIT_DEG_PER_PX * sensitivity,
+        pitchSign * dCy * rates().touchOrbitDegPerPx * sensitivity,
+        dCx * rates().touchOrbitDegPerPx * sensitivity,
       );
     }
     if (session.zoomActive && Math.abs(clampedLogScaleStep) > 0.0001) {
@@ -349,7 +335,7 @@ export function attachTouchController(
       // so factor = previousDistance / clampedD = 1 / clampedScaleStep.
       const sensitivity = options.getSettings?.().sensitivity.touch.zoom ?? 1;
       const factor = 1 / clampedScaleStep;
-      camera.zoomBy(Math.pow(factor, sensitivity * TOUCH_ZOOM_EXPONENT));
+      camera.zoomBy(Math.pow(factor, sensitivity * rates().touchZoomExponent));
     }
 
     session.previousCentroid = c;

@@ -4,11 +4,13 @@ import { attachSafariGestures, isSafariGestureSupported } from "./safariGestures
 import { attachTouchController } from "./touchController";
 import { attachMouseController } from "./mouseController";
 import {
+  DEFAULT_INPUT_RATES,
   DEFAULT_INPUT_SETTINGS,
   loadGlobeAnchorRotationPreference,
   normalizeSensitivitySettings,
   saveGlobeAnchorRotationPreference,
   type InputModePreference,
+  type InputRates,
   type InputSensitivitySettings,
   type InputSettings,
 } from "./inputSettings";
@@ -18,6 +20,9 @@ export interface InputController {
   setSensitivity(sensitivity: Partial<InputSensitivitySettings>): void;
   setGlobeAnchorRotation(enabled: boolean): void;
   getGlobeAnchorRotation(): boolean;
+  /** The devices' rates before sensitivity: `input.mouse.*`, `input.wheel.*` and `input.touch.*`. */
+  setRates(rates: Partial<InputRates>): void;
+  getRates(): InputRates;
   destroy(): void;
 }
 
@@ -44,6 +49,7 @@ export function createInputController(
     mode: DEFAULT_INPUT_SETTINGS.mode,
     sensitivity: normalizeSensitivitySettings(DEFAULT_INPUT_SETTINGS.sensitivity),
     globeAnchorRotation: loadGlobeAnchorRotationPreference(),
+    rates: { ...DEFAULT_INPUT_RATES },
   };
 
   // ── Document-level prevention ────────────────────────────────────
@@ -89,6 +95,12 @@ export function createInputController(
     },
     getGlobeAnchorRotation(): boolean {
       return settings.globeAnchorRotation;
+    },
+    setRates(rates: Partial<InputRates>): void {
+      settings.rates = { ...(settings.rates ?? DEFAULT_INPUT_RATES), ...rates };
+    },
+    getRates(): InputRates {
+      return { ...(settings.rates ?? DEFAULT_INPUT_RATES) };
     },
     destroy(): void {
       detachWheel();

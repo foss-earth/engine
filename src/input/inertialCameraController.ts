@@ -33,7 +33,8 @@ export interface InertialCameraController extends CameraInputTarget {
 }
 
 const FRAME_MS = 1000 / 60;
-const DECAY_PER_FRAME = 0.82;
+/** How much velocity a 60 Hz frame keeps: `camera.inertiaDecay`'s default. */
+export const DEFAULT_INERTIA_DECAY_PER_FRAME = 0.82;
 const STOP_EPSILON_PX = 0.01;
 const STOP_EPSILON_DEG = 0.002;
 const STOP_EPSILON_ZOOM_LOG = 0.00005;
@@ -45,11 +46,16 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
-function decayForDeltaTime(deltaMs: number): number {
-  return Math.pow(DECAY_PER_FRAME, deltaMs / FRAME_MS);
+export interface InertialCameraOptions {
+  /** The share of velocity a 60 Hz frame keeps, read each update: `camera.inertiaDecay`. */
+  decayPerFrame?: () => number;
 }
 
-export function createInertialCameraController(target: CameraInputTarget): InertialCameraController {
+export function createInertialCameraController(target: CameraInputTarget, options: InertialCameraOptions = {}): InertialCameraController {
+  const decayForDeltaTime = (deltaMs: number): number => {
+    const decay = options.decayPerFrame?.() ?? DEFAULT_INERTIA_DECAY_PER_FRAME;
+    return Math.pow(clamp(Number.isFinite(decay) ? decay : DEFAULT_INERTIA_DECAY_PER_FRAME, 0, 0.999), deltaMs / FRAME_MS);
+  };
   let lastUpdateMs: number | null = null;
   let panVelocityX = 0;
   let panVelocityY = 0;

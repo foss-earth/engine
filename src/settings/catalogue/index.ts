@@ -9,7 +9,7 @@ import { MAP_DETAIL_PARAMETERS, MAP_SOURCE_PARAMETERS, MAP_TAB } from "./map";
 import { RENDERER_PARAMETERS, RENDERER_TAB } from "./renderer";
 
 export { CONTROLS_TAB, MAP_TAB, RENDERER_TAB, SETTINGS_TAB, PERFORMANCE_HUD_METRICS, TOOLBAR_BUTTONS };
-export { INPUT_SENSITIVITY_IDS } from "./controls";
+export { INPUT_RATE_IDS, INPUT_SENSITIVITY_IDS } from "./controls";
 export { atlasLimitMiB } from "./loading";
 
 /** Every parameter FOSS Earth owns. Hosts register theirs alongside. */
@@ -34,10 +34,12 @@ export const FOSS_EARTH_SECTION_TITLES: ReadonlyArray<readonly [string, string, 
   [MAP_TAB, "terrain-selection", "Terrain selection"],
   [RENDERER_TAB, "backend", "Renderer"],
   [CONTROLS_TAB, "input-method", "Input method"],
+  [CONTROLS_TAB, "camera", "Camera"],
   [CONTROLS_TAB, "orbit", "Orbit"],
+  [CONTROLS_TAB, "mouse", "Mouse and trackpad"],
+  [CONTROLS_TAB, "touch", "Touch"],
   [CONTROLS_TAB, "controller", "Controller"],
   [SETTINGS_TAB, "toolbar", "Toolbar"],
-  [SETTINGS_TAB, "camera", "Camera"],
   [SETTINGS_TAB, "performance", "Performance debug"],
 ];
 

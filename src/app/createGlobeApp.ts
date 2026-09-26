@@ -51,6 +51,7 @@ import {
   createGlobeGamepadAdapter,
   createStandardGlobeProfile,
   STANDARD_GLOBE_PROFILE_NAME,
+  withStickDeadzone,
 } from "../input/globeNavigation";
 import { createHudBar } from "../shell/hudBar";
 import type { PoiSpriteSizeParams } from "../hud/poiSpriteSizeTuner";
@@ -311,11 +312,6 @@ export async function createGlobeApp(
       </div>
 
       <div id="settingsSectionsHolder" hidden>
-        <div id="settingsCameraLines" class="settings-section-content">
-          <p class="settings-line">Camera model: state-driven orbit geometry.</p>
-          <p class="settings-line">Pitch: 0\u00B0\u202F=\u202Fhorizon, 90\u00B0\u202F=\u202Fstraight down.</p>
-        </div>
-
         <div id="controlsInputMethodSection" class="settings-section-content"></div>
         <div id="controlsControllerSection" class="settings-section-content"></div>
 
@@ -624,10 +620,15 @@ export async function createGlobeApp(
   const gamepadSource = createBrowserInputSource({ target: window });
   const gamepadAdapter = createGlobeGamepadAdapter(runtime, { onResetNorth: resetNorth });
   const selectedGamepadSlot = (): number => gamepadSource.getSelectedDevice()?.slot ?? 0;
+  const stickDeadzone = (): number => settings.get<number>("input.gamepad.deadzone");
   const gamepadRuntime = new BindingRuntime({
     adapter: gamepadAdapter,
-    profile: createStandardGlobeProfile(selectedGamepadSlot()),
+    profile: createStandardGlobeProfile(selectedGamepadSlot(), stickDeadzone()),
   });
+  // Every stick bound to a navigation rate, the standard one or the user's own, takes the deadzone.
+  stopWatchingSettings.push(settings.watch("input.gamepad.deadzone", () => {
+    gamepadRuntime.setProfile(withStickDeadzone(gamepadRuntime.getProfile(), stickDeadzone()));
+  }));
   const gamepadStore = createProfileStore();
   const offGamepadFrame = gamepadSource.subscribe((frame) => gamepadRuntime.dispatch(frame));
   const stopGamepadSource = gamepadSource.start({ intervalMs: 33 });
@@ -644,7 +645,7 @@ export async function createGlobeApp(
           {
             id: "standard",
             label: STANDARD_GLOBE_PROFILE_NAME,
-            create: () => createStandardGlobeProfile(selectedGamepadSlot()),
+            create: () => createStandardGlobeProfile(selectedGamepadSlot(), stickDeadzone()),
           },
         ],
       })
@@ -695,17 +696,21 @@ export async function createGlobeApp(
   const inputMethodElement = inputMethodSectionEl
     ? sectionOf("controls", "input-method", { main: inputMethodSectionEl, covers: ["input.mode", ...INPUT_SENSITIVITY_IDS] })
     : null;
-  const controllerSectionElement = rootElement.querySelector<HTMLElement>("#controlsControllerSection");
   const aboutElement = rootElement.querySelector<HTMLElement>("#settingsAboutSection");
   // The input-method button lands here, so its section starts open.
   const controlsSections: PanelSection[] = [
     ...(inputMethodElement ? [{ id: "input-method", title: "Input method", element: inputMethodElement, defaultOpen: true }] : []),
+    { id: "camera", title: settings.getSectionTitle("controls", "camera"), element: sectionOf("controls", "camera", {
+      footer: note("Tilt: 0\u00B0 looks at the horizon, 90\u00B0 straight down."),
+    }), defaultOpen: false },
     { id: "orbit", title: settings.getSectionTitle("controls", "orbit"), element: sectionOf("controls", "orbit"), defaultOpen: false },
-    ...(controllerSectionElement ? [{ id: "controller", title: "Controller", element: controllerSectionElement, defaultOpen: false }] : []),
+    { id: "mouse", title: settings.getSectionTitle("controls", "mouse"), element: sectionOf("controls", "mouse"), defaultOpen: false },
+    { id: "touch", title: settings.getSectionTitle("controls", "touch"), element: sectionOf("controls", "touch"), defaultOpen: false },
+    { id: "controller", title: settings.getSectionTitle("controls", "controller"),
+      element: sectionOf("controls", "controller", { main: controllerSectionEl ?? undefined }), defaultOpen: false },
   ];
   const settingsSections: PanelSection[] = [
     { id: "toolbar", title: "Toolbar", element: sectionOf("settings", "toolbar", { footer: note("Settings stays available from + in either panel.") }), defaultOpen: false },
-    { id: "camera", title: "Camera", element: sectionOf("settings", "camera", { main: rootElement.querySelector<HTMLElement>("#settingsCameraLines") ?? undefined }), defaultOpen: false },
     { id: "performance", title: "Performance debug", element: sectionOf("settings", "performance", { main: performanceMain, covers: [...performanceIds, "interface.poiSpriteTuner", "interface.compassScaleTuner"] }), defaultOpen: false },
     { id: "saved-settings", title: "Saved settings", element: savedSettings.element, defaultOpen: false },
     ...(aboutElement ? [{ id: "about", title: "About", element: aboutElement, defaultOpen: false }] : []),
@@ -715,7 +720,7 @@ export async function createGlobeApp(
     if (!stored || stored.hostNamespace !== "foss-earth") {
       return;
     }
-    gamepadRuntime.setProfile(stored);
+    gamepadRuntime.setProfile(withStickDeadzone(stored, stickDeadzone()));
     if (stored.selectedDeviceSlot !== undefined || stored.selectedDeviceSessionId !== undefined) {
       gamepadSource.selectDevice({
         slot: stored.selectedDeviceSlot,

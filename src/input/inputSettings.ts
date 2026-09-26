@@ -1,4 +1,5 @@
 import { getAppSettings } from "../settings/appSettings";
+import type { InputRates } from "./inputRates";
 
 export type InputModePreference = "auto" | "mouse" | "trackpad" | "touch";
 
@@ -14,11 +15,15 @@ export interface InputSensitivitySettings {
   touch: MovementSensitivity;
 }
 
+export { DEFAULT_INPUT_RATES, type InputRates } from "./inputRates";
+
 export interface InputSettings {
   mode: InputModePreference;
   sensitivity: InputSensitivitySettings;
   /** When true, drag-pan rotates the globe so the grabbed surface point follows the cursor. */
   globeAnchorRotation: boolean;
+  /** The devices' rates; DEFAULT_INPUT_RATES when omitted. */
+  rates?: InputRates;
 }
 
 export const DEFAULT_INPUT_SENSITIVITY: InputSensitivitySettings = {

@@ -7,6 +7,7 @@ import {
   GLOBE_GAMEPAD_ACTIONS,
   createGlobeGamepadAdapter,
   createStandardGlobeProfile,
+  withStickDeadzone,
   type GlobeNavigationIntentFrame,
 } from "./globeNavigation";
 
@@ -125,6 +126,22 @@ describe("standard globe controller profile", () => {
     axis(3, -0.14);
     step();
     expect(applyGlobeNavigationIntents).not.toHaveBeenCalled();
+  });
+
+  it("takes input.gamepad.deadzone for every stick bound to a rate, and nothing else", () => {
+    const { step, runtime, applyGlobeNavigationIntents } = harness();
+    const before = runtime.getProfile();
+    runtime.setProfile(withStickDeadzone(before, 0.3));
+    axis(0, 0.2);
+    step();
+    // Inside the wider deadzone, a stick that moved the view before rests.
+    expect(applyGlobeNavigationIntents).not.toHaveBeenCalled();
+    const after = runtime.getProfile();
+    const deadzones = (profile: typeof before) => profile.bindings.map(binding => [binding.id, binding.transform.deadzone]);
+    expect(deadzones(after)).toEqual(deadzones(before).map(([id, deadzone]) => [id, String(id).match(/pan|orbit/) ? 0.3 : deadzone]));
+    // Nothing to change: the same profile comes back.
+    expect(withStickDeadzone(after, 0.3)).toBe(after);
+    expect(deadzones(createStandardGlobeProfile(0, 0.3))).toEqual(deadzones(after));
   });
 
   it("keeps the camera still while a binding is being captured", () => {

@@ -93,9 +93,11 @@ export function createGlobeGamepadAdapter(
 export const STANDARD_GLOBE_PROFILE_ID = "foss-earth-standard-globe";
 export const STANDARD_GLOBE_PROFILE_NAME = "Standard controller";
 
-// Navigation actions are rates, so any stick drift outside the deadzone keeps
-// the camera creeping and the scene rendering.
-const GLOBE_STICK_DEADZONE = 0.15;
+/**
+ * Navigation actions are rates, so any stick drift outside the deadzone keeps
+ * the camera creeping and the scene rendering: `input.gamepad.deadzone`'s default.
+ */
+export const DEFAULT_GLOBE_STICK_DEADZONE = 0.15;
 
 function axisSource(slot: number, axisIndex: number): BindingSource {
   return { selector: { kind: "gamepad-axis", gamepadSlot: slot, axisIndex } };
@@ -105,7 +107,7 @@ function buttonSource(slot: number, buttonIndex: number): BindingSource {
   return { selector: { kind: "gamepad-button", gamepadSlot: slot, buttonIndex } };
 }
 
-function stickRate(id: string, actionId: GlobeNavigationActionId, source: BindingSource, invert = false): BindingSpec {
+function stickRate(id: string, actionId: GlobeNavigationActionId, source: BindingSource, deadzone: number, invert = false): BindingSpec {
   return {
     id,
     actionId,
@@ -114,7 +116,7 @@ function stickRate(id: string, actionId: GlobeNavigationActionId, source: Bindin
     contexts: ["globe"],
     enabled: true,
     precedence: 0,
-    transform: { ...DEFAULT_BINDING_TRANSFORM, deadzone: GLOBE_STICK_DEADZONE, invert },
+    transform: { ...DEFAULT_BINDING_TRANSFORM, deadzone, invert },
     source,
   };
 }
@@ -124,18 +126,18 @@ function stickRate(id: string, actionId: GlobeNavigationActionId, source: Bindin
  * Directions match the mouse: the right stick orbits the way a right drag
  * does, and the left stick moves the view the way it points.
  */
-export function createStandardGlobeProfile(slot = 0): BindingProfile {
+export function createStandardGlobeProfile(slot = 0, deadzone = DEFAULT_GLOBE_STICK_DEADZONE): BindingProfile {
   return {
     ...createDefaultProfile("foss-earth"),
     profileId: STANDARD_GLOBE_PROFILE_ID,
     name: STANDARD_GLOBE_PROFILE_NAME,
     contexts: ["globe"],
     bindings: [
-      stickRate("standard-pan-x", "globe.panX", axisSource(slot, 0)),
+      stickRate("standard-pan-x", "globe.panX", axisSource(slot, 0), deadzone),
       // Stick Y reads negative when pushed up; up should move forward.
-      stickRate("standard-pan-y", "globe.panY", axisSource(slot, 1), true),
-      stickRate("standard-orbit-heading", "globe.orbitHeading", axisSource(slot, 2)),
-      stickRate("standard-orbit-pitch", "globe.orbitPitch", axisSource(slot, 3)),
+      stickRate("standard-pan-y", "globe.panY", axisSource(slot, 1), deadzone, true),
+      stickRate("standard-orbit-heading", "globe.orbitHeading", axisSource(slot, 2), deadzone),
+      stickRate("standard-orbit-pitch", "globe.orbitPitch", axisSource(slot, 3), deadzone),
       {
         id: "standard-zoom",
         actionId: "globe.zoom",
@@ -163,4 +165,20 @@ export function createStandardGlobeProfile(slot = 0): BindingProfile {
       },
     ],
   };
+}
+
+/**
+ * The profile with every stick bound to a navigation rate at `deadzone`, the
+ * one `input.gamepad.deadzone` sets. Other bindings are left as they are; the
+ * same profile comes back when nothing changes.
+ */
+export function withStickDeadzone(profile: BindingProfile, deadzone: number): BindingProfile {
+  let changed = false;
+  const bindings = profile.bindings.map((binding) => {
+    if (binding.kind !== "single" || binding.semantics !== "rate" || binding.source.selector.kind !== "gamepad-axis"
+      || binding.transform.deadzone === deadzone) return binding;
+    changed = true;
+    return { ...binding, transform: { ...binding.transform, deadzone } };
+  });
+  return changed ? { ...profile, bindings } : profile;
 }

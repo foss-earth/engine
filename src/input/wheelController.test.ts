@@ -159,6 +159,31 @@ describe("attachWheelController", () => {
     cleanup();
   });
 
+  it("zooms a notch by input.wheel.zoomRate, and orbits by input.wheel.orbitRate", async () => {
+    const { DEFAULT_INPUT_RATES, DEFAULT_INPUT_SETTINGS } = await import("./inputSettings");
+    let now = 1_000;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const canvas = createCanvas();
+    const camera = { panBy: vi.fn(), orbitBy: vi.fn(), zoomBy: vi.fn() };
+    let settings = { ...DEFAULT_INPUT_SETTINGS, mode: "mouse" as const, rates: { ...DEFAULT_INPUT_RATES } };
+    const cleanup = attachWheelController(canvas, camera, { isSafariWithGestures: false, getSettings: () => settings });
+
+    // Out by the default share: what 1.08 to the power 0.03 always did.
+    canvas.dispatchEvent(createWheelEvent({ deltaY: 100 }));
+    expect(camera.zoomBy).toHaveBeenLastCalledWith(expect.closeTo(1.08 ** 0.03, 12));
+    settings = { ...settings, rates: { ...settings.rates, wheelZoomPerNotch: 0.1 } };
+    canvas.dispatchEvent(createWheelEvent({ deltaY: 100 }));
+    expect(camera.zoomBy).toHaveBeenLastCalledWith(expect.closeTo(1.1, 12));
+
+    // A new gesture after a pause.
+    now += 1_000;
+    settings = { ...settings, rates: { ...settings.rates, wheelOrbitDegPerPx: 0.1 } };
+    canvas.dispatchEvent(createWheelEvent({ deltaX: 10, deltaY: 20, shiftKey: true }));
+    expect(camera.orbitBy).toHaveBeenLastCalledWith(expect.closeTo(2, 9), expect.closeTo(-1, 9));
+
+    cleanup();
+  });
+
   it("zooms (not orbits) when shift is held in trackpad mode", () => {
     vi.spyOn(performance, "now").mockReturnValue(1_000);
     const canvas = createCanvas();

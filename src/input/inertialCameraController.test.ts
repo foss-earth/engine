@@ -36,6 +36,25 @@ describe("createInertialCameraController", () => {
     expect(target.panBy).toHaveBeenNthCalledWith(2, expect.closeTo(8.2, 1), 0, 800);
   });
 
+  it("glides by camera.inertiaDecay, read at each update", () => {
+    const target = { panBy: vi.fn(), orbitBy: vi.fn(), zoomBy: vi.fn() };
+    let decay = 0.5;
+    const controller = createInertialCameraController(target, { decayPerFrame: () => decay });
+
+    controller.panBy(10, 0, 800);
+    controller.update(1000);
+    controller.update(1000 + 1000 / 60);
+    expect(target.panBy).toHaveBeenNthCalledWith(2, expect.closeTo(5, 6), 0, 800);
+
+    // 0 stops after the motion already under way.
+    decay = 0;
+    controller.update(1000 + 2000 / 60);
+    controller.update(1000 + 3000 / 60);
+    expect(target.panBy).toHaveBeenCalledTimes(3);
+    expect(target.panBy).toHaveBeenNthCalledWith(3, expect.closeTo(2.5, 6), 0, 800);
+    expect(controller.isActive()).toBe(false);
+  });
+
   it("cancels queued motion", () => {
     const target = {
       panBy: vi.fn(),

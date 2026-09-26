@@ -455,3 +455,37 @@ describe("createBabylonRuntime simulation mode", () => {
     runtime.destroy();
   });
 });
+
+describe("createBabylonRuntime camera and input parameters", () => {
+  it("gives the globe camera and its input their parameters, and follows changes", async () => {
+    const setRates = vi.fn();
+    mocks.createInputController.mockReturnValue({ setRates, destroy: vi.fn() });
+    const { getAppSettings } = await import("../../settings/appSettings");
+    const settings = getAppSettings();
+    const { createBabylonRuntime } = await import("./createBabylonRuntime");
+    const runtime = await createBabylonRuntime(document.createElement("canvas"));
+    const camera = runtime.geospatialCamera!;
+    try {
+      // Unchanged by default: Babylon's field of view, and the old limits.
+      expect(camera.fov).toBeCloseTo(0.8, 9);
+      expect(camera.limits.radiusMin).toBe(25);
+      expect(setRates).toHaveBeenLastCalledWith(expect.objectContaining({ mouseOrbitDegPerPx: 0.03, touchPanRate: 0.48 }));
+
+      settings.set("camera.fieldOfView", 60);
+      expect(camera.fov).toBeCloseTo(Math.PI / 3, 9);
+
+      runtime.setViewState({ zoomMeters: 5_000_000, pitchDeg: 80 });
+      settings.set("camera.zoomLimits", { min: 100, max: 1_000_000 });
+      settings.set("camera.pitchLimits", { min: 10, max: 60 });
+      expect(camera.limits.radiusMin).toBe(100);
+      // A view outside new limits moves inside them at once.
+      expect(runtime.getViewState()).toMatchObject({ zoomMeters: 1_000_000, pitchDeg: expect.closeTo(60, 6) });
+
+      settings.set("input.touch.panRate", 1.2);
+      expect(setRates).toHaveBeenLastCalledWith(expect.objectContaining({ touchPanRate: 1.2, mouseOrbitDegPerPx: 0.03 }));
+    } finally {
+      for (const id of ["camera.fieldOfView", "camera.zoomLimits", "camera.pitchLimits", "input.touch.panRate"]) settings.reset(id);
+      runtime.destroy();
+    }
+  });
+});

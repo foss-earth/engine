@@ -82,8 +82,6 @@ export const INTERFACE_PARAMETERS: readonly ParameterSpec[] = [
     false, "A debugging panel.", "performance", "src/hud/poiSpriteSizeTuner.ts"),
   toggle("interface.compassScaleTuner", "Compass scale tuner", "Shows the panel that tunes the orbit compass's size.",
     false, "A debugging panel.", "performance", "src/hud/compassScaleTuner.ts"),
-  toggle("input.globeAnchorRotation", "Globe anchor rotation pan", "Dragging keeps the grabbed point of the globe under the pointer; off, a drag translates the view flatly.",
-    true, "The grabbed ground follows the pointer, as in Google Earth.", "camera", "src/input/inputSettings.ts"),
   {
     id: "visualization.compass.heightOffset",
     label: "Compass orbit height",
@@ -95,7 +93,7 @@ export const INTERFACE_PARAMETERS: readonly ParameterSpec[] = [
     scale: "linear",
     default: 0,
     defaultReason: "On the ground under the orbit target.",
-    home: { tab: SETTINGS_TAB, section: "camera", level: "main" },
+    home: { tab: "controls", section: "camera", level: "main" },
     appliesLive: true,
     source: "src/terrain/anchorHeight.ts",
   },

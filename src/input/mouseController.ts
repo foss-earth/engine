@@ -1,16 +1,6 @@
 import type { CameraInputTarget } from "./inertialCameraController";
 import { attachAnchorPanDebugOverlay, type AnchorPanDebugOverlay } from "./anchorPanDebugOverlay";
-import { MOVEMENT_SENSITIVITY_BASE, type InputSettings } from "./inputSettings";
-
-/** Degrees of orbit change per pixel of mouse drag. */
-const MOUSE_ORBIT_DEG_PER_PX = 0.3;
-/**
- * Pixels the pointer must travel from its down-position before we
- * commit to a drag and start intercepting events.  Below this threshold
- * the interaction is treated as a click and events pass through to
- * Babylon so picking / sphere-click handlers still fire.
- */
-const DRAG_START_THRESHOLD_PX = 4;
+import { DEFAULT_INPUT_RATES, MOVEMENT_SENSITIVITY_BASE, type InputSettings } from "./inputSettings";
 
 /**
  * Attach a mouse-button drag handler to the canvas.
@@ -20,7 +10,7 @@ const DRAG_START_THRESHOLD_PX = 4;
  *
  * On pointerdown the event is NOT consumed so that Babylon's picking
  * system can still detect clicks on scene objects.  Once the pointer
- * travels more than DRAG_START_THRESHOLD_PX the interaction is committed
+ * travels more than `input.mouse.dragThreshold` the interaction is committed
  * as a drag: subsequent pointermove / pointerup events are captured and
  * stopImmediatePropagation is called so Babylon's own camera input does
  * not also fire.
@@ -35,6 +25,9 @@ export function attachMouseController(
   camera: CameraInputTarget,
   options: { isOrbitMode?: () => boolean; getSettings?: () => InputSettings } = {},
 ): () => void {
+  // Below the drag threshold a press is a click, and events pass through to
+  // Babylon so picking and sphere-click handlers still fire.
+  const rates = () => options.getSettings?.().rates ?? DEFAULT_INPUT_RATES;
   let activeButton: 0 | 2 | null = null;
   let isDragging = false;
   let anchorPanActive = false;
@@ -108,7 +101,7 @@ export function attachMouseController(
     const distFromStart = Math.hypot(e.clientX - startX, e.clientY - startY);
 
     if (anchorPanActive && activeButton === 0 && !(options.isOrbitMode?.() ?? false)) {
-      if (distFromStart >= DRAG_START_THRESHOLD_PX) {
+      if (distFromStart >= rates().mouseDragThresholdPx) {
         if (!isDragging) {
           isDragging = true;
           stopInertial();
@@ -132,7 +125,7 @@ export function attachMouseController(
 
     if (!isDragging) {
       const dist = distFromStart;
-      if (dist < DRAG_START_THRESHOLD_PX) return;
+      if (dist < rates().mouseDragThresholdPx) return;
       isDragging = true;
       stopInertial();
     }
@@ -149,8 +142,8 @@ export function attachMouseController(
       const sensitivity = options.getSettings?.().sensitivity.mouse.orbit ?? 1;
       const pitchSign = options.isOrbitMode?.() ? -1 : 1;
       camera.orbitBy(
-        pitchSign * dy * MOUSE_ORBIT_DEG_PER_PX * sensitivity * MOVEMENT_SENSITIVITY_BASE,
-        dx * MOUSE_ORBIT_DEG_PER_PX * sensitivity * MOVEMENT_SENSITIVITY_BASE,
+        pitchSign * dy * rates().mouseOrbitDegPerPx * sensitivity,
+        dx * rates().mouseOrbitDegPerPx * sensitivity,
       );
     }
   }

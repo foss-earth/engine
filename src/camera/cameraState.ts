@@ -10,6 +10,7 @@ import {
   type ScreenPickInput,
 } from "./anchorPan";
 import { hasPickablePointAt } from "../sprites/picking";
+import { DEFAULT_CAMERA_LIMITS, type CameraLimits } from "./cameraLimits";
 import {
   geodeticToEcef,
   ecefToGeodetic,
@@ -21,14 +22,14 @@ import {
 
 // ─── Camera State Limits ────────────────────────────────────────────
 
-/** Minimum pitch: 1° prevents a perfectly horizontal view that can flip the camera. */
-export const MIN_PITCH_DEG = 1;
-/** Maximum pitch: 89° prevents a perfectly vertical view that loses heading reference. */
-export const MAX_PITCH_DEG = 89;
-/** Minimum orbit radius (metres) — prevents clipping into tile geometry. */
-export const MIN_ZOOM_METERS = 25;
-/** Maximum orbit radius (metres) — keeps the globe in frame. */
-export const MAX_ZOOM_METERS = 80_000_000;
+export {
+  DEFAULT_CAMERA_LIMITS,
+  MAX_PITCH_DEG,
+  MAX_ZOOM_METERS,
+  MIN_PITCH_DEG,
+  MIN_ZOOM_METERS,
+  type CameraLimits,
+} from "./cameraLimits";
 const ORBIT_TARGET_OFFSET_ZOOM_STEP_METERS = 750;
 const MAX_ORBIT_SURFACE_HEIGHT_SPEED_METERS_PER_SECOND = 160;
 const MAX_ORBIT_HEIGHT_SMOOTHING_DELTA_MS = 100;
@@ -58,13 +59,6 @@ function surfacePitchDegToBabylonPitch(pitchDeg: number): number {
   return (Math.PI / 2) * (1 - pitchDeg / 90);
 }
 
-function clampPitchDeg(pitchDeg: number): number {
-  return Math.max(MIN_PITCH_DEG, Math.min(MAX_PITCH_DEG, pitchDeg));
-}
-
-function clampZoomMeters(zoom: number): number {
-  return Math.max(MIN_ZOOM_METERS, Math.min(MAX_ZOOM_METERS, zoom));
-}
 
 // ─── Camera Controller ───────────────────────────────────────────────
 
@@ -86,8 +80,33 @@ export class CameraController {
   /** Client coords at pointer down — visual fallback when projection is stale. */
   private anchorPanDownClient: { x: number; y: number } | null = null;
 
+  private limits: CameraLimits = DEFAULT_CAMERA_LIMITS;
+
   constructor(camera: GeospatialCamera) {
     this.camera = camera;
+  }
+
+  /** New limits apply at once: a view outside them moves inside. */
+  setLimits(limits: CameraLimits): void {
+    this.limits = {
+      pitchDeg: { min: Math.min(limits.pitchDeg.min, limits.pitchDeg.max), max: Math.max(limits.pitchDeg.min, limits.pitchDeg.max) },
+      zoomMeters: { min: Math.min(limits.zoomMeters.min, limits.zoomMeters.max), max: Math.max(limits.zoomMeters.min, limits.zoomMeters.max) },
+    };
+    this.camera.limits.radiusMin = this.limits.zoomMeters.min;
+    this.camera.limits.radiusMax = this.limits.zoomMeters.max;
+    this.applyViewState(this.syncFromCamera(), this.getCurrentCenterHeightMeters());
+  }
+
+  getLimits(): CameraLimits {
+    return this.limits;
+  }
+
+  private clampPitchDeg(pitchDeg: number): number {
+    return Math.max(this.limits.pitchDeg.min, Math.min(this.limits.pitchDeg.max, pitchDeg));
+  }
+
+  private clampZoomMeters(zoom: number): number {
+    return Math.max(this.limits.zoomMeters.min, Math.min(this.limits.zoomMeters.max, zoom));
   }
 
   configureOrbitTargetHeight(options: OrbitTargetHeightOptions | null): void {
@@ -137,8 +156,8 @@ export class CameraController {
     const { latRad, lonRad } = ecefToGeodetic(c.x, c.y, c.z);
 
     const headingDeg = normalizeHeadingDeg(this.camera.yaw * RAD_TO_DEG);
-    const pitchDeg = clampPitchDeg(babylonPitchToSurfacePitchDeg(this.camera.pitch));
-    const zoomMeters = clampZoomMeters(this.camera.radius);
+    const pitchDeg = this.clampPitchDeg(babylonPitchToSurfacePitchDeg(this.camera.pitch));
+    const zoomMeters = this.clampZoomMeters(this.camera.radius);
 
     return {
       latDeg: latRad * RAD_TO_DEG,
@@ -173,8 +192,8 @@ export class CameraController {
     const { x, y, z } = geodeticToEcef(state.latDeg * DEG_TO_RAD, state.lonDeg * DEG_TO_RAD, targetHeightMeters);
     this.camera.center = new Vector3(x, y, z);
     this.camera.yaw = normalizeHeadingDeg(state.headingDeg) * DEG_TO_RAD;
-    this.camera.pitch = surfacePitchDegToBabylonPitch(clampPitchDeg(state.pitchDeg));
-    this.camera.radius = clampZoomMeters(state.zoomMeters);
+    this.camera.pitch = surfacePitchDegToBabylonPitch(this.clampPitchDeg(state.pitchDeg));
+    this.camera.radius = this.clampZoomMeters(state.zoomMeters);
   }
 
   /**
@@ -328,7 +347,7 @@ export class CameraController {
     this.applyViewState(
       {
         ...state,
-        pitchDeg: clampPitchDeg(state.pitchDeg + ep),
+        pitchDeg: this.clampPitchDeg(state.pitchDeg + ep),
         headingDeg: normalizeHeadingDeg(state.headingDeg + eh),
       },
       this.getCurrentCenterHeightMeters(),
@@ -347,13 +366,13 @@ export class CameraController {
     const state = this.syncFromCamera();
     const requestedZoomMeters = state.zoomMeters * factor;
 
-    if (requestedZoomMeters >= MIN_ZOOM_METERS || factor >= 1 || this.orbitTargetOffsetMeters <= 0) {
-      this.setViewState({ zoomMeters: clampZoomMeters(requestedZoomMeters) });
+    if (requestedZoomMeters >= this.limits.zoomMeters.min || factor >= 1 || this.orbitTargetOffsetMeters <= 0) {
+      this.setViewState({ zoomMeters: this.clampZoomMeters(requestedZoomMeters) });
       return;
     }
 
     const offsetStepMeters = Math.max(1, Math.abs(Math.log(factor)) * ORBIT_TARGET_OFFSET_ZOOM_STEP_METERS);
     this.orbitTargetOffsetMeters = Math.max(0, this.orbitTargetOffsetMeters - offsetStepMeters);
-    this.applyViewState({ ...state, zoomMeters: MIN_ZOOM_METERS });
+    this.applyViewState({ ...state, zoomMeters: this.limits.zoomMeters.min });
   }
 }

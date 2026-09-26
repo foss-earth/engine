@@ -56,11 +56,13 @@ declare global {
 }
 import { createRenderScheduler, type RenderScheduler } from "./renderScheduler";
 import { geodeticToEcef, DEG_TO_RAD } from "../../camera/cameraMath";
-import { CameraController, type OrbitTargetHeightOptions } from "../../camera/cameraState";
+import { CameraController, DEFAULT_CAMERA_LIMITS, type CameraLimits, type OrbitTargetHeightOptions } from "../../camera/cameraState";
 import { createInputController, type InputController } from "../../input/createInputController";
 import { createInertialCameraController, type InertialCameraController } from "../../input/inertialCameraController";
 import type { GlobeNavigationIntentFrame } from "../../input/globeNavigation";
-import type { InputModePreference, InputSensitivitySettings } from "../../input/inputSettings";
+import { DEFAULT_INPUT_RATES, type InputModePreference, type InputRates, type InputSensitivitySettings } from "../../input/inputSettings";
+import { INPUT_RATE_IDS } from "../../settings/catalogue";
+import { isNumberRange } from "../../settings/values";
 import type { GlobeViewState } from "../types";
 
 const PLANET_RADIUS_METERS = 6_378_137;
@@ -346,7 +348,6 @@ function createGeospatialCamera(scene: Scene): GeospatialCamera {
   camera.radius = DEFAULT_CAMERA_ALTITUDE_METERS;
   camera.yaw = DEFAULT_CAMERA_YAW_RAD;
   camera.pitch = DEFAULT_CAMERA_PITCH_RAD;
-  camera.limits.radiusMin = 25;
   camera.checkCollisions = true;
 
   return camera;
@@ -587,6 +588,27 @@ export async function createBabylonRuntime(
     for (const listener of streamingListenersRef) listener(false);
   };
 
+  // The globe camera and its input follow `camera.*` and the device rates.
+  function cameraFieldOfViewRad(): number {
+    return settings.get<number>("camera.fieldOfView") * DEG_TO_RAD;
+  }
+  function cameraLimits(): CameraLimits {
+    const pitch = settings.get("camera.pitchLimits");
+    const zoom = settings.get("camera.zoomLimits");
+    return {
+      pitchDeg: isNumberRange(pitch) ? pitch : DEFAULT_CAMERA_LIMITS.pitchDeg,
+      zoomMeters: isNumberRange(zoom) ? zoom : DEFAULT_CAMERA_LIMITS.zoomMeters,
+    };
+  }
+  function inputRates(): InputRates {
+    const rates = { ...DEFAULT_INPUT_RATES };
+    for (const [field, id] of Object.entries(INPUT_RATE_IDS) as Array<[keyof InputRates, string]>) {
+      const value = settings.get(id);
+      if (typeof value === "number") rates[field] = value;
+    }
+    return rates;
+  }
+
   function ensureGeospatialCamera(): GeospatialCamera {
     if (geospatialCamera) {
       // Flight mode owns scene.activeCamera with its cockpit/chase camera.
@@ -598,9 +620,13 @@ export async function createBabylonRuntime(
     }
 
     geospatialCamera = createGeospatialCamera(scene);
+    geospatialCamera.fov = cameraFieldOfViewRad();
     if (!simMode || !scene.activeCamera) scene.activeCamera = geospatialCamera;
     cameraController = new CameraController(geospatialCamera);
-    const baseInertial = createInertialCameraController(cameraController);
+    cameraController.setLimits(cameraLimits());
+    const baseInertial = createInertialCameraController(cameraController, {
+      decayPerFrame: () => settings.get<number>("camera.inertiaDecay"),
+    });
     // Every input gesture goes through the inertial controller. Wrap its input
     // methods so each one wakes the on-demand scheduler. The wrapped methods
     // delegate to the underlying controller, which queues velocity; the
@@ -650,6 +676,7 @@ export async function createBabylonRuntime(
     inputController = simMode
       ? null
       : createInputController(canvas, inertialCameraController, { isOrbitMode: () => orbitModeActive });
+    inputController?.setRates(inputRates());
 
     return geospatialCamera;
   }
@@ -1086,6 +1113,15 @@ export async function createBabylonRuntime(
       focusCache = null;
       scheduler.requestRender();
     })),
+    settings.watch("camera.fieldOfView", () => {
+      if (geospatialCamera) geospatialCamera.fov = cameraFieldOfViewRad();
+      scheduler.requestRender();
+    }),
+    ...["camera.pitchLimits", "camera.zoomLimits"].map(id => settings.watch(id, () => {
+      cameraController?.setLimits(cameraLimits());
+      scheduler.requestRender();
+    })),
+    ...Object.values(INPUT_RATE_IDS).map(id => settings.watch(id, () => inputController?.setRates(inputRates()))),
   ];
 
   // The HTTP tile cache is shared by every map on the page; its limits are parameters.

@@ -1,12 +1,11 @@
 import type { CameraInputTarget } from "./inertialCameraController";
-import { MOVEMENT_SENSITIVITY_BASE, type InputSettings } from "./inputSettings";
+import { DEFAULT_INPUT_RATES, MOVEMENT_SENSITIVITY_BASE, type InputSettings } from "./inputSettings";
 
 type WheelGestureMode = "pan" | "pinchZoom" | "wheelZoom" | "orbit" | "ignore";
 
 const WHEEL_GESTURE_IDLE_MS = 180;
 const PIXEL_DELTA_MODE = 0;
 const FRACTIONAL_DELTA_EPSILON = 0.001;
-const MOUSE_WHEEL_ZOOM_SENSITIVITY_BASE = 0.03;
 
 interface WheelGestureSession {
   mode: WheelGestureMode;
@@ -83,6 +82,7 @@ export function attachWheelController(
   options: { isSafariWithGestures: boolean; isOrbitMode?: () => boolean; getSettings?: () => InputSettings },
 ): () => void {
   const { isSafariWithGestures } = options;
+  const rates = () => options.getSettings?.().rates ?? DEFAULT_INPUT_RATES;
   let session: WheelGestureSession | null = null;
 
   function onWheel(e: WheelEvent): void {
@@ -121,8 +121,9 @@ export function attachWheelController(
       // POI orbit mode maps trackpad swipe to orbit; invert pitch so swipe-up
       // tilts the view upward (matches pan drag direction users expect).
       const pitchSign = options.isOrbitMode?.() ? -1 : 1;
-      const pitchDeltaDeg = pitchSign * e.deltaY * 0.15 * sensitivity * MOVEMENT_SENSITIVITY_BASE;
-      const headingDeltaDeg = -e.deltaX * 0.15 * sensitivity * MOVEMENT_SENSITIVITY_BASE;
+      const rate = rates().wheelOrbitDegPerPx;
+      const pitchDeltaDeg = pitchSign * e.deltaY * rate * sensitivity;
+      const headingDeltaDeg = -e.deltaX * rate * sensitivity;
       camera.orbitBy(pitchDeltaDeg, headingDeltaDeg);
       return;
     }
@@ -134,7 +135,7 @@ export function attachWheelController(
     // ── Ctrl+wheel = macOS trackpad pinch-to-zoom (non-Safari browsers) ──
     if (session.mode === "pinchZoom") {
       const sensitivity = options.getSettings?.().sensitivity.trackpad.zoom ?? 1;
-      const factor = 1 + e.deltaY * 0.01 * sensitivity * MOVEMENT_SENSITIVITY_BASE;
+      const factor = 1 + e.deltaY * rates().trackpadPinchZoomPerPx * sensitivity;
       camera.zoomBy(factor);
       return;
     }
@@ -143,7 +144,9 @@ export function attachWheelController(
     // Scroll down (deltaY>0) = zoom out; scroll up (deltaY<0) = zoom in.
     if (Math.abs(e.deltaY) <= FRACTIONAL_DELTA_EPSILON) return;
     const sensitivity = options.getSettings?.().sensitivity.mouse.zoom ?? 1;
-    const factor = Math.pow(e.deltaY > 0 ? 1.08 : 0.92, sensitivity * MOUSE_WHEEL_ZOOM_SENSITIVITY_BASE);
+    // The notch's share of the distance, as a power of 1.08 out and of 0.92 in.
+    const exponent = Math.log1p(Math.max(0, rates().wheelZoomPerNotch)) / Math.log(1.08);
+    const factor = Math.pow(e.deltaY > 0 ? 1.08 : 0.92, sensitivity * exponent);
     camera.zoomBy(factor);
   }
 
