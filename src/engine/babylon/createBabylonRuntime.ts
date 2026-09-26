@@ -33,7 +33,7 @@ import { DEFAULT_RASTER_IMAGERY } from "./resolveMapRuntimeConfig";
 import { isKnownRasterBaseMapId, resolveRasterBaseMapSource, withSourceKey, type RasterBaseMapSource } from "./rasterBaseMaps";
 import { getAppSettings } from "../../settings/appSettings";
 import type { SettingsRegistry } from "../../settings/registry";
-import type { RasterQualitySetting, RasterQualityState } from "./rasterQuality";
+import type { AutoDetailDecision } from "../../terrain/autoDetail";
 import { createTerrainPerformanceCapture, type TerrainPerformanceCapture } from "../../terrain/terrainPerformanceCapture";
 
 declare global {
@@ -79,7 +79,12 @@ export interface BabylonRuntimeOptions {
   rasterBaseMap?: RasterBaseMapSource | null;
   getSurfaceHeightMeters?: (latDeg: number, lonDeg: number) => number | null;
   terrainSource?: TerrainSource;
-  rasterQuality?: RasterQualitySetting;
+  /**
+   * @deprecated The quality profiles are retired: terrain detail is
+   * `map.detail.terrain.*`, adjusted by `map.auto.*`; `?terrainQuality` sets
+   * them for a visit. Ignored.
+   */
+  rasterQuality?: unknown;
   /** How 2D basemap imagery is selected and drawn. */
   rasterImagery?: "atlas" | "legacy";
   /** Explicit opt-in; no per-query timings or capture buffers by default. */
@@ -111,7 +116,6 @@ export interface BabylonRuntimeStatus {
    */
   displayedRasterBaseMap?: RasterBaseMapSource | null;
   terrainSource: TerrainSource | null;
-  rasterQuality: RasterQualityState | null;
   lastError: string | null;
 }
 
@@ -139,6 +143,12 @@ export interface FocusPoint {
   label: string;
   /** ECEF metres, or null while it is not known. */
   getPosition(): { x: number; y: number; z: number } | null;
+}
+
+/** Levels as the adjustment reports them: "0.5 levels", "1 level". */
+function formatLevels(levels: number): string {
+  const rounded = Math.round(levels * 100) / 100;
+  return `${rounded} level${rounded === 1 ? "" : "s"}`;
 }
 
 /** The parameters that decide the focus region, read by both maps each frame. */
@@ -220,9 +230,12 @@ export interface BabylonRuntime {
   setMapSource(source: "google" | RasterBaseMapSource): void;
   /** Switch the elevation stream used by raster basemaps. */
   setTerrainSource(source: TerrainSource): void;
-  /** Select Auto, Low, Balanced, or High raster terrain detail. */
-  setRasterQuality(setting: RasterQualitySetting): void;
-  getRasterQuality(): RasterQualityState | null;
+  /**
+   * Called when automatic adjustment moves 2D basemap detail (`map.auto.*`),
+   * with the frame time that caused it, for a host's log. Returns a function
+   * that stops it.
+   */
+  onDetailAdjusted(listener: (decision: AutoDetailDecision) => void): () => void;
   /**
    * Tell the input system whether the camera is currently locked to a POI.
    * When true, two-finger trackpad swipe orbits instead of panning.
@@ -457,7 +470,7 @@ export async function createBabylonRuntime(
     return withSourceKey(source, typeof key === "string" ? key : "");
   };
   let activeTerrainSource = resolveTerrainSource(options.terrainSource);
-  let activeRasterQuality: RasterQualitySetting | undefined = options.rasterQuality;
+  const detailAdjustedListeners = new Set<(decision: AutoDetailDecision) => void>();
   let lastRasterFrameAt = performance.now();
   const worldRoot = simMode ? new TransformNode("sim-world-root", scene) : null;
 
@@ -489,7 +502,6 @@ export async function createBabylonRuntime(
     googleApiKeyProvided: hasGoogleApiKey,
     rasterBaseMap: activeRasterBaseMap,
     terrainSource: activeTerrainSource,
-    rasterQuality: null,
     lastError: null,
   };
   const scheduler: RenderScheduler = createRenderScheduler({
@@ -505,11 +517,6 @@ export async function createBabylonRuntime(
       tilesRuntime?.update();
       rasterTilesRuntime?.reportFrame(frameNow, frameNow - lastRasterFrameAt, document.hidden);
       lastRasterFrameAt = frameNow;
-      const rasterQuality = rasterTilesRuntime?.getQualityState() ?? null;
-      if (status.rasterQuality !== rasterQuality) {
-        status.rasterQuality = rasterQuality;
-        emitStatus();
-      }
       rasterTilesRuntime?.update();
       if (status.mode === "raster-basemap" && (rasterTilesRuntime?.getMetrics().visibleTiles ?? 0) > 0) {
         hideFallbackExperience();
@@ -816,14 +823,15 @@ export async function createBabylonRuntime(
           return { ...request, offsetCap: typeof finest === "number" ? finest : null };
         },
         worldRoot: worldRoot ?? undefined,
-        alwaysRefresh: simMode,
-        getViewState: () => preparationViewState ?? (simMode && simViewState
-          ? simViewState
-          : cameraController?.getViewState() ?? null),
         getSurfaceHeightMeters: options.getSurfaceHeightMeters,
         terrainSource: activeTerrainSource,
-        quality: activeRasterQuality,
         detailOffset: rasterDetailOffset,
+        onDetailAdjusted: decision => {
+          const text = `${decision.to > decision.from ? "Coarsened" : "Refined"} 2D map detail to ${formatLevels(decision.to)} below the request: frames averaged ${decision.meanFrameMs.toFixed(1)} ms against a ${decision.goalMs.toFixed(1)} ms goal.`;
+          console.info("[map auto]", text);
+          recordMapDebugEvent("detail-adjusted", { ...decision });
+          for (const listener of detailAdjustedListeners) listener(decision);
+        },
         imagery: options.rasterImagery ?? (settings.get("map.detail.imageryPath") === "legacy" ? "legacy" : DEFAULT_RASTER_IMAGERY),
         onDetailFeedback: emitRasterDetailFeedback,
         performanceCapture: terrainCapture,
@@ -869,7 +877,6 @@ export async function createBabylonRuntime(
     const displayedId = rasterTilesRuntime.getDisplayedSourceId();
     status.displayedRasterBaseMap = knownRasterBaseMaps.get(displayedId) ?? rasterBaseMap;
     status.terrainSource = activeTerrainSource;
-    status.rasterQuality = rasterTilesRuntime.getQualityState();
     status.lastError = reason;
     status.message = reason
       ? `${rasterBaseMap.label} active after Google tiles failed.`
@@ -893,7 +900,6 @@ export async function createBabylonRuntime(
       rasterTilesRuntime?.dispose();
       rasterTilesRuntime = null;
     }
-    status.rasterQuality = null;
     if (!hasGoogleApiKey) {
       if (activeRasterBaseMap) enableRasterBaseMapMode("Google 3D Tiles need an API key.");
       else enableFallbackMode("Google 3D Tiles need an API key.");
@@ -1105,6 +1111,11 @@ export async function createBabylonRuntime(
   const imagery = () => (status.mode === "raster-basemap" ? rasterTilesRuntime?.getImageryDiagnostics().atlas ?? null : null);
   let uploadSample: { at: number; bytes: number } | null = null;
   const google = () => (status.mode === "google-tiles" ? tilesRuntime?.getLoadingState?.() ?? null : null);
+  const raster = () => (status.mode === "raster-basemap" ? rasterTilesRuntime : null);
+  const formatPx = (px: number): string => `${px >= 10 ? Math.round(px) : px.toFixed(1)} px`;
+  const because = (decision: AutoDetailDecision | null): string => (decision
+    ? `, since frames averaged ${decision.meanFrameMs.toFixed(1)} ms against a ${decision.goalMs.toFixed(1)} ms goal`
+    : "");
   const readings: Array<[string, () => string | null]> = [
     ["map.imagery.gpuBudget", () => {
       const atlas = imagery()?.atlas;
@@ -1145,6 +1156,35 @@ export async function createBabylonRuntime(
       if (!focus) return null;
       const limited = diagnostics.plan?.limits.includes("memory") ? "; the GPU budget limits its detail" : "";
       return `${focus.pages} imagery pages in the region, about ${focus.estimatedPages} expected from this view${limited}`;
+    }],
+    ["map.detail.terrain.default", () => {
+      const terrain = raster()?.getTerrainState();
+      return terrain ? `${formatPx(terrain.targetPx)} in use${terrain.targetPx !== terrain.requestedTargetPx ? `, ${formatPx(terrain.requestedTargetPx)} asked for` : ""}` : null;
+    }],
+    ["map.terrain.maxTiles", () => {
+      const terrain = raster()?.getTerrainState();
+      return terrain ? `${terrain.selectedTiles} chosen, ${terrain.neededTiles} in view or around the focus point${terrain.truncated ? ", limit reached" : ""}` : null;
+    }],
+    ["map.auto.terrainDetail", () => {
+      const runtime = raster();
+      const auto = runtime?.getAutoDetailState();
+      if (!runtime || !auto?.terrainEnabled) return null;
+      const terrain = runtime.getTerrainState();
+      return auto.adjustment > 0 && terrain.targetPx > terrain.requestedTargetPx
+        ? `${formatPx(terrain.targetPx)}, coarser than the ${formatPx(terrain.requestedTargetPx)} asked for${because(auto.lastDecision)}`
+        : "At the detail asked for";
+    }],
+    ["map.auto.imageryDetail", () => {
+      const auto = raster()?.getAutoDetailState();
+      if (!auto?.imageryEnabled) return null;
+      return auto.offset < auto.requestedOffset
+        ? `${formatLevels(auto.requestedOffset - auto.offset)} coarser than asked for${because(auto.lastDecision)}`
+        : "At the detail asked for";
+    }],
+    ["map.auto.frameTimeGoal", () => {
+      const auto = raster()?.getAutoDetailState();
+      if (!auto || auto.goalMs === null) return null;
+      return `${auto.goalMs.toFixed(1)} ms in use${auto.lastMeanMs !== null ? `; the last window averaged ${auto.lastMeanMs.toFixed(1)} ms` : ""}`;
     }],
     ["map.terrain.cachedTiles", () => {
       const metrics = status.mode === "raster-basemap" ? rasterTilesRuntime?.getMetrics() : null;
@@ -1436,15 +1476,9 @@ export async function createBabylonRuntime(
     },
     setMapSource: applyMapSource,
     setTerrainSource: applyTerrainSource,
-    setRasterQuality(setting): void {
-      activeRasterQuality = setting;
-      rasterTilesRuntime?.setQuality(setting);
-      status.rasterQuality = rasterTilesRuntime?.getQualityState() ?? null;
-      emitStatus();
-      scheduler.requestRender();
-    },
-    getRasterQuality(): RasterQualityState | null {
-      return rasterTilesRuntime?.getQualityState() ?? null;
+    onDetailAdjusted(listener): () => void {
+      detailAdjustedListeners.add(listener);
+      return () => { detailAdjustedListeners.delete(listener); };
     },
     setOrbitMode(active: boolean): void {
       orbitModeActive = active;

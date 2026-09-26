@@ -12,7 +12,6 @@ import {
 
 import {
   DEG_TO_RAD,
-  WGS84_A,
   geodeticToEcef,
 } from "../../camera/cameraMath";
 import { createTerrainTileLoader, sampleTerrainGrid, type TerrainGrid, type TerrainSource } from "../../terrain/terrainTiles";
@@ -31,10 +30,13 @@ import type { RasterBaseMapSource } from "./rasterBaseMaps";
 import { getAppSettings } from "../../settings/appSettings";
 import type { SettingsRegistry } from "../../settings/registry";
 import { IMAGERY_LIMIT_IDS, IMAGERY_TUNING_IDS, imageryLimitsFrom, imageryTuningFrom } from "./imagery/imageryParameters";
-import { createRasterQualityController, RASTER_QUALITY_PROFILES, resolveRasterQualityState, type RasterQualityProfile, type RasterQualitySetting, type RasterQualityState } from "./rasterQuality";
+import { readImageryView, imageryViewChanged } from "./imagery/imageryView";
+import type { ImageryView } from "../../terrain/imagery/imageryGeometry";
+import { selectTerrain, type TerrainFocus, type TerrainSelection } from "../../terrain/terrainSelector";
+import { createAutoDetailController, type AutoDetailDecision, type AutoDetailState } from "../../terrain/autoDetail";
 
-const WEB_MERCATOR_MAX_LAT_DEG = 85.05112878;
-const EARTH_CIRCUMFERENCE_METERS = 2 * Math.PI * WGS84_A;
+/** Segments along a tile's side when the caller gives none: `map.terrain.tileSegments`'s default. */
+const DEFAULT_TILE_SEGMENTS = 64;
 const UNAVAILABLE_DETAIL: RasterDetailFeedback = Object.freeze({
   support: "unavailable",
   reason: "Detail for 2D basemaps is not available yet.",
@@ -54,6 +56,25 @@ export interface RasterDetailFeedback {
   effectiveTarget: number | null;
 }
 
+export interface RasterTerrainState {
+  /** The mesh's screen-space error target in use, px, after the link and automatic adjustment. */
+  targetPx: number;
+  /** The target before automatic adjustment, px. */
+  requestedTargetPx: number;
+  /** Tiles the last selection chose, those the camera or focus region needs, and whether the limit cut it short. */
+  selectedTiles: number;
+  neededTiles: number;
+  truncated: boolean;
+}
+
+export interface RasterAutoDetailState extends AutoDetailState {
+  terrainEnabled: boolean;
+  imageryEnabled: boolean;
+  /** The imagery offset requested and the one in use. */
+  requestedOffset: number;
+  offset: number;
+}
+
 export interface RasterTileMetrics {
   visibleTiles: number;
   activeTiles: number;
@@ -63,12 +84,23 @@ export interface RasterTilesRuntimeOptions {
   scene: Scene;
   source: RasterBaseMapSource;
   worldRoot?: TransformNode;
+  /** @deprecated Unused: the runtime selects on every update that finds a change. */
   alwaysRefresh?: boolean;
-  getViewState: () => GlobeViewState | null;
+  /**
+   * @deprecated Terrain is chosen from the scene's active camera and
+   * `map.focus.*`; the view state no longer decides it. Ignored.
+   */
+  getViewState?: () => GlobeViewState | null;
   getSurfaceHeightMeters?: (latDeg: number, lonDeg: number) => number | null;
   terrainSource?: TerrainSource;
   performanceCapture?: TerrainPerformanceCapture;
-  quality?: RasterQualitySetting;
+  /**
+   * @deprecated The quality profiles are retired: terrain detail is
+   * `map.detail.terrain.*` and adjusts itself by `map.auto.*`. Ignored.
+   */
+  quality?: unknown;
+  /** Mesh segments along each side of a tile; the runtime passes `map.terrain.tileSegments`. */
+  segments?: number;
   /** Requested imagery detail offset; see RasterDetailPolicy. */
   detailOffset?: number;
   /**
@@ -86,10 +118,10 @@ export interface RasterTilesRuntimeOptions {
    * `map.imagery.*` and `map.terrain.*`. The app's when omitted.
    */
   settings?: SettingsRegistry;
-  /** A region of imagery to load around a focus point, beyond or instead of the view. */
+  /** A region of terrain and imagery to load around a focus point, beyond or instead of the view. */
   getFocus?: () => ImageryFocusRequest | null;
-  /** Internal active profile used by the runtime's Auto controller. */
-  activeQualityProfile?: Exclude<RasterQualitySetting, "auto">;
+  /** Called when automatic adjustment moves detail, for the host's log. */
+  onDetailAdjusted?: (decision: AutoDetailDecision) => void;
   /** Texture samples for per-tile imagery; read when a texture is created. */
   anisotropy?: () => number;
   requestRender?: () => void;
@@ -115,10 +147,16 @@ export interface RasterTilesRuntime {
   getMetrics(): RasterTileMetrics;
   getRevision(): number;
   sample(latDeg: number, lonDeg: number): SurfaceHit | null;
-  getQualityState(): RasterQualityState;
-  setQuality(setting: RasterQualitySetting): void;
-  /** Request imagery detail as an offset; imagery changes, terrain does not. */
+  /**
+   * Request imagery detail as an offset. With `map.detail.linkTerrainToImagery`
+   * the terrain mesh's target follows, a level per halving; the displayed
+   * surface changes only through ordinary tile adoption.
+   */
   setDetailTarget(offset: number): void;
+  /** The terrain target in use and what the last selection chose. */
+  getTerrainState(): RasterTerrainState;
+  /** Where automatic adjustment has moved detail, and why. */
+  getAutoDetailState(): RasterAutoDetailState;
   getDetailFeedback(): RasterDetailFeedback;
   /** The imagery path in use and, for the atlas, what it is doing. */
   getImageryDiagnostics(): { mode: "atlas" | "legacy"; atlas: ImageryDiagnostics | null };
@@ -130,11 +168,6 @@ export interface RasterTilesRuntime {
 
 interface TileCoord {
   z: number;
-  x: number;
-  y: number;
-}
-
-interface HighLodTile {
   x: number;
   y: number;
 }
@@ -173,23 +206,6 @@ function retryDelayMs(failures: number): number {
   return Math.min(30_000, 2000 * 2 ** Math.max(0, failures - 1));
 }
 
-function wrapTileX(x: number, z: number): number {
-  const n = 2 ** z;
-  return ((x % n) + n) % n;
-}
-
-function lonToTileX(lonDeg: number, z: number): number {
-  const n = 2 ** z;
-  return Math.floor(((lonDeg + 180) / 360) * n);
-}
-
-function latToTileY(latDeg: number, z: number): number {
-  const clampedLat = clamp(latDeg, -WEB_MERCATOR_MAX_LAT_DEG, WEB_MERCATOR_MAX_LAT_DEG);
-  const latRad = clampedLat * DEG_TO_RAD;
-  const n = 2 ** z;
-  return Math.floor(((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2) * n);
-}
-
 function tileXToLon(x: number, z: number): number {
   return (x / (2 ** z)) * 360 - 180;
 }
@@ -200,21 +216,6 @@ function tileYToLat(y: number, z: number): number {
 }
 
 type ZoomLimits = Pick<RasterBaseMapSource, "minZoom" | "maxZoom">;
-
-
-function chooseTileZoom(view: GlobeViewState, source: ZoomLimits, profile: RasterQualityProfile): number {
-  const minZoom = source.minZoom ?? 0;
-  const maxZoom = source.maxZoom ?? 18;
-  const targetTileMeters = clamp(view.zoomMeters * 0.65, 250, 8_000_000);
-  const zoom = Math.round(Math.log2(EARTH_CIRCUMFERENCE_METERS / targetTileMeters)) + profile.zoomBias;
-  return clamp(zoom, minZoom, maxZoom);
-}
-
-function chooseGlobalBaseZoom(source: ZoomLimits, focusZoom: number, profile: RasterQualityProfile): number {
-  const minZoom = source.minZoom ?? 0;
-  const maxZoom = source.maxZoom ?? 18;
-  return clamp(Math.min(profile.baseZoom, focusZoom), minZoom, maxZoom);
-}
 
 function tileKey(tile: TileCoord): string {
   return `${tile.z}/${tile.x}/${tile.y}`;
@@ -227,114 +228,6 @@ function buildTileUrl(source: RasterBaseMapSource, tile: TileCoord): string {
     .replace(/\{y\}/g, String(tile.y));
 }
 
-/**
- * `corridor` prefetches a few tiles ahead along the view's heading. A focus
- * region turns it off: it follows the camera's heading, so orbiting would load.
- */
-function getDesiredTiles(view: GlobeViewState, source: ZoomLimits, profile = RASTER_QUALITY_PROFILES.balanced, corridor = true): TileCoord[] {
-  const z = chooseTileZoom(view, source, profile);
-  const baseZoom = chooseGlobalBaseZoom(source, z, profile);
-  const n = 2 ** z;
-  const centerX = lonToTileX(view.lonDeg, z);
-  const centerY = clamp(latToTileY(view.latDeg, z), 0, n - 1);
-  const radius = profile.ringRadius;
-  const tiles: TileCoord[] = [];
-  const seen = new Set<string>();
-
-  const addTile = (tile: TileCoord): void => {
-    const key = tileKey(tile);
-    if (seen.has(key)) return;
-    seen.add(key);
-    tiles.push(tile);
-  };
-
-  // High-LOD focus tiles around the camera anchor. Skipped at very low zoom
-  // where the focus zoom collapses onto the global base zoom.
-  const highLodTiles: HighLodTile[] = [];
-  const markHighLod = (x: number, y: number): void => {
-    highLodTiles.push({ x, y });
-  };
-  if (z > baseZoom) {
-    for (let dy = -radius; dy <= radius; dy += 1) {
-      const y = centerY + dy;
-      if (y < 0 || y >= n) continue;
-      for (let dx = -radius; dx <= radius; dx += 1) {
-        const x = wrapTileX(centerX + dx, z);
-        markHighLod(x, y);
-      }
-    }
-    // Prefetch a short corridor ahead without changing the central resident ring.
-    if (corridor && Number.isFinite(view.headingDeg)) {
-      const heading = view.headingDeg * DEG_TO_RAD;
-      for (let step = 1; step <= profile.corridorSteps; step++) for (let offset = -1; offset <= 1; offset++) {
-        const x = wrapTileX(centerX + Math.round(Math.sin(heading) * (radius + step) + Math.cos(heading) * offset), z);
-        const y = centerY + Math.round(-Math.cos(heading) * (radius + step) + Math.sin(heading) * offset);
-        if (y >= 0 && y < n && !highLodTiles.some(tile => tile.x === x && tile.y === y)) markHighLod(x, y);
-      }
-    }
-  }
-
-  // Build a non-overlapping quadtree. Regions outside the focus ring stay as
-  // coarse as possible; regions intersecting it split until the high-LOD tiles
-  // become the leaves. This avoids partial base tiles underneath detail tiles.
-  const baseTileCount = 2 ** baseZoom;
-  for (let by = 0; by < baseTileCount; by += 1) {
-    for (let bx = 0; bx < baseTileCount; bx += 1) {
-      addDesiredCoverage({ z: baseZoom, x: bx, y: by }, z, highLodTiles, addTile);
-    }
-  }
-
-  return tiles;
-}
-
-function addDesiredCoverage(
-  tile: TileCoord,
-  focusZoom: number,
-  highLodTiles: readonly HighLodTile[],
-  addTile: (tile: TileCoord) => void,
-): void {
-  const coverage = getHighLodCoverage(tile, focusZoom, highLodTiles);
-  if (coverage === "none" || tile.z === focusZoom) {
-    addTile(tile);
-    return;
-  }
-
-  const childZ = tile.z + 1;
-  const childX = tile.x * 2;
-  const childY = tile.y * 2;
-  addDesiredCoverage({ z: childZ, x: childX, y: childY }, focusZoom, highLodTiles, addTile);
-  addDesiredCoverage({ z: childZ, x: childX + 1, y: childY }, focusZoom, highLodTiles, addTile);
-  addDesiredCoverage({ z: childZ, x: childX, y: childY + 1 }, focusZoom, highLodTiles, addTile);
-  addDesiredCoverage({ z: childZ, x: childX + 1, y: childY + 1 }, focusZoom, highLodTiles, addTile);
-}
-
-function getHighLodCoverage(
-  tile: TileCoord,
-  focusZoom: number,
-  highLodTiles: readonly HighLodTile[],
-): "none" | "partial" | "full" {
-  if (tile.z > focusZoom || highLodTiles.length === 0) return "none";
-  const ratio = 2 ** (focusZoom - tile.z);
-  const x0 = tile.x * ratio;
-  const x1 = x0 + ratio;
-  const y0 = tile.y * ratio;
-  const y1 = y0 + ratio;
-  let covered = 0;
-  for (const highTile of highLodTiles) {
-    if (highTile.x >= x0 && highTile.x < x1 && highTile.y >= y0 && highTile.y < y1) {
-      covered += 1;
-    }
-  }
-  if (covered === 0) return "none";
-  return covered === ratio * ratio ? "full" : "partial";
-}
-
-function chooseTilePatchSegments(tile: TileCoord, profile: RasterQualityProfile): number {
-  if (tile.z <= profile.baseZoom) return profile.minSegments;
-  if (tile.z <= 10) return Math.min(profile.maxSegments, Math.max(profile.minSegments, 32));
-  return profile.maxSegments;
-}
-
 export function createTerrainMesh(options: RasterTilesRuntimeOptions, tile: TileCoord, grid?: TerrainGrid): Mesh {
   const started = options.performanceCapture ? performance.now() : 0;
   const { scene, source } = options;
@@ -342,11 +235,7 @@ export function createTerrainMesh(options: RasterTilesRuntimeOptions, tile: Tile
   const positions: number[] = [];
   const uvs: number[] = [];
   const indices: number[] = [];
-  // Public mesh construction retains the prior high-resolution default. The
-  // streamed runtime always supplies its resolved bounded profile explicitly.
-  const quality = options.activeQualityProfile
-    ?? (options.quality === "low" || options.quality === "balanced" || options.quality === "high" ? options.quality : "high");
-  const segments = chooseTilePatchSegments(tile, RASTER_QUALITY_PROFILES[quality]);
+  const segments = Math.max(1, Math.round(options.segments ?? DEFAULT_TILE_SEGMENTS));
   const center = geodeticToEcef(tileYToLat(tile.y + 0.5, tile.z) * DEG_TO_RAD, tileXToLon(tile.x + 0.5, tile.z) * DEG_TO_RAD, 0);
   let minHeight = Infinity, maxHeight = -Infinity;
 
@@ -594,6 +483,16 @@ interface DisplayBuildResult {
   keys: string[];
 }
 
+/** Parameters that change which terrain tiles a selection chooses. */
+const TERRAIN_SELECTION_IDS = new Set([
+  "map.terrain.maxLevel",
+  "map.terrain.errorPerSpacing",
+  "map.terrain.tileSegments",
+  "map.terrain.maxTiles",
+  "map.terrain.refineAbove",
+  "map.terrain.coarsenBelow",
+]);
+
 export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): RasterTilesRuntime {
   const capture = options.performanceCapture;
   const settings = options.settings ?? getAppSettings();
@@ -601,17 +500,62 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
     const value = settings.get(id);
     return typeof value === "number" ? value : Number.NaN;
   };
+  const range = (id: string): { min: number; max: number } => {
+    const value = settings.get(id);
+    return typeof value === "object" && value !== null && "min" in value ? value : { min: Number.NaN, max: Number.NaN };
+  };
   let imagerySource = options.source;
   let imageryGeneration = 0;
-  const qualityController = createRasterQualityController(resolveRasterQualityState(options.quality));
-  let qualityState = qualityController.getState();
-  // Tile-record callbacks retain this object, so changing Auto's active profile
-  // also affects meshes prepared after the quality change.
+  // Tile-record callbacks retain this object, so a new segment count also
+  // reaches meshes prepared after the change.
   const meshOptions: RasterTilesRuntimeOptions = {
     ...options,
-    activeQualityProfile: qualityState.activeProfile,
+    segments: Math.round(setting("map.terrain.tileSegments")),
     anisotropy: () => Math.round(setting("map.imagery.anisotropy")),
   };
+
+  // Detail: the rail's imagery request, the terrain target it sets when
+  // linked, and how far automatic adjustment has coarsened both.
+  let requestedOffset = options.detailOffset ?? 0;
+  const autoTuning = () => {
+    const goal = settings.get("map.auto.frameTimeGoal");
+    return {
+      goalMs: typeof goal === "number" ? goal : null,
+      coarsenAbove: setting("map.auto.coarsenAbove"),
+      refineBelow: setting("map.auto.refineBelow"),
+      windowMs: setting("map.auto.window"),
+      coarsenWindows: Math.round(setting("map.auto.coarsenWindows")),
+      refineWindows: Math.round(setting("map.auto.refineWindows")),
+      step: setting("map.auto.step"),
+      intervalMs: setting("map.auto.interval"),
+    };
+  };
+  const autoDetail = createAutoDetailController(autoTuning());
+  const terrainAuto = (): boolean => settings.get("map.auto.terrainDetail") !== false;
+  const imageryAuto = (): boolean => settings.get("map.auto.imageryDetail") !== false;
+  /** The terrain target before adjustment: the default, moved a level per level of the rail when linked, within its range. */
+  const requestedTerrainTarget = (): number => {
+    const bounds = range("map.detail.terrain.range");
+    const base = setting("map.detail.terrain.default");
+    const imageryDefault = settings.get("map.detail.imagery.default");
+    const linked = settings.get("map.detail.linkTerrainToImagery") !== false;
+    const target = linked ? base * 2 ** ((typeof imageryDefault === "number" ? imageryDefault : 0) - requestedOffset) : base;
+    return clamp(target, bounds.min, bounds.max);
+  };
+  const terrainTarget = (): number => {
+    const requested = requestedTerrainTarget();
+    return terrainAuto() ? Math.min(range("map.detail.terrain.range").max, requested * 2 ** autoDetail.getAdjustment()) : requested;
+  };
+  const imageryOffset = (): number => {
+    if (!imageryAuto()) return requestedOffset;
+    return Math.max(Math.min(requestedOffset, range("map.detail.imagery.range").min), requestedOffset - autoDetail.getAdjustment());
+  };
+  /** How far the enabled details can still coarsen from their requests, in levels. */
+  const autoRoom = (): number => Math.max(
+    terrainAuto() ? Math.log2(range("map.detail.terrain.range").max / requestedTerrainTarget()) : 0,
+    imageryAuto() && imageryRuntime ? requestedOffset - range("map.detail.imagery.range").min : 0,
+    0,
+  );
   let terrainSource = options.terrainSource;
   const createTerrainLoader = () => createTerrainTileLoader(terrainSource, options.onDownloadBytes, undefined, Boolean(capture),
     capture ? milliseconds => { capture.counters.preparationCpuMs += milliseconds; } : undefined);
@@ -619,7 +563,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
   let terrainGeneration = 0;
   // Persistent cache: tiles stay alive after they leave the desired set so we
   // can keep showing them (or use them as best-effort fallbacks) without
-  // re-downloading. Eviction is LRU and bound by the active quality profile.
+  // re-downloading. Eviction is LRU and bound by `map.terrain.cachedTiles`.
   const cache = new Map<string, RasterTileRecord>();
   const lastUsedTick = new Map<string, number>();
   const retryAfter = new Map<string, number>();
@@ -636,7 +580,13 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
   const dirtyGeometryKeys = new Set<string>();
   let visibilityDirty = false;
   const meshRebuildQueue = new Set<string>();
-  let lastView: Pick<GlobeViewState, "latDeg" | "lonDeg" | "zoomMeters"> | null = null;
+  // What the last terrain selection was made from, and what it chose.
+  let selectionDirty = true;
+  let selectedView: ImageryView | null = null;
+  let selectedFocus: TerrainFocus | null = null;
+  let selectedAt = -Infinity;
+  let selection: TerrainSelection | null = null;
+  let selectedTarget = Number.NaN;
   // Adopted terrain levels, finest first, for imagery height queries.
   let visibleLevels: number[] = [];
 
@@ -712,6 +662,21 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
       created.dispose();
     }
   }
+  // Detail follows its request, the link and automatic adjustment wherever
+  // they change: imagery at once, terrain at the next selection.
+  let appliedOffset = requestedOffset;
+  function applyDetail(): void {
+    const decision = autoDetail.setRoom(autoRoom());
+    if (decision) options.onDetailAdjusted?.(decision);
+    const offset = imageryOffset();
+    if (offset !== appliedOffset) {
+      appliedOffset = offset;
+      imageryRuntime?.setOffset(offset);
+    }
+    options.requestRender?.();
+  }
+  applyDetail();
+
   // Budgets and tuning follow the registry wherever they change.
   let appliedLimits = JSON.stringify(imageryLimitsFrom(settings));
   let appliedTuning = JSON.stringify(imageryTuningFrom(settings));
@@ -733,7 +698,16 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
       const samples = Math.round(setting("map.imagery.anisotropy"));
       for (const record of cache.values()) if (record.texture) record.texture.anisotropicFilteringLevel = samples;
     }
-    if (changed.has("map.terrain.maxLevel")) lastView = null;
+    if (changed.has("map.terrain.tileSegments")) {
+      const segments = Math.round(setting("map.terrain.tileSegments"));
+      if (segments !== meshOptions.segments) {
+        meshOptions.segments = segments;
+        for (const key of cache.keys()) meshRebuildQueue.add(key);
+        selectionDirty = true;
+      }
+    }
+    if (ids.some(id => id.startsWith("map.auto."))) autoDetail.setTuning(autoTuning());
+    if (ids.some(id => TERRAIN_SELECTION_IDS.has(id) || id.startsWith("map.auto.") || id.startsWith("map.detail."))) applyDetail();
     options.requestRender?.();
   });
   // With projected imagery, terrain levels no longer follow the imagery
@@ -975,10 +949,26 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
     }
   }
 
-  function hasMeaningfulCameraChange(view: GlobeViewState): boolean {
-    if (!lastView) return true;
-    if (Math.abs(view.zoomMeters - lastView.zoomMeters) > setting("map.terrain.requestDebounce")) return true;
-    return Math.abs(view.latDeg - lastView.latDeg) > 0.00001 || Math.abs(view.lonDeg - lastView.lonDeg) > 0.00001;
+  /** The focus region as terrain measures it: from the camera's distance to the point. */
+  function terrainFocus(view: ImageryView | null): TerrainFocus | null {
+    const request = options.getFocus?.();
+    if (!request || !view) return null;
+    const { position } = request;
+    return {
+      mode: request.mode,
+      position: { ...position },
+      radiusMeters: request.radiusMeters,
+      minDistanceMeters: Math.hypot(view.camera.x - position.x, view.camera.y - position.y, view.camera.z - position.z),
+      horizonCull: request.horizonCull,
+    };
+  }
+
+  /** A change in the focus region worth a new selection: the point moved, or what it asks for changed. */
+  function focusChanged(a: TerrainFocus | null, b: TerrainFocus | null): boolean {
+    if (!a || !b) return a !== b;
+    const moved = Math.hypot(a.position.x - b.position.x, a.position.y - b.position.y, a.position.z - b.position.z);
+    const nearer = Math.abs(a.minDistanceMeters - b.minDistanceMeters) > 0.02 * Math.max(1, a.minDistanceMeters);
+    return a.mode !== b.mode || moved > 0.5 || nearer || a.radiusMeters !== b.radiusMeters || a.horizonCull !== b.horizonCull;
   }
 
   function commitTerrain(): void {
@@ -1032,19 +1022,35 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
     if (meshRebuildQueue.size > 0) options.requestRender?.();
   }
 
-  function selectTiles(view: GlobeViewState): void {
-    lastView = { latDeg: view.latDeg, lonDeg: view.lonDeg, zoomMeters: view.zoomMeters };
+  function selectTiles(view: ImageryView | null, focus: TerrainFocus | null): void {
+    selectionDirty = false;
+    selectedView = view;
+    selectedFocus = focus;
+    selectedAt = performance.now();
+    selectedTarget = terrainTarget();
     tick += 1;
 
-    const profile = RASTER_QUALITY_PROFILES[qualityState.activeProfile];
     const limits = zoomLimits();
-    const baseZoom = chooseGlobalBaseZoom(limits, chooseTileZoom(view, limits, profile), profile);
-    const desiredTiles = getDesiredTiles(view, limits, profile, !options.getFocus?.());
-    // Load nearby detail first, so a flight doesn't wait behind distant tiles.
-    desiredTiles.sort((a, b) => b.z - a.z ||
-      Math.hypot(a.x - lonToTileX(view.lonDeg, a.z), a.y - latToTileY(view.latDeg, a.z)) -
-      Math.hypot(b.x - lonToTileX(view.lonDeg, b.z), b.y - latToTileY(view.latDeg, b.z)));
-    lastDesired = desiredTiles.map((tile) => ({ tile, key: tileKey(tile), baseZoom }));
+    const previous = selection;
+    selection = selectTerrain({
+      view,
+      focus,
+      targetPx: selectedTarget,
+      errorPerSpacing: setting("map.terrain.errorPerSpacing"),
+      segments: meshOptions.segments ?? DEFAULT_TILE_SEGMENTS,
+      minLevel: limits.minZoom ?? 0,
+      maxLevel: limits.maxZoom ?? 18,
+      maxTiles: Math.round(setting("map.terrain.maxTiles")),
+      hysteresis: { refineAbove: setting("map.terrain.refineAbove"), coarsenBelow: setting("map.terrain.coarsenBelow") },
+      previous: previous && { split: previous.split, leaves: new Set(previous.leaves.map(leaf => leaf.key)) },
+      boundsFor: tile => {
+        const bounds = coveringVisibleRecord(tile)?.heightBounds;
+        return bounds ? { min: bounds.min - 50, max: bounds.max + 50 } : { min: -500, max: 9000 };
+      },
+    });
+    const baseZoom = selection.rootLevel;
+    // Nearest needed first, so a flight does not wait behind distant tiles.
+    lastDesired = selection.leaves.map(leaf => ({ tile: leaf.tile, key: leaf.key, baseZoom }));
 
     // Queue loads for any desired tile not yet cached; touch ancestors so
     // already-loaded coarser tiles survive LRU while we wait for detail.
@@ -1105,15 +1111,21 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
       if (disposed) return;
       const started = capture ? performance.now() : 0, oldRevision = revision;
       const previousPreparation = capture?.counters.preparationCpuMs ?? 0;
-      const view = options.getViewState();
-      const retryDue = nextRetryAt !== Infinity && performance.now() >= nextRetryAt;
-      // Simulation ticks still advance active refinement every frame, but a
-      // stationary (or sub-threshold) aircraft has no new coverage to select
-      // unless a failed load is due to be requested again.
-      if (view && [view.latDeg, view.lonDeg, view.zoomMeters].every(Number.isFinite)
-        && (retryDue || hasMeaningfulCameraChange(view))) {
+      const view = readImageryView(options.scene, options.worldRoot ?? null);
+      const focus = terrainFocus(view);
+      const now = performance.now();
+      const retryDue = nextRetryAt !== Infinity && now >= nextRetryAt;
+      // A still camera and focus point have no new coverage to select unless
+      // a failed load is due again. Around a focus point the view decides
+      // nothing, so turning the camera selects nothing.
+      const moved = (focus?.mode !== "around" && imageryViewChanged(selectedView, view)) || focusChanged(selectedFocus, focus);
+      if (selectionDirty || retryDue || terrainTarget() !== selectedTarget) {
         nextRetryAt = Infinity;
-        selectTiles(view);
+        selectTiles(view, focus);
+      } else if (moved) {
+        // While the view moves, select at most every interval; the view it stops at is always selected.
+        if (now - selectedAt >= setting("map.terrain.reselectWhileMoving")) selectTiles(view, focus);
+        else options.requestRender?.();
       }
       if (visibilityDirty) recomputeVisibility();
       // Imagery follows the camera and only uploads pages and page tables; it
@@ -1148,7 +1160,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
       for (const record of cache.values()) record.replaceImagery(source, imageryGeneration);
       // A provider may have different useful bounds/levels. Selection updates
       // independently from the DEM and does not revise the physical surface.
-      lastView = null;
+      selectionDirty = true;
       options.requestRender?.();
     },
     setTerrainSource(source): void {
@@ -1170,31 +1182,39 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
     getMetrics,
     getRevision: () => revision,
     setDetailTarget(offset): void {
-      imageryRuntime?.setOffset(offset);
+      if (!Number.isFinite(offset) || offset === requestedOffset) return;
+      requestedOffset = offset;
+      applyDetail();
     },
-    getDetailFeedback: () => imageryRuntime?.getFeedback()
-      ?? (imageryUnavailableReason ? { ...UNAVAILABLE_DETAIL, reason: imageryUnavailableReason, limits: ["backend"] } : UNAVAILABLE_DETAIL),
+    getDetailFeedback: () => {
+      if (!imageryRuntime) return imageryUnavailableReason ? { ...UNAVAILABLE_DETAIL, reason: imageryUnavailableReason, limits: ["backend"] } : UNAVAILABLE_DETAIL;
+      const feedback = imageryRuntime.getFeedback();
+      // Coarser than the rail asks because frames were slow: the rail says so.
+      return appliedOffset < requestedOffset && !feedback.limits.includes("frame-time")
+        ? { ...feedback, limits: [...feedback.limits, "frame-time"] }
+        : feedback;
+    },
     getImageryDiagnostics: () => ({ mode: imageryRuntime ? "atlas" : "legacy", atlas: imageryRuntime?.getDiagnostics() ?? null }),
     getDisplayedSourceId: () => imageryRuntime?.getDisplayedSourceId() ?? imagerySource.id,
-    getQualityState: () => qualityState,
-    setQuality(setting): void {
-      const next = qualityController.setSetting(setting);
-      if (next.activeProfile === qualityState.activeProfile && next.setting === qualityState.setting) return;
-      qualityState = next;
-      meshOptions.activeQualityProfile = next.activeProfile;
-      lastView = null;
-      for (const key of cache.keys()) meshRebuildQueue.add(key);
-      options.requestRender?.();
-    },
+    getTerrainState: () => ({
+      targetPx: terrainTarget(),
+      requestedTargetPx: requestedTerrainTarget(),
+      selectedTiles: selection?.leaves.length ?? 0,
+      neededTiles: selection?.leaves.filter(leaf => leaf.needed).length ?? 0,
+      truncated: selection?.truncated ?? false,
+    }),
+    getAutoDetailState: () => ({
+      ...autoDetail.getState(),
+      terrainEnabled: terrainAuto(),
+      imageryEnabled: imageryAuto() && imageryRuntime !== null,
+      requestedOffset,
+      offset: imageryOffset(),
+    }),
     reportFrame(now, frameMs, suspended): void {
-      const next = qualityController.observe(now, frameMs, suspended);
-      if (next) {
-        qualityState = next;
-        meshOptions.activeQualityProfile = next.activeProfile;
-        lastView = null;
-        for (const key of cache.keys()) meshRebuildQueue.add(key);
-        options.requestRender?.();
-      }
+      const decision = autoDetail.observe(now, frameMs, suspended);
+      if (!decision) return;
+      options.onDetailAdjusted?.(decision);
+      applyDetail();
     },
     sample(lat, lon) {
       if (!capture) return surfaceSampler.sample(lat, lon);

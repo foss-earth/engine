@@ -71,6 +71,10 @@ export const MAP_SOURCE_PARAMETERS: readonly ParameterSpec[] = [
 
 const RASTER_BOUNDS = { min: RASTER_DETAIL_ENVELOPE.coarsest, max: RASTER_DETAIL_ENVELOPE.finest };
 const GOOGLE_BOUNDS = { min: GOOGLE_ERROR_TARGET_BOUNDS.finest, max: GOOGLE_ERROR_TARGET_BOUNDS.coarsest };
+/** Terrain mesh error targets, px: from finer than a pixel to where relief is gone. */
+const TERRAIN_BOUNDS = { min: 0.5, max: 64 };
+/** In log2 px: a quarter of a level, as for 2D imagery. */
+const TERRAIN_DETAIL_STEP = 0.25;
 
 export const MAP_DETAIL_PARAMETERS: readonly ParameterSpec[] = [
   {
@@ -141,6 +145,50 @@ export const MAP_DETAIL_PARAMETERS: readonly ParameterSpec[] = [
     home: { tab: MAP_TAB, section: "detail", level: "main" },
     appliesLive: true,
     source: "src/shell/mapDetailController.ts",
+  },
+  {
+    id: "map.detail.terrain.range",
+    label: "Terrain mesh detail range",
+    description: "The screen-space error the 2D basemaps' terrain mesh may show, in pixels: where the linked detail rail and automatic adjustment may move it. Smaller is finer and loads more.",
+    unit: "px",
+    kind: "range",
+    bounds: () => TERRAIN_BOUNDS,
+    step: TERRAIN_DETAIL_STEP,
+    scale: "log2",
+    track: { ramp: "detail" },
+    default: { min: 2, max: 16 },
+    defaultReason: "From 2 px, Cesium's default for terrain, to 16 px, where relief visibly flattens.",
+    home: { tab: MAP_TAB, section: "detail", level: "main" },
+    appliesLive: true,
+    source: "src/engine/babylon/createRasterTilesRuntime.ts",
+  },
+  {
+    id: "map.detail.terrain.default",
+    label: "Terrain mesh default detail",
+    description: "The screen-space error the terrain mesh aims for, in pixels, before the detail rail or automatic adjustment move it: a tile splits while its geometric error projects larger than this.",
+    unit: "px",
+    kind: "number",
+    bounds: () => TERRAIN_BOUNDS,
+    step: TERRAIN_DETAIL_STEP,
+    scale: "log2",
+    track: { ramp: "detail" },
+    default: 4,
+    defaultReason: "About the error terrain showed under the camera before this became a setting.",
+    home: { tab: MAP_TAB, section: "detail", level: "main" },
+    appliesLive: true,
+    source: "src/engine/babylon/createRasterTilesRuntime.ts",
+  },
+  {
+    id: "map.detail.linkTerrainToImagery",
+    label: "Detail rail moves terrain too",
+    description: "On, each level the 2D detail rail moves finer halves the terrain mesh's error, within its range; off, the rail moves imagery only.",
+    unit: "none",
+    kind: "boolean",
+    default: true,
+    defaultReason: "Finer imagery on coarse relief looks wrong, and coarser imagery rarely needs fine relief.",
+    home: { tab: MAP_TAB, section: "detail", level: "main" },
+    appliesLive: true,
+    source: "src/engine/babylon/createRasterTilesRuntime.ts",
   },
   {
     id: "map.detail.imageryPath",

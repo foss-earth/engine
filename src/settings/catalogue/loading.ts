@@ -50,7 +50,7 @@ interface Quantity {
   fallback: number;
   reason: string;
   source: string;
-  section?: "loading" | "selection";
+  section?: "loading" | "selection" | "terrain-selection";
   level?: "main" | "all";
   scale?: "linear" | "log2";
   step?: number;
@@ -79,6 +79,7 @@ const RASTER_RUNTIME = "src/engine/babylon/createRasterTilesRuntime.ts";
 const GOOGLE_RUNTIME = "src/engine/babylon/createTilesRuntime.ts";
 const MAP_CACHE = "src/terrain/mapCache.ts";
 const SELECTOR = "src/terrain/imagery/imagerySelector.ts";
+const TERRAIN_SELECTOR = "src/terrain/terrainSelector.ts";
 const STARTING_VALUE = "The starting calibration of the projected-imagery work; not yet measured across devices.";
 
 export const MAP_LOADING_PARAMETERS: readonly ParameterSpec[] = [
@@ -140,12 +141,12 @@ export const MAP_LOADING_PARAMETERS: readonly ParameterSpec[] = [
   quantity({
     id: "map.terrain.cachedTiles", label: "Terrain tiles kept", unit: "count", min: 32, max: 4096, fallback: 160, scale: "log2", step: 0.05, level: "main",
     description: "Terrain tiles kept after they leave the view, so returning does not load them again.",
-    reason: "What the Balanced profile kept before this became a setting.", source: RASTER_RUNTIME,
+    reason: "What was kept by default before this became a setting.", source: RASTER_RUNTIME,
   }),
   quantity({
-    id: "map.terrain.requestDebounce", label: "Terrain reselection distance", unit: "m", min: 0, max: 1000, fallback: 5, scale: "linear", step: 1,
-    description: "How far the camera's distance to the ground must change before terrain tiles are chosen again.",
-    reason: "The distance used before this became a setting.", source: RASTER_RUNTIME,
+    id: "map.terrain.reselectWhileMoving", label: "Terrain reselection interval", unit: "ms", min: 0, max: 1000, fallback: 100, step: 10,
+    description: "While the view moves, terrain tiles are chosen again at most this often; the view it stops at is always chosen.",
+    reason: "The interval 2D imagery uses, so both follow the camera alike.", source: RASTER_RUNTIME,
   }),
   quantity({
     id: "map.terrain.maxLevel", label: "Finest terrain level", unit: "levels", min: 8, max: 20, fallback: 16, step: 1,
@@ -259,4 +260,32 @@ export const MAP_SELECTION_PARAMETERS: readonly ParameterSpec[] = [
     source: "src/engine/babylon/imagery/imageryAtlasLayout.ts",
     readOnly: "Fixed by the shader's page-table layout.",
   },
+];
+
+export const MAP_TERRAIN_SELECTION_PARAMETERS: readonly ParameterSpec[] = [
+  quantity({
+    id: "map.terrain.errorPerSpacing", label: "Error per vertex spacing", unit: "ratio", min: 0.05, max: 1, fallback: 0.25, step: 0.05, section: "terrain-selection",
+    description: "How far the ground between a terrain tile's vertices is taken to stray from its mesh, as a share of their spacing. It turns a tile's size into the error the detail target is measured against.",
+    reason: "The share Cesium uses for heightmap terrain.", source: TERRAIN_SELECTOR,
+  }),
+  quantity({
+    id: "map.terrain.tileSegments", label: "Mesh segments per tile", unit: "count", min: 8, max: 256, fallback: 64, scale: "log2", step: 1, section: "terrain-selection",
+    description: "How many segments each side of a terrain tile's mesh has. More gives each tile finer relief, so fewer, larger tiles meet the target; changing it rebuilds the meshes.",
+    reason: "The segments the finest terrain tiles had by default before this became a setting.", source: RASTER_RUNTIME,
+  }),
+  quantity({
+    id: "map.terrain.maxTiles", label: "Terrain selection limit", unit: "count", min: 64, max: 8192, fallback: 512, scale: "log2", step: 0.05, section: "terrain-selection",
+    description: "The most terrain tiles one choice may cover the globe with. Where it runs out, the farthest regions stay coarser than the target.",
+    reason: "About twice the tiles a horizon view at the default detail needs.", source: TERRAIN_SELECTOR,
+  }),
+  quantity({
+    id: "map.terrain.refineAbove", label: "Refine above", unit: "ratio", min: 1, max: 4, fallback: 1.2, step: 0.05, section: "terrain-selection",
+    description: "A terrain tile shown at one level splits when its error exceeds the target by this much. Above 1, terrain does not switch levels back and forth at the threshold.",
+    reason: "The value 2D imagery starts from.", source: TERRAIN_SELECTOR,
+  }),
+  quantity({
+    id: "map.terrain.coarsenBelow", label: "Coarsen below", unit: "ratio", min: 0.1, max: 1, fallback: 0.8, step: 0.05, section: "terrain-selection",
+    description: "Split terrain gives way to its parent once the parent's error is this far under the target.",
+    reason: "The value 2D imagery starts from.", source: TERRAIN_SELECTOR,
+  }),
 ];

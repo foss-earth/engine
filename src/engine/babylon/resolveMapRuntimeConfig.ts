@@ -8,13 +8,16 @@ import { resolveTerrainSource, type TerrainSource } from "../../terrain/terrainT
 import { getAppSettings } from "../../settings/appSettings";
 import { FOSS_EARTH_PARAMETERS, fossEarthUrlAliases } from "../../settings/catalogue";
 import { createSettingsRegistry, type SettingsRegistry } from "../../settings/registry";
-import type { RasterQualitySetting } from "./rasterQuality";
 
 export interface MapRuntimeConfig {
   googleApiKey: string | null;
   rasterBaseMap: RasterBaseMapSource;
   terrainSource: TerrainSource;
-  rasterQuality: RasterQualitySetting;
+  /**
+   * @deprecated Always undefined: the quality profiles are retired, and
+   * `?terrainQuality` sets `map.detail.terrain.*` for the visit instead.
+   */
+  rasterQuality?: undefined;
   /** How 2D basemap imagery is selected and drawn; see RasterImageryMode. */
   rasterImagery: RasterImageryMode;
   preferGoogleTiles: boolean;
@@ -37,7 +40,8 @@ export interface ResolveMapRuntimeConfigOptions {
   baseMap?: string | RasterBaseMapSource | null;
   preferGoogleTiles?: boolean;
   terrainSource?: string | TerrainSource | null;
-  rasterQuality?: RasterQualitySetting | null;
+  /** @deprecated Ignored: see MapRuntimeConfig.rasterQuality. */
+  rasterQuality?: unknown;
   rasterImagery?: RasterImageryMode | null;
   /**
    * A query to read instead of the page's, in a registry of its own: for tests
@@ -91,21 +95,10 @@ export function setTerrainSourcePreference(source: string, settings: SettingsReg
   dropUrlParameters(["elevationSource", "terrainSource", "set.map.source.elevation"]);
 }
 
-export function getRasterQualityPreferenceFromSearchParams(searchParams: URLSearchParams): RasterQualitySetting {
-  const value = (searchParams.get("terrainQuality") ?? "").trim().toLowerCase();
-  return value === "low" || value === "balanced" || value === "high" || value === "auto" ? value : "auto";
-}
-
 /** A development and rollback switch: `?rasterImagery=atlas` or `legacy`; anything else is the default. */
 export function getRasterImageryPreferenceFromSearchParams(searchParams: URLSearchParams): RasterImageryMode {
   const value = (searchParams.get("rasterImagery") ?? "").trim().toLowerCase();
   return value === "atlas" || value === "legacy" ? value : DEFAULT_RASTER_IMAGERY;
-}
-
-export function setRasterQualityPreference(setting: RasterQualitySetting): void {
-  const url = new URL(window.location.href);
-  url.searchParams.set("terrainQuality", setting);
-  window.history.replaceState(null, "", url);
 }
 
 function registryFor(options: ResolveMapRuntimeConfigOptions): SettingsRegistry {
@@ -126,7 +119,6 @@ export function resolveMapRuntimeConfig(
   options: ResolveMapRuntimeConfigOptions = {},
 ): MapRuntimeConfig {
   const settings = registryFor(options);
-  const searchParams = options.searchParams ?? new URLSearchParams(typeof window === "undefined" ? "" : window.location.search);
   const configuredBaseMap = resolveRasterBaseMapSource(options.baseMap ?? DEFAULT_RASTER_BASE_MAP_ID);
   const savedKey = settings.get("map.source.googleKey");
   const googleApiKey = options.googleApiKey?.trim() || (typeof savedKey === "string" && savedKey.trim() ? savedKey.trim() : null);
@@ -148,7 +140,6 @@ export function resolveMapRuntimeConfig(
       ? configuredBaseMap
       : isKnownRasterBaseMapId(selected) ? resolveRasterBaseMapSource(selected) : configuredBaseMap,
     terrainSource: resolveTerrainSource(options.terrainSource ?? String(settings.get("map.source.elevation"))),
-    rasterQuality: options.rasterQuality ?? getRasterQualityPreferenceFromSearchParams(searchParams),
     rasterImagery: options.rasterImagery ?? (imagery === "legacy" ? "legacy" : DEFAULT_RASTER_IMAGERY),
     preferGoogleTiles: shouldUseGoogle,
   };

@@ -31,6 +31,7 @@ const LIMIT_TEXT: Record<DetailLimit, string> = {
   backend: "limited by this renderer",
   memory: "limited by the memory budget",
   loading: "still loading",
+  "frame-time": "coarsened to hold the frame time",
 };
 
 /** A sentence about what limits the request, or null when nothing does. */

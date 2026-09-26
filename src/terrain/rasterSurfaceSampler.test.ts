@@ -21,7 +21,8 @@ function setup() {
   const sampler = createRasterSurfaceSampler(() => 27, counters);
   const reference = createSurfaceQuery(scene, () => root, mesh => Boolean(mesh.metadata?.mapSurface), () => 27);
   function patch(tile: TerrainTile, height = 250): TerrainPatch {
-    const mesh = createTerrainMesh({ scene, source: RASTER_BASE_MAP_SOURCES[0], worldRoot: root, getViewState: () => null },
+    // The segments these comparisons were written for; at 64 the dateline seam differs by about 5 cm.
+    const mesh = createTerrainMesh({ scene, source: RASTER_BASE_MAP_SOURCES[0], worldRoot: root, segments: 128 },
       tile, { ...tile, size: 2, heights: new Float32Array([height, height + 25, height - 30, height + 80]) });
     mesh.setEnabled(true); mesh.computeWorldMatrix(true);
     return { tile, mesh };

@@ -3,7 +3,8 @@ import type { UrlAliasResult } from "../registry";
 import type { LegacyMigration, ParameterSpec, ParameterValue } from "../types";
 import { CONTROLS_PARAMETERS, CONTROLS_TAB } from "./controls";
 import { INTERFACE_PARAMETERS, PERFORMANCE_HUD_METRICS, SETTINGS_TAB, TOOLBAR_BUTTONS } from "./interface";
-import { MAP_LOADING_PARAMETERS, MAP_SELECTION_PARAMETERS } from "./loading";
+import { MAP_AUTO_PARAMETERS } from "./auto";
+import { MAP_LOADING_PARAMETERS, MAP_SELECTION_PARAMETERS, MAP_TERRAIN_SELECTION_PARAMETERS } from "./loading";
 import { MAP_DETAIL_PARAMETERS, MAP_SOURCE_PARAMETERS, MAP_TAB } from "./map";
 import { RENDERER_PARAMETERS, RENDERER_TAB } from "./renderer";
 
@@ -15,8 +16,10 @@ export { atlasLimitMiB } from "./loading";
 export const FOSS_EARTH_PARAMETERS: readonly ParameterSpec[] = [
   ...MAP_SOURCE_PARAMETERS,
   ...MAP_DETAIL_PARAMETERS,
+  ...MAP_AUTO_PARAMETERS,
   ...MAP_LOADING_PARAMETERS,
   ...MAP_SELECTION_PARAMETERS,
+  ...MAP_TERRAIN_SELECTION_PARAMETERS,
   ...RENDERER_PARAMETERS,
   ...CONTROLS_PARAMETERS,
   ...INTERFACE_PARAMETERS,
@@ -26,7 +29,9 @@ export const FOSS_EARTH_SECTION_TITLES: ReadonlyArray<readonly [string, string, 
   [MAP_TAB, "source", "Source"],
   [MAP_TAB, "detail", "Detail"],
   [MAP_TAB, "loading", "Loading and memory"],
+  [MAP_TAB, "auto", "Automatic adjustment"],
   [MAP_TAB, "selection", "Imagery selection"],
+  [MAP_TAB, "terrain-selection", "Terrain selection"],
   [RENDERER_TAB, "backend", "Renderer"],
   [CONTROLS_TAB, "input-method", "Input method"],
   [CONTROLS_TAB, "orbit", "Orbit"],
@@ -203,5 +208,25 @@ export function fossEarthUrlAliases(params: URLSearchParams): UrlAliasResult {
   if (imagery === "atlas" || imagery === "legacy") values["map.detail.imageryPath"] = imagery;
   const key = (params.get("key") ?? params.get("googleKey"))?.trim();
   if (key) values["map.source.googleKey"] = key;
-  return { values };
+  const notes: Record<string, string> = {};
+  // The retired quality profiles, as the terrain values they stand for, for this visit only.
+  const quality = params.get("terrainQuality")?.trim().toLowerCase();
+  const profile = quality ? TERRAIN_QUALITY_VALUES[quality] : undefined;
+  if (profile) {
+    Object.assign(values, profile);
+    notes["map.detail.terrain.default"] = `?terrainQuality=${quality} is retired: it set terrain detail for this visit.`;
+  }
+  return { values, notes };
 }
+
+/**
+ * `?terrainQuality`'s profiles as parameter values: the terrain error each
+ * profile showed under the camera, held there (low, balanced, high), or
+ * adjusted to the frame time (auto).
+ */
+const TERRAIN_QUALITY_VALUES: Readonly<Record<string, Record<string, string>>> = {
+  low: { "map.detail.terrain.default": "8", "map.auto.terrainDetail": "false" },
+  balanced: { "map.detail.terrain.default": "4", "map.auto.terrainDetail": "false" },
+  high: { "map.detail.terrain.default": "2", "map.auto.terrainDetail": "false" },
+  auto: { "map.auto.terrainDetail": "true" },
+};

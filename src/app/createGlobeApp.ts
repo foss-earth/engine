@@ -20,7 +20,6 @@ import { INPUT_SENSITIVITY_IDS, PERFORMANCE_HUD_METRICS } from "../settings/cata
 import { createParameterControl, type ParameterControlHandle } from "../shell/settings/controls";
 import { createParameterSection, type ParameterSectionHandle } from "../shell/settings/parameterSection";
 import { createSavedSettingsSection } from "../shell/settings/savedSettings";
-import type { RasterQualitySetting } from "../engine/babylon/rasterQuality";
 import type {
   GlobeHandle,
   GlobeLayerContext,
@@ -78,7 +77,8 @@ export interface GlobeAppOptions {
   preferGoogleTiles?: boolean;
   getSurfaceHeightMeters?: (latDeg: number, lonDeg: number) => number | null;
   terrainSource?: string | TerrainSource | null;
-  rasterQuality?: RasterQualitySetting;
+  /** @deprecated Ignored: terrain detail is `map.detail.terrain.*`, adjusted by `map.auto.*`. */
+  rasterQuality?: unknown;
   onPoiSpriteSizeChange?: (params: PoiSpriteSizeParams) => void;
   onCompassScaleChange?: (params: OrbitCompassScaleParams) => void;
   /** A detail controller the host configured; the app creates one otherwise. */
@@ -419,7 +419,6 @@ export async function createGlobeApp(
     baseMap: options.baseMap,
     preferGoogleTiles: options.preferGoogleTiles,
     terrainSource: options.terrainSource,
-    rasterQuality: options.rasterQuality,
     settings,
   });
 
@@ -428,7 +427,6 @@ export async function createGlobeApp(
     preferGoogleTiles: mapConfig.preferGoogleTiles,
     rasterBaseMap: mapConfig.rasterBaseMap,
     terrainSource: mapConfig.terrainSource,
-    rasterQuality: mapConfig.rasterQuality,
     rasterImagery: mapConfig.rasterImagery,
     getSurfaceHeightMeters: options.getSurfaceHeightMeters,
     onStatusChange: applyRuntimeStatus,

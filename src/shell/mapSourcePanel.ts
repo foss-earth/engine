@@ -35,7 +35,7 @@ export interface MapSourcePanelHandle {
 }
 
 /** The Map tab's own sections; hosts' sections for the tab follow them. */
-const MAP_SECTIONS = ["source", "detail", "loading", "selection"] as const;
+const MAP_SECTIONS = ["source", "detail", "auto", "loading", "selection", "terrain-selection"] as const;
 
 /**
  * The contents of the Map tab, one collapsible section per group: Source (a
@@ -76,11 +76,21 @@ export function createMapSourcePanel(options: MapSourcePanelOptions): MapSourceP
   selectionNote.className = "foss-earth-choices__note";
   selectionNote.textContent = "How 2D imagery is chosen as the view moves: when a region refines or coarsens, and what stands in while finer imagery loads. The values are the selector's starting calibration.";
   const selection = createParameterSection(settings, { tab: "map", section: "selection", main: selectionNote });
+  const autoNote = document.createElement("p");
+  autoNote.className = "foss-earth-choices__note";
+  autoNote.textContent = "When frames take longer than the goal, 2D basemap detail may coarsen, a step at a time, toward the coarse end of the ranges in Detail, and return once frames are fast again. It never goes finer than you asked for.";
+  const auto = createParameterSection(settings, { tab: "map", section: "auto", main: autoNote });
+  const terrainNote = document.createElement("p");
+  terrainNote.className = "foss-earth-choices__note";
+  terrainNote.textContent = "How the terrain mesh of 2D basemaps is chosen: a tile splits while its geometric error, seen from the camera or the focus point, is larger on screen than the detail target.";
+  const terrainSelection = createParameterSection(settings, { tab: "map", section: "terrain-selection", main: terrainNote });
   const sections = createSectionsElement([
     { id: "map.source", title: settings.getSectionTitle("map", "source"), element: sourceSection.element, defaultOpen: true },
     { id: "map.detail", title: settings.getSectionTitle("map", "detail"), element: detailSection.element, defaultOpen: true },
+    { id: "map.auto", title: settings.getSectionTitle("map", "auto"), element: auto.element, defaultOpen: false },
     { id: "map.loading", title: settings.getSectionTitle("map", "loading"), element: loading.element, defaultOpen: false },
     { id: "map.selection", title: settings.getSectionTitle("map", "selection"), element: selection.element, defaultOpen: false },
+    { id: "map.terrain-selection", title: settings.getSectionTitle("map", "terrain-selection"), element: terrainSelection.element, defaultOpen: false },
   ]);
   const hostSections = appendHostSections(settings, "map", sections, MAP_SECTIONS);
 
@@ -118,6 +128,8 @@ export function createMapSourcePanel(options: MapSourcePanelOptions): MapSourceP
       cache.destroy();
       loading.destroy();
       selection.destroy();
+      auto.destroy();
+      terrainSelection.destroy();
       hostSections.destroy();
       sections.destroy();
     },

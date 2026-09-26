@@ -74,7 +74,7 @@ export interface DetailTrackMarker {
 }
 
 /** Why delivered detail can differ from the request. */
-export type DetailLimit = "source" | "memory" | "loading" | "backend" | "consumer";
+export type DetailLimit = "source" | "memory" | "loading" | "backend" | "consumer" | "frame-time";
 
 /**
  * One source's detail request and what limits it. Numeric values carry the

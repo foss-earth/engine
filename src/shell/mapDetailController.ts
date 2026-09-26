@@ -152,7 +152,7 @@ function sameLimits(a: readonly DetailLimit[], b: readonly DetailLimit[]): boole
   return a.length === b.length && a.every((limit, index) => limit === b[index]);
 }
 
-const LIMIT_ORDER: readonly DetailLimit[] = ["consumer", "source", "backend", "memory", "loading"];
+const LIMIT_ORDER: readonly DetailLimit[] = ["consumer", "source", "backend", "memory", "frame-time", "loading"];
 
 function asRange(value: ParameterValue): NumberRange | null {
   return typeof value === "object" && value !== null ? value : null;

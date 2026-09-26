@@ -6,6 +6,7 @@ import { createTerrainPerformanceCapture } from "../../terrain/terrainPerformanc
 import type { TerrainGrid, TerrainTile } from "../../terrain/terrainTiles";
 import { createRasterTilesRuntime } from "./createRasterTilesRuntime";
 import { RASTER_BASE_MAP_SOURCES } from "./rasterBaseMaps";
+import { getAppSettings } from "../../settings/appSettings";
 
 const pending = vi.hoisted(() => ({
   imagery: [] as Array<() => void>,
@@ -40,6 +41,8 @@ async function resolveFirstDetail(): Promise<void> {
 
 describe("raster imagery and terrain lifecycle", () => {
   it("keeps fine raster tiles in the camera frustum after zooming in and committing terrain", async () => {
+    // Select the zoomed view at once, however fast the test runs.
+    getAppSettings().set("map.terrain.reselectWhileMoving", 0);
     const engine = new NullEngine(); const scene = new Scene(engine);
     scene.useRightHandedSystem = true;
     const camera = new GeospatialCamera("raster-camera", scene, { planetRadius: 6378137 });
@@ -51,6 +54,8 @@ describe("raster imagery and terrain lifecycle", () => {
       for (const zoomMeters of [80_000_000, 1200]) {
         currentView.zoomMeters = zoomMeters;
         controller.applyViewState(currentView);
+        // The clipping behaviour sets the near plane for the new view as a frame renders.
+        scene.render();
         runtime.update();
         pending.imagery.splice(0).forEach(loaded => loaded());
         runtime.update();

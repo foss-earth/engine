@@ -36,7 +36,7 @@ function imageryLoader() {
   return { loader, urls };
 }
 
-async function setup(sourceIndex = 0, loaderOverride?: ImageryLoader, getFocus?: RasterTilesRuntimeOptions["getFocus"]) {
+async function setup(sourceIndex = 0, loaderOverride?: ImageryLoader, extra: Partial<RasterTilesRuntimeOptions> = {}) {
   const engine = new NullEngine({ renderWidth: 1280, renderHeight: 720, textureSize: 8192, deterministicLockstep: false, lockstepMaxSteps: 1 });
   // NullEngine has no sub-image upload; the atlas only needs it to exist.
   Object.assign(engine, { updateTextureData: vi.fn() });
@@ -54,7 +54,7 @@ async function setup(sourceIndex = 0, loaderOverride?: ImageryLoader, getFocus?:
   const onDetailFeedback = vi.fn();
   const runtime = createRasterTilesRuntime({
     scene, source: RASTER_BASE_MAP_SOURCES[sourceIndex], getViewState: () => view,
-    imagery: "atlas", imageryLoader: loader, onDetailFeedback, getFocus,
+    imagery: "atlas", imageryLoader: loader, onDetailFeedback, ...extra,
   });
   const settle = async () => {
     for (let round = 0; round < 40; round++) {
@@ -87,6 +87,8 @@ describe("raster runtime with atlas imagery", () => {
   });
 
   it("changes imagery level and source without touching terrain, elevation requests or the surface", async () => {
+    // Imagery alone: the rail does not move terrain.
+    getAppSettings().set("map.detail.linkTerrainToImagery", false);
     const { runtime, settle, engine, urls } = await setup();
     await settle();
     const writes = vi.spyOn(refinement, "updateTerrainPositions");
@@ -204,9 +206,9 @@ describe("raster runtime with atlas imagery", () => {
     getAppSettings().set("map.imagery.reselectWhileMoving", 0);
     const orbit = async (mode: "view" | "around") => {
       let focus: { x: number; y: number; z: number } | null = null;
-      const { runtime, settle, engine, urls, camera, controller, view } = await setup(0, undefined, () => (
+      const { runtime, settle, engine, urls, camera, controller, view } = await setup(0, undefined, { getFocus: () => (
         mode === "view" || !focus ? null : { mode, position: focus, radiusMeters: 10_000, offsetCap: null, horizonCull: true }
-      ));
+      ) });
       // Low over the Grand Canyon, looking toward the horizon: turning shows new ground.
       Object.assign(view, { zoomMeters: 3000, pitchDeg: 75 });
       controller.applyViewState(view);
@@ -233,9 +235,65 @@ describe("raster runtime with atlas imagery", () => {
     expect(around.pages?.estimatedPages).toBeGreaterThan(0);
   });
 
+  it("moves the terrain target a level per level of the rail when linked, within its range", async () => {
+    const settings = getAppSettings();
+    const { runtime, settle, engine } = await setup();
+    await settle();
+    const target = () => runtime.getTerrainState().targetPx;
+    expect(target()).toBe(4);
+    const selected = (offset: number) => { runtime.setDetailTarget(offset); return target(); };
+    expect(selected(1)).toBe(2);
+    expect(selected(-2)).toBe(16);
+    // The range's coarse end, 16 px, holds.
+    expect(selected(-3)).toBe(16);
+    runtime.setDetailTarget(1);
+    await settle();
+    const fine = runtime.getTerrainState().selectedTiles;
+    runtime.setDetailTarget(-2);
+    await settle();
+    expect(runtime.getTerrainState().selectedTiles).toBeLessThan(fine);
+    settings.set("map.detail.linkTerrainToImagery", false);
+    expect(target()).toBe(4);
+    runtime.dispose();
+    engine.dispose();
+  });
+
+  it("coarsens enabled detail toward its range when frames are slow, says why, and returns when they are fast", async () => {
+    const settings = getAppSettings();
+    settings.setMany({ "map.auto.frameTimeGoal": 16, "map.auto.coarsenWindows": 1, "map.auto.interval": 0, "map.auto.refineWindows": 2, "map.auto.step": 0.5 });
+    const onDetailAdjusted = vi.fn();
+    const { runtime, settle, engine, onDetailFeedback } = await setup(0, undefined, { onDetailAdjusted });
+    await settle();
+    const frames = (from: number, ms: number, frameMs: number) => {
+      for (let now = from; now < from + ms; now += frameMs) runtime.reportFrame(now, frameMs, false);
+    };
+    frames(0, 1100, 40);
+    expect(onDetailAdjusted).toHaveBeenCalledWith(expect.objectContaining({ from: 0, to: 0.5, goalMs: 16 }));
+    expect(runtime.getTerrainState()).toMatchObject({ requestedTargetPx: 4, targetPx: 4 * Math.SQRT2 });
+    expect(runtime.getAutoDetailState()).toMatchObject({ adjustment: 0.5, requestedOffset: 0, offset: -0.5 });
+    expect(runtime.getDetailFeedback().limits).toContain("frame-time");
+    expect(onDetailFeedback).toHaveBeenCalled();
+    // Imagery may stay as asked while terrain alone gives way.
+    settings.set("map.auto.imageryDetail", false);
+    expect(runtime.getAutoDetailState().offset).toBe(0);
+    expect(runtime.getDetailFeedback().limits).not.toContain("frame-time");
+    expect(runtime.getTerrainState().targetPx).toBeCloseTo(4 * Math.SQRT2);
+    // Fast frames return it to the request, never past it.
+    frames(1100, 3000, 10);
+    expect(runtime.getAutoDetailState().adjustment).toBe(0);
+    expect(runtime.getTerrainState().targetPx).toBe(4);
+    // With nothing it may move, it holds still.
+    settings.setMany({ "map.auto.terrainDetail": false, "map.auto.imageryDetail": false });
+    frames(4100, 3000, 40);
+    expect(runtime.getAutoDetailState().adjustment).toBe(0);
+    runtime.dispose();
+    engine.dispose();
+  });
+
   it("asks first for a near ancestor where a new region could only show the root coverage", async () => {
     // Reselect at once after the move, however fast the test runs.
     getAppSettings().set("map.imagery.reselectWhileMoving", 0);
+    getAppSettings().set("map.terrain.reselectWhileMoving", 0);
     const { runtime, settle, engine, urls, controller, view } = await setup();
     await settle();
     // Somewhere the atlas has only the level-2 coverage for.
@@ -247,13 +305,14 @@ describe("raster runtime with atlas imagery", () => {
       const [z, y, x] = url.split("/").slice(-3).map(Number);
       return { z, x, y };
     });
-    const deepest = Math.max(...tiles.map(tile => tile.z));
-    expect(deepest).toBeGreaterThanOrEqual(6);
-    const firstDeep = tiles.findIndex(tile => tile.z === deepest);
-    const leaf = tiles[firstDeep];
-    const ancestorIndex = tiles.findIndex(tile => tile.z === leaf.z - 3 && tile.x === leaf.x >> 3 && tile.y === leaf.y >> 3);
-    expect(ancestorIndex).toBeGreaterThanOrEqual(0);
-    expect(ancestorIndex).toBeLessThan(firstDeep);
+    // The first image asked for stands in for finer ones asked for after it:
+    // an ancestor fallbackStep (3) levels above them, more than fallbackGap (4)
+    // levels finer than the root coverage. Terrain refines in stages from
+    // there, so later, deeper images have nearer stand-ins already shown.
+    const first = tiles[0];
+    expect(first.z).toBeGreaterThanOrEqual(2 + 4);
+    const covered = tiles.findIndex(tile => tile.z === first.z + 3 && tile.x >> 3 === first.x && tile.y >> 3 === first.y);
+    expect(covered).toBeGreaterThan(0);
     runtime.dispose();
     engine.dispose();
   });
