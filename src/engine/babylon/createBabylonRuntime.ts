@@ -1,4 +1,5 @@
 import { createMapDownloadMeter } from "./mapDownloadMeter";
+import { setMapCacheLimits } from "../../terrain/mapCache";
 import { createSurfaceQuery, type SurfaceQuery } from "../../terrain/surfaceQuery";
 import { resolveTerrainSource, type TerrainSource } from "../../terrain/terrainTiles";
 import { evaluateTerrainReadiness, terrainReadinessSamples, validateTerrainPreparation,
@@ -730,6 +731,7 @@ export async function createBabylonRuntime(
         onDownloadBytes: downloadMeter.addBytes,
         scene,
         source: keyedSource(rasterBaseMap),
+        settings,
         worldRoot: worldRoot ?? undefined,
         alwaysRefresh: simMode,
         getViewState: () => preparationViewState ?? (simMode && simViewState
@@ -842,6 +844,7 @@ export async function createBabylonRuntime(
         // Flight attaches the simulation world to a floating-origin parent.
         // Before that happens, terrain preparation owns the active camera and
         // its normal camera-based detail selection remains the safe behavior.
+        settings,
         getTerrainDetailAnchor: () => {
           if (googleTerrainDetailAnchor === "simulation-origin") return worldRoot?.parent ? simulationOrigin : null;
           // Without a simulation the scene is in ECEF, so the orbit target is a scene point.
@@ -983,6 +986,74 @@ export async function createBabylonRuntime(
       scheduler.requestRender();
     }),
   ];
+
+  // The HTTP tile cache is shared by every map on the page; its limits are parameters.
+  const MiB = 1024 * 1024;
+  const settingNumber = (id: string): number => {
+    const value = settings.get(id);
+    return typeof value === "number" ? value : 0;
+  };
+  const applyMapCacheLimits = (): void => setMapCacheLimits({
+    maxBytes: settingNumber("map.cache.httpBytes") * MiB,
+    maxEntries: Math.round(settingNumber("map.cache.httpEntries")),
+    maxTileBytes: settingNumber("map.cache.maxTileBytes") * MiB,
+  });
+  applyMapCacheLimits();
+  stopWatchingSettings.push(
+    settings.watch("map.cache.httpBytes", applyMapCacheLimits),
+    settings.watch("map.cache.httpEntries", applyMapCacheLimits),
+    settings.watch("map.cache.maxTileBytes", applyMapCacheLimits),
+  );
+
+  // Each budget shows what it bounds, read while its section is on screen.
+  const mebibytes = (bytes: number): string => `${bytes >= 10 * MiB ? Math.round(bytes / MiB) : (bytes / MiB).toFixed(1)} MiB`;
+  const imagery = () => (status.mode === "raster-basemap" ? rasterTilesRuntime?.getImageryDiagnostics().atlas ?? null : null);
+  let uploadSample: { at: number; bytes: number } | null = null;
+  const google = () => (status.mode === "google-tiles" ? tilesRuntime?.getLoadingState?.() ?? null : null);
+  const readings: Array<[string, () => string | null]> = [
+    ["map.imagery.gpuBudget", () => {
+      const atlas = imagery()?.atlas;
+      return atlas ? `${mebibytes(atlas.estimatedGpuBytes)} allocated, ${atlas.capacity - atlas.freeSlots} of ${atlas.capacity} pages in use` : null;
+    }],
+    ["map.imagery.stagingBudget", () => {
+      const residency = imagery()?.residency;
+      return residency ? `${mebibytes(residency.stagedBytes + residency.inFlightReservedBytes)} waiting` : null;
+    }],
+    ["map.imagery.concurrentRequests", () => {
+      const residency = imagery()?.residency;
+      return residency ? `${residency.inFlight} in flight` : null;
+    }],
+    ["map.imagery.queuedRequests", () => {
+      const residency = imagery()?.residency;
+      return residency ? `${residency.queued} queued${residency.overflow > 0 ? `, ${residency.overflow} left out` : ""}` : null;
+    }],
+    ["map.imagery.uploadPerFrame", () => {
+      const counters = imagery()?.counters;
+      if (!counters) return null;
+      const at = performance.now();
+      const previous = uploadSample;
+      uploadSample = { at, bytes: counters.uploadBytes };
+      if (!previous || at <= previous.at) return null;
+      return `${mebibytes(((counters.uploadBytes - previous.bytes) * 1000) / (at - previous.at))}/s uploaded`;
+    }],
+    ["map.imagery.selectionTimePerFrame", () => {
+      const plan = imagery()?.plan;
+      return plan ? `the last choice took ${plan.cpuMs.toFixed(1)} ms over ${plan.nodesEvaluated} regions` : null;
+    }],
+    ["map.imagery.maxNodes", () => {
+      const plan = imagery()?.plan;
+      return plan ? `${plan.nodesEvaluated} examined${plan.truncated ? ", limit reached" : ""}` : null;
+    }],
+    ["map.terrain.cachedTiles", () => {
+      const metrics = status.mode === "raster-basemap" ? rasterTilesRuntime?.getMetrics() : null;
+      return metrics ? `${metrics.activeTiles} kept, ${metrics.visibleTiles} shown` : null;
+    }],
+    ["map.google.cacheTiles", () => { const state = google(); return state ? `${state.cachedTiles} kept` : null; }],
+    ["map.google.cacheBytes", () => { const state = google(); return state ? `${mebibytes(state.cachedBytes)} kept` : null; }],
+    ["map.google.downloads", () => { const state = google(); return state ? `${state.downloading} downloading` : null; }],
+    ["map.google.parses", () => { const state = google(); return state ? `${state.parsing} parsing` : null; }],
+  ];
+  const removeReadings = readings.map(([id, read]) => settings.setReadingSource(id, read));
 
   const handleResize = () => {
     renderer.engine.resize();
@@ -1316,6 +1387,7 @@ export async function createBabylonRuntime(
     },
     destroy() {
       for (const stop of stopWatchingSettings) stop();
+      for (const remove of removeReadings) remove();
       cancelPreparation?.(new DOMException("Map runtime destroyed.", "AbortError"));
       if (captureFromUrl && window.fossTerrainPerformance === terrainCapture) {
         if (previousCapture) window.fossTerrainPerformance = previousCapture;

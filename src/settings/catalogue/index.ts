@@ -3,16 +3,20 @@ import type { UrlAliasResult } from "../registry";
 import type { LegacyMigration, ParameterSpec, ParameterValue } from "../types";
 import { CONTROLS_PARAMETERS, CONTROLS_TAB } from "./controls";
 import { INTERFACE_PARAMETERS, PERFORMANCE_HUD_METRICS, SETTINGS_TAB, TOOLBAR_BUTTONS } from "./interface";
+import { MAP_LOADING_PARAMETERS, MAP_SELECTION_PARAMETERS } from "./loading";
 import { MAP_DETAIL_PARAMETERS, MAP_SOURCE_PARAMETERS, MAP_TAB } from "./map";
 import { RENDERER_PARAMETERS, RENDERER_TAB } from "./renderer";
 
 export { CONTROLS_TAB, MAP_TAB, RENDERER_TAB, SETTINGS_TAB, PERFORMANCE_HUD_METRICS, TOOLBAR_BUTTONS };
 export { INPUT_SENSITIVITY_IDS } from "./controls";
+export { atlasLimitMiB } from "./loading";
 
 /** Every parameter FOSS Earth owns. Hosts register theirs alongside. */
 export const FOSS_EARTH_PARAMETERS: readonly ParameterSpec[] = [
   ...MAP_SOURCE_PARAMETERS,
   ...MAP_DETAIL_PARAMETERS,
+  ...MAP_LOADING_PARAMETERS,
+  ...MAP_SELECTION_PARAMETERS,
   ...RENDERER_PARAMETERS,
   ...CONTROLS_PARAMETERS,
   ...INTERFACE_PARAMETERS,

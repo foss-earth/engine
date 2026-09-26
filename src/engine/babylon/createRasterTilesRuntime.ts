@@ -28,11 +28,13 @@ import { createImageryRuntime, type ImageryDiagnostics, type ImageryRuntime } fr
 import { IMAGERY_TABLE_MAX_CELLS_LOG2 } from "./imagery/imageryAtlasLayout";
 import type { ImageryLoader } from "./imagery/imageryResidency";
 import type { RasterBaseMapSource } from "./rasterBaseMaps";
+import { getAppSettings } from "../../settings/appSettings";
+import type { SettingsRegistry } from "../../settings/registry";
+import { IMAGERY_LIMIT_IDS, IMAGERY_TUNING_IDS, imageryLimitsFrom, imageryTuningFrom } from "./imagery/imageryParameters";
 import { createRasterQualityController, RASTER_QUALITY_PROFILES, resolveRasterQualityState, type RasterQualityProfile, type RasterQualitySetting, type RasterQualityState } from "./rasterQuality";
 
 const WEB_MERCATOR_MAX_LAT_DEG = 85.05112878;
 const EARTH_CIRCUMFERENCE_METERS = 2 * Math.PI * WGS84_A;
-const TILE_REQUEST_DEBOUNCE_METERS = 5;
 const UNAVAILABLE_DETAIL: RasterDetailFeedback = Object.freeze({
   support: "unavailable",
   reason: "Detail for 2D basemaps is not available yet.",
@@ -79,8 +81,15 @@ export interface RasterTilesRuntimeOptions {
   imageryLoader?: ImageryLoader;
   /** Called when detail delivery or support changes. */
   onDetailFeedback?: () => void;
+  /**
+   * The registry the runtime reads its budgets and tuning from and follows:
+   * `map.imagery.*` and `map.terrain.*`. The app's when omitted.
+   */
+  settings?: SettingsRegistry;
   /** Internal active profile used by the runtime's Auto controller. */
   activeQualityProfile?: Exclude<RasterQualitySetting, "auto">;
+  /** Texture samples for per-tile imagery; read when a texture is created. */
+  anisotropy?: () => number;
   requestRender?: () => void;
   onLoadStart?: () => void;
   onDownloadBytes?: (bytes: number) => void;
@@ -190,11 +199,6 @@ function tileYToLat(y: number, z: number): number {
 
 type ZoomLimits = Pick<RasterBaseMapSource, "minZoom" | "maxZoom">;
 
-/**
- * Terrain levels when imagery is independent of it: the imagery provider's
- * cap and tile size no longer decide terrain detail.
- */
-const TERRAIN_ZOOM_LIMITS: ZoomLimits = { minZoom: 0, maxZoom: 16 };
 
 function chooseTileZoom(view: GlobeViewState, source: ZoomLimits, profile: RasterQualityProfile): number {
   const minZoom = source.minZoom ?? 0;
@@ -532,7 +536,7 @@ function createTileRecord(
     );
     texture.wrapU = Texture.CLAMP_ADDRESSMODE;
     texture.wrapV = Texture.CLAMP_ADDRESSMODE;
-    texture.anisotropicFilteringLevel = 4;
+    texture.anisotropicFilteringLevel = options.anisotropy?.() ?? 1;
     // New records have no usable old texture, so attach their pending texture
     // immediately. Existing records keep their previous map until replacement.
     if (!record.texture) {
@@ -586,13 +590,22 @@ interface DisplayBuildResult {
 
 export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): RasterTilesRuntime {
   const capture = options.performanceCapture;
+  const settings = options.settings ?? getAppSettings();
+  const setting = (id: string): number => {
+    const value = settings.get(id);
+    return typeof value === "number" ? value : Number.NaN;
+  };
   let imagerySource = options.source;
   let imageryGeneration = 0;
   const qualityController = createRasterQualityController(resolveRasterQualityState(options.quality));
   let qualityState = qualityController.getState();
   // Tile-record callbacks retain this object, so changing Auto's active profile
   // also affects meshes prepared after the quality change.
-  const meshOptions: RasterTilesRuntimeOptions = { ...options, activeQualityProfile: qualityState.activeProfile };
+  const meshOptions: RasterTilesRuntimeOptions = {
+    ...options,
+    activeQualityProfile: qualityState.activeProfile,
+    anisotropy: () => Math.round(setting("map.imagery.anisotropy")),
+  };
   let terrainSource = options.terrainSource;
   const createTerrainLoader = () => createTerrainTileLoader(terrainSource, options.onDownloadBytes, undefined, Boolean(capture),
     capture ? milliseconds => { capture.counters.preparationCpuMs += milliseconds; } : undefined);
@@ -667,7 +680,8 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
       worldRoot: options.worldRoot ?? null,
       source: imagerySource,
       offset: options.detailOffset ?? 0,
-      profile: qualityState.activeProfile,
+      limits: imageryLimitsFrom(settings),
+      tuning: imageryTuningFrom(settings),
       surface: imagerySurface,
       loader: options.imageryLoader,
       requestRender: () => options.requestRender?.(),
@@ -691,7 +705,33 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
       created.dispose();
     }
   }
-  const zoomLimits = (): ZoomLimits => (imageryRuntime ? TERRAIN_ZOOM_LIMITS : imagerySource);
+  // Budgets and tuning follow the registry wherever they change.
+  let appliedLimits = JSON.stringify(imageryLimitsFrom(settings));
+  let appliedTuning = JSON.stringify(imageryTuningFrom(settings));
+  const limitIds = new Set<string>(IMAGERY_LIMIT_IDS);
+  const tuningIds = new Set<string>(IMAGERY_TUNING_IDS);
+  const unsubscribeSettings = settings.subscribe(changed => {
+    if (disposed) return;
+    const ids = [...changed];
+    // A note or a reading changes a parameter's state, not its value: only new values apply.
+    const limits = ids.some(id => limitIds.has(id)) ? imageryLimitsFrom(settings) : null;
+    const tuning = ids.some(id => tuningIds.has(id)) ? imageryTuningFrom(settings) : null;
+    const newLimits = limits !== null && JSON.stringify(limits) !== appliedLimits;
+    const newTuning = tuning !== null && JSON.stringify(tuning) !== appliedTuning;
+    if (newLimits) { appliedLimits = JSON.stringify(limits); imageryRuntime?.setLimits(limits); }
+    if (newTuning) { appliedTuning = JSON.stringify(tuning); imageryRuntime?.setTuning(tuning); }
+    // A budget the renderer could not allocate says so where it was changed.
+    if ((newLimits || newTuning) && imageryRuntime) settings.setNote("map.imagery.gpuBudget", imageryRuntime.getDiagnostics().allocationError);
+    if (changed.has("map.imagery.anisotropy")) {
+      const samples = Math.round(setting("map.imagery.anisotropy"));
+      for (const record of cache.values()) if (record.texture) record.texture.anisotropicFilteringLevel = samples;
+    }
+    if (changed.has("map.terrain.maxLevel")) lastView = null;
+    options.requestRender?.();
+  });
+  // With projected imagery, terrain levels no longer follow the imagery
+  // provider's cap and tile size: `map.terrain.maxLevel` bounds them.
+  const zoomLimits = (): ZoomLimits => (imageryRuntime ? { minZoom: 0, maxZoom: Math.round(setting("map.terrain.maxLevel")) } : imagerySource);
   const disposeRecord = (record: RasterTileRecord): void => {
     imageryRuntime?.detachPatch(record.key);
     disposeTile(record);
@@ -905,7 +945,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
   }
 
   function evictIfNeeded(): void {
-    const maxCachedTiles = RASTER_QUALITY_PROFILES[qualityState.activeProfile].maxCachedTiles;
+    const maxCachedTiles = Math.round(setting("map.terrain.cachedTiles"));
     if (cache.size <= maxCachedTiles) return;
     const desiredKeys = new Set(lastDesired.map((e) => e.key));
     const candidates: Array<{ key: string; tick: number }> = [];
@@ -930,7 +970,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
 
   function hasMeaningfulCameraChange(view: GlobeViewState): boolean {
     if (!lastView) return true;
-    if (Math.abs(view.zoomMeters - lastView.zoomMeters) > TILE_REQUEST_DEBOUNCE_METERS) return true;
+    if (Math.abs(view.zoomMeters - lastView.zoomMeters) > setting("map.terrain.requestDebounce")) return true;
     return Math.abs(view.latDeg - lastView.latDeg) > 0.00001 || Math.abs(view.lonDeg - lastView.lonDeg) > 0.00001;
   }
 
@@ -1134,7 +1174,6 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
       const next = qualityController.setSetting(setting);
       if (next.activeProfile === qualityState.activeProfile && next.setting === qualityState.setting) return;
       qualityState = next;
-      imageryRuntime?.setProfile(next.activeProfile);
       meshOptions.activeQualityProfile = next.activeProfile;
       lastView = null;
       for (const key of cache.keys()) meshRebuildQueue.add(key);
@@ -1144,7 +1183,6 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
       const next = qualityController.observe(now, frameMs, suspended);
       if (next) {
         qualityState = next;
-        imageryRuntime?.setProfile(next.activeProfile);
         meshOptions.activeQualityProfile = next.activeProfile;
         lastView = null;
         for (const key of cache.keys()) meshRebuildQueue.add(key);
@@ -1160,6 +1198,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
     },
     dispose(): void {
       disposed = true;
+      unsubscribeSettings();
       terrain.dispose();
       imageryRuntime?.dispose();
       for (const record of cache.values()) {

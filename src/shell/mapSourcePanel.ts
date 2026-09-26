@@ -35,7 +35,7 @@ export interface MapSourcePanelHandle {
 }
 
 /** The Map tab's own sections; hosts' sections for the tab follow them. */
-const MAP_SECTIONS = ["source", "detail", "loading"] as const;
+const MAP_SECTIONS = ["source", "detail", "loading", "selection"] as const;
 
 /**
  * The contents of the Map tab, one collapsible section per group: Source (a
@@ -69,12 +69,18 @@ export function createMapSourcePanel(options: MapSourcePanelOptions): MapSourceP
     main: detail?.element,
     covers: detail ? Object.values(MAP_DETAIL_PARAMETER_IDS).flatMap(ids => [ids.range, ids.default]) : [],
   });
+  // The budgets first, each beside what it bounds; then what the tile cache holds.
   const cache = createMapCacheSection();
-  const loading = createParameterSection(settings, { tab: "map", section: "loading", main: cache.element });
+  const loading = createParameterSection(settings, { tab: "map", section: "loading", footer: cache.element });
+  const selectionNote = document.createElement("p");
+  selectionNote.className = "foss-earth-choices__note";
+  selectionNote.textContent = "How 2D imagery is chosen as the view moves: when a region refines or coarsens, and what stands in while finer imagery loads. The values are the selector's starting calibration.";
+  const selection = createParameterSection(settings, { tab: "map", section: "selection", main: selectionNote });
   const sections = createSectionsElement([
     { id: "map.source", title: settings.getSectionTitle("map", "source"), element: sourceSection.element, defaultOpen: true },
     { id: "map.detail", title: settings.getSectionTitle("map", "detail"), element: detailSection.element, defaultOpen: true },
     { id: "map.loading", title: settings.getSectionTitle("map", "loading"), element: loading.element, defaultOpen: false },
+    { id: "map.selection", title: settings.getSectionTitle("map", "selection"), element: selection.element, defaultOpen: false },
   ]);
   const hostSections = appendHostSections(settings, "map", sections, MAP_SECTIONS);
 
@@ -111,6 +117,7 @@ export function createMapSourcePanel(options: MapSourcePanelOptions): MapSourceP
       detailSection.destroy();
       cache.destroy();
       loading.destroy();
+      selection.destroy();
       hostSections.destroy();
       sections.destroy();
     },

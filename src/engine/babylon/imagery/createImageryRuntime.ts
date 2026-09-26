@@ -4,6 +4,7 @@ import {
   createImagerySelector,
   imageKey,
   imageSourceKey,
+  type ImageryHysteresis,
   type ImageryPlan,
   type ImagerySelectionInput,
   type ImagerySourceCapabilities,
@@ -12,13 +13,12 @@ import {
 import { imagerySourceSupport, imageryTileUrl, type ImageryDescriptor } from "../../../terrain/imagery/imagerySources";
 import type { DetailLimit } from "../../../terrain/mapDetailPolicy";
 import { createImageryAtlas, planAtlasForBackend, readAtlasCapabilities, type AtlasCapabilities, type ImageryAtlas } from "./imageryAtlas";
-import { slotBytes } from "./imageryAtlasLayout";
+import { slotBytes, type ImageryAtlasLayout } from "./imageryAtlasLayout";
 import { buildImageryDisplay, buildPatchTable, type ImageryDisplay } from "./imageryBinding";
 import { createBrowserImageryLoader } from "./imageryLoader";
 import { ImageryAtlasMaterialPlugin } from "./imageryMaterialPlugin";
 import {
   createImageryResidency,
-  IMAGERY_RESOURCE_PROFILES,
   type ImageryLoader,
   type ImageryRequest,
   type ImageryResidency,
@@ -27,7 +27,24 @@ import {
 } from "./imageryResidency";
 import { imageryViewChanged, readImageryView } from "./imageryView";
 
-export type ImageryResourceProfile = keyof typeof IMAGERY_RESOURCE_PROFILES;
+/** How imagery is chosen and drawn, beyond its budgets: the `map.imagery.*` parameters. */
+export interface ImageryTuning {
+  /** New traversals for a moving view start at most this often, in ms; the last view is always selected. */
+  reselectWhileMovingMs: number;
+  /** Texture samples along steep views. */
+  anisotropy: number;
+  /**
+   * A leaf whose region would otherwise show a page this many levels coarser
+   * (often the level-2 coverage, a flat colour) asks first for its ancestor
+   * `fallbackStep` levels up: one small image that stands in for many leaves.
+   */
+  fallbackGap: number;
+  fallbackStep: number;
+  /** Terrain patches that may each hold a page-table block. */
+  tablePatches: number;
+  maxNodes: number;
+  hysteresis: ImageryHysteresis;
+}
 
 export interface ImageryFeedback {
   support: "ready" | "unavailable";
@@ -57,6 +74,8 @@ export interface ImageryDiagnostics {
   } | null;
   residency: ImageryResidencyStats;
   atlas: { capacity: number; freeSlots: number; estimatedGpuBytes: number; width: number; height: number; tableBlocks: number } | null;
+  /** Why the last budget change could not reallocate the atlas, when it could not. */
+  allocationError: string | null;
   binding: { patches: number; blocks: number; fallbackPatches: number; fallbackLeaves: number; capped: number; emptyCells: number };
   counters: { selections: number; selectionCpuMs: number; publishes: number; tableWrites: number; uploads: number; uploadBytes: number };
 }
@@ -66,9 +85,9 @@ export interface ImageryRuntimeOptions {
   worldRoot?: TransformNode | null;
   source: ImageryDescriptor;
   offset?: number;
-  profile?: ImageryResourceProfile;
-  /** Injectable limits for tests; otherwise from the profile. */
-  limits?: ImageryResourceLimits;
+  /** The budgets: `map.imagery.*`. */
+  limits: ImageryResourceLimits;
+  tuning: ImageryTuning;
   surface: ImagerySurface & {
     /** The finest imagery a region's terrain binding can show. */
     maxLevelFor?(tile: TileId): number;
@@ -89,8 +108,14 @@ export interface ImageryRuntimeOptions {
 
 export interface ImageryRuntime {
   readonly supported: boolean;
-  /** Follow a resource profile change; the atlas keeps its size. */
-  setProfile(profile: ImageryResourceProfile): void;
+  /**
+   * New budgets. Admission limits apply from the next update; a new GPU
+   * budget reallocates the atlas, and the old one keeps drawing until the new
+   * one's fallback coverage is resident.
+   */
+  setLimits(limits: ImageryResourceLimits): void;
+  /** New tuning; a new number of page tables reallocates the atlas the same way. */
+  setTuning(tuning: ImageryTuning): void;
   setSource(source: ImageryDescriptor): void;
   setOffset(offset: number): void;
   /** Draws a terrain patch's material from the atlas. */
@@ -111,6 +136,8 @@ export interface ImageryRuntime {
 interface PatchState {
   tile: TileId;
   plugin: ImageryAtlasMaterialPlugin;
+  /** The atlas the patch's material draws from; the old one during a reallocation. */
+  atlas: ImageryAtlas | null;
   visible: boolean;
   block: number | null;
   tableSignature: string | null;
@@ -123,15 +150,7 @@ interface SourceState {
 }
 
 const COVERAGE_PRIORITY = 1e12;
-/**
- * A leaf whose region would otherwise show a page this many levels coarser
- * (often the level-2 coverage, a flat colour) asks first for its ancestor
- * FALLBACK_STEP levels up: one small image that stands in for 64 leaves.
- */
-const FALLBACK_GAP = 4;
-const FALLBACK_STEP = 3;
-/** New traversals for a moving view start at most this often; the last view is always selected. */
-const MOTION_SELECTION_INTERVAL_MS = 100;
+const MiB = 1024 * 1024;
 
 function signature(data: Uint8Array, cellsLog2: number): string {
   // A cheap content signature: FNV-1a over the used cells.
@@ -155,27 +174,34 @@ function signature(data: Uint8Array, cellsLog2: number): string {
 export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRuntime {
   const now = options.now ?? (() => performance.now());
   const worldRoot = options.worldRoot ?? null;
-  // The atlas is sized once for the profile active at creation. Later profile
-  // changes move admission limits and the selection budget within it.
-  let limits = options.limits ?? IMAGERY_RESOURCE_PROFILES[options.profile ?? "balanced"];
+  let limits = options.limits;
+  let tuning = options.tuning;
   const capabilities = options.capabilities ?? readAtlasCapabilities(options.scene);
-  const layout = planAtlasForBackend(capabilities, limits.gpuBytes, 256);
-  let atlas: ImageryAtlas | null = null;
-  let unsupportedReason: string | null = null;
-  if (!layout) {
-    unsupportedReason = "This renderer cannot hold the imagery atlas.";
-  } else {
+
+  /** The largest atlas the budget and the renderer allow. */
+  const allocate = (): { layout: ImageryAtlasLayout; atlas: ImageryAtlas } | { error: string } => {
+    const nextLayout = planAtlasForBackend(capabilities, limits.gpuBytes, tuning.tablePatches);
+    if (!nextLayout) return { error: "This renderer cannot hold the imagery atlas." };
     try {
-      atlas = createImageryAtlas(options.scene, layout);
+      return { layout: nextLayout, atlas: createImageryAtlas(options.scene, nextLayout, tuning.anisotropy) };
     } catch (error) {
-      unsupportedReason = `The imagery atlas could not be created: ${error instanceof Error ? error.message : String(error)}`;
+      return { error: `The imagery atlas could not be created: ${error instanceof Error ? error.message : String(error)}` };
     }
-  }
+  };
+  let layout: ImageryAtlasLayout | null = null;
+  let atlas: ImageryAtlas | null = null;
+  /** The atlas a reallocation replaced; patches draw from it until the new one covers them. */
+  let retiredAtlas: ImageryAtlas | null = null;
+  let allocationError: string | null = null;
+  let unsupportedReason: string | null = null;
+  const first = allocate();
+  if ("error" in first) unsupportedReason = first.error;
+  else ({ layout, atlas } = first);
   const backendLimited = capabilities.backend === "webgl" && !capabilities.explicitGradients;
-  // A texture-size cap can hold the atlas well below the profile's budget; a
-  // memory limit that follows is then the renderer's.
-  const atlasCappedByBackend = layout !== null && layout.estimatedBytes < limits.gpuBytes * 0.75;
-  /** Pages the current profile allows selection to use inside the atlas. */
+  // A texture-size cap can hold the atlas well below the budget; a memory
+  // limit that follows is then the renderer's.
+  const atlasCappedByBackend = (): boolean => layout !== null && layout.estimatedBytes < limits.gpuBytes * 0.75;
+  /** Pages the budget allows selection to use inside the atlas. */
   const pageBudget = (): number => {
     const capacity = atlas?.capacity ?? 0;
     const byBytes = Math.floor((limits.gpuBytes - (layout ? layout.tableSize ** 2 * 4 : 0)) / slotBytes());
@@ -197,14 +223,15 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
   let wakeTimer: ReturnType<typeof setTimeout> | undefined;
   let wakeAt = Infinity;
   let disposed = false;
-  const residency: ImageryResidency = createImageryResidency({
+  const createResidency = (store: ImageryAtlas | null): ImageryResidency => createImageryResidency({
     loader,
-    store: atlas ?? { capacity: 0, allocate: () => null, release: () => {}, upload: () => {} },
+    store: store ?? { capacity: 0, allocate: () => null, release: () => {}, upload: () => {} },
     limits,
     now,
     onChange: () => { if (!disposed) options.requestRender(); },
     onError: options.onError,
   });
+  let residency: ImageryResidency = createResidency(atlas);
 
   const selector = createImagerySelector();
   let plan: ImageryPlan | null = null;
@@ -265,6 +292,8 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
       availability: { isResident: residency.isResident, isMissing: residency.isMissing },
       maxLevelFor: options.surface.maxLevelFor,
       maxPages: pageBudget(),
+      maxNodes: tuning.maxNodes,
+      hysteresis: tuning.hysteresis,
       now: now(),
     };
   }
@@ -306,8 +335,8 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
       const benefit = leaf.screenArea * (exceed(before) - exceed(leaf.footprintPx)) + leaf.screenArea * 1e-3 + 1e-6;
       const priority = benefit / (pages * slotBytes());
       requests.push(request(leaf.tile, leaf.variant, priority, false));
-      const stepUp = Math.min(FALLBACK_STEP, leaf.tile.z - source.capabilities.minLevel);
-      if (pageLevel - shownLevel >= FALLBACK_GAP && stepUp > 0 && !residency.isResident(leaf.imageKey)) {
+      const stepUp = Math.min(tuning.fallbackStep, leaf.tile.z - source.capabilities.minLevel);
+      if (pageLevel - shownLevel >= tuning.fallbackGap && stepUp > 0 && !residency.isResident(leaf.imageKey)) {
         const ancestor = { z: leaf.tile.z - stepUp, x: leaf.tile.x >> stepUp, y: leaf.tile.y >> stepUp };
         if (ancestor.z > shownLevel && !residency.isMissing(standardKey(source, ancestor))) {
           requests.push(request(ancestor, null, priority * 2, false));
@@ -332,9 +361,9 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
     if (!wanted) return;
     // During continuous motion, start a traversal at most every 100 ms and
     // wake once more afterwards so the final view is always selected.
-    const throttled = !restartSelection && !selector.isRunning() && plan !== null && now() - lastTraversalStart < MOTION_SELECTION_INTERVAL_MS;
+    const throttled = !restartSelection && !selector.isRunning() && plan !== null && now() - lastTraversalStart < tuning.reselectWhileMovingMs;
     if (throttled) {
-      scheduleWake(lastTraversalStart + MOTION_SELECTION_INTERVAL_MS);
+      scheduleWake(lastTraversalStart + tuning.reselectWhileMovingMs);
       return;
     }
     const started = now();
@@ -396,12 +425,17 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
     for (const [, patch] of patches) {
       if (!patch.visible) {
         if (patch.block !== null) {
-          atlas.releaseBlock(patch.block);
+          if (patch.atlas === atlas) atlas.releaseBlock(patch.block);
           patch.block = null;
           patch.tableSignature = null;
           patch.table = null;
         }
         continue;
+      }
+      // After a reallocation, a patch moves to the new atlas once it can be drawn from it.
+      if (patch.atlas !== atlas) {
+        patch.plugin.setAtlas(atlas);
+        patch.atlas = atlas;
       }
       if (patch.block === null) patch.block = atlas.allocateBlock();
       patch.table ??= new Uint8Array(64 * 64 * 4);
@@ -431,6 +465,47 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
       patch.plugin.setTable({ x: origin.x, y: origin.y, cellsLog2: table.cellsLog2 }, null);
     }
     residency.setPinned(display.slots);
+    if (retiredAtlas) {
+      for (const patch of patches.values()) {
+        if (patch.atlas !== retiredAtlas) continue;
+        patch.plugin.setAtlas(atlas);
+        patch.atlas = atlas;
+      }
+      retiredAtlas.dispose();
+      retiredAtlas = null;
+    }
+  }
+
+  /**
+   * A new atlas for a new budget. The old one keeps drawing, with its pages and
+   * tables, until the new one's fallback coverage is resident; then each patch
+   * moves over as its table is written. If the new atlas cannot be created,
+   * the old one stays and the diagnostics say why.
+   */
+  function reallocate(): void {
+    if (!atlas) return;
+    const next = allocate();
+    if ("error" in next) {
+      allocationError = `${next.error} The atlas stays at ${Math.round((layout?.estimatedBytes ?? 0) / MiB)} MiB.`;
+      options.onFeedback?.();
+      return;
+    }
+    allocationError = null;
+    residency.dispose();
+    // A second change before the first finished: the atlas in between was never drawn.
+    if (retiredAtlas) atlas.dispose(); else retiredAtlas = atlas;
+    ({ layout, atlas } = next);
+    residency = createResidency(atlas);
+    for (const patch of patches.values()) {
+      patch.block = null;
+      patch.tableSignature = null;
+      patch.table = null;
+    }
+    display = null;
+    displayed = null;
+    restartSelection = true;
+    planChangedSincePublish = true;
+    options.requestRender();
   }
 
   function refreshFeedback(): void {
@@ -440,7 +515,7 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
     } else {
       const stats = residency.stats();
       const limitSet = new Set<DetailLimit>([...(plan?.limits ?? []), ...stats.limits]);
-      if (capped > 0 || backendLimited || (atlasCappedByBackend && limitSet.has("memory"))) limitSet.add("backend");
+      if (capped > 0 || backendLimited || (atlasCappedByBackend() && limitSet.has("memory"))) limitSet.add("backend");
       const pending = selector.isRunning() || residency.isBusy() || (display?.fallbackLeaves ?? 0) > 0 || displayed !== requested || !plan;
       if (pending) limitSet.add("loading");
       const limitsList = (["source", "backend", "memory", "loading"] as const).filter(limit => limitSet.has(limit));
@@ -475,12 +550,23 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
 
   return {
     get supported() { return atlas !== null && requested !== null; },
-    setProfile(profile) {
-      if (options.limits) return;
-      const next = IMAGERY_RESOURCE_PROFILES[profile];
-      if (next === limits) return;
-      limits = next;
-      residency.setLimits(next);
+    setLimits(next) {
+      const reallocating = next.gpuBytes !== limits.gpuBytes;
+      limits = { ...next };
+      if (reallocating) reallocate();
+      else residency.setLimits(limits);
+      restartSelection = true;
+      options.requestRender();
+    },
+    setTuning(next) {
+      const reallocating = next.tablePatches !== tuning.tablePatches;
+      const anisotropy = next.anisotropy !== tuning.anisotropy;
+      tuning = { ...next, hysteresis: { ...next.hysteresis } };
+      if (anisotropy) {
+        atlas?.setAnisotropy(tuning.anisotropy);
+        retiredAtlas?.setAnisotropy(tuning.anisotropy);
+      }
+      if (reallocating) reallocate();
       restartSelection = true;
       options.requestRender();
     },
@@ -512,13 +598,13 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
       const plugin = new ImageryAtlasMaterialPlugin(material);
       plugin.setAtlas(atlas);
       plugin.setPatch(tile.z, tile.x, tile.y);
-      patches.set(key, { tile, plugin, visible: false, block: null, tableSignature: null, table: null });
+      patches.set(key, { tile, plugin, atlas, visible: false, block: null, tableSignature: null, table: null });
       patchesChanged = true;
     },
     detachPatch(key) {
       const patch = patches.get(key);
       if (!patch) return;
-      if (patch.block !== null) atlas?.releaseBlock(patch.block);
+      if (patch.block !== null && patch.atlas === atlas) atlas?.releaseBlock(patch.block);
       patches.delete(key);
       patchesChanged = true;
     },
@@ -602,6 +688,7 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
           height: layout.height,
           tableBlocks: layout.tableBlocks,
         },
+        allocationError,
         binding: { patches: patches.size, blocks, fallbackPatches, fallbackLeaves: display?.fallbackLeaves ?? 0, capped, emptyCells },
         counters: { ...counters },
       };
@@ -616,6 +703,8 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
       patches.clear();
       atlas?.dispose();
       atlas = null;
+      retiredAtlas?.dispose();
+      retiredAtlas = null;
     },
   };
 }

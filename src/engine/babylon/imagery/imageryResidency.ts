@@ -24,15 +24,6 @@ export interface ImageryResourceLimits {
   cpuMsPerUpdate: number;
 }
 
-const MiB = 1024 * 1024;
-
-/** Starting calibration limits, not device-performance claims. */
-export const IMAGERY_RESOURCE_PROFILES: Readonly<Record<"low" | "balanced" | "high", ImageryResourceLimits>> = Object.freeze({
-  low: { gpuBytes: 64 * MiB, stagingBytes: 8 * MiB, concurrentRequests: 4, queuedRequests: 64, uploadBytesPerUpdate: 2 * MiB, cpuMsPerUpdate: 2 },
-  balanced: { gpuBytes: 128 * MiB, stagingBytes: 16 * MiB, concurrentRequests: 6, queuedRequests: 128, uploadBytesPerUpdate: 2 * MiB, cpuMsPerUpdate: 2 },
-  high: { gpuBytes: 256 * MiB, stagingBytes: 32 * MiB, concurrentRequests: 8, queuedRequests: 256, uploadBytesPerUpdate: 2 * MiB, cpuMsPerUpdate: 2 },
-});
-
 /** One image's pages, each as its slot at every sampled level. */
 export interface PreparedImage {
   width: number;

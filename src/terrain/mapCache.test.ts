@@ -49,6 +49,7 @@ describe("managed map cache", () => {
     const cache = createMapCache({
       storage: () => ({ open: async (name: string) => name.includes("index") ? index : body }) as unknown as CacheStorage,
       fetcher, now: () => now,
+      maxBytes: 128 * 1024 * 1024, maxEntries: 1024, maxTileBytes: 8 * 1024 * 1024,
     });
     const url = "https://tiles.mapterhorn.com/7/12/42.png";
     expect(await (await cache.fetch(url)).text()).toBe("tile");
@@ -62,5 +63,29 @@ describe("managed map cache", () => {
     now = 1;
     await cache.fetch(url);
     expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps nothing until it has limits, and shrinks to new ones", async () => {
+    const body = new MemoryCache();
+    const index = new MemoryCache();
+    const fetcher = vi.fn(async () => new Response("tile", { headers: {
+      "cache-control": "max-age=3600", date: new Date(0).toUTCString(), age: "0",
+    } }));
+    const cache = createMapCache({
+      storage: () => ({ open: async (name: string) => name.includes("index") ? index : body }) as unknown as CacheStorage,
+      fetcher, now: () => 0,
+    });
+    const urls = [1, 2, 3].map(x => `https://tiles.mapterhorn.com/7/${x}/42.png`);
+    await cache.fetch(urls[0]);
+    expect((await cache.inspect()).entries).toHaveLength(0);
+    cache.setLimits({ maxBytes: 1024, maxEntries: 1024, maxTileBytes: 1024 });
+    for (const url of urls) await cache.fetch(url);
+    expect((await cache.inspect()).entries).toHaveLength(3);
+    cache.setLimits({ maxBytes: 1024, maxEntries: 1, maxTileBytes: 1024 });
+    const snapshot = await cache.inspect();
+    expect(snapshot.entries.map(entry => entry.url)).toEqual([urls[2]]);
+    cache.setLimits({ maxBytes: 1024, maxEntries: 10, maxTileBytes: 2 });
+    await cache.fetch("https://tiles.mapterhorn.com/7/9/42.png");
+    expect((await cache.inspect()).entries).toHaveLength(1);
   });
 });

@@ -5,6 +5,7 @@ import * as refinement from "../../terrain/meshRefinement";
 import type { TerrainGrid, TerrainTile } from "../../terrain/terrainTiles";
 import { createRasterTilesRuntime } from "./createRasterTilesRuntime";
 import type { ImageryLoader, PreparedImage } from "./imagery/imageryResidency";
+import { getAppSettings } from "../../settings/appSettings";
 import { RASTER_BASE_MAP_SOURCES } from "./rasterBaseMaps";
 
 const pending = vi.hoisted(() => ({
@@ -35,7 +36,7 @@ function imageryLoader() {
   return { loader, urls };
 }
 
-async function setup(sourceIndex = 0) {
+async function setup(sourceIndex = 0, loaderOverride?: ImageryLoader) {
   const engine = new NullEngine({ renderWidth: 1280, renderHeight: 720, textureSize: 8192, deterministicLockstep: false, lockstepMaxSteps: 1 });
   // NullEngine has no sub-image upload; the atlas only needs it to exist.
   Object.assign(engine, { updateTextureData: vi.fn() });
@@ -47,7 +48,9 @@ async function setup(sourceIndex = 0) {
   const controller = new CameraController(camera);
   const view = { latDeg: 36.1, lonDeg: -112.14, zoomMeters: 30_000, pitchDeg: 30, headingDeg: 0 };
   controller.applyViewState(view);
-  const { loader, urls } = imageryLoader();
+  const created = imageryLoader();
+  const loader = loaderOverride ?? created.loader;
+  const urls = created.urls;
   const onDetailFeedback = vi.fn();
   const runtime = createRasterTilesRuntime({
     scene, source: RASTER_BASE_MAP_SOURCES[sourceIndex], getViewState: () => view,
@@ -122,7 +125,83 @@ describe("raster runtime with atlas imagery", () => {
     engine.dispose();
   });
 
+  it("sizes the atlas from its GPU budget, and on a change reallocates it while the old one keeps drawing", async () => {
+    const settings = getAppSettings();
+    const { runtime, settle, engine, scene } = await setup();
+    await settle();
+    const atlases = () => scene.textures.filter(texture => texture.name === "imagery-atlas");
+    const before = runtime.getImageryDiagnostics().atlas!;
+    expect(before.atlas!.estimatedGpuBytes).toBeLessThanOrEqual(128 * 2 ** 20);
+    expect(before.atlas!.estimatedGpuBytes).toBeGreaterThan(64 * 2 ** 20);
+    expect(atlases()).toHaveLength(1);
+
+    settings.set("map.imagery.gpuBudget", 48);
+    // The new atlas exists; the old one still draws until the new one covers the view.
+    expect(atlases()).toHaveLength(2);
+    const during = runtime.getImageryDiagnostics().atlas!;
+    expect(during.atlas!.estimatedGpuBytes).toBeLessThanOrEqual(48 * 2 ** 20);
+    expect(runtime.getMetrics().visibleTiles).toBeGreaterThan(0);
+    await settle();
+    expect(atlases()).toHaveLength(1);
+    const after = runtime.getImageryDiagnostics().atlas!;
+    expect(after.atlas!.capacity).toBeLessThan(before.atlas!.capacity);
+    expect(after.residency.residentPages).toBeGreaterThan(0);
+    expect(after.binding.blocks).toBeGreaterThan(0);
+    expect(runtime.getDetailFeedback().support).toBe("ready");
+    runtime.dispose();
+    engine.dispose();
+  });
+
+  it("admits no more image requests at once than its budget", async () => {
+    const settings = getAppSettings();
+    settings.set("map.imagery.concurrentRequests", 2);
+    let inFlight = 0;
+    let most = 0;
+    const waiting: Array<() => void> = [];
+    const loader: ImageryLoader = {
+      load(_url, expected) {
+        inFlight += 1;
+        most = Math.max(most, inFlight);
+        return new Promise(resolve => waiting.push(() => {
+          inFlight -= 1;
+          const pages = (expected.width / 256) * (expected.height / 256);
+          resolve({ width: expected.width, height: expected.height, compressedBytes: 10, pages: Array.from({ length: pages }, () => [new Uint8Array(4)]) });
+        }));
+      },
+    };
+    const { runtime, scene, engine } = await setup(0, loader);
+    for (let round = 0; round < 10; round++) { runtime.update(); scene.render(); await flush(); }
+    expect(most).toBe(2);
+    settings.set("map.imagery.concurrentRequests", 5);
+    for (let round = 0; round < 10; round++) { runtime.update(); scene.render(); await flush(); }
+    expect(most).toBe(5);
+    for (const done of waiting.splice(0)) done();
+    runtime.dispose();
+    engine.dispose();
+  });
+
+  it("keeps no more terrain tiles than its budget beyond what the view needs", async () => {
+    const settings = getAppSettings();
+    const visit = async (cachedTiles: number) => {
+      settings.set("map.terrain.cachedTiles", cachedTiles);
+      const { runtime, settle, engine, controller, view } = await setup();
+      await settle();
+      Object.assign(view, { latDeg: 47.6, lonDeg: -122.3 });
+      controller.applyViewState(view);
+      await settle();
+      const kept = runtime.getMetrics().activeTiles;
+      runtime.dispose();
+      engine.dispose();
+      return kept;
+    };
+    const generous = await visit(4096);
+    const small = await visit(32);
+    expect(small).toBeLessThan(generous);
+  });
+
   it("asks first for a near ancestor where a new region could only show the root coverage", async () => {
+    // Reselect at once after the move, however fast the test runs.
+    getAppSettings().set("map.imagery.reselectWhileMoving", 0);
     const { runtime, settle, engine, urls, controller, view } = await setup();
     await settle();
     // Somewhere the atlas has only the level-2 coverage for.

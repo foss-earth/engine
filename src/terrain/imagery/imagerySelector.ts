@@ -86,9 +86,23 @@ export interface ImagerySelectionInput {
   maxLevelFor?(tile: TileId): number;
   /** Atlas pages the selection may occupy: one per standard tile. */
   maxPages: number;
-  /** A hard cap on nodes evaluated by one traversal. */
-  maxNodes?: number;
+  /** A hard cap on nodes evaluated by one traversal: `map.imagery.maxNodes`. */
+  maxNodes: number;
+  /** When a region changes level: the `map.imagery.*` hysteresis parameters. */
+  hysteresis: ImageryHysteresis;
   now: number;
+}
+
+/** Keeps level changes bounded when the view or the target jitters around a threshold. */
+export interface ImageryHysteresis {
+  /** An existing leaf refines once its footprint exceeds the target by this ratio. */
+  refineAbove: number;
+  /** A split node may merge once its footprint is under the target by this ratio. */
+  coarsenBelow: number;
+  /** ...and has stayed so for this long, in ms. */
+  coarsenAfterMs: number;
+  /** Children stay shown at least this long, in ms. */
+  pinMs: number;
 }
 
 export interface ImageryPlanLeaf {
@@ -131,14 +145,13 @@ export interface ImageryPlan {
   cpuMs: number;
 }
 
-/** Initial constants: calibration starting points, covered by tests. */
+/**
+ * The traversal's structure, not tuning: the root level whose 16 tiles are
+ * always resident as fallback coverage, and the widest tile horizon rejection
+ * is trusted for. Tuning comes in with each input.
+ */
 export const IMAGERY_SELECTION_CONSTANTS = Object.freeze({
-  refineAbove: 1.2,
-  coarsenBelow: 0.8,
-  coarsenAfterMs: 500,
-  pinMs: 1000,
   rootLevel: 2,
-  maxNodes: 12_000,
   /** Horizon rejection is trusted only for tiles narrower than this, in radians. */
   horizonTileSpan: Math.PI / 8,
 });
@@ -492,19 +505,20 @@ export function createImagerySelector(): ImagerySelector {
     const previous = memory.get(node.key);
     const now = input.now;
     // An existing leaf refines only past 1.2x its target; a new node at 1x.
-    const threshold = previous && !previous.split ? IMAGERY_SELECTION_CONSTANTS.refineAbove : 1;
+    const { hysteresis } = input;
+    const threshold = previous && !previous.split ? hysteresis.refineAbove : 1;
     const over = node.footprint > current.target * threshold;
     let split = over;
     let coarsenSince: number | null = null;
     if (previous?.split && !over) {
       // Merge only once the parent has been coarse enough for a while, the
       // children have been shown long enough, and the parent can be shown.
-      const coarseEnough = node.footprint < current.target * IMAGERY_SELECTION_CONSTANTS.coarsenBelow;
+      const coarseEnough = node.footprint < current.target * hysteresis.coarsenBelow;
       coarsenSince = coarseEnough ? previous.coarsenSince ?? now : null;
       if (coarsenSince !== null) {
         const mergeAt = Math.max(
-          coarsenSince + IMAGERY_SELECTION_CONSTANTS.coarsenAfterMs,
-          previous.since + IMAGERY_SELECTION_CONSTANTS.pinMs,
+          coarsenSince + hysteresis.coarsenAfterMs,
+          previous.since + hysteresis.pinMs,
         );
         const parentUsable = input.availability.isResident(imageKey(input.source, node.tile, null));
         split = !(now >= mergeAt && parentUsable);
@@ -551,7 +565,7 @@ export function createImagerySelector(): ImagerySelector {
   function advance(current: Job, deadline: number, clock: () => number): boolean {
     const { input } = current;
     const started = clock();
-    const maxNodes = input.maxNodes ?? IMAGERY_SELECTION_CONSTANTS.maxNodes;
+    const maxNodes = input.maxNodes;
     let iterations = 0;
     while (current.heap.length > 0) {
       // Check the clock every few nodes; each evaluation costs microseconds.

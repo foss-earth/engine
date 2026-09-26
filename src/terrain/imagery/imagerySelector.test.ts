@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { tileContains, type TileId } from "./imageryGeometry";
 import {
   createImagerySelector,
-  IMAGERY_SELECTION_CONSTANTS,
   imageKey,
   type ImageryPlan,
   type ImagerySelectionInput,
@@ -19,6 +18,9 @@ const CARTO: ImagerySourceCapabilities = {
   tileWidth: 256, tileHeight: 256, variants: [{ id: "2x", width: 512, height: 512 }],
 };
 
+/** The calibration the catalogue starts from. */
+const HYSTERESIS = { refineAbove: 1.2, coarsenBelow: 0.8, coarsenAfterMs: 500, pinMs: 1000 };
+
 function input(view: TestViewOptions, overrides: Partial<ImagerySelectionInput> = {}): ImagerySelectionInput {
   return {
     view: createTestView(view),
@@ -27,6 +29,8 @@ function input(view: TestViewOptions, overrides: Partial<ImagerySelectionInput> 
     surface: { heightAt: () => 0, boundsFor: () => ({ min: 0, max: 0 }) },
     availability: { isResident: () => true, isMissing: () => false },
     maxPages: 4096,
+    maxNodes: 12_000,
+    hysteresis: HYSTERESIS,
     now: 0,
     ...overrides,
   };
@@ -279,7 +283,7 @@ describe("stability", () => {
     const far = { ...OVERHEAD, altitudeMeters: 12_000 };
     const held = selector.step(input(far, { now: 100 }), Infinity).plan!;
     expect(levelUnder(held, OVERHEAD.latDeg, OVERHEAD.lonDeg)).toBe(nearLevel);
-    expect(held.wakeAt).toBe(IMAGERY_SELECTION_CONSTANTS.pinMs);
+    expect(held.wakeAt).toBe(HYSTERESIS.pinMs);
     const stillHeld = selector.step(input(far, { now: 700 }), Infinity).plan!;
     expect(levelUnder(stillHeld, OVERHEAD.latDeg, OVERHEAD.lonDeg)).toBe(nearLevel);
     let merged = stillHeld;

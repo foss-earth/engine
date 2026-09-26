@@ -28,6 +28,8 @@ export interface ImageryAtlas extends ImageryPageStore {
   freeSlots(): number;
   /** Drops every page and block, e.g. after the GPU context was restored. */
   clear(): void;
+  /** Texture samples along steep views: `map.imagery.anisotropy`. */
+  setAnisotropy(samples: number): void;
   dispose(): void;
 }
 
@@ -37,14 +39,14 @@ export interface ImageryAtlas extends ImageryPageStore {
  * is allocated with its full mip chain; pages write their own levels into
  * their slots and the shader never samples past IMAGERY_MAX_SAMPLED_LOD.
  */
-export function createImageryAtlas(scene: Scene, layout: ImageryAtlasLayout): ImageryAtlas {
+export function createImageryAtlas(scene: Scene, layout: ImageryAtlasLayout, anisotropy: number): ImageryAtlas {
   const engine = scene.getEngine() as unknown as TextureUpdater;
   const texture = new RawTexture(null, layout.width, layout.height, Constants.TEXTUREFORMAT_RGBA, scene, true, false,
     Texture.TRILINEAR_SAMPLINGMODE, Constants.TEXTURETYPE_UNSIGNED_BYTE);
   texture.name = "imagery-atlas";
   texture.wrapU = Texture.CLAMP_ADDRESSMODE;
   texture.wrapV = Texture.CLAMP_ADDRESSMODE;
-  texture.anisotropicFilteringLevel = 4;
+  texture.anisotropicFilteringLevel = anisotropy;
   const tableData = new Uint8Array(layout.tableSize * layout.tableSize * 4);
   const table = new RawTexture(tableData, layout.tableSize, layout.tableSize, Constants.TEXTUREFORMAT_RGBA, scene, false, false,
     Texture.NEAREST_SAMPLINGMODE, Constants.TEXTURETYPE_UNSIGNED_BYTE);
@@ -95,6 +97,9 @@ export function createImageryAtlas(scene: Scene, layout: ImageryAtlasLayout): Im
     },
     freeSlots: () => freeSlotList.length,
     clear: reset,
+    setAnisotropy(samples) {
+      texture.anisotropicFilteringLevel = samples;
+    },
     dispose() {
       texture.dispose();
       table.dispose();
@@ -127,9 +132,10 @@ export function readAtlasCapabilities(scene: Scene): AtlasCapabilities {
 
 /** The atlas for a byte budget on this backend, or null when none fits. */
 export function planAtlasForBackend(capabilities: AtlasCapabilities, maxBytes: number, maxPatches: number): ImageryAtlasLayout | null {
-  // WebGPU guarantees 8192; WebGL 1 is kept small and power-of-two.
+  // The renderer's own texture limit bounds the atlas; WebGL 1 is kept small
+  // and power-of-two. The byte budget, a parameter, decides within it.
   const maxTextureSize = capabilities.backend === "webgl"
     ? Math.min(4096, capabilities.maxTextureSize)
-    : Math.min(8192, capabilities.maxTextureSize);
+    : capabilities.maxTextureSize;
   return planAtlasLayout({ maxBytes, maxTextureSize, powerOfTwo: capabilities.backend === "webgl", maxPatches });
 }

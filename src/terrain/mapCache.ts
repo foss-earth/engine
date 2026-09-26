@@ -2,9 +2,13 @@
 const BODY_CACHE = "foss-earth-map-tiles-v1";
 const INDEX_CACHE = "foss-earth-map-index-v1";
 const INDEX_URL = "https://foss-earth.invalid/map-cache/index";
-export const MAP_CACHE_MAX_BYTES = 128 * 1024 * 1024;
-const MAX_ENTRIES = 1024;
-const MAX_TILE_BYTES = 8 * 1024 * 1024;
+
+/** What the cache may hold: the `map.cache.*` parameters. */
+export interface MapCacheLimits {
+  maxBytes: number;
+  maxEntries: number;
+  maxTileBytes: number;
+}
 
 export interface MapCacheEntry { url: string; provider: string; bytes: number; storedAt: number; expiresAt: number }
 export interface MapCacheSnapshot {
@@ -63,14 +67,16 @@ export function createMapCache(options: {
   storage?: () => CacheStorage | undefined;
   fetcher?: typeof fetch;
   now?: () => number;
-  maxBytes?: number;
-  maxEntries?: number;
-} = {}) {
+} & Partial<MapCacheLimits> = {}) {
   const storage = options.storage ?? (() => typeof caches === "undefined" ? undefined : caches);
   const fetcher: typeof fetch = options.fetcher ?? ((input, init) => fetch(input, init));
   const now = options.now ?? Date.now;
-  const maxBytes = options.maxBytes ?? MAP_CACHE_MAX_BYTES;
-  const maxEntries = options.maxEntries ?? MAX_ENTRIES;
+  // Until the app gives its limits (the registry holds the defaults), nothing
+  // is added and nothing already saved is pruned.
+  let limitsKnown = options.maxBytes !== undefined && options.maxEntries !== undefined && options.maxTileBytes !== undefined;
+  let maxBytes = options.maxBytes ?? 0;
+  let maxEntries = options.maxEntries ?? 0;
+  let maxTileBytes = options.maxTileBytes ?? 0;
   const entries = new Map<string, MapCacheEntry>();
   const browserRequests = new Map<string, number>();
   let initialized: Promise<void> | undefined;
@@ -91,6 +97,7 @@ export function createMapCache(options: {
   async function remove(url: string) { entries.delete(url); await bodyCache?.delete(url, { ignoreVary: true }); }
   async function prune() {
     for (const entry of entries.values()) if (entry.expiresAt <= now()) await remove(entry.url);
+    if (!limitsKnown) return;
     let bytes = [...entries.values()].reduce((sum, entry) => sum + entry.bytes, 0);
     for (const entry of entries.values()) {
       if (bytes <= maxBytes && entries.size <= maxEntries) break;
@@ -108,7 +115,7 @@ export function createMapCache(options: {
         const saved: unknown = response ? await response.json() : [];
         if (Array.isArray(saved)) for (const value of saved) {
           if (value && isPublicMapCacheUrl(value.url) && Number.isFinite(value.bytes) && value.bytes >= 0
-            && value.bytes <= MAX_TILE_BYTES && Number.isFinite(value.expiresAt) && Number.isFinite(value.storedAt)) {
+            && Number.isFinite(value.expiresAt) && Number.isFinite(value.storedAt)) {
             entries.set(value.url, { ...value, provider: providerForUrl(value.url)! });
           }
         }
@@ -150,13 +157,13 @@ export function createMapCache(options: {
     recordBrowserRequest(url);
     const response = await fetcher(url, { ...requestInit, credentials: "omit", cache: "default" });
     const expiresAt = mapResponseExpiresAt(response, now());
-    if (bodyCache && expiresAt !== null && requestGeneration === generation && pendingWrites < 8) {
+    if (bodyCache && limitsKnown && expiresAt !== null && requestGeneration === generation && pendingWrites < 8) {
       const copy = response.clone();
       pendingWrites++;
       void serialize(async () => {
         try {
           const bytes = (await copy.clone().blob()).size;
-          if (requestGeneration !== generation || bytes > Math.min(MAX_TILE_BYTES, maxBytes) || expiresAt <= now()) return;
+          if (requestGeneration !== generation || bytes > Math.min(maxTileBytes, maxBytes) || expiresAt <= now()) return;
           await bodyCache!.put(request, copy);
           entries.delete(url);
           entries.set(url, { url, provider: providerForUrl(url)!, bytes, storedAt: now(), expiresAt });
@@ -188,7 +195,15 @@ export function createMapCache(options: {
       await saveIndex();
     });
   }
-  return { fetch: fetchTile, inspect, clear, recordBrowserRequest };
+  /** New limits; the cache shrinks to them at its next write or inspection. */
+  function setLimits(limits: MapCacheLimits) {
+    limitsKnown = true;
+    maxBytes = limits.maxBytes;
+    maxEntries = limits.maxEntries;
+    maxTileBytes = limits.maxTileBytes;
+    if (initialized) void serialize(async () => { await prune(); await saveIndex(); }).catch(() => {});
+  }
+  return { fetch: fetchTile, inspect, clear, recordBrowserRequest, setLimits };
 }
 
 const mapCache = createMapCache();
@@ -196,3 +211,5 @@ export const fetchMapTile = mapCache.fetch;
 export const inspectMapCache = mapCache.inspect;
 export const clearMapCache = mapCache.clear;
 export const recordBrowserMapRequest = mapCache.recordBrowserRequest;
+/** Applies the `map.cache.*` parameters; the map runtime calls it and follows them. */
+export const setMapCacheLimits = mapCache.setLimits;

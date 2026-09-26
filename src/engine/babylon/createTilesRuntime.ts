@@ -5,6 +5,9 @@ import { Matrix, Vector3, type Scene, type TransformNode } from "@babylonjs/core
 import type { Tile } from "3d-tiles-renderer/core";
 import { TilesRenderer } from "3d-tiles-renderer/babylonjs";
 import { GoogleCloudAuthPlugin } from "3d-tiles-renderer/core/plugins";
+import { getAppSettings } from "../../settings/appSettings";
+import type { SettingsRegistry } from "../../settings/registry";
+import type { NumberRange } from "../../settings/types";
 
 const GOOGLE_3D_TILES_ROOT_URL = "https://tile.googleapis.com/v1/3dtiles/root.json";
 
@@ -20,17 +23,43 @@ export interface GoogleTilesRuntimeOptions {
   onLoadError?: (error: Error, url: string) => void;
   onLoadStart?: () => void;
   onLoadEnd?: (visibleTiles: number, activeTiles: number) => void;
+  /** The registry holding `map.google.*`, followed live. The app's when omitted. */
+  settings?: SettingsRegistry;
 }
 
 export interface GoogleTilesRuntime {
   tiles: TilesRenderer;
   /** Changes when the visible collision surface is replaced or removed. */
   getRevision(): number;
+  /** What the `map.google.*` budgets bound right now. */
+  getLoadingState(): GoogleLoadingState;
   /** The renderer's pixel-based detail target, optionally overridden for a session. */
   getTerrainDetailState(): GoogleTerrainDetailState;
   setTerrainDetailTarget(errorTarget: number | null): void;
   update(): void;
   dispose(): void;
+}
+
+export interface GoogleLoadingState {
+  cachedTiles: number;
+  cachedBytes: number;
+  downloading: number;
+  parsing: number;
+}
+
+const MiB = 1024 * 1024;
+export const GOOGLE_LOADING_IDS = ["map.google.cacheTiles", "map.google.cacheBytes", "map.google.downloads", "map.google.parses"] as const;
+
+/** The renderer's cache and queues as the `map.google.*` parameters say. */
+function applyLoadingParameters(tiles: TilesRenderer, settings: SettingsRegistry): void {
+  const count = settings.get<NumberRange>("map.google.cacheTiles");
+  const bytes = settings.get<NumberRange>("map.google.cacheBytes");
+  tiles.lruCache.minSize = Math.round(count.min);
+  tiles.lruCache.maxSize = Math.round(count.max);
+  tiles.lruCache.minBytesSize = bytes.min * MiB;
+  tiles.lruCache.maxBytesSize = bytes.max * MiB;
+  tiles.downloadQueue.maxJobs = Math.round(settings.get<number>("map.google.downloads"));
+  tiles.parseQueue.maxJobs = Math.round(settings.get<number>("map.google.parses"));
 }
 
 /**
@@ -151,6 +180,12 @@ export function createGoogleTilesRuntime(options: GoogleTilesRuntimeOptions): Go
 
   const tiles = new TilesRenderer(GOOGLE_3D_TILES_ROOT_URL, scene);
   applyTerrainDetailAnchor(tiles, scene, options.getTerrainDetailAnchor);
+  const settings = options.settings ?? getAppSettings();
+  applyLoadingParameters(tiles, settings);
+  const loadingIds = new Set<string>(GOOGLE_LOADING_IDS);
+  const unsubscribeSettings = settings.subscribe(changed => {
+    if ([...changed].some(id => loadingIds.has(id))) applyLoadingParameters(tiles, settings);
+  });
   tiles.fetchOptions.mode = "cors";
   tiles.fetchOptions.cache = "default";
 
@@ -241,6 +276,17 @@ export function createGoogleTilesRuntime(options: GoogleTilesRuntimeOptions): Go
   return {
     tiles,
     getRevision: () => surfaceRevision,
+    getLoadingState() {
+      // Present at run time in 0.4.24, though its declarations leave them out.
+      const cache = tiles.lruCache as unknown as { itemSet?: Set<unknown>; cachedBytes?: number };
+      const queue = (value: unknown): number => (value as { currJobs?: number }).currJobs ?? 0;
+      return {
+        cachedTiles: cache.itemSet?.size ?? 0,
+        cachedBytes: cache.cachedBytes ?? 0,
+        downloading: queue(tiles.downloadQueue),
+        parsing: queue(tiles.parseQueue),
+      };
+    },
     getTerrainDetailState() {
       return { defaultErrorTarget, errorTarget: tiles.errorTarget, overrideErrorTarget };
     },
@@ -252,6 +298,7 @@ export function createGoogleTilesRuntime(options: GoogleTilesRuntimeOptions): Go
       tiles.update();
     },
     dispose() {
+      unsubscribeSettings();
       tiles.removeEventListener("tiles-load-start", handleLoadStart);
       tiles.removeEventListener("tiles-load-end", handleLoadEnd);
       tiles.removeEventListener("load-error", handleLoadError);
