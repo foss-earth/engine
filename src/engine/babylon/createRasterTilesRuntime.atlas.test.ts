@@ -1,5 +1,6 @@
 import { GeospatialCamera, NullEngine, Scene } from "@babylonjs/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { geodeticToEcef } from "../../camera/cameraMath";
 import { CameraController } from "../../camera/cameraState";
 import * as refinement from "../../terrain/meshRefinement";
 import type { TerrainGrid, TerrainTile } from "../../terrain/terrainTiles";
@@ -10,6 +11,10 @@ import { RASTER_BASE_MAP_SOURCES } from "./rasterBaseMaps";
 
 const pending = vi.hoisted(() => ({
   terrain: [] as Array<{ tile: TerrainTile; resolve(grid: TerrainGrid): void; reject(error: Error): void }>,
+  /** Every elevation request, including those already answered. */
+  terrainRequests: 0,
+  /** The four corner heights each elevation tile answers with. */
+  heights: (tile: TerrainTile): number[] => [100 + tile.z, 100, 100, 100],
   legacyImagery: 0,
 }));
 vi.mock("./loadMapTexture", () => ({ loadMapTexture: () => { pending.legacyImagery += 1; throw new Error("The atlas path must not load per-tile textures."); } }));
@@ -17,9 +22,17 @@ vi.mock("../../terrain/terrainTiles", async importOriginal => ({
   ...await importOriginal<typeof import("../../terrain/terrainTiles")>(),
   createTerrainTileLoader: () => ({ dispose: vi.fn(),
     getMetrics: () => ({ active: 0, queued: 0, decodedBytes: 0 }),
-    loadPatch: (tile: TerrainTile) => new Promise<TerrainGrid>((resolve, reject) => pending.terrain.push({ tile, resolve, reject })) }),
+    loadPatch: (tile: TerrainTile) => new Promise<TerrainGrid>((resolve, reject) => {
+      pending.terrainRequests += 1;
+      pending.terrain.push({ tile, resolve, reject });
+    }) }),
 }));
-beforeEach(() => { pending.terrain = []; pending.legacyImagery = 0; });
+beforeEach(() => {
+  pending.terrain = [];
+  pending.terrainRequests = 0;
+  pending.heights = tile => [100 + tile.z, 100, 100, 100];
+  pending.legacyImagery = 0;
+});
 afterEach(() => vi.restoreAllMocks());
 
 const flush = async () => { for (let i = 0; i < 8; i++) await Promise.resolve(); };
@@ -62,7 +75,7 @@ async function setup(sourceIndex = 0, loaderOverride?: ImageryLoader, extra: Par
       scene.render();
       await flush();
       for (const item of pending.terrain.splice(0)) {
-        item.resolve({ ...item.tile, size: 2, heights: new Float32Array([100 + item.tile.z, 100, 100, 100]) });
+        item.resolve({ ...item.tile, size: 2, heights: new Float32Array(pending.heights(item.tile)) });
       }
       await flush();
     }
@@ -95,7 +108,7 @@ describe("raster runtime with atlas imagery", () => {
     const revision = runtime.getRevision();
     const probe = runtime.sample(36.1, -112.14);
     expect(probe).not.toBeNull();
-    const demRequests = pending.terrain.length;
+    const demRequests = pending.terrainRequests;
     const imageRequests = urls.length;
 
     for (const offset of [1, -2, 0.5, -3, 0]) {
@@ -106,7 +119,7 @@ describe("raster runtime with atlas imagery", () => {
     await settle();
 
     expect(urls.length).toBeGreaterThan(imageRequests);
-    expect(pending.terrain.length).toBe(demRequests);
+    expect(pending.terrainRequests).toBe(demRequests);
     expect(writes).not.toHaveBeenCalled();
     expect(runtime.getRevision()).toBe(revision);
     expect(runtime.sample(36.1, -112.14)).toEqual(probe);
@@ -215,13 +228,22 @@ describe("raster runtime with atlas imagery", () => {
       // The orbit target, in ECEF as the scene is here.
       focus = { x: camera.center.x, y: camera.center.y, z: camera.center.z };
       await settle();
-      const settled = { images: urls.length, elevation: pending.terrain.length };
+      const settled = { images: urls.length, elevation: pending.terrainRequests };
       for (const headingDeg of [60, 120, 180, 240, 300]) {
         Object.assign(view, { headingDeg });
         controller.applyViewState(view);
         await settle();
       }
-      const turned = { images: urls.length - settled.images, elevation: pending.terrain.length - settled.elevation, pages: runtime.getImageryDiagnostics().atlas?.focus };
+      // Anything else that reselects, such as automatic adjustment stepping
+      // coarser and back, finds the same tiles: what is loaded does not change
+      // what a still focus region asks for.
+      const settings = getAppSettings();
+      const detail = settings.get("map.detail.terrain.default") as number;
+      settings.set("map.detail.terrain.default", detail * 2 ** 0.25);
+      await settle();
+      settings.set("map.detail.terrain.default", detail);
+      await settle();
+      const turned = { images: urls.length - settled.images, elevation: pending.terrainRequests - settled.elevation, pages: runtime.getImageryDiagnostics().atlas?.focus };
       runtime.dispose();
       engine.dispose();
       return turned;
@@ -233,6 +255,46 @@ describe("raster runtime with atlas imagery", () => {
     // The region's pages are counted and estimated from this view.
     expect(around.pages?.pages).toBeGreaterThan(0);
     expect(around.pages?.estimatedPages).toBeGreaterThan(0);
+  });
+
+  it("settles on what it would choose again, so reselecting around a still, low focus point requests nothing", async () => {
+    const settings = getAppSettings();
+    settings.set("map.auto.terrainDetail", false);
+    settings.set("map.detail.linkTerrainToImagery", false);
+    // Reselect whenever there is cause, however fast the test runs.
+    settings.set("map.terrain.reselectWhileMoving", 0);
+    // One narrow peak beside the point: coarse grids miss it, fine ones find it.
+    const peak = { latDeg: 36.103, lonDeg: -112.137 };
+    pending.heights = tile => {
+      const heights: number[] = [];
+      for (const row of [0.25, 0.75]) for (const col of [0.25, 0.75]) {
+        const n = 2 ** tile.z;
+        const lonDeg = ((tile.x + col) / n) * 360 - 180;
+        const latDeg = (Math.atan(Math.sinh(Math.PI * (1 - (2 * (tile.y + row)) / n))) * 180) / Math.PI;
+        const d = Math.hypot((latDeg - peak.latDeg) * 111_000, (lonDeg - peak.lonDeg) * 90_000);
+        heights.push(100 + 1300 * Math.exp(-((d / 300) ** 2)));
+      }
+      return heights;
+    };
+    // A chase camera's case: the point 1500 m up, the camera 100 m above it.
+    const focus = geodeticToEcef((36.1 * Math.PI) / 180, (-112.14 * Math.PI) / 180, 1500);
+    const { runtime, settle, engine, controller, view } = await setup(0, undefined, { getFocus: () => (
+      { mode: "around", position: focus, radiusMeters: 10_000, offsetCap: null, horizonCull: true }
+    ) });
+    Object.assign(view, { zoomMeters: 1600, pitchDeg: 89 });
+    controller.applyViewState(view);
+    await settle();
+    const settled = pending.terrainRequests;
+    // Automatic adjustment stepping coarser and back reselects with nothing moved.
+    const detail = settings.get("map.detail.terrain.default") as number;
+    settings.set("map.detail.terrain.default", detail * 2 ** 0.25);
+    await settle();
+    settings.set("map.detail.terrain.default", detail);
+    await settle();
+    expect(settled).toBeGreaterThan(0);
+    expect(pending.terrainRequests - settled).toBe(0);
+    runtime.dispose();
+    engine.dispose();
   });
 
   it("moves the terrain target a level per level of the rail when linked, within its range", async () => {

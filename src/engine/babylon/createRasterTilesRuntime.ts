@@ -587,6 +587,8 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
   let selectedAt = -Infinity;
   let selection: TerrainSelection | null = null;
   let selectedTarget = Number.NaN;
+  // A tile's heights arrived since the last selection, which may measure it differently now.
+  let heightsArrived = false;
   // Adopted terrain levels, finest first, for imagery height queries.
   let visibleLevels: number[] = [];
 
@@ -595,6 +597,22 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
     for (;;) {
       const key = `${z}/${x}/${y}`;
       if (visibleTileKeys.has(key)) return cache.get(key) ?? null;
+      if (z === 0) return null;
+      z -= 1; x >>= 1; y >>= 1;
+    }
+  };
+  /**
+   * The height range terrain selection measures a tile with: the tile's own
+   * heights once they arrive, otherwise its nearest ancestor's. Not only
+   * visible tiles: a split tile's children replace it on screen, and its
+   * range must not widen to the fallback then, or a reselection with nothing
+   * moved would choose differently.
+   */
+  const knownHeightBounds = (tile: TileCoord): { min: number; max: number } | null => {
+    let { z, x, y } = tile;
+    for (;;) {
+      const record = cache.get(`${z}/${x}/${y}`);
+      if (record?.heightBounds && (record.grid || (options.getSurfaceHeightMeters && record.loaded))) return record.heightBounds;
       if (z === 0) return null;
       z -= 1; x >>= 1; y >>= 1;
     }
@@ -797,6 +815,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
       geometryDirty = true;
       dirtyGeometryKeys.add(changed.key);
       visibilityDirty = true;
+      heightsArrived = true;
       options.requestRender?.();
     }, scheduleRetry, imageryRuntime);
     cache.set(key, record);
@@ -1024,6 +1043,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
 
   function selectTiles(view: ImageryView | null, focus: TerrainFocus | null): void {
     selectionDirty = false;
+    heightsArrived = false;
     selectedView = view;
     selectedFocus = focus;
     selectedAt = performance.now();
@@ -1044,7 +1064,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
       hysteresis: { refineAbove: setting("map.terrain.refineAbove"), coarsenBelow: setting("map.terrain.coarsenBelow") },
       previous: previous && { split: previous.split, leaves: new Set(previous.leaves.map(leaf => leaf.key)) },
       boundsFor: tile => {
-        const bounds = coveringVisibleRecord(tile)?.heightBounds;
+        const bounds = knownHeightBounds(tile);
         return bounds ? { min: bounds.min - 50, max: bounds.max + 50 } : { min: -500, max: 9000 };
       },
     });
@@ -1116,14 +1136,18 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
       const now = performance.now();
       const retryDue = nextRetryAt !== Infinity && now >= nextRetryAt;
       // A still camera and focus point have no new coverage to select unless
-      // a failed load is due again. Around a focus point the view decides
-      // nothing, so turning the camera selects nothing.
+      // a failed load is due again, or heights arrived that measure a tile
+      // better: a still view settles on what it would choose again. Around a
+      // focus point the view decides nothing, so turning the camera selects
+      // nothing.
       const moved = (focus?.mode !== "around" && imageryViewChanged(selectedView, view)) || focusChanged(selectedFocus, focus);
       if (selectionDirty || retryDue || terrainTarget() !== selectedTarget) {
         nextRetryAt = Infinity;
         selectTiles(view, focus);
-      } else if (moved) {
-        // While the view moves, select at most every interval; the view it stops at is always selected.
+      } else if (moved || heightsArrived) {
+        // While the view moves or heights arrive, select at most every
+        // interval; the view it stops at, and the last heights, are always
+        // selected for.
         if (now - selectedAt >= setting("map.terrain.reselectWhileMoving")) selectTiles(view, focus);
         else options.requestRender?.();
       }

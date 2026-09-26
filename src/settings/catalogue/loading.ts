@@ -145,7 +145,7 @@ export const MAP_LOADING_PARAMETERS: readonly ParameterSpec[] = [
   }),
   quantity({
     id: "map.terrain.reselectWhileMoving", label: "Terrain reselection interval", unit: "ms", min: 0, max: 1000, fallback: 100, step: 10,
-    description: "While the view moves, terrain tiles are chosen again at most this often; the view it stops at is always chosen.",
+    description: "While the view moves or elevation arrives, terrain tiles are chosen again at most this often; the view it stops at, and the last elevation to arrive, are always chosen for.",
     reason: "The interval 2D imagery uses, so both follow the camera alike.", source: RASTER_RUNTIME,
   }),
   quantity({
