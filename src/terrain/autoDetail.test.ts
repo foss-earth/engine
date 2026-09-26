@@ -76,4 +76,15 @@ describe("automatic detail adjustment", () => {
     expect(controller.getAdjustment()).toBe(0);
     expect(controller.getState().lastMeanMs).toBeNull();
   });
+
+  it("takes a frame-rate cap's interval as the least goal, so capped frames are not slow ones", () => {
+    const controller = createAutoDetailController({ ...TUNING, goalMs: null, leastGoalMs: 1000 / 30 });
+    controller.setRoom(4);
+    let now = 0;
+    // The display refreshes at 60 Hz; capped at 30 fps, frames come every 33 ms.
+    controller.observe(now, 1000 / 60, false);
+    for (let i = 0; i < 600; i++) { now += 1000 / 30; controller.observe(now, 1000 / 30, false); }
+    expect(controller.getState().goalMs).toBeCloseTo(1000 / 30, 6);
+    expect(controller.getAdjustment()).toBe(0);
+  });
 });

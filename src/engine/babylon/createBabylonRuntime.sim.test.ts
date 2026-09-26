@@ -489,3 +489,36 @@ describe("createBabylonRuntime camera and input parameters", () => {
     }
   });
 });
+
+describe("createBabylonRuntime renderer parameters", () => {
+  it("draws at renderer.resolutionScale and clips the globe camera as renderer.clipping says", async () => {
+    mocks.createInputController.mockReturnValue({ setRates: vi.fn(), destroy: vi.fn() });
+    const { getAppSettings } = await import("../../settings/appSettings");
+    const settings = getAppSettings();
+    const { createBabylonRuntime } = await import("./createBabylonRuntime");
+    const runtime = await createBabylonRuntime(document.createElement("canvas"));
+    const camera = runtime.geospatialCamera!;
+    const dpr = window.devicePixelRatio || 1;
+    // The null engine always reports 1; what it is asked for is what a real one draws at.
+    const scaling = vi.spyOn(runtime.engine, "setHardwareScalingLevel");
+    try {
+      settings.set("renderer.resolutionScale", 0.5);
+      expect(scaling).toHaveBeenLastCalledWith(expect.closeTo(2 / dpr, 9));
+      window.dispatchEvent(new Event("resize"));
+      expect(scaling).toHaveBeenLastCalledWith(expect.closeTo(2 / dpr, 9));
+
+      // Automatic: Babylon's geospatial clipping behaviour sets the planes.
+      const clipping = () => camera.behaviors.filter(behavior => behavior.name === "GeospatialClipping").length;
+      expect(clipping()).toBe(1);
+      settings.set("renderer.clipping.fixed", { min: 5, max: 2e6 });
+      settings.set("renderer.clipping", "fixed");
+      expect(clipping()).toBe(0);
+      expect([camera.minZ, camera.maxZ]).toEqual([5, 2e6]);
+      settings.set("renderer.clipping", "automatic");
+      expect(clipping()).toBe(1);
+    } finally {
+      for (const id of ["renderer.resolutionScale", "renderer.clipping", "renderer.clipping.fixed"]) settings.reset(id);
+      runtime.destroy();
+    }
+  });
+});

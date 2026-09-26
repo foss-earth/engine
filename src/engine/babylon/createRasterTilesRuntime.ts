@@ -519,8 +519,10 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
   let requestedOffset = options.detailOffset ?? 0;
   const autoTuning = () => {
     const goal = settings.get("map.auto.frameTimeGoal");
+    const cap = settings.get("renderer.frameRateCap");
     return {
       goalMs: typeof goal === "number" ? goal : null,
+      leastGoalMs: typeof cap === "number" && cap > 0 ? 1000 / cap : 0,
       coarsenAbove: setting("map.auto.coarsenAbove"),
       refineBelow: setting("map.auto.refineBelow"),
       windowMs: setting("map.auto.window"),
@@ -724,7 +726,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
         selectionDirty = true;
       }
     }
-    if (ids.some(id => id.startsWith("map.auto."))) autoDetail.setTuning(autoTuning());
+    if (ids.some(id => id.startsWith("map.auto.") || id === "renderer.frameRateCap")) autoDetail.setTuning(autoTuning());
     if (ids.some(id => TERRAIN_SELECTION_IDS.has(id) || id.startsWith("map.auto.") || id.startsWith("map.detail."))) applyDetail();
     options.requestRender?.();
   });

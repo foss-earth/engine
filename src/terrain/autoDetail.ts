@@ -2,6 +2,8 @@
 export interface AutoDetailTuning {
   /** The frame interval aimed for, ms; null measures the display's. */
   goalMs: number | null;
+  /** The shortest goal, ms: a frame-rate cap's interval, 0 without one. Capped frames are not slow ones. */
+  leastGoalMs?: number;
   /** Multiples of the goal: a slower window counts toward coarsening, a faster one toward refining. */
   coarsenAbove: number;
   refineBelow: number;
@@ -57,7 +59,10 @@ export function createAutoDetailController(initial: AutoDetailTuning) {
   let lastDecision: AutoDetailDecision | null = null;
 
   const restartWindow = (): void => { windowStartedAt = null; total = 0; frames = 0; };
-  const goal = (): number | null => tuning.goalMs ?? measuredGoal;
+  const goal = (): number | null => {
+    const aimed = tuning.goalMs ?? measuredGoal;
+    return aimed === null ? null : Math.max(aimed, tuning.leastGoalMs ?? 0);
+  };
 
   function decide(now: number, to: number, mean: number, goalMs: number): AutoDetailDecision {
     lastDecision = { at: now, from: adjustment, to, meanFrameMs: mean, goalMs };

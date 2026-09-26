@@ -337,7 +337,6 @@ function createGeospatialCamera(scene: Scene): GeospatialCamera {
   camera.inputs.removeByType("GeospatialCameraPointersInput");
   camera.inputs.removeByType("GeospatialCameraMouseWheelInput");
   camera.attachControl(true);
-  camera.addBehavior(new GeospatialClippingBehavior());
 
   const { x: cx, y: cy, z: cz } = geodeticToEcef(
     DEFAULT_CAMERA_LAT_DEG * DEG_TO_RAD,
@@ -373,12 +372,24 @@ export async function createBabylonRuntime(
   const backend = settings.get("renderer.backend");
   const { renderer, scene } = await bootstrapGlobeRenderer(canvas, {
     force: options.rendererForce ?? (backend === "webgpu" || backend === "webgl2" || backend === "webgl" ? backend : null),
+    antialias: settings.get("renderer.antialias") !== false,
   });
   // Defaults and bounds that depend on the renderer can now be resolved.
   settings.setDeviceContext({
     rendererMode: renderer.mode,
     maxTextureSize: (renderer.engine.getCaps() as { maxTextureSize?: number }).maxTextureSize ?? null,
+    rendererDevicePixels: renderer.devicePixels ?? null,
   });
+  if (renderer.antialias === false && settings.get("renderer.antialias") !== false) {
+    settings.setNote("renderer.antialias", "Off: WebGPU could only start without it on this device.");
+  }
+  /** Pixels drawn per device pixel: `renderer.resolutionScale`, which the canvas follows on every resize. */
+  const applyResolutionScale = (): void => {
+    const scale = settings.get("renderer.resolutionScale");
+    const ratio = (window.devicePixelRatio || 1) * (typeof scale === "number" && scale > 0 ? scale : 1);
+    renderer.engine.setHardwareScalingLevel(1 / ratio);
+  };
+  applyResolutionScale();
   const captureFromUrl = new URLSearchParams(window.location.search).get("terrainCapture") === "1";
   const terrainCapture = options.terrainPerformanceCapture ?? (captureFromUrl ? createTerrainPerformanceCapture() : undefined);
   const previousCapture = window.fossTerrainPerformance;
@@ -543,6 +554,10 @@ export async function createBabylonRuntime(
       }
     },
     shouldKeepRendering: () => simRunning || (inertialCameraController?.isActive() ?? false),
+    minFrameIntervalMs: () => {
+      const cap = settings.get("renderer.frameRateCap");
+      return typeof cap === "number" && cap > 0 ? 1000 / cap : 0;
+    },
   });
 
   // Credits are the shell's to show: the map source HUD links the basemap's,
@@ -609,6 +624,28 @@ export async function createBabylonRuntime(
     return rates;
   }
 
+  /**
+   * `renderer.clipping`: Babylon's geospatial clipping sets the near and far
+   * planes from the camera's height each frame; fixed, they are the range's ends.
+   */
+  let clippingBehavior: GeospatialClippingBehavior | null = null;
+  function applyClipping(): void {
+    const camera = geospatialCamera;
+    if (!camera) return;
+    if (settings.get("renderer.clipping") === "fixed") {
+      if (clippingBehavior) camera.removeBehavior(clippingBehavior);
+      clippingBehavior = null;
+      const range = settings.get("renderer.clipping.fixed");
+      if (isNumberRange(range)) {
+        camera.minZ = range.min;
+        camera.maxZ = range.max;
+      }
+    } else if (!clippingBehavior) {
+      clippingBehavior = new GeospatialClippingBehavior();
+      camera.addBehavior(clippingBehavior);
+    }
+  }
+
   function ensureGeospatialCamera(): GeospatialCamera {
     if (geospatialCamera) {
       // Flight mode owns scene.activeCamera with its cockpit/chase camera.
@@ -621,6 +658,7 @@ export async function createBabylonRuntime(
 
     geospatialCamera = createGeospatialCamera(scene);
     geospatialCamera.fov = cameraFieldOfViewRad();
+    applyClipping();
     if (!simMode || !scene.activeCamera) scene.activeCamera = geospatialCamera;
     cameraController = new CameraController(geospatialCamera);
     cameraController.setLimits(cameraLimits());
@@ -1113,6 +1151,17 @@ export async function createBabylonRuntime(
       focusCache = null;
       scheduler.requestRender();
     })),
+    settings.watch("renderer.resolutionScale", () => {
+      applyResolutionScale();
+      renderer.engine.resize();
+      scheduler.requestRender();
+    }),
+    // A lower cap takes effect from the next frame; a higher one needs a frame to start from.
+    settings.watch("renderer.frameRateCap", () => scheduler.requestRender()),
+    ...["renderer.clipping", "renderer.clipping.fixed"].map(id => settings.watch(id, () => {
+      applyClipping();
+      scheduler.requestRender();
+    })),
     settings.watch("camera.fieldOfView", () => {
       if (geospatialCamera) geospatialCamera.fov = cameraFieldOfViewRad();
       scheduler.requestRender();
@@ -1234,6 +1283,8 @@ export async function createBabylonRuntime(
   const removeReadings = readings.map(([id, read]) => settings.setReadingSource(id, read));
 
   const handleResize = () => {
+    // The device pixel ratio changes between displays and with browser zoom.
+    applyResolutionScale();
     renderer.engine.resize();
     scheduler.requestRender();
   };
