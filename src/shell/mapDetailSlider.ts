@@ -76,7 +76,10 @@ export function createMapDetailSlider(options: MapDetailSliderOptions): MapDetai
   slider.className = "map-detail-control__slider";
   slider.type = "range";
   slider.setAttribute("aria-label", `${name} for this session`);
-  rail.append(validRange, defaultTick, activeMarker, slider);
+  const markerTicks = document.createElement("span");
+  markerTicks.className = "map-detail-control__markers";
+  markerTicks.setAttribute("aria-hidden", "true");
+  rail.append(validRange, defaultTick, activeMarker, markerTicks, slider);
   element.append(rail);
 
   let shown: DetailState | null | undefined;
@@ -93,6 +96,7 @@ export function createMapDetailSlider(options: MapDetailSliderOptions): MapDetai
       slider.disabled = true;
       defaultTick.hidden = true;
       activeMarker.hidden = true;
+      markerTicks.replaceChildren();
       slider.removeAttribute("aria-valuetext");
       element.title = `${name} is not available for this map.`;
       slider.title = element.title;
@@ -124,6 +128,19 @@ export function createMapDetailSlider(options: MapDetailSliderOptions): MapDetai
       activeMarker.classList.toggle("is-beyond-range", detailPosition(kind, effective) < finer - 1e-9);
     }
 
+    // Hosts' markers that explain the rail, such as a flight's minimum while it holds.
+    const railMarkers = ready ? state.markers.filter(marker => marker.onRail) : [];
+    markerTicks.replaceChildren(...railMarkers.map(marker => {
+      const tick = document.createElement("span");
+      tick.className = "map-detail-control__marker";
+      const position = detailPosition(kind, marker.value);
+      tick.style.left = `${rangePercent(position, finer, coarser)}%`;
+      tick.style.setProperty("--marker-colour", marker.colour);
+      tick.classList.toggle("is-hollow", Boolean(marker.hollow));
+      tick.classList.toggle("is-beyond-range", position < finer - 1e-9 || position > coarser + 1e-9);
+      return tick;
+    }));
+
     if (!ready) {
       element.title = state.availability === "initializing"
         ? `${name} is starting.`
@@ -134,6 +151,7 @@ export function createMapDetailSlider(options: MapDetailSliderOptions): MapDetai
         `Saved default: ${formatDetailValue(kind, state.resolvedDefault)}${state.defaultLimitedByRange ? ", limited by the range" : ""}.`,
       ];
       if (!activeMarker.hidden && effective !== null) lines.push(`Blue marker: the renderer is held at ${formatDetailValue(kind, effective)}.`);
+      for (const marker of railMarkers) lines.push(`${marker.label}: ${formatDetailValue(kind, marker.value)}${marker.hollow ? ", waived" : ""}.`);
       if (status) lines.push(status);
       lines.push("Left is finer, right is coarser. The Map tab restores the saved detail.");
       element.title = lines.join("\n");

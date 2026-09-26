@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_GOOGLE_DETAIL_POLICY, type GoogleDetailPolicy, type RasterDetailPolicy } from "../terrain/mapDetailPolicy";
+import { SETTINGS_STORAGE_KEY } from "../settings/registry";
 import { createMapDetailController, MAP_DETAIL_STORAGE_KEY, type MapDetailStorage } from "./mapDetailController";
 
 function memoryStorage(initial: Record<string, string> = {}): MapDetailStorage & { data: Map<string, string> } {
@@ -42,7 +43,7 @@ describe("map detail controller", () => {
     expect(controller.getRuntimeTarget()).toEqual({ kind: "google", value: 20 });
   });
 
-  it("saves policies per source in one versioned record", () => {
+  it("saves one policy per kind as parameters in the settings record", () => {
     const storage = memoryStorage();
     const controller = createMapDetailController({ storage });
     readyGoogle(controller);
@@ -51,12 +52,46 @@ describe("map detail controller", () => {
     controller.setActiveSource({ key: RASTER, availability: "ready" });
     const raster: RasterDetailPolicy = { kind: "raster", coarseOffset: -2, fineOffset: 0.5, defaultValue: "normal" };
     expect(controller.updatePolicy(raster)).toBe(true);
-    const record = JSON.parse(storage.data.get(MAP_DETAIL_STORAGE_KEY)!);
-    expect(record).toEqual({ version: 1, policies: { google, [RASTER]: raster } });
+    const record = JSON.parse(storage.data.get(SETTINGS_STORAGE_KEY)!);
+    expect(record.values).toEqual({
+      "map.detail.google.range": { min: 2, max: 256 },
+      "map.detail.google.default": 32,
+      "map.detail.imagery.range": { min: -2, max: 0.5 },
+    });
 
     const reloaded = createMapDetailController({ storage });
     expect(reloaded.getPolicy("google")).toEqual(google);
     expect(reloaded.getPolicy(RASTER)).toEqual(raster);
+    // Every 2D basemap shares the imagery policy: its offsets are relative to Normal.
+    expect(reloaded.getPolicy("raster:osm-standard")).toEqual(raster);
+  });
+
+  it("imports the record kept before the settings registry, once", () => {
+    const google: GoogleDetailPolicy = { kind: "google", finestErrorPx: 2, coarsestErrorPx: 8, defaultValue: 4 };
+    const storage = memoryStorage({ [MAP_DETAIL_STORAGE_KEY]: JSON.stringify({ version: 1, policies: { google } }) });
+    const controller = createMapDetailController({ storage });
+    expect(controller.getPolicy("google")).toEqual(google);
+    expect(controller.hasSavedPolicy("google")).toBe(true);
+    readyGoogle(controller);
+    controller.resetPolicy();
+    expect(createMapDetailController({ storage }).hasSavedPolicy("google")).toBe(false);
+  });
+
+  it("follows edits made through the registry and draws host markers", () => {
+    const controller = createMapDetailController({ storage: memoryStorage() });
+    readyGoogle(controller);
+    const listener = vi.fn();
+    controller.subscribe(listener);
+    controller.settings.set("map.detail.google.default", 32);
+    expect(controller.getState()?.requestedTarget).toBe(32);
+    const remove = controller.setTrackMarker({ id: "flight", kind: "google", value: 4096, colour: "#ef4444", label: "Flight minimum", ariaLabel: "Flight minimum", draggable: true });
+    expect(controller.getState()?.markers.map(marker => marker.id)).toEqual(["flight"]);
+    controller.setActiveSource({ key: RASTER, availability: "ready" });
+    expect(controller.getState()?.markers).toEqual([]);
+    controller.setActiveSource({ key: "google", availability: "ready" });
+    remove();
+    expect(controller.getState()?.markers).toEqual([]);
+    expect(listener).toHaveBeenCalled();
   });
 
   it("refuses a policy of the wrong kind or an invalid one", () => {
@@ -157,7 +192,7 @@ describe("map detail controller", () => {
     controller.resetPolicy();
     expect(controller.getPolicy(RASTER)).toMatchObject({ coarseOffset: -3, fineOffset: 1, defaultValue: "normal" });
     expect(controller.getPolicy("google")).toMatchObject({ finestErrorPx: 2 });
-    expect(JSON.parse(storage.data.get(MAP_DETAIL_STORAGE_KEY)!).policies).not.toHaveProperty(RASTER);
+    expect(Object.keys(JSON.parse(storage.data.get(SETTINGS_STORAGE_KEY)!).values)).toEqual(["map.detail.google.range", "map.detail.google.default"]);
   });
 
   it("composes consumer requirements as the finer target without moving the request", () => {

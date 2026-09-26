@@ -60,6 +60,12 @@ export interface RasterBaseMapSource {
   minZoom?: number;
   /** The approved request ceiling. Provider metadata never raises it. */
   maxZoom?: number;
+  /**
+   * A key the provider requires: the parameter that holds it and the query
+   * parameter it travels in. It is added to requests only, never saved in the
+   * map cache or shown.
+   */
+  apiKey?: { parameter: string; query: string };
   /** Geographic coverage; outside it imagery is not refined. */
   bounds?: {
     west: number;
@@ -152,6 +158,8 @@ export const RASTER_BASE_MAP_SOURCES: readonly RasterBaseMapSource[] = [
     requestPolicy: { prefetch: true },
     attribution: "OpenStreetMap contributors, CARTO",
     attributionUrl: "https://carto.com/attributions",
+    // The query name is not yet checked against a working key.
+    apiKey: { parameter: "map.source.cartoKey", query: "api_key" },
     wordmark: { onDark: cartoLogoOnDark, onLight: cartoLogoOnLight, label: "Positron" },
     minZoom: 0,
     maxZoom: 20,
@@ -169,6 +177,7 @@ export const RASTER_BASE_MAP_SOURCES: readonly RasterBaseMapSource[] = [
     requestPolicy: { prefetch: true },
     attribution: "OpenStreetMap contributors, CARTO",
     attributionUrl: "https://carto.com/attributions",
+    apiKey: { parameter: "map.source.cartoKey", query: "api_key" },
     wordmark: { onDark: cartoLogoOnDark, onLight: cartoLogoOnLight, label: "Dark Matter" },
     minZoom: 0,
     maxZoom: 20,
@@ -205,4 +214,21 @@ export function resolveRasterBaseMapSource(source: string | RasterBaseMapSource 
 
 export function isKnownRasterBaseMapId(value: string | null | undefined): boolean {
   return typeof value === "string" && RASTER_BASE_MAP_BY_ID.has(value);
+}
+/**
+ * The source as requested with its key: the key joins each URL template and
+ * the version changes, so images fetched without it are not reused. Without a
+ * key, or for a source that needs none, the source itself.
+ */
+export function withSourceKey(source: RasterBaseMapSource, key: string): RasterBaseMapSource {
+  const trimmed = key.trim();
+  if (!source.apiKey || !trimmed) return source;
+  const query = `${source.apiKey.query}=${encodeURIComponent(trimmed)}`;
+  const addKey = (template: string): string => `${template}${template.includes("?") ? "&" : "?"}${query}`;
+  return {
+    ...source,
+    urlTemplate: addKey(source.urlTemplate),
+    version: `${source.version}-keyed`,
+    ...(source.variants ? { variants: source.variants.map(variant => ({ ...variant, urlTemplate: addKey(variant.urlTemplate) })) } : {}),
+  };
 }

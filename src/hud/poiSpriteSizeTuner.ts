@@ -1,3 +1,4 @@
+import { getAppSettings } from "../settings/appSettings";
 export interface PoiSpriteSizeParams {
   maxSize: number;
   minSize: number;
@@ -12,7 +13,6 @@ export const DEFAULT_POI_SPRITE_SIZE_PARAMS: PoiSpriteSizeParams = {
   maxRefZoom: 1_000_000,
 };
 
-const POI_SPRITE_SIZE_DEFAULTS_STORAGE_KEY = "foss-earth.poi-sprite-size-defaults";
 const POI_SPRITE_SIZE_PARAM_KEYS = ["maxSize", "minSize", "minRefZoom", "maxRefZoom"] as const;
 type PoiSpriteSizeParamKey = typeof POI_SPRITE_SIZE_PARAM_KEYS[number];
 
@@ -29,18 +29,17 @@ function normalizePoiSpriteSizeParams(value: unknown): PoiSpriteSizeParams | nul
   return params;
 }
 
+/** The `visualization.poiSprite.*` parameters, or null while every one is at its default. */
 function loadSavedPoiSpriteSizeDefaults(): PoiSpriteSizeParams | null {
-  try {
-    const raw = window.localStorage.getItem(POI_SPRITE_SIZE_DEFAULTS_STORAGE_KEY);
-    if (!raw) return null;
-    return normalizePoiSpriteSizeParams(JSON.parse(raw));
-  } catch { return null; }
+  const settings = getAppSettings();
+  const ids = POI_SPRITE_SIZE_PARAM_KEYS.map(key => `visualization.poiSprite.${key}`);
+  if (ids.every(id => settings.inspect(id).provenance === "default")) return null;
+  return normalizePoiSpriteSizeParams(Object.fromEntries(POI_SPRITE_SIZE_PARAM_KEYS.map(key => [key, settings.get(`visualization.poiSprite.${key}`)])));
 }
 
-function savePoiSpriteSizeDefaults(params: PoiSpriteSizeParams): void {
-  try {
-    window.localStorage.setItem(POI_SPRITE_SIZE_DEFAULTS_STORAGE_KEY, JSON.stringify(params));
-  } catch { /* ignore */ }
+/** Refused, never repaired, when a value is outside its bounds; the panel keeps its values. */
+function savePoiSpriteSizeDefaults(params: PoiSpriteSizeParams): boolean {
+  return getAppSettings().setMany(Object.fromEntries(POI_SPRITE_SIZE_PARAM_KEYS.map(key => [`visualization.poiSprite.${key}`, params[key]]))).ok;
 }
 
 function paramsToCommitted(params: PoiSpriteSizeParams): Record<PoiSpriteSizeParamKey, string> {

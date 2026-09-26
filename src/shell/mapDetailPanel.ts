@@ -17,30 +17,19 @@ import {
 } from "../terrain/mapDetailPolicy";
 import type { MapDetailController } from "./mapDetailController";
 import { describeDetailStatus } from "./mapDetailSlider";
+import { createTrack, type TrackThumb } from "./settings/track";
 
 export interface MapDetailPanelHandle {
   element: HTMLElement;
   destroy(): void;
 }
 
-let panelCount = 0;
-
-// The HUD rail's colours, finer to coarser: the same position is the same colour everywhere.
-const DETAIL_COLOURS: ReadonlyArray<readonly [number, readonly [number, number, number]]> = [
-  [0, [0x46, 0xdb, 0x8f]],
-  [0.55, [0xf6, 0xd3, 0x65]],
-  [1, [0xff, 0x6b, 0x6b]],
-];
-
-function detailColour(fraction: number): string {
-  const t = Math.min(1, Math.max(0, fraction));
-  let index = 1;
-  while (index < DETAIL_COLOURS.length - 1 && t > DETAIL_COLOURS[index][0]) index += 1;
-  const [t0, c0] = DETAIL_COLOURS[index - 1];
-  const [t1, c1] = DETAIL_COLOURS[index];
-  const u = (t - t0) / (t1 - t0);
-  return `rgb(${c0.map((value, channel) => Math.round(value + (c1[channel] - value) * u)).join(", ")})`;
+export interface MapDetailPanelOptions {
+  /** Draws the "Detail" heading; leave it out inside a section that has the title. Defaults to true. */
+  heading?: boolean;
 }
+
+let panelCount = 0;
 
 interface Readout {
   element: HTMLElement;
@@ -58,14 +47,6 @@ function createReadout(label: string, className: string): Readout {
   return { element, output };
 }
 
-function createThumb(label: string, className: string): HTMLInputElement {
-  const input = document.createElement("input");
-  input.type = "range";
-  input.className = `map-detail-panel__thumb ${className}`;
-  input.setAttribute("aria-label", label);
-  return input;
-}
-
 function createChoice(name: string, value: string, label: string): { element: HTMLLabelElement; input: HTMLInputElement; text: HTMLSpanElement } {
   const element = document.createElement("label");
   element.className = "foss-earth-choice";
@@ -79,12 +60,18 @@ function createChoice(name: string, value: string, label: string): { element: HT
   return { element, input, text };
 }
 
+const FINER = "finer";
+const COARSER = "coarser";
+const DEFAULT = "default";
+const MARKER_PREFIX = "marker:";
+
 /**
  * The Detail group of the Map tab: the saved range the HUD rail spans, its
- * default, and the actions that restore the saved detail or reset the source's
- * settings. It edits the active source's policy through the shared controller.
+ * default, hosts' markers such as a flight's minimum, and the actions that
+ * restore the saved detail or reset the source's settings. It edits the active
+ * source's policy through the shared controller.
  */
-export function createMapDetailPanel(controller: MapDetailController): MapDetailPanelHandle {
+export function createMapDetailPanel(controller: MapDetailController, options: MapDetailPanelOptions = {}): MapDetailPanelHandle {
   const choiceName = `foss-earth-map-detail-default-${++panelCount}`;
   const element = document.createElement("div");
   element.className = "foss-earth-choices map-detail-panel";
@@ -93,10 +80,12 @@ export function createMapDetailPanel(controller: MapDetailController): MapDetail
   const heading = document.createElement("div");
   heading.className = "foss-earth-choices__heading";
   heading.textContent = "Detail";
+  heading.hidden = options.heading === false;
   const note = document.createElement("p");
   note.className = "foss-earth-choices__note map-detail-panel__note";
   // One track across every value the source allows. The two ends of the range
-  // the HUD rail spans are its two thumbs; the saved default sits between them.
+  // the HUD rail spans are its two thumbs; the saved default and hosts'
+  // markers sit on it too.
   const range = document.createElement("div");
   range.className = "map-detail-panel__range";
   range.setAttribute("role", "group");
@@ -107,31 +96,23 @@ export function createMapDetailPanel(controller: MapDetailController): MapDetail
   const defaultReadout = createReadout("Default", "map-detail-panel__readout--default");
   const coarserReadout = createReadout("Coarsest", "map-detail-panel__readout--coarser");
   readouts.append(finerReadout.element, defaultReadout.element, coarserReadout.element);
-  const track = document.createElement("div");
-  track.className = "map-detail-panel__track";
-  const colours = document.createElement("span");
-  colours.className = "map-detail-panel__colours";
-  colours.setAttribute("aria-hidden", "true");
-  const shadeFiner = document.createElement("span");
-  shadeFiner.className = "map-detail-panel__shade map-detail-panel__shade--finer";
-  shadeFiner.setAttribute("aria-hidden", "true");
-  const shadeCoarser = document.createElement("span");
-  shadeCoarser.className = "map-detail-panel__shade map-detail-panel__shade--coarser";
-  shadeCoarser.setAttribute("aria-hidden", "true");
-  const defaultTick = document.createElement("span");
-  defaultTick.className = "map-detail-panel__default-tick";
-  defaultTick.setAttribute("aria-hidden", "true");
-  const finerThumb = createThumb("Finest end of the detail range", "map-detail-panel__thumb--end");
-  const coarserThumb = createThumb("Coarsest end of the detail range", "map-detail-panel__thumb--end");
-  const defaultThumb = createThumb("Saved default detail", "map-detail-panel__thumb--default");
-  track.append(colours, shadeFiner, shadeCoarser, defaultTick, finerThumb, coarserThumb, defaultThumb);
+  let editing = false;
+  const track = createTrack({
+    ariaLabel: "Detail range",
+    ramp: "detail",
+    className: "map-detail-panel__track",
+    onInput: (id, position) => onTrackInput(id, position),
+    onCommit: () => endEdit(),
+  });
   const scale = document.createElement("div");
   scale.className = "map-detail-panel__scale";
   scale.setAttribute("aria-hidden", "true");
   const scaleFiner = document.createElement("span");
   const scaleCoarser = document.createElement("span");
   scale.append(scaleFiner, scaleCoarser);
-  range.append(readouts, track, scale);
+  const markerNotes = document.createElement("div");
+  markerNotes.className = "map-detail-panel__markers";
+  range.append(readouts, track.element, scale, markerNotes);
   const defaultHeading = document.createElement("div");
   defaultHeading.className = "foss-earth-choices__heading map-detail-panel__subheading";
   defaultHeading.textContent = "Saved default";
@@ -153,11 +134,8 @@ export function createMapDetailPanel(controller: MapDetailController): MapDetail
   element.append(heading, note, range, defaultHeading, recommended.element, custom.element, restore, reset, status, storage);
 
   let shown: DetailState | null | undefined;
-  let editing = false;
-  let lastMoved: HTMLInputElement | null = null;
-
-  // Where a thumb's centre sits, as a CSS length along the track.
-  const along = (fraction: number): string => `calc(var(--thumb) / 2 + (100% - var(--thumb)) * ${fraction})`;
+  // The positions the thumbs showed last, so a thumb stops at the other end.
+  let positions = { finer: 0, coarser: 0 };
 
   const update = (): void => {
     const state = controller.getState();
@@ -165,9 +143,10 @@ export function createMapDetailPanel(controller: MapDetailController): MapDetail
     shown = state;
     const ready = state?.availability === "ready";
     element.classList.toggle("is-unavailable", !ready);
-    const controls = [finerThumb, coarserThumb, defaultThumb, recommended.input, custom.input, restore, reset];
+    const pills = [recommended.input, custom.input, restore, reset];
     if (!state) {
-      for (const control of controls) control.disabled = true;
+      for (const control of pills) control.disabled = true;
+      track.render({ min: 0, max: 1, step: 1, thumbs: [], disabled: true });
       note.textContent = "This map has no detail setting.";
       for (const part of [range, defaultHeading, recommended.element, custom.element, restore, reset]) part.hidden = true;
       status.hidden = true;
@@ -178,57 +157,69 @@ export function createMapDetailPanel(controller: MapDetailController): MapDetail
     const kind = state.policy.kind;
     const envelope = detailEnvelope(kind);
     const span = detailRange(state.policy);
-    const step = String(kind === "raster" ? RASTER_DETAIL_STEP : GOOGLE_DETAIL_STEP);
+    const step = kind === "raster" ? RASTER_DETAIL_STEP : GOOGLE_DETAIL_STEP;
     const min = detailPosition(kind, envelope.finer);
     const max = detailPosition(kind, envelope.coarser);
-    const fraction = (value: number): number => (detailPosition(kind, value) - min) / (max - min);
-    for (const thumb of [finerThumb, coarserThumb, defaultThumb]) {
-      thumb.min = String(min);
-      thumb.max = String(max);
-      thumb.step = step;
-    }
-    if (!editing) {
-      finerThumb.value = String(detailPosition(kind, span.finer));
-      coarserThumb.value = String(detailPosition(kind, span.coarser));
-      defaultThumb.value = String(detailPosition(kind, state.resolvedDefault));
-    }
-    const finerAt = fraction(span.finer);
-    const coarserAt = fraction(span.coarser);
-    const defaultAt = fraction(state.resolvedDefault);
-    shadeFiner.style.right = `calc(100% - ${along(finerAt)})`;
-    shadeCoarser.style.left = along(coarserAt);
-    defaultTick.style.left = along(defaultAt);
-    finerThumb.style.setProperty("--thumb-colour", detailColour(finerAt));
-    coarserThumb.style.setProperty("--thumb-colour", detailColour(coarserAt));
-    defaultThumb.style.setProperty("--thumb-colour", detailColour(defaultAt));
-    // Stacked thumbs: at equal ends, keep on top the one that can still move.
-    const equal = Math.abs(finerAt - coarserAt) < 1e-9;
-    const finerOnTop = equal ? finerAt > 0.5 : lastMoved === finerThumb;
-    finerThumb.style.zIndex = finerOnTop ? "3" : "2";
-    coarserThumb.style.zIndex = finerOnTop ? "2" : "3";
+    positions = { finer: detailPosition(kind, span.finer), coarser: detailPosition(kind, span.coarser) };
+    const defaultAt = detailPosition(kind, state.resolvedDefault);
+    const isRecommended = kind === "raster" ? state.policy.defaultValue === "normal" : typeof state.policy.defaultValue === "object";
+    const equal = Math.abs(positions.finer - positions.coarser) < 1e-9;
+    // A requirement finer than the range's coarse end stripes what it refuses.
+    const requirement = state.markers.find(marker => marker.requirement && !marker.hollow);
+    const requirementAt = requirement ? detailPosition(kind, requirement.value) : null;
+    const thumbs: TrackThumb[] = [
+      { id: FINER, role: "end", position: positions.finer, ariaLabel: "Finest end of the detail range", ariaValueText: describeDetailValue(kind, span.finer) },
+      { id: COARSER, role: "end", position: positions.coarser, ariaLabel: "Coarsest end of the detail range", ariaValueText: describeDetailValue(kind, span.coarser) },
+      // A Custom default is a third thumb on the same track; Normal or a
+      // recommendation is only marked there.
+      { id: DEFAULT, role: "default", position: defaultAt, ariaLabel: "Saved default detail", ariaValueText: describeDetailValue(kind, state.resolvedDefault), hidden: isRecommended, disabled: !ready || equal },
+      ...state.markers.map((marker): TrackThumb => ({
+        id: `${MARKER_PREFIX}${marker.id}`,
+        role: "marker",
+        position: detailPosition(kind, marker.value),
+        ariaLabel: marker.ariaLabel,
+        ariaValueText: formatDetailValue(kind, marker.value),
+        colour: marker.colour,
+        hollow: marker.hollow,
+        fixed: !marker.draggable,
+        label: marker.label,
+      })),
+    ];
+    track.render({
+      min,
+      max,
+      step,
+      thumbs,
+      range: { low: positions.finer, high: positions.coarser },
+      tick: defaultAt,
+      stripe: requirementAt !== null && requirementAt < positions.coarser
+        ? { low: Math.max(requirementAt, positions.finer), high: positions.coarser }
+        : null,
+      disabled: !ready,
+    });
     finerReadout.output.textContent = formatDetailValue(kind, span.finer);
     coarserReadout.output.textContent = formatDetailValue(kind, span.coarser);
     defaultReadout.output.textContent = formatDetailValue(kind, state.resolvedDefault);
-    finerThumb.setAttribute("aria-valuetext", describeDetailValue(kind, span.finer));
-    coarserThumb.setAttribute("aria-valuetext", describeDetailValue(kind, span.coarser));
-    defaultThumb.setAttribute("aria-valuetext", describeDetailValue(kind, state.resolvedDefault));
     scaleFiner.textContent = `Finer · ${formatDetailValue(kind, envelope.finer)}`;
     scaleCoarser.textContent = `Coarser · ${formatDetailValue(kind, envelope.coarser)}`;
+    markerNotes.replaceChildren(...state.markers.map(marker => {
+      const line = document.createElement("span");
+      line.className = "map-detail-panel__marker-note";
+      line.style.setProperty("--marker-colour", marker.colour);
+      line.classList.toggle("is-hollow", Boolean(marker.hollow));
+      line.textContent = `${marker.label}: ${formatDetailValue(kind, marker.value)}${marker.hollow ? " (waived)" : ""}`;
+      return line;
+    }));
+    markerNotes.hidden = state.markers.length === 0;
 
-    const isRecommended = kind === "raster" ? state.policy.defaultValue === "normal" : typeof state.policy.defaultValue === "object";
     recommended.input.checked = isRecommended;
     custom.input.checked = !isRecommended;
     recommended.text.textContent = kind === "raster"
       ? "Normal"
       : `Recommended (${formatDetailValue(kind, state.resolvedDefault)}${state.defaultLimitedByRange ? ", limited by the range" : ""})`;
-    // A Custom default is a third thumb on the same track; Normal or a
-    // recommendation is only marked there.
-    defaultThumb.hidden = isRecommended;
-    defaultTick.classList.toggle("is-draggable", !isRecommended);
 
-    for (const control of controls) control.disabled = !ready;
+    for (const control of pills) control.disabled = !ready;
     restore.disabled = !ready || state.sessionOverride === null;
-    defaultThumb.disabled = !ready || equal;
 
     note.textContent = !ready
       ? state.availability === "initializing"
@@ -251,23 +242,30 @@ export function createMapDetailPanel(controller: MapDetailController): MapDetail
     controller.updatePolicy(edit(state.policy));
   };
 
-  const onRangeInput = (event: Event): void => {
+  function onTrackInput(id: string, rawPosition: number): void {
     const state = controller.getState();
     if (!state) return;
+    editing = true;
     const kind = state.policy.kind;
-    const thumb = event.target as HTMLInputElement;
-    lastMoved = thumb;
+    if (id.startsWith(MARKER_PREFIX)) {
+      // A requirement is not clamped into the range: it is not a preference.
+      const marker = state.markers.find(item => `${MARKER_PREFIX}${item.id}` === id);
+      marker?.onChange?.(detailValueAtPosition(kind, rawPosition));
+      return;
+    }
+    if (id === DEFAULT) {
+      const position = Math.min(positions.coarser, Math.max(positions.finer, rawPosition));
+      const value = detailValueAtPosition(kind, position);
+      withPolicy(policy => selectCustomDefault(policy, value));
+      return;
+    }
     // A thumb stops at the other end rather than passing it.
-    let position = Number(thumb.value);
-    if (thumb === finerThumb) position = Math.min(position, Number(coarserThumb.value));
-    else position = Math.max(position, Number(finerThumb.value));
-    thumb.value = String(position);
+    const position = id === FINER ? Math.min(rawPosition, positions.coarser) : Math.max(rawPosition, positions.finer);
     const value = detailValueAtPosition(kind, position);
-    const end = thumb === finerThumb ? "finer" : "coarser";
     withPolicy(policy => policy.kind === "raster"
-      ? editRasterRange(policy, end === "finer" ? { fineOffset: value } : { coarseOffset: value })
-      : editGoogleRange(policy, end === "finer" ? { finestErrorPx: value } : { coarsestErrorPx: value }));
-  };
+      ? editRasterRange(policy, id === FINER ? { fineOffset: value } : { coarseOffset: value })
+      : editGoogleRange(policy, id === FINER ? { finestErrorPx: value } : { coarsestErrorPx: value }));
+  }
   const onDefaultChoice = (): void => {
     withPolicy(policy => {
       if (recommended.input.checked) {
@@ -278,30 +276,14 @@ export function createMapDetailPanel(controller: MapDetailController): MapDetail
       return selectCustomDefault(policy, controller.getState()?.resolvedDefault ?? 0);
     });
   };
-  const onCustomInput = (): void => {
-    const state = controller.getState();
-    if (!state) return;
-    const position = Math.min(Number(coarserThumb.value), Math.max(Number(finerThumb.value), Number(defaultThumb.value)));
-    defaultThumb.value = String(position);
-    const value = detailValueAtPosition(state.policy.kind, position);
-    withPolicy(policy => selectCustomDefault(policy, value));
-  };
-  const beginEdit = (): void => { editing = true; };
-  const endEdit = (): void => {
+  function endEdit(): void {
     editing = false;
     shown = undefined;
     update();
-  };
+  }
   const onRestore = (): void => controller.clearSessionOverride();
   const onReset = (): void => controller.resetPolicy();
 
-  for (const input of [finerThumb, coarserThumb]) input.addEventListener("input", onRangeInput);
-  defaultThumb.addEventListener("input", onCustomInput);
-  for (const input of [finerThumb, coarserThumb, defaultThumb]) {
-    input.addEventListener("pointerdown", beginEdit);
-    input.addEventListener("pointerup", endEdit);
-    input.addEventListener("pointercancel", endEdit);
-  }
   recommended.input.addEventListener("change", onDefaultChoice);
   custom.input.addEventListener("change", onDefaultChoice);
   restore.addEventListener("click", onRestore);
@@ -313,8 +295,7 @@ export function createMapDetailPanel(controller: MapDetailController): MapDetail
     element,
     destroy(): void {
       unsubscribe();
-      for (const input of [finerThumb, coarserThumb]) input.removeEventListener("input", onRangeInput);
-      defaultThumb.removeEventListener("input", onCustomInput);
+      track.destroy();
       recommended.input.removeEventListener("change", onDefaultChoice);
       custom.input.removeEventListener("change", onDefaultChoice);
       restore.removeEventListener("click", onRestore);

@@ -29,7 +29,9 @@ import {
 } from "./createTilesRuntime";
 import { createRasterTilesRuntime, type RasterDetailFeedback, type RasterTilesRuntime } from "./createRasterTilesRuntime";
 import { DEFAULT_RASTER_IMAGERY } from "./resolveMapRuntimeConfig";
-import type { RasterBaseMapSource } from "./rasterBaseMaps";
+import { isKnownRasterBaseMapId, resolveRasterBaseMapSource, withSourceKey, type RasterBaseMapSource } from "./rasterBaseMaps";
+import { getAppSettings } from "../../settings/appSettings";
+import type { SettingsRegistry } from "../../settings/registry";
 import type { RasterQualitySetting, RasterQualityState } from "./rasterQuality";
 import { createTerrainPerformanceCapture, type TerrainPerformanceCapture } from "../../terrain/terrainPerformanceCapture";
 
@@ -85,6 +87,12 @@ export interface BabylonRuntimeOptions {
   onStatusChange?: (status: BabylonRuntimeStatus) => void;
   /** Enable a consumer-driven simulation camera and frame callback. */
   simMode?: boolean;
+  /**
+   * The registry the runtime reads its parameters from and follows: the
+   * renderer, the map source and elevation, provider keys, the imagery path
+   * and where Google refines from. The app's when omitted.
+   */
+  settings?: SettingsRegistry;
 }
 
 export type { RendererMode };
@@ -113,8 +121,13 @@ export interface BabylonTileMetrics {
 
 export type { GoogleTerrainDetailState };
 
-/** Where Google 3D Tiles measure distance when choosing mesh detail. */
-export type GoogleTerrainDetailAnchor = "camera" | "simulation-origin";
+/**
+ * Where Google 3D Tiles measure distance when choosing mesh detail: the
+ * camera, a simulation's floating origin, or the globe camera's orbit target.
+ * The `map.focus.refineFrom` parameter chooses between the camera and the
+ * focus point, which is the simulation origin in simulation mode.
+ */
+export type GoogleTerrainDetailAnchor = "camera" | "simulation-origin" | "orbit-target";
 
 interface MapDebugEvent {
   at: number;
@@ -301,7 +314,9 @@ export async function createBabylonRuntime(
   canvas: HTMLCanvasElement,
   options: BabylonRuntimeOptions = {},
 ): Promise<BabylonRuntime> {
-  const normalizedApiKey = options.googleApiKey?.trim() ?? "";
+  const settings = options.settings ?? getAppSettings();
+  const savedGoogleKey = settings.get("map.source.googleKey");
+  const normalizedApiKey = options.googleApiKey?.trim() || (typeof savedGoogleKey === "string" ? savedGoogleKey.trim() : "");
   const mapDebugEnabled = new URLSearchParams(window.location.search).get("mapDebug") === "1";
   const mapDebugEvents: MapDebugEvent[] = [];
   const recordMapDebugEvent = (event: string, detail?: Record<string, unknown>): void => {
@@ -312,8 +327,14 @@ export async function createBabylonRuntime(
   const hasGoogleApiKey = normalizedApiKey.length > 0;
   const shouldStartGoogle = hasGoogleApiKey && options.preferGoogleTiles !== false;
   const simMode = options.simMode === true;
+  const backend = settings.get("renderer.backend");
   const { renderer, scene } = await bootstrapGlobeRenderer(canvas, {
-    force: options.rendererForce ?? null,
+    force: options.rendererForce ?? (backend === "webgpu" || backend === "webgl2" || backend === "webgl" ? backend : null),
+  });
+  // Defaults and bounds that depend on the renderer can now be resolved.
+  settings.setDeviceContext({
+    rendererMode: renderer.mode,
+    maxTextureSize: (renderer.engine.getCaps() as { maxTextureSize?: number }).maxTextureSize ?? null,
   });
   const captureFromUrl = new URLSearchParams(window.location.search).get("terrainCapture") === "1";
   const terrainCapture = options.terrainPerformanceCapture ?? (captureFromUrl ? createTerrainPerformanceCapture() : undefined);
@@ -330,7 +351,10 @@ export async function createBabylonRuntime(
   const downloadMeter = createMapDownloadMeter();
   let tilesRuntime: GoogleTilesRuntime | null = null;
   let googleTerrainDetailTarget: number | null = null;
-  let googleTerrainDetailAnchor: GoogleTerrainDetailAnchor = simMode ? "simulation-origin" : "camera";
+  const anchorForRefinement = (value: unknown): GoogleTerrainDetailAnchor => (
+    value === "focus" ? (simMode ? "simulation-origin" : "orbit-target") : "camera"
+  );
+  let googleTerrainDetailAnchor: GoogleTerrainDetailAnchor = anchorForRefinement(settings.get("map.focus.refineFrom"));
   let rasterTilesRuntime: RasterTilesRuntime | null = null;
   let googleTilesStartupWatchdog: number | null = null;
   let fallbackExperienceCreated = false;
@@ -352,6 +376,11 @@ export async function createBabylonRuntime(
   let preparationTick: ((now: number) => void) | null = null;
   let cancelPreparation: ((error: Error) => void) | null = null;
   let activeRasterBaseMap = options.rasterBaseMap ?? null;
+  // A provider's key goes into its requests only: the source the rest of the app sees has none.
+  const keyedSource = (source: RasterBaseMapSource): RasterBaseMapSource => {
+    const key = source.apiKey ? settings.get(source.apiKey.parameter) : "";
+    return withSourceKey(source, typeof key === "string" ? key : "");
+  };
   let activeTerrainSource = resolveTerrainSource(options.terrainSource);
   let activeRasterQuality: RasterQualitySetting | undefined = options.rasterQuality;
   let lastRasterFrameAt = performance.now();
@@ -700,7 +729,7 @@ export async function createBabylonRuntime(
       rasterTilesRuntime = createRasterTilesRuntime({
         onDownloadBytes: downloadMeter.addBytes,
         scene,
-        source: rasterBaseMap,
+        source: keyedSource(rasterBaseMap),
         worldRoot: worldRoot ?? undefined,
         alwaysRefresh: simMode,
         getViewState: () => preparationViewState ?? (simMode && simViewState
@@ -710,7 +739,7 @@ export async function createBabylonRuntime(
         terrainSource: activeTerrainSource,
         quality: activeRasterQuality,
         detailOffset: rasterDetailOffset,
-        imagery: options.rasterImagery ?? DEFAULT_RASTER_IMAGERY,
+        imagery: options.rasterImagery ?? (settings.get("map.detail.imageryPath") === "legacy" ? "legacy" : DEFAULT_RASTER_IMAGERY),
         onDetailFeedback: emitRasterDetailFeedback,
         performanceCapture: terrainCapture,
         requestRender: () => scheduler.requestRender(),
@@ -746,7 +775,7 @@ export async function createBabylonRuntime(
         },
       });
     } else if (rasterTilesRuntime.source.id !== rasterBaseMap.id) {
-      rasterTilesRuntime.setSource(rasterBaseMap);
+      rasterTilesRuntime.setSource(keyedSource(rasterBaseMap));
     }
 
     status.mode = "raster-basemap";
@@ -813,11 +842,12 @@ export async function createBabylonRuntime(
         // Flight attaches the simulation world to a floating-origin parent.
         // Before that happens, terrain preparation owns the active camera and
         // its normal camera-based detail selection remains the safe behavior.
-        getTerrainDetailAnchor: () => (
-          googleTerrainDetailAnchor === "simulation-origin" && worldRoot?.parent
-            ? simulationOrigin
-            : null
-        ),
+        getTerrainDetailAnchor: () => {
+          if (googleTerrainDetailAnchor === "simulation-origin") return worldRoot?.parent ? simulationOrigin : null;
+          // Without a simulation the scene is in ECEF, so the orbit target is a scene point.
+          if (googleTerrainDetailAnchor === "orbit-target" && !worldRoot) return geospatialCamera?.center ?? null;
+          return null;
+        },
         onLoadError: (error, url) => {
           if (status.mode !== "google-tiles") return;
           recordMapDebugEvent("google-load-error", { error: error.message, url });
@@ -909,6 +939,50 @@ export async function createBabylonRuntime(
 
     console.warn("[runtime] No Google Maps API key found. Starting without Google 3D tiles.");
   }
+
+  function applyMapSource(source: "google" | RasterBaseMapSource): void {
+    recordMapDebugEvent("map-source-selection", { source });
+    if (source === "google") {
+      if (status.mode !== "google-tiles") enableGoogleTilesMode();
+      return;
+    }
+    if (activeRasterBaseMap?.id === source.id && status.mode === "raster-basemap") return;
+    activeRasterBaseMap = source;
+    enableRasterBaseMapMode(null);
+  }
+
+  function applyTerrainSource(source: TerrainSource): void {
+    const nextSource = resolveTerrainSource(source);
+    if (activeTerrainSource.id === nextSource.id) return;
+    activeTerrainSource = nextSource;
+    status.terrainSource = nextSource;
+    if (status.mode === "raster-basemap") {
+      rasterTilesRuntime?.setTerrainSource(nextSource);
+      scheduler.requestRender();
+    }
+    emitStatus();
+  }
+
+  // The runtime follows its parameters wherever they change: the Map tab, Show
+  // all parameters, an import, a preset or another tab.
+  const stopWatchingSettings = [
+    settings.watch("map.source.basemap", value => {
+      const id = String(value);
+      if (id === "google") applyMapSource("google");
+      else if (isKnownRasterBaseMapId(id)) applyMapSource(resolveRasterBaseMapSource(id));
+    }),
+    settings.watch("map.source.elevation", value => applyTerrainSource(resolveTerrainSource(String(value)))),
+    settings.watch("map.focus.refineFrom", value => {
+      googleTerrainDetailAnchor = anchorForRefinement(value);
+      scheduler.requestRender();
+    }),
+    settings.watch("map.source.cartoKey", () => {
+      const source = activeRasterBaseMap;
+      if (status.mode !== "raster-basemap" || !source?.apiKey || !rasterTilesRuntime) return;
+      rasterTilesRuntime.setSource(keyedSource(source));
+      scheduler.requestRender();
+    }),
+  ];
 
   const handleResize = () => {
     renderer.engine.resize();
@@ -1160,29 +1234,8 @@ export async function createBabylonRuntime(
       activeRasterBaseMap = source;
       enableRasterBaseMapMode(null);
     },
-    setMapSource(source): void {
-      recordMapDebugEvent("map-source-selection", { source });
-      if (source === "google") {
-        if (status.mode !== "google-tiles") enableGoogleTilesMode();
-        return;
-      }
-      if (activeRasterBaseMap?.id === source.id && status.mode === "raster-basemap") return;
-      activeRasterBaseMap = source;
-      enableRasterBaseMapMode(null);
-    },
-    setTerrainSource(source): void {
-      const nextSource = resolveTerrainSource(source);
-      if (activeTerrainSource.id === nextSource.id) return;
-      activeTerrainSource = nextSource;
-      status.terrainSource = nextSource;
-      if (status.mode === "raster-basemap") {
-        rasterTilesRuntime?.setTerrainSource(nextSource);
-        scheduler.requestRender();
-        emitStatus();
-      } else {
-        emitStatus();
-      }
-    },
+    setMapSource: applyMapSource,
+    setTerrainSource: applyTerrainSource,
     setRasterQuality(setting): void {
       activeRasterQuality = setting;
       rasterTilesRuntime?.setQuality(setting);
@@ -1262,6 +1315,7 @@ export async function createBabylonRuntime(
       simTick = callback;
     },
     destroy() {
+      for (const stop of stopWatchingSettings) stop();
       cancelPreparation?.(new DOMException("Map runtime destroyed.", "AbortError"));
       if (captureFromUrl && window.fossTerrainPerformance === terrainCapture) {
         if (previousCapture) window.fossTerrainPerformance = previousCapture;

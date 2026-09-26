@@ -5,23 +5,21 @@ import { BindingRuntime, createProfileStore } from "@felipegalind0/gamepad-tools
 import { mountBindingEditor, type BindingEditorHandle } from "@felipegalind0/gamepad-tools/ui";
 import "@felipegalind0/gamepad-tools/styles.css";
 import { Matrix, Vector3 } from "@babylonjs/core";
-import { createBabylonRuntime, type BabylonRuntime, type RendererMode } from "../engine/babylon/createBabylonRuntime";
+import { createBabylonRuntime, type BabylonRuntime } from "../engine/babylon/createBabylonRuntime";
 import { createGameLog, type GameLogTone } from "../log/createGameLog";
-import { clearRendererPreference } from "../engine/babylon/rendererPreference";
+import { applyRendererChoice } from "../engine/babylon/rendererPreference";
+import { RASTER_BASE_MAP_SOURCES, type RasterBaseMapSource } from "../engine/babylon/rasterBaseMaps";
 import {
-  DEFAULT_RASTER_BASE_MAP_ID,
-  RASTER_BASE_MAP_SOURCES,
-  isKnownRasterBaseMapId,
-  resolveRasterBaseMapSource,
-  type RasterBaseMapSource,
-} from "../engine/babylon/rasterBaseMaps";
-import {
-  getRasterQualityPreferenceFromSearchParams,
-  getRasterImageryPreferenceFromSearchParams,
-  getTerrainSourcePreferenceFromSearchParams,
+  resolveMapRuntimeConfig,
+  setMapSourcePreference,
   setTerrainSourcePreference,
 } from "../engine/babylon/resolveMapRuntimeConfig";
-import { TERRAIN_SOURCES, resolveTerrainSource, type TerrainSource } from "../terrain/terrainTiles";
+import { TERRAIN_SOURCES, type TerrainSource } from "../terrain/terrainTiles";
+import { getAppSettings } from "../settings/appSettings";
+import { INPUT_SENSITIVITY_IDS, PERFORMANCE_HUD_METRICS } from "../settings/catalogue";
+import { createParameterControl, type ParameterControlHandle } from "../shell/settings/controls";
+import { createParameterSection, type ParameterSectionHandle } from "../shell/settings/parameterSection";
+import { createSavedSettingsSection } from "../shell/settings/savedSettings";
 import type { RasterQualitySetting } from "../engine/babylon/rasterQuality";
 import type {
   GlobeHandle,
@@ -35,7 +33,7 @@ import { MAX_PITCH_DEG } from "../camera/cameraState";
 import { createStatusHud, type StatusHudHandle } from "../hud/statusHud";
 import { createNorthButton, type NorthButtonHandle } from "../hud/northButton";
 import { createHelpModal, type HelpModalHandle } from "../hud/helpModal";
-import { HUD_BUTTON_IDS, loadHudButtonVisibility, saveHudButtonVisibility, type HudButtonId } from "../hud/hudButtonVisibility";
+import { HUD_BUTTON_IDS, hudButtonParameterId, loadHudButtonVisibility, type HudButtonId } from "../hud/hudButtonVisibility";
 import type { PanelSection } from "../shell/SectionsPanel";
 import type { WindowOverlayHandle } from "../shell/WindowOverlay";
 import { createMapSourcePanel } from "../shell/mapSourcePanel";
@@ -49,7 +47,7 @@ import { createAnchorHeightResolver } from "../terrain/anchorHeight";
 import { createPoiSpriteSizeTuner } from "../hud/poiSpriteSizeTuner";
 import { createCompassScaleTuner } from "../hud/compassScaleTuner";
 import { createInputModeHud, type InputModeHudHandle } from "../hud/inputModeHud";
-import { loadGlobeAnchorRotationPreference } from "../input/inputSettings";
+import { loadInputSensitivityPreference } from "../input/inputSettings";
 import {
   createGlobeGamepadAdapter,
   createStandardGlobeProfile,
@@ -93,24 +91,19 @@ export interface GlobeAppOptions {
   overlayApiRef?: { current: WindowOverlayHandle | null };
 }
 
-const COMPASS_HEIGHT_OFFSET_METERS = 0;
 /** Pixel offset from the projected sphere centre to the top-right exit button. */
 const POI_EXIT_BTN_OFFSET_PX = 22;
 const BUILD_TIME = __BUILD_TIME__;
 const SOURCE_VERSION = __SOURCE_VERSION__;
 const REPOSITORY_SLUG = __REPOSITORY_SLUG__;
-const PERFORMANCE_METRIC_VISIBILITY_STORAGE_KEY = "foss-earth.performanceMetricVisibility";
-const COMPASS_HEIGHT_STORAGE_KEY = "foss-earth.compassHeightOffsetMeters";
-const POI_SPRITE_TUNER_VISIBLE_STORAGE_KEY = "foss-earth.poiSpriteTunerVisible";
-const COMPASS_SCALE_TUNER_VISIBLE_STORAGE_KEY = "foss-earth.compassScaleTunerVisible";
 
 type PerformanceMetricId = "fps" | "frame" | "p95" | "activeMeshes" | "drawCalls" | "tiles" | "culling" | "memory";
 
+/** How each toolbar reading is drawn; whether it is shown is `interface.performanceHud.<id>`. */
 interface PerformanceMetricDefinition {
   id: PerformanceMetricId;
   settingsLabel: string;
   tooltip: string;
-  defaultVisible: boolean;
   format(snapshot: PerformanceSnapshot): string | null;
 }
 
@@ -119,61 +112,52 @@ const PERFORMANCE_METRIC_DEFINITIONS: readonly PerformanceMetricDefinition[] = [
     id: "fps",
     settingsLabel: "FPS",
     tooltip: "Frames per second rendered by the map.",
-    defaultVisible: true,
     format: (snapshot) => `${Math.round(snapshot.fps)}fps`,
   },
   {
     id: "frame",
     settingsLabel: "Frame time",
     tooltip: "Average time spent rendering each frame.",
-    defaultVisible: false,
     format: (snapshot) => `${snapshot.frameMs.toFixed(1)}ms`,
   },
   {
     id: "p95",
     settingsLabel: "P95 frame time",
     tooltip: "95th percentile frame time over the recent sample window.",
-    defaultVisible: false,
     format: (snapshot) => `p95 ${snapshot.p95FrameMs.toFixed(1)}ms`,
   },
   {
     id: "activeMeshes",
     settingsLabel: "Active meshes (#⬟)",
     tooltip: "Babylon meshes currently active in the scene.",
-    defaultVisible: false,
     format: (snapshot) => `${snapshot.activeMeshes}⬟`,
   },
   {
     id: "drawCalls",
     settingsLabel: "Draw calls",
     tooltip: "GPU draw calls submitted for the current frame when the renderer exposes them.",
-    defaultVisible: false,
     format: (snapshot) => snapshot.drawCalls === null ? null : `d${snapshot.drawCalls}`,
   },
   {
     id: "tiles",
     settingsLabel: "Map tiles (#/#t)",
     tooltip: "Visible map tiles over active map tiles managed by the tile runtime.",
-    defaultVisible: false,
     format: (snapshot) => snapshot.tiles ? `${snapshot.tiles.visibleTiles}/${snapshot.tiles.activeTiles}t` : null,
   },
   {
     id: "culling",
     settingsLabel: "Culling",
     tooltip: "Visible tracked objects over total tracked objects after hemisphere culling.",
-    defaultVisible: false,
     format: (snapshot) => snapshot.culling.total > 0 ? `c${snapshot.culling.visible}/${snapshot.culling.total}` : null,
   },
   {
     id: "memory",
     settingsLabel: "Memory",
     tooltip: "Approximate JavaScript heap memory currently used by the page.",
-    defaultVisible: true,
     format: (snapshot) => snapshot.memoryMb === null ? null : `${Math.round(snapshot.memoryMb)}MB`,
   },
 ];
 
-const PERFORMANCE_METRIC_IDS = new Set<PerformanceMetricId>(PERFORMANCE_METRIC_DEFINITIONS.map((metric) => metric.id));
 
 function getLoadedBundleName(): string {
   const scripts = Array.from(document.querySelectorAll<HTMLScriptElement>("script[src]"));
@@ -214,113 +198,11 @@ function hydrateDeployShaLine(line: HTMLElement | null): void {
   });
 }
 
-function getGoogleApiKeyFromUrl(): string | null {
-  const searchParams = new URLSearchParams(window.location.search);
-  const key = searchParams.get("key") ?? searchParams.get("googleKey");
-  if (!key) {
-    return null;
-  }
-
-  const trimmed = key.trim();
-  return trimmed.length > 0 ? trimmed : null;
-}
-
-function getMapSourcePreferenceFromUrl(): string | null {
-  const searchParams = new URLSearchParams(window.location.search);
-  const value = (searchParams.get("mapSource") ?? searchParams.get("tiles") ?? "").trim().toLowerCase();
-  if (value === "google" || value === "google-3d-tiles") return "google";
-  if (value === "fallback" || value === "fallback-globe") return DEFAULT_RASTER_BASE_MAP_ID;
-  if (isKnownRasterBaseMapId(value)) return value;
-  return null;
-}
-
-function setMapSourcePreference(source: string): void {
-  const url = new URL(window.location.href);
-  url.searchParams.set("mapSource", source);
-  window.history.replaceState(null, "", url);
-}
-
-function getRendererForceFromUrl(): RendererMode | null {
-  const v = new URLSearchParams(window.location.search).get("renderer")?.toLowerCase() ?? "";
-  if (v === "webgpu") return "webgpu";
-  if (v === "webgl2") return "webgl2";
-  if (v === "webgl") return "webgl";
-  return null;
-}
-
-function setRendererForce(force: RendererMode | null): void {
-  if (force === null) {
-    clearRendererPreference();
-  }
-  const url = new URL(window.location.href);
-  if (force) url.searchParams.set("renderer", force);
-  else url.searchParams.delete("renderer");
-  window.location.assign(url.toString());
-}
-
-function getPerformanceMetricSettingsMarkup(): string {
-  return PERFORMANCE_METRIC_DEFINITIONS.map((metric) => `
-            <label class="settings-checkbox" title="${metric.tooltip}">
-              <input type="checkbox" data-perf-metric="${metric.id}" ${metric.defaultVisible ? "checked" : ""}>
-              <span>${metric.settingsLabel}</span>
-            </label>`).join("");
-}
-
-function getDefaultVisiblePerformanceMetrics(): Set<PerformanceMetricId> {
+function readVisiblePerformanceMetrics(): Set<PerformanceMetricId> {
+  const settings = getAppSettings();
   return new Set(PERFORMANCE_METRIC_DEFINITIONS
-    .filter((metric) => metric.defaultVisible)
+    .filter((metric) => settings.get(`interface.performanceHud.${metric.id}`) === true)
     .map((metric) => metric.id));
-}
-
-function isPerformanceMetricId(value: string | undefined): value is PerformanceMetricId {
-  return value !== undefined && PERFORMANCE_METRIC_IDS.has(value as PerformanceMetricId);
-}
-
-function loadPerformanceMetricVisibility(): Set<PerformanceMetricId> {
-  try {
-    const raw = window.localStorage.getItem(PERFORMANCE_METRIC_VISIBILITY_STORAGE_KEY);
-    if (!raw) return getDefaultVisiblePerformanceMetrics();
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return getDefaultVisiblePerformanceMetrics();
-
-    const visible = new Set<PerformanceMetricId>();
-    for (const value of parsed) {
-      if (typeof value === "string" && isPerformanceMetricId(value)) {
-        visible.add(value);
-      }
-    }
-    return visible;
-  } catch {
-    return getDefaultVisiblePerformanceMetrics();
-  }
-}
-
-function savePerformanceMetricVisibility(visibleMetrics: ReadonlySet<PerformanceMetricId>): void {
-  try {
-    const metricIds = PERFORMANCE_METRIC_DEFINITIONS
-      .filter((metric) => visibleMetrics.has(metric.id))
-      .map((metric) => metric.id);
-    window.localStorage.setItem(PERFORMANCE_METRIC_VISIBILITY_STORAGE_KEY, JSON.stringify(metricIds));
-  } catch {
-    // Ignore private-mode or restricted-storage failures; visibility still works for this session.
-  }
-}
-
-function loadCompassHeightOffset(): number {
-  try {
-    const raw = window.localStorage.getItem(COMPASS_HEIGHT_STORAGE_KEY);
-    if (raw === null) return COMPASS_HEIGHT_OFFSET_METERS;
-    const parsed = Number(raw);
-    return Number.isFinite(parsed) ? Math.max(-1000, Math.min(1000, parsed)) : COMPASS_HEIGHT_OFFSET_METERS;
-  } catch {
-    return COMPASS_HEIGHT_OFFSET_METERS;
-  }
-}
-
-function syncPerformanceMetricInputs(element: HTMLElement | null, visibleMetrics: ReadonlySet<PerformanceMetricId>): void {
-  element?.querySelectorAll<HTMLInputElement>("[data-perf-metric]").forEach((input) => {
-    input.checked = isPerformanceMetricId(input.dataset.perfMetric) && visibleMetrics.has(input.dataset.perfMetric);
-  });
 }
 
 function renderPerformanceChips(
@@ -429,65 +311,13 @@ export async function createGlobeApp(
       </div>
 
       <div id="settingsSectionsHolder" hidden>
-        <div id="settingsToolbarSection" class="settings-section-content">
-          <div class="settings-metric-menu" aria-label="Toolbar buttons">
-            <label class="settings-checkbox" title="Show the ? button that opens the controls help.">
-              <input type="checkbox" data-hud-button="help">
-              <span>Help (?)</span>
-            </label>
-            <label class="settings-checkbox" title="Show the \u2699 button that opens this tab.">
-              <input type="checkbox" data-hud-button="settings">
-              <span>Settings (\u2699)</span>
-            </label>
-            <label class="settings-checkbox" title="Show the light and dark theme button.">
-              <input type="checkbox" data-hud-button="theme">
-              <span>Theme</span>
-            </label>
-            <label class="settings-checkbox" title="Show the input method button, which opens the Controls tab.">
-              <input type="checkbox" data-hud-button="inputMode">
-              <span>Input method</span>
-            </label>
-          </div>
-          <p class="settings-line">Settings stays available from + in either panel.</p>
-        </div>
-
-        <div id="settingsCameraSection" class="settings-section-content">
+        <div id="settingsCameraLines" class="settings-section-content">
           <p class="settings-line">Camera model: state-driven orbit geometry.</p>
           <p class="settings-line">Pitch: 0\u00B0\u202F=\u202Fhorizon, 90\u00B0\u202F=\u202Fstraight down.</p>
-          <div class="settings-metric-menu">
-            <label class="settings-checkbox" title="Drag the globe so the point under your cursor stays grabbed, like Google Earth. When off, pan uses a flat screen translation instead. Enabled by default.">
-              <input type="checkbox" id="globeAnchorRotationToggle" checked>
-              <span>Globe anchor rotation pan</span>
-            </label>
-            <label class="settings-slider-row">
-              <span style="display:flex;justify-content:space-between">
-                <span>Compass orbit height</span>
-                <span id="compassHeightValue"></span>
-              </span>
-              <input id="compassHeightSlider" type="range" min="-1000" max="1000" step="10">
-            </label>
-          </div>
         </div>
 
         <div id="controlsInputMethodSection" class="settings-section-content"></div>
         <div id="controlsControllerSection" class="settings-section-content"></div>
-
-        <div id="settingsPerformanceSection" class="settings-section-content">
-          <div id="settingsPerformanceMetrics" class="settings-metric-menu" aria-label="Performance HUD visibility">
-            <div class="settings-section-title">Performance HUD</div>${getPerformanceMetricSettingsMarkup()}
-          </div>
-          <div class="settings-metric-menu">
-            <div class="settings-section-title">Extra Panels</div>
-            <label class="settings-checkbox" title="Show the POI sprite size tuner panel at the bottom-right of the map.">
-              <input type="checkbox" id="poiSpriteTunerToggle">
-              <span>POI sprite size tuner</span>
-            </label>
-            <label class="settings-checkbox" title="Show the compass scale tuner panel at the bottom-right of the map.">
-              <input type="checkbox" id="compassScaleTunerToggle">
-              <span>Compass scale tuner</span>
-            </label>
-          </div>
-        </div>
 
         <div id="settingsAboutSection" class="settings-section-content">
           <p id="settingsBuildLine" class="settings-line">Build: ${BUILD_TIME}</p>
@@ -564,7 +394,9 @@ export async function createGlobeApp(
     gameLog.print({ text, tone });
   };
 
-  const configuredBaseMap = resolveRasterBaseMapSource(options.baseMap ?? DEFAULT_RASTER_BASE_MAP_ID);
+  // One registry for the page: the map source, renderer and every other
+  // parameter below are read from it and follow it.
+  const settings = getAppSettings();
 
   let onMapStatus: ((status: BabylonRuntime["status"]) => void) | null = null;
   const applyRuntimeStatus = (status: BabylonRuntime["status"]): void => {
@@ -582,30 +414,30 @@ export async function createGlobeApp(
     }
   };
 
-  const sourcePreference = getMapSourcePreferenceFromUrl();
-  const urlGoogleApiKey = options.googleApiKey ?? getGoogleApiKeyFromUrl();
-  const shouldUseGoogle = sourcePreference === "google"
-    || (!sourcePreference && options.preferGoogleTiles !== false && Boolean(urlGoogleApiKey));
-  const rasterBaseMap = shouldUseGoogle
-    ? configuredBaseMap
-    : resolveRasterBaseMapSource(sourcePreference ?? configuredBaseMap);
-  const rendererForce = getRendererForceFromUrl();
-  const mapSearchParams = new URLSearchParams(window.location.search);
-  const terrainSource = resolveTerrainSource(options.terrainSource ?? getTerrainSourcePreferenceFromSearchParams(mapSearchParams));
-  const rasterQuality = options.rasterQuality ?? getRasterQualityPreferenceFromSearchParams(mapSearchParams);
-  const rasterImagery = getRasterImageryPreferenceFromSearchParams(mapSearchParams);
+  const mapConfig = resolveMapRuntimeConfig({
+    googleApiKey: options.googleApiKey,
+    baseMap: options.baseMap,
+    preferGoogleTiles: options.preferGoogleTiles,
+    terrainSource: options.terrainSource,
+    rasterQuality: options.rasterQuality,
+    settings,
+  });
 
   const runtime = await createBabylonRuntime(canvas, {
-    googleApiKey: urlGoogleApiKey,
-    preferGoogleTiles: shouldUseGoogle,
-    rasterBaseMap,
-    terrainSource,
-    rasterQuality,
-    rasterImagery,
+    googleApiKey: mapConfig.googleApiKey,
+    preferGoogleTiles: mapConfig.preferGoogleTiles,
+    rasterBaseMap: mapConfig.rasterBaseMap,
+    terrainSource: mapConfig.terrainSource,
+    rasterQuality: mapConfig.rasterQuality,
+    rasterImagery: mapConfig.rasterImagery,
     getSurfaceHeightMeters: options.getSurfaceHeightMeters,
-    rendererForce,
     onStatusChange: applyRuntimeStatus,
+    settings,
   });
+  const compassHeightOffset = (): number => {
+    const value = settings.get("visualization.compass.heightOffset");
+    return typeof value === "number" ? value : 0;
+  };
   const layerContext: GlobeLayerContext = {
     scene: runtime.scene,
     engine: runtime.engine,
@@ -618,11 +450,11 @@ export async function createGlobeApp(
   const anchorHeights = createAnchorHeightResolver({
     provider: resolveSurfaceHeightMeters,
     cacheProviderSamples: false,
-    heightOffsetMeters: loadCompassHeightOffset(),
+    heightOffsetMeters: compassHeightOffset(),
   });
   runtime.configureOrbitTargetHeight({
     resolveSurfaceHeightMeters: anchorHeights.resolveHeight,
-    initialOffsetMeters: loadCompassHeightOffset(),
+    initialOffsetMeters: compassHeightOffset(),
   });
   const registry = createLayerRegistry(layerContext, poiTracking, culling, anchorHeights);
   // Layer add/remove mutates scene contents (meshes, sprites); wrap so the
@@ -654,7 +486,7 @@ export async function createGlobeApp(
   const toggleTab = (tabId: Parameters<WindowOverlayHandle["toggleTab"]>[0]): void => {
     options.overlayApiRef?.current?.toggleTab(tabId);
   };
-  const rendererPanel = createRendererPanel({ renderer: runtime.renderer, onChange: setRendererForce });
+  const rendererPanel = createRendererPanel({ renderer: runtime.renderer, onChange: force => applyRendererChoice(force, settings), settings });
   // One detail controller: the HUD rail and the Map tab's Detail group both
   // observe it, and it is the only writer of the renderer's detail target.
   const mapDetail: MapDetailController = options.mapDetail ?? createMapDetailController();
@@ -663,14 +495,10 @@ export async function createGlobeApp(
     detail: mapDetail,
     rasterSources: RASTER_BASE_MAP_SOURCES,
     terrainSources: TERRAIN_SOURCES,
-    onMapSourceChange: (selected) => {
-      runtime.setMapSource(selected === "google" ? "google" : resolveRasterBaseMapSource(selected));
-      setMapSourcePreference(selected);
-    },
-    onTerrainSourceChange: (selected) => {
-      runtime.setTerrainSource(resolveTerrainSource(selected));
-      setTerrainSourcePreference(selected);
-    },
+    settings,
+    // The runtime follows map.source.*: saving the choice switches the map.
+    onMapSourceChange: (selected) => setMapSourcePreference(selected, settings),
+    onTerrainSourceChange: (selected) => setTerrainSourcePreference(selected, settings),
   });
 
   // The map source sits at the bar's right end: the basemap's name and credit
@@ -698,76 +526,23 @@ export async function createGlobeApp(
   const settingsBtnEl = rootElement.querySelector<HTMLButtonElement>("#settingsButton");
   const themeBtnEl = rootElement.querySelector<HTMLButtonElement>("#themeButton");
   const themeBtnIconEl = themeBtnEl?.querySelector<HTMLElement>(".theme-button-icon") ?? null;
-  const settingsPerformanceMetricsEl = rootElement.querySelector<HTMLElement>("#settingsPerformanceMetrics");
-  const compassHeightSliderEl = rootElement.querySelector<HTMLInputElement>("#compassHeightSlider");
-  const compassHeightValueEl = rootElement.querySelector<HTMLElement>("#compassHeightValue");
   const poiExitBtnEl = rootElement.querySelector<HTMLButtonElement>("#poiExitBtn");
   const extraPanelsGridEl = rootElement.querySelector<HTMLElement>("#extraPanelsGrid");
-  const poiSpriteTunerToggleEl = rootElement.querySelector<HTMLInputElement>("#poiSpriteTunerToggle");
-  const compassScaleTunerToggleEl = rootElement.querySelector<HTMLInputElement>("#compassScaleTunerToggle");
-  const globeAnchorRotationToggleEl = rootElement.querySelector<HTMLInputElement>("#globeAnchorRotationToggle");
 
   const statusHud: StatusHudHandle | null = hudStatusEl ? createStatusHud(hudStatusEl) : null;
   const northButton: NorthButtonHandle | null = northBtnSvgEl ? createNorthButton(northBtnSvgEl) : null;
   const helpModal: HelpModalHandle | null = helpModalEl ? createHelpModal(helpModalEl) : null;
 
-  let visiblePerformanceMetrics = loadPerformanceMetricVisibility();
+  let visiblePerformanceMetrics = readVisiblePerformanceMetrics();
   let lastPerfSnapshot: PerformanceSnapshot | null = null;
-  syncPerformanceMetricInputs(settingsPerformanceMetricsEl, visiblePerformanceMetrics);
 
-  if (compassHeightSliderEl) {
-    const storedHeight = loadCompassHeightOffset();
-    compassHeightSliderEl.value = String(storedHeight);
-    if (compassHeightValueEl) compassHeightValueEl.textContent = `${storedHeight}m`;
-  }
-
-  if (globeAnchorRotationToggleEl) {
-    globeAnchorRotationToggleEl.checked = runtime.getGlobeAnchorRotation?.()
-      ?? loadGlobeAnchorRotationPreference();
-  }
-  const onGlobeAnchorRotationToggleChange = (): void => {
-    if (!globeAnchorRotationToggleEl) return;
-    runtime.setGlobeAnchorRotation?.(globeAnchorRotationToggleEl.checked);
-  };
-  globeAnchorRotationToggleEl?.addEventListener("change", onGlobeAnchorRotationToggleChange);
-
-  // ── POI sprite size tuner ─────────────────────────────────────
-  function loadPoiSpriteTunerVisible(): boolean {
-    try {
-      return window.localStorage.getItem(POI_SPRITE_TUNER_VISIBLE_STORAGE_KEY) === "true";
-    } catch { return false; }
-  }
-  function savePoiSpriteTunerVisible(visible: boolean): void {
-    try { window.localStorage.setItem(POI_SPRITE_TUNER_VISIBLE_STORAGE_KEY, String(visible)); } catch { /* ignore */ }
-  }
-  let poiSpriteTunerVisible = loadPoiSpriteTunerVisible();
+  // ── Debug panels ──────────────────────────────────────────────
   const spriteTuner = extraPanelsGridEl
     ? createPoiSpriteSizeTuner(extraPanelsGridEl, (params) => {
         options.onPoiSpriteSizeChange?.(params);
         runtime.requestRender();
       })
     : null;
-  if (poiSpriteTunerVisible) spriteTuner?.show(); else spriteTuner?.hide();
-  if (poiSpriteTunerToggleEl) poiSpriteTunerToggleEl.checked = poiSpriteTunerVisible;
-
-  const onPoiSpriteTunerToggleChange = (): void => {
-    if (!poiSpriteTunerToggleEl) return;
-    poiSpriteTunerVisible = poiSpriteTunerToggleEl.checked;
-    savePoiSpriteTunerVisible(poiSpriteTunerVisible);
-    if (poiSpriteTunerVisible) spriteTuner?.show(); else spriteTuner?.hide();
-  };
-  poiSpriteTunerToggleEl?.addEventListener("change", onPoiSpriteTunerToggleChange);
-
-  // ── Compass scale tuner ───────────────────────────────────────
-  function loadCompassScaleTunerVisible(): boolean {
-    try {
-      return window.localStorage.getItem(COMPASS_SCALE_TUNER_VISIBLE_STORAGE_KEY) === "true";
-    } catch { return false; }
-  }
-  function saveCompassScaleTunerVisible(visible: boolean): void {
-    try { window.localStorage.setItem(COMPASS_SCALE_TUNER_VISIBLE_STORAGE_KEY, String(visible)); } catch { /* ignore */ }
-  }
-  let compassScaleTunerVisible = loadCompassScaleTunerVisible();
   const compassScaleTuner = extraPanelsGridEl
     ? createCompassScaleTuner(extraPanelsGridEl, (params) => {
         orbitCompass.setScaleParams(params);
@@ -775,16 +550,11 @@ export async function createGlobeApp(
         runtime.requestRender();
       })
     : null;
-  if (compassScaleTunerVisible) compassScaleTuner?.show(); else compassScaleTuner?.hide();
-  if (compassScaleTunerToggleEl) compassScaleTunerToggleEl.checked = compassScaleTunerVisible;
-
-  const onCompassScaleTunerToggleChange = (): void => {
-    if (!compassScaleTunerToggleEl) return;
-    compassScaleTunerVisible = compassScaleTunerToggleEl.checked;
-    saveCompassScaleTunerVisible(compassScaleTunerVisible);
-    if (compassScaleTunerVisible) compassScaleTuner?.show(); else compassScaleTuner?.hide();
+  const showTuners = (): void => {
+    if (settings.get("interface.poiSpriteTuner") === true) spriteTuner?.show(); else spriteTuner?.hide();
+    if (settings.get("interface.compassScaleTuner") === true) compassScaleTuner?.show(); else compassScaleTuner?.hide();
   };
-  compassScaleTunerToggleEl?.addEventListener("change", onCompassScaleTunerToggleChange);
+  showTuners();
 
   const inputModeHud: InputModeHudHandle | null = themeBtnEl
     ? createInputModeHud(rootElement, themeBtnEl, {
@@ -796,40 +566,48 @@ export async function createGlobeApp(
 
   const onRendererPillClick = (): void => toggleTab("renderer");
   const onStatusClick = (): void => toggleTab("location");
-  const onPerformanceMetricChange = (e: Event): void => {
-    const input = (e.target as HTMLElement).closest<HTMLInputElement>("[data-perf-metric]");
-    if (!input || !isPerformanceMetricId(input.dataset.perfMetric)) return;
-
-    const nextVisibleMetrics = new Set(visiblePerformanceMetrics);
-    if (input.checked) {
-      nextVisibleMetrics.add(input.dataset.perfMetric);
-    } else {
-      nextVisibleMetrics.delete(input.dataset.perfMetric);
-    }
-
-    visiblePerformanceMetrics = nextVisibleMetrics;
-    savePerformanceMetricVisibility(visiblePerformanceMetrics);
-    if (lastPerfSnapshot && perfMetricsPill) {
-      renderPerformanceChips(perfMetricsPill, lastPerfSnapshot, visiblePerformanceMetrics);
-    }
-  };
-
   rendererModePill?.addEventListener("click", onRendererPillClick);
   hudStatusEl?.addEventListener("click", onStatusClick);
-  settingsPerformanceMetricsEl?.addEventListener("change", onPerformanceMetricChange);
 
-  const onCompassHeightInput = (): void => {
-    if (!compassHeightSliderEl) return;
-    const meters = Number(compassHeightSliderEl.value);
-    if (compassHeightValueEl) compassHeightValueEl.textContent = `${meters}m`;
+  // The app follows its parameters wherever they are changed: their sections,
+  // Show all parameters, an import or another tab.
+  const hudButtonElements: Record<HudButtonId, HTMLElement | null> = {
+    help: helpBtnEl,
+    settings: settingsBtnEl,
+    theme: themeBtnEl,
+    inputMode: rootElement.querySelector<HTMLElement>(".input-mode-control"),
+  };
+  // The toolbar buttons stay on by default: a first-time visitor may not know
+  // that + opens the same things. Hiding one never hides its content, because
+  // every one of them has a home in these sections or under +.
+  const applyHudButtonVisibility = (): void => {
+    const visibility = loadHudButtonVisibility();
+    for (const id of HUD_BUTTON_IDS) {
+      const element = hudButtonElements[id];
+      if (element) element.hidden = !visibility[id];
+    }
+  };
+  applyHudButtonVisibility();
+  const applyCompassHeight = (): void => {
+    const meters = compassHeightOffset();
     anchorHeights.setHeightOffset(meters);
     runtime.configureOrbitTargetHeight({
       resolveSurfaceHeightMeters: anchorHeights.resolveHeight,
       initialOffsetMeters: meters,
     });
-    try { window.localStorage.setItem(COMPASS_HEIGHT_STORAGE_KEY, String(meters)); } catch { /* ignore */ }
   };
-  compassHeightSliderEl?.addEventListener("input", onCompassHeightInput);
+  const stopWatchingSettings = [
+    ...HUD_BUTTON_IDS.map(id => settings.watch(hudButtonParameterId(id), applyHudButtonVisibility)),
+    ...PERFORMANCE_HUD_METRICS.map(([metric]) => settings.watch(`interface.performanceHud.${metric}`, () => {
+      visiblePerformanceMetrics = readVisiblePerformanceMetrics();
+      if (lastPerfSnapshot && perfMetricsPill) renderPerformanceChips(perfMetricsPill, lastPerfSnapshot, visiblePerformanceMetrics);
+    })),
+    settings.watch("interface.poiSpriteTuner", showTuners),
+    settings.watch("interface.compassScaleTuner", showTuners),
+    settings.watch("visualization.compass.heightOffset", applyCompassHeight),
+    settings.watch("input.globeAnchorRotation", value => runtime.setGlobeAnchorRotation?.(value === true)),
+    ...INPUT_SENSITIVITY_IDS.map(id => settings.watch(id, () => runtime.setInputSensitivity?.(loadInputSensitivityPreference()))),
+  ];
 
   const resetNorth = (): void => {
     poiTracking.exitTracking();
@@ -867,57 +645,65 @@ export async function createGlobeApp(
     : null;
   const openControllerBindings = (): void => options.overlayApiRef?.current?.openOrSelectTab("controls");
 
-  // ── Settings tab ──────────────────────────────────────────────
-  // The toolbar buttons stay on by default: a first-time visitor may not know
-  // that + opens the same things. Hiding one here never hides its content,
-  // because every one of them has a home in these sections or under +.
-  const settingsToolbarEl = rootElement.querySelector<HTMLElement>("#settingsToolbarSection");
-  const hudButtonElements: Record<HudButtonId, HTMLElement | null> = {
-    help: helpBtnEl,
-    settings: settingsBtnEl,
-    theme: themeBtnEl,
-    inputMode: rootElement.querySelector<HTMLElement>(".input-mode-control"),
-  };
-  let hudButtonVisibility = loadHudButtonVisibility();
-  const applyHudButtonVisibility = (): void => {
-    for (const id of HUD_BUTTON_IDS) {
-      const element = hudButtonElements[id];
-      if (element) element.hidden = !hudButtonVisibility[id];
-      const input = settingsToolbarEl?.querySelector<HTMLInputElement>(`[data-hud-button="${id}"]`);
-      if (input) input.checked = hudButtonVisibility[id];
-    }
-  };
-  const onHudButtonToggle = (event: Event): void => {
-    const input = event.target;
-    if (!(input instanceof HTMLInputElement)) return;
-    const id = input.dataset.hudButton as HudButtonId | undefined;
-    if (!id || !HUD_BUTTON_IDS.includes(id)) return;
-    hudButtonVisibility = { ...hudButtonVisibility, [id]: input.checked };
-    saveHudButtonVisibility(hudButtonVisibility);
-    applyHudButtonVisibility();
-  };
-  applyHudButtonVisibility();
-  settingsToolbarEl?.addEventListener("change", onHudButtonToggle);
-
   const inputMethodSectionEl = rootElement.querySelector<HTMLElement>("#controlsInputMethodSection");
   const unmountInlineInputMode = inputMethodSectionEl ? inputModeHud?.mountInline(inputMethodSectionEl) : undefined;
 
-  const sectionsFrom = (entries: ReadonlyArray<readonly [string, string, string, boolean]>): PanelSection[] =>
-    entries.flatMap(([id, title, selector, defaultOpen]) => {
-      const element = rootElement.querySelector<HTMLElement>(selector);
-      return element ? [{ id, title, element, defaultOpen }] : [];
-    });
+  // ── Settings and Controls tabs ───────────────────────────────
+  // Each section draws its parameters' controls and, under Show all
+  // parameters, every parameter homed in it.
+  const parameterSections: ParameterSectionHandle[] = [];
+  const parameterControls: ParameterControlHandle[] = [];
+  const sectionOf = (tab: string, section: string, extra: Omit<Parameters<typeof createParameterSection>[1], "tab" | "section"> = {}): HTMLElement => {
+    const handle = createParameterSection(settings, { tab, section, ...extra });
+    parameterSections.push(handle);
+    return handle.element;
+  };
+  const note = (text: string): HTMLElement => {
+    const line = document.createElement("p");
+    line.className = "settings-line";
+    line.textContent = text;
+    return line;
+  };
+  const group = (heading: string, ids: readonly string[]): HTMLElement => {
+    const element = document.createElement("div");
+    element.className = "settings-metric-menu";
+    const title = document.createElement("div");
+    title.className = "settings-section-title";
+    title.textContent = heading;
+    element.append(title);
+    for (const id of ids) {
+      const control = createParameterControl(settings, id);
+      parameterControls.push(control);
+      element.append(control.element);
+    }
+    return element;
+  };
+  const performanceIds = PERFORMANCE_HUD_METRICS.map(([metric]) => `interface.performanceHud.${metric}`);
+  const performanceMain = document.createElement("div");
+  performanceMain.className = "settings-section-content";
+  performanceMain.append(
+    group("Performance HUD", performanceIds),
+    group("Extra panels", ["interface.poiSpriteTuner", "interface.compassScaleTuner"]),
+  );
+  const savedSettings = createSavedSettingsSection(settings);
+  const inputMethodElement = inputMethodSectionEl
+    ? sectionOf("controls", "input-method", { main: inputMethodSectionEl, covers: ["input.mode", ...INPUT_SENSITIVITY_IDS] })
+    : null;
+  const controllerSectionElement = rootElement.querySelector<HTMLElement>("#controlsControllerSection");
+  const aboutElement = rootElement.querySelector<HTMLElement>("#settingsAboutSection");
   // The input-method button lands here, so its section starts open.
-  const controlsSections = sectionsFrom([
-    ["input-method", "Input method", "#controlsInputMethodSection", true],
-    ["controller", "Controller", "#controlsControllerSection", false],
-  ]);
-  const settingsSections = sectionsFrom([
-    ["toolbar", "Toolbar", "#settingsToolbarSection", false],
-    ["camera", "Camera", "#settingsCameraSection", false],
-    ["performance", "Performance debug", "#settingsPerformanceSection", false],
-    ["about", "About", "#settingsAboutSection", false],
-  ]);
+  const controlsSections: PanelSection[] = [
+    ...(inputMethodElement ? [{ id: "input-method", title: "Input method", element: inputMethodElement, defaultOpen: true }] : []),
+    { id: "orbit", title: settings.getSectionTitle("controls", "orbit"), element: sectionOf("controls", "orbit"), defaultOpen: false },
+    ...(controllerSectionElement ? [{ id: "controller", title: "Controller", element: controllerSectionElement, defaultOpen: false }] : []),
+  ];
+  const settingsSections: PanelSection[] = [
+    { id: "toolbar", title: "Toolbar", element: sectionOf("settings", "toolbar", { footer: note("Settings stays available from + in either panel.") }), defaultOpen: false },
+    { id: "camera", title: "Camera", element: sectionOf("settings", "camera", { main: rootElement.querySelector<HTMLElement>("#settingsCameraLines") ?? undefined }), defaultOpen: false },
+    { id: "performance", title: "Performance debug", element: sectionOf("settings", "performance", { main: performanceMain, covers: [...performanceIds, "interface.poiSpriteTuner", "interface.compassScaleTuner"] }), defaultOpen: false },
+    { id: "saved-settings", title: "Saved settings", element: savedSettings.element, defaultOpen: false },
+    ...(aboutElement ? [{ id: "about", title: "About", element: aboutElement, defaultOpen: false }] : []),
+  ];
   void gamepadStore.listProfileIds("foss-earth").then(async (ids) => {
     const stored = ids.length > 0 ? await gamepadStore.loadProfile("foss-earth", ids[0]) : null;
     if (!stored || stored.hostNamespace !== "foss-earth") {
@@ -1067,7 +853,10 @@ export async function createGlobeApp(
       northButton?.destroy();
       helpModal?.destroy();
       settingsBtnEl?.removeEventListener("click", onSettingsButtonClick);
-      settingsToolbarEl?.removeEventListener("change", onHudButtonToggle);
+      for (const stop of stopWatchingSettings) stop();
+      for (const section of parameterSections) section.destroy();
+      for (const control of parameterControls) control.destroy();
+      savedSettings.destroy();
       unmountInlineInputMode?.();
       spriteTuner?.destroy();
       compassScaleTuner?.destroy();
@@ -1086,11 +875,6 @@ export async function createGlobeApp(
       disconnectMapDetail();
       if (!options.mapDetail) mapDetail.dispose();
       rendererPanel.destroy();
-      settingsPerformanceMetricsEl?.removeEventListener("change", onPerformanceMetricChange);
-      compassHeightSliderEl?.removeEventListener("input", onCompassHeightInput);
-      poiSpriteTunerToggleEl?.removeEventListener("change", onPoiSpriteTunerToggleChange);
-      compassScaleTunerToggleEl?.removeEventListener("change", onCompassScaleTunerToggleChange);
-      globeAnchorRotationToggleEl?.removeEventListener("change", onGlobeAnchorRotationToggleChange);
       themeBtnEl?.removeEventListener("click", onThemeButtonClick);
       offThemeChangeForButton();
       offRendererActivity();

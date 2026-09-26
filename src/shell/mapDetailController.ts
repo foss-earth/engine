@@ -1,32 +1,42 @@
 import {
   copyDetailPolicy,
   clampDetailValue,
-  DEFAULT_GOOGLE_DETAIL_POLICY,
-  DEFAULT_RASTER_DETAIL_POLICY,
   detailKindOfKey,
   GOOGLE_DETAIL_KEY,
   GOOGLE_ERROR_TARGET_BOUNDS,
   isValidDetailPolicy,
   readDeviceHints,
   resolveDetailDefault,
+  type DetailKind,
   type DetailLimit,
   type DetailPolicy,
   type DetailRecommendationContext,
   type DetailState,
+  type DetailTrackMarker,
   type DeviceHints,
   type GoogleDetailPolicy,
   type GoogleRecommendationPolicy,
   type RasterDetailPolicy,
 } from "../terrain/mapDetailPolicy";
+import { getAppSettings } from "../settings/appSettings";
+import { FOSS_EARTH_MIGRATIONS } from "../settings/catalogue";
+import { MAP_DETAIL_PARAMETERS } from "../settings/catalogue/map";
+import { createSettingsRegistry, type SettingsRegistry, type SettingsStorage } from "../settings/registry";
+import type { NumberRange, ParameterValue } from "../settings/types";
 
-/** One versioned record per browser origin, keyed by source. */
+/**
+ * @deprecated The record before the settings registry. It is migrated once into
+ * the `map.detail.*` parameters and left in place for rollback.
+ */
 export const MAP_DETAIL_STORAGE_KEY = "foss-earth.map-detail.v1";
-const RECORD_VERSION = 1;
 
-export interface MapDetailStorage {
-  getItem(key: string): string | null;
-  setItem(key: string, value: string): void;
-}
+export type MapDetailStorage = SettingsStorage;
+
+/** The parameters that hold each kind's policy. */
+export const MAP_DETAIL_PARAMETER_IDS = {
+  google: { range: "map.detail.google.range", default: "map.detail.google.default" },
+  raster: { range: "map.detail.imagery.range", default: "map.detail.imagery.default" },
+} as const;
 
 export interface MapDetailActiveSource {
   /** "google" or "raster:<stable source id>". */
@@ -59,17 +69,19 @@ export interface MapDetailRequirement {
 export type MapDetailSeedResult = "saved" | "unsaved" | "exists" | "forced" | "invalid";
 
 export interface MapDetailControllerOptions {
+  /** The registry that holds the `map.detail.*` parameters. The app's when omitted. */
+  settings?: SettingsRegistry;
   /**
-   * Where policies persist. Omitted, the browser's localStorage when it can be
-   * reached; null keeps everything in memory.
+   * A private registry over this storage instead of the app's, for tests and
+   * embedded hosts; null keeps it in memory. Ignored when `settings` is given.
    */
   storage?: MapDetailStorage | null;
   /**
-   * Host policies that win over saved ones on every load. They are not saved;
-   * a user edit applies until the next load. Keyed like states.
+   * Host policies that win over saved and edited ones while this controller
+   * lives. They are never saved. Keyed like states.
    */
   forcedPolicies?: Readonly<Record<string, DetailPolicy>>;
-  /** Registered defaults, used when neither a forced, saved nor seeded policy exists. */
+  /** The app's defaults, used when neither a forced nor a saved policy exists. */
   defaults?: {
     google?: GoogleDetailPolicy;
     raster?: RasterDetailPolicy;
@@ -112,6 +124,14 @@ export interface MapDetailController {
   getStorageError(): string | null;
   /** The recommendation a Google "Recommended" default uses in this app. */
   getGoogleRecommendation(): GoogleRecommendationPolicy;
+  /** The registry holding the policies, for the Map tab's parameter list. */
+  readonly settings: SettingsRegistry;
+  /**
+   * A host's marker on a detail track, such as a flight's minimum. Setting a
+   * marker with an existing id replaces it. Returns a function that removes it.
+   */
+  setTrackMarker(marker: DetailTrackMarker): () => void;
+  removeTrackMarker(id: string): void;
   setActiveSource(source: MapDetailActiveSource | null): void;
   setRecommendationContext(context: Partial<Pick<DetailRecommendationContext, "rendererDefaultErrorPx" | "rendererMode">>): void;
   reportDelivery(key: string, delivery: MapDetailDelivery | null): void;
@@ -121,14 +141,6 @@ export interface MapDetailController {
 interface Lease {
   errorPx: number;
   active: boolean;
-}
-
-function defaultStorage(): MapDetailStorage | null {
-  try {
-    return typeof window === "undefined" ? null : window.localStorage;
-  } catch {
-    return null;
-  }
 }
 
 function sanitizeErrorPx(errorPx: number): number {
@@ -142,94 +154,91 @@ function sameLimits(a: readonly DetailLimit[], b: readonly DetailLimit[]): boole
 
 const LIMIT_ORDER: readonly DetailLimit[] = ["consumer", "source", "backend", "memory", "loading"];
 
-export function createMapDetailController(options: MapDetailControllerOptions = {}): MapDetailController {
-  const storage = options.storage === undefined ? defaultStorage() : options.storage;
-  let storageError: string | null = storage === null && options.storage === undefined
-    ? "Browser storage is unavailable, so detail settings last only until the page reloads."
-    : null;
-  const deviceHints = options.deviceHints ?? readDeviceHints;
-  const googleRecommendation = options.googleRecommendation ?? "renderer-default";
-  const defaults = {
-    google: options.defaults?.google && isValidDetailPolicy(options.defaults.google, "google")
-      ? options.defaults.google
-      : { ...DEFAULT_GOOGLE_DETAIL_POLICY, defaultValue: { mode: "recommended", policy: googleRecommendation } } as GoogleDetailPolicy,
-    raster: options.defaults?.raster && isValidDetailPolicy(options.defaults.raster, "raster") ? options.defaults.raster : DEFAULT_RASTER_DETAIL_POLICY,
+function asRange(value: ParameterValue): NumberRange | null {
+  return typeof value === "object" && value !== null ? value : null;
+}
+
+/** The parameters' values for a policy. */
+export function detailPolicyValues(policy: DetailPolicy): Record<string, ParameterValue> {
+  if (policy.kind === "google") {
+    return {
+      [MAP_DETAIL_PARAMETER_IDS.google.range]: { min: policy.finestErrorPx, max: policy.coarsestErrorPx },
+      [MAP_DETAIL_PARAMETER_IDS.google.default]: typeof policy.defaultValue === "number" ? policy.defaultValue : policy.defaultValue.policy,
+    };
+  }
+  return {
+    [MAP_DETAIL_PARAMETER_IDS.raster.range]: { min: policy.coarseOffset, max: policy.fineOffset },
+    [MAP_DETAIL_PARAMETER_IDS.raster.default]: policy.defaultValue,
   };
-  const forced = new Map<string, DetailPolicy>();
+}
+
+/**
+ * A policy from its parameters' values. A default outside the range (which
+ * separate URL values can produce) is clamped to it, so the policy is valid.
+ */
+export function detailPolicyFromValues(kind: DetailKind, range: ParameterValue, fallback: ParameterValue): DetailPolicy | null {
+  const span = asRange(range);
+  if (!span) return null;
+  if (kind === "google") {
+    const defaultValue = typeof fallback === "number"
+      ? Math.max(span.min, Math.min(span.max, fallback))
+      : { mode: "recommended" as const, policy: fallback === "device-hints" ? "device-hints" as const : "renderer-default" as const };
+    return { kind, finestErrorPx: span.min, coarsestErrorPx: span.max, defaultValue };
+  }
+  const normal = fallback === "normal" && span.min <= 0 && span.max >= 0;
+  const value = typeof fallback === "number" ? fallback : 0;
+  return { kind, coarseOffset: span.min, fineOffset: span.max, defaultValue: normal ? "normal" : Math.max(span.min, Math.min(span.max, value)) };
+}
+
+function privateRegistry(storage: MapDetailStorage | null): SettingsRegistry {
+  const registry = createSettingsRegistry({ storage });
+  registry.register(MAP_DETAIL_PARAMETERS.filter(spec => spec.id.startsWith("map.detail.") && spec.kind !== "choice"));
+  registry.migrateLegacy(FOSS_EARTH_MIGRATIONS.filter(migration => migration.key === MAP_DETAIL_STORAGE_KEY));
+  return registry;
+}
+
+export function createMapDetailController(options: MapDetailControllerOptions = {}): MapDetailController {
+  const settings = options.settings ?? (options.storage !== undefined ? privateRegistry(options.storage) : getAppSettings());
+  const deviceHints = options.deviceHints ?? readDeviceHints;
+  const hostDefaultReason = "the app's default";
+  for (const kind of ["google", "raster"] as const) {
+    const policy = options.defaults?.[kind];
+    if (!policy || !isValidDetailPolicy(policy, kind)) continue;
+    for (const [id, value] of Object.entries(detailPolicyValues(policy))) settings.setHostDefault(id, value, hostDefaultReason);
+  }
+  if (options.googleRecommendation && !options.defaults?.google) {
+    settings.setHostDefault(MAP_DETAIL_PARAMETER_IDS.google.default, options.googleRecommendation, `the app recommends ${options.googleRecommendation === "device-hints" ? "from device hints" : "the renderer's target"}`);
+  }
+  const releaseForced: Array<() => void> = [];
+  const forcedKinds = new Set<DetailKind>();
   for (const [key, policy] of Object.entries(options.forcedPolicies ?? {})) {
     const kind = detailKindOfKey(key);
-    if (kind && isValidDetailPolicy(policy, kind)) forced.set(key, copyDetailPolicy(policy));
+    if (!kind || !isValidDetailPolicy(policy, kind) || forcedKinds.has(kind)) continue;
+    forcedKinds.add(kind);
+    for (const [id, value] of Object.entries(detailPolicyValues(policy))) releaseForced.push(settings.force(id, value, "set by the app"));
   }
 
-  const saved = readSavedPolicies();
-  // The policy in force per key once anything has touched it this session.
-  const policies = new Map<string, DetailPolicy>();
   const overrides = new Map<string, number>();
   const deliveries = new Map<string, MapDetailDelivery>();
   const leases = new Set<Lease>();
+  const markers = new Map<string, DetailTrackMarker>();
   const listeners = new Set<(state: DetailState | null) => void>();
   let active: MapDetailActiveSource | null = null;
   let context: DetailRecommendationContext = { rendererDefaultErrorPx: null, rendererMode: null, deviceHints: deviceHints() };
   let state: DetailState | null = null;
   let disposed = false;
 
-  function readRecord(): { policies: Record<string, unknown> } | null {
-    if (!storage) return null;
-    let raw: string | null;
-    try {
-      raw = storage.getItem(MAP_DETAIL_STORAGE_KEY);
-    } catch {
-      storageError = "Browser storage could not be read, so saved detail settings were not loaded.";
-      return null;
-    }
-    if (raw === null) return { policies: {} };
-    try {
-      const parsed: unknown = JSON.parse(raw);
-      if (typeof parsed === "object" && parsed !== null && (parsed as { version?: unknown }).version === RECORD_VERSION) {
-        const stored = (parsed as { policies?: unknown }).policies;
-        if (typeof stored === "object" && stored !== null && !Array.isArray(stored)) return { policies: { ...(stored as Record<string, unknown>) } };
-      }
-    } catch {
-      // A corrupt record is ignored as a whole and replaced by the next save.
-    }
-    return { policies: {} };
-  }
-
-  function readSavedPolicies(): Map<string, DetailPolicy> {
-    const result = new Map<string, DetailPolicy>();
-    const record = readRecord();
-    for (const [key, value] of Object.entries(record?.policies ?? {})) {
-      const kind = detailKindOfKey(key);
-      if (kind && isValidDetailPolicy(value, kind)) result.set(key, copyDetailPolicy(value));
-    }
-    return result;
-  }
-
-  function writeSaved(key: string, policy: DetailPolicy | null): boolean {
-    if (!storage) return false;
-    const record = readRecord() ?? { policies: {} };
-    if (policy) record.policies[key] = copyDetailPolicy(policy);
-    else delete record.policies[key];
-    try {
-      storage.setItem(MAP_DETAIL_STORAGE_KEY, JSON.stringify({ version: RECORD_VERSION, policies: record.policies }));
-      storageError = null;
-      return true;
-    } catch {
-      storageError = "Detail settings could not be saved in this browser. They apply until the page reloads.";
-      return false;
-    }
-  }
-
-  function registeredDefault(key: string): DetailPolicy | null {
-    const kind = detailKindOfKey(key);
-    if (kind === "google") return defaults.google;
-    if (kind === "raster") return defaults.raster;
-    return null;
-  }
-
   function policyFor(key: string): DetailPolicy | null {
-    const current = policies.get(key) ?? forced.get(key) ?? saved.get(key) ?? registeredDefault(key);
-    return current ? copyDetailPolicy(current) : null;
+    const kind = detailKindOfKey(key);
+    if (!kind) return null;
+    const ids = MAP_DETAIL_PARAMETER_IDS[kind];
+    return detailPolicyFromValues(kind, settings.get(ids.range), settings.get(ids.default));
+  }
+
+  function hasSaved(kind: DetailKind): boolean {
+    if (settings.getStorageError() !== null) return false;
+    const ids = MAP_DETAIL_PARAMETER_IDS[kind];
+    return [ids.range, ids.default].some(id => settings.inspect(id).layers.saved !== undefined);
   }
 
   function composeLimits(key: string, requirementApplied: boolean): DetailLimit[] {
@@ -283,6 +292,7 @@ export function createMapDetailController(options: MapDetailControllerOptions = 
       effectiveTarget,
       pending: availability === "ready" && (delivery?.pending ?? false),
       limits: availability === "ready" ? composeLimits(active.key, requirementApplied) : [],
+      markers: [...markers.values()].filter(marker => marker.kind === kind),
     };
   }
 
@@ -298,7 +308,9 @@ export function createMapDetailController(options: MapDetailControllerOptions = 
       && a.requestedTarget === b.requestedTarget
       && a.effectiveTarget === b.effectiveTarget
       && a.pending === b.pending
-      && sameLimits(a.limits, b.limits);
+      && sameLimits(a.limits, b.limits)
+      && a.markers.length === b.markers.length
+      && a.markers.every((marker, index) => marker === b.markers[index]);
   }
 
   function refresh(): void {
@@ -314,14 +326,30 @@ export function createMapDetailController(options: MapDetailControllerOptions = 
     if (override !== undefined) overrides.set(key, clampDetailValue(policy, override));
   }
 
+  function reclampOverrides(): void {
+    for (const key of overrides.keys()) {
+      const policy = policyFor(key);
+      if (policy) reclampOverride(key, policy);
+    }
+  }
+
   function releaseAllLeases(): void {
     for (const lease of leases) lease.active = false;
     leases.clear();
   }
 
+  const detailIds = new Set<string>(Object.values(MAP_DETAIL_PARAMETER_IDS).flatMap(ids => [ids.range, ids.default]));
+  // Edits from the parameter list, another tab or a preset reach the rail and the renderer too.
+  const unsubscribeSettings = settings.subscribe(changed => {
+    if (![...changed].some(id => detailIds.has(id))) return;
+    reclampOverrides();
+    refresh();
+  });
+
   state = computeState();
 
-  return {
+  const controller: MapDetailController = {
+    settings,
     getState: () => state,
     subscribe(listener) {
       listeners.add(listener);
@@ -331,10 +359,8 @@ export function createMapDetailController(options: MapDetailControllerOptions = 
       if (!active || disposed) return false;
       const kind = detailKindOfKey(active.key);
       if (!kind || !isValidDetailPolicy(policy, kind)) return false;
-      const next = copyDetailPolicy(policy);
-      policies.set(active.key, next);
-      if (writeSaved(active.key, next)) saved.set(active.key, next);
-      reclampOverride(active.key, next);
+      if (!settings.setMany(detailPolicyValues(policy)).ok) return false;
+      reclampOverride(active.key, copyDetailPolicy(policy));
       refresh();
       return true;
     },
@@ -354,28 +380,28 @@ export function createMapDetailController(options: MapDetailControllerOptions = 
     },
     resetPolicy() {
       if (!active || disposed) return;
-      const key = active.key;
-      policies.delete(key);
-      saved.delete(key);
-      writeSaved(key, null);
-      const policy = policyFor(key);
-      if (policy) reclampOverride(key, policy);
+      const kind = detailKindOfKey(active.key);
+      if (!kind) return;
+      const ids = MAP_DETAIL_PARAMETER_IDS[kind];
+      settings.reset(ids.range);
+      settings.reset(ids.default);
+      reclampOverrides();
       refresh();
     },
     getPolicy: policyFor,
-    hasSavedPolicy: (key) => saved.has(key),
+    hasSavedPolicy(key) {
+      const kind = detailKindOfKey(key);
+      return kind !== null && hasSaved(kind);
+    },
     seedPolicy(key, policy) {
       const kind = detailKindOfKey(key);
       if (!kind || !isValidDetailPolicy(policy, kind)) return "invalid";
-      if (forced.has(key)) return "forced";
-      if (saved.has(key) || policies.has(key)) return "exists";
-      const next = copyDetailPolicy(policy);
-      policies.set(key, next);
-      const written = writeSaved(key, next);
-      if (written) saved.set(key, next);
-      reclampOverride(key, next);
+      if (forcedKinds.has(kind)) return "forced";
+      if (hasSaved(kind)) return "exists";
+      if (!settings.setMany(detailPolicyValues(policy)).ok) return "invalid";
+      reclampOverrides();
       refresh();
-      return written ? "saved" : "unsaved";
+      return settings.getStorageError() === null ? "saved" : "unsaved";
     },
     acquireRequirement(errorPx) {
       const lease: Lease = { errorPx: sanitizeErrorPx(errorPx), active: !disposed };
@@ -405,8 +431,28 @@ export function createMapDetailController(options: MapDetailControllerOptions = 
         ? { kind, value: state.effectiveTarget ?? state.requestedTarget }
         : { kind, value: state.requestedTarget };
     },
-    getStorageError: () => storageError,
-    getGoogleRecommendation: () => googleRecommendation,
+    getStorageError: () => settings.getStorageError(),
+    getGoogleRecommendation() {
+      const current = settings.get(MAP_DETAIL_PARAMETER_IDS.google.default);
+      if (current === "device-hints" || current === "renderer-default") return current;
+      const fallback = settings.inspect(MAP_DETAIL_PARAMETER_IDS.google.default).defaultValue;
+      return fallback === "device-hints" ? "device-hints" : "renderer-default";
+    },
+    setTrackMarker(marker) {
+      if (disposed) return () => {};
+      const stored = { ...marker };
+      markers.set(marker.id, stored);
+      refresh();
+      return () => {
+        if (markers.get(marker.id) !== stored) return;
+        markers.delete(marker.id);
+        refresh();
+      };
+    },
+    removeTrackMarker(id) {
+      if (!markers.delete(id)) return;
+      refresh();
+    },
     setActiveSource(source) {
       if (disposed) return;
       const previousKey = active?.key ?? null;
@@ -430,8 +476,12 @@ export function createMapDetailController(options: MapDetailControllerOptions = 
     dispose() {
       if (disposed) return;
       releaseAllLeases();
+      unsubscribeSettings();
+      for (const release of releaseForced) release();
       disposed = true;
       listeners.clear();
+      markers.clear();
     },
   };
+  return controller;
 }

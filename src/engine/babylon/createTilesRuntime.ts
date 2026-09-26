@@ -72,7 +72,7 @@ interface TilesRendererWithViewError extends TilesRenderer {
  * must still refine around the aircraft. Keep the adapter's frustum result,
  * then replace only its distance-derived error.
  */
-function useTerrainDetailAnchor(
+function applyTerrainDetailAnchor(
   tiles: TilesRenderer,
   scene: Scene,
   getTerrainDetailAnchor: (() => Vector3 | null) | undefined,
@@ -150,7 +150,7 @@ export function createGoogleTilesRuntime(options: GoogleTilesRuntimeOptions): Go
   }
 
   const tiles = new TilesRenderer(GOOGLE_3D_TILES_ROOT_URL, scene);
-  useTerrainDetailAnchor(tiles, scene, options.getTerrainDetailAnchor);
+  applyTerrainDetailAnchor(tiles, scene, options.getTerrainDetailAnchor);
   tiles.fetchOptions.mode = "cors";
   tiles.fetchOptions.cache = "default";
 

@@ -1,8 +1,12 @@
 import type { BabylonRuntimeStatus } from "../engine/babylon/createBabylonRuntime";
+import { getAppSettings } from "../settings/appSettings";
+import type { SettingsRegistry } from "../settings/registry";
 import { checkChoice, createChoiceGroup, createChoiceNote, type Choice } from "./choiceGroup";
-import type { MapDetailController } from "./mapDetailController";
+import { createMapCacheSection } from "./mapCacheSection";
+import { MAP_DETAIL_PARAMETER_IDS, type MapDetailController } from "./mapDetailController";
 import { createMapDetailPanel, type MapDetailPanelHandle } from "./mapDetailPanel";
 import { GOOGLE_3D_TILES } from "./mapSourceHud";
+import { appendHostSections, createParameterSection, createSectionsElement } from "./settings/parameterSection";
 
 const MAP_SOURCE_CHOICE_NAME = "foss-earth-map-source";
 const ELEVATION_CHOICE_NAME = "foss-earth-elevation-source";
@@ -15,8 +19,10 @@ export interface MapSourcePanelOptions {
   /** "google" for Google 3D Tiles, or a raster source id. */
   onMapSourceChange(sourceId: string): void;
   onTerrainSourceChange?(sourceId: string): void;
-  /** The app's detail controller, edited in the tab's Detail group. Left out, there is none. */
+  /** The app's detail controller, edited in the tab's Detail section. Left out, there is none. */
   detail?: MapDetailController;
+  /** The registry of the tab's parameters: the detail controller's, or the app's. */
+  settings?: SettingsRegistry;
 }
 
 export type MapSourceStatus = Pick<BabylonRuntimeStatus, "mode" | "rasterBaseMap" | "terrainSource">;
@@ -28,13 +34,19 @@ export interface MapSourcePanelHandle {
   destroy(): void;
 }
 
+/** The Map tab's own sections; hosts' sections for the tab follow them. */
+const MAP_SECTIONS = ["source", "detail", "loading"] as const;
+
 /**
- * The contents of the Map tab: a 3D basemap, which brings its own terrain, or
- * a 2D basemap draped over the chosen elevation provider.
+ * The contents of the Map tab, one collapsible section per group: Source (a
+ * 3D basemap, which brings its own terrain, or a 2D basemap draped over the
+ * chosen elevation provider, and their keys), Detail, Loading and memory, and
+ * any section a host's parameters are homed in.
  */
 export function createMapSourcePanel(options: MapSourcePanelOptions): MapSourcePanelHandle {
-  const element = document.createElement("div");
-  element.className = "foss-earth-choice-panel";
+  const settings = options.settings ?? options.detail?.settings ?? getAppSettings();
+  const sourceChoices = document.createElement("div");
+  sourceChoices.className = "foss-earth-choice-panel";
 
   // The source in use, basemap and elevation provider alike, ends its pill with
   // a link to its attribution page.
@@ -42,14 +54,29 @@ export function createMapSourcePanel(options: MapSourcePanelOptions): MapSourceP
   const terrainIncluded = createChoiceNote("Terrain is included. No elevation provider is used.");
   threeD.append(terrainIncluded);
   const twoD = createChoiceGroup(MAP_SOURCE_CHOICE_NAME, "2D basemaps", options.rasterSources.map(({ id, label, attributionUrl }) => ({ id, label, creditUrl: attributionUrl })));
-  element.append(threeD, twoD);
+  sourceChoices.append(threeD, twoD);
   const terrainSources = options.onTerrainSourceChange ? options.terrainSources ?? [] : [];
   const elevation = terrainSources.length > 0
     ? createChoiceGroup(ELEVATION_CHOICE_NAME, "Elevation provider", terrainSources.map(({ id, label, attribution }) => ({ id, label, creditUrl: attribution })))
     : null;
-  if (elevation) element.append(elevation);
-  const detail: MapDetailPanelHandle | null = options.detail ? createMapDetailPanel(options.detail) : null;
-  if (detail) element.append(detail.element);
+  if (elevation) sourceChoices.append(elevation);
+  const element = sourceChoices;
+  const sourceSection = createParameterSection(settings, { tab: "map", section: "source", main: sourceChoices, covers: ["map.source.basemap", "map.source.elevation"] });
+  const detail: MapDetailPanelHandle | null = options.detail ? createMapDetailPanel(options.detail, { heading: false }) : null;
+  const detailSection = createParameterSection(settings, {
+    tab: "map",
+    section: "detail",
+    main: detail?.element,
+    covers: detail ? Object.values(MAP_DETAIL_PARAMETER_IDS).flatMap(ids => [ids.range, ids.default]) : [],
+  });
+  const cache = createMapCacheSection();
+  const loading = createParameterSection(settings, { tab: "map", section: "loading", main: cache.element });
+  const sections = createSectionsElement([
+    { id: "map.source", title: settings.getSectionTitle("map", "source"), element: sourceSection.element, defaultOpen: true },
+    { id: "map.detail", title: settings.getSectionTitle("map", "detail"), element: detailSection.element, defaultOpen: true },
+    { id: "map.loading", title: settings.getSectionTitle("map", "loading"), element: loading.element, defaultOpen: false },
+  ]);
+  const hostSections = appendHostSections(settings, "map", sections, MAP_SECTIONS);
 
   let shown: string | null = null;
   const update = (status: MapSourceStatus): void => {
@@ -75,12 +102,17 @@ export function createMapSourcePanel(options: MapSourcePanelOptions): MapSourceP
   element.addEventListener("change", onChange);
 
   return {
-    element,
+    element: sections.element,
     update,
     destroy(): void {
       element.removeEventListener("change", onChange);
       detail?.destroy();
-      element.remove();
+      sourceSection.destroy();
+      detailSection.destroy();
+      cache.destroy();
+      loading.destroy();
+      hostSections.destroy();
+      sections.destroy();
     },
   };
 }

@@ -1,4 +1,5 @@
 import type { GlobeInputSensitivitySettings } from "../engine/types";
+import { getAppSettings } from "../settings/appSettings";
 import {
   loadInputModePreference,
   loadInputSensitivityPreference,
@@ -213,7 +214,8 @@ export function createInputModeHud(
   const hasTouch = availableModes.has("touch");
   const movements = options.movements ?? ["pan", "orbit", "zoom"] as const;
   // With no mouse or trackpad the mode stays "touch", which reads no wheel.
-  let activeMode = loadInputModePreference(new Set<HudInputMode>(pointerModes.length > 0 ? pointerModes : ["touch"]));
+  const modeChoices = new Set<HudInputMode>(pointerModes.length > 0 ? pointerModes : ["touch"]);
+  let activeMode = loadInputModePreference(modeChoices);
   let sensitivity = loadInputSensitivityPreference();
   let debugMode = false;
   let autoModeActive = false;
@@ -464,6 +466,25 @@ export function createInputModeHud(
   button.addEventListener("click", onButtonClick);
   container.addEventListener("wheel", onWheel, { passive: true });
 
+  // A change made elsewhere, such as under Show all parameters or by an
+  // import, reaches this section and the camera. The section's own edits are
+  // already drawn, and redrawing would take the field being typed in.
+  const offSettings = getAppSettings().subscribe(changed => {
+    if (![...changed].some(id => id === "input.mode" || id.startsWith("input.sensitivity."))) return;
+    const nextMode = loadInputModePreference(modeChoices);
+    const nextSensitivity = loadInputSensitivityPreference();
+    const modeChanged = nextMode !== activeMode;
+    const sensitivityChanged = JSON.stringify(nextSensitivity) !== JSON.stringify(sensitivity);
+    if (!modeChanged && !sensitivityChanged) return;
+    activeMode = nextMode;
+    sensitivity = nextSensitivity;
+    if (modeChanged) options.onModeChange?.(activeMode);
+    if (sensitivityChanged) options.onSensitivityChange?.(sensitivity);
+    renderButton();
+    const typing = document.activeElement instanceof HTMLElement ? document.activeElement.closest<HTMLElement>(".input-mode-inline") : null;
+    renderAll(typing ?? undefined);
+  });
+
   return {
     mountInline(target: HTMLElement): () => void {
       const view = document.createElement("div");
@@ -481,6 +502,7 @@ export function createInputModeHud(
       onAutoModeExit = handler;
     },
     destroy(): void {
+      offSettings();
       document.getElementById(INPUT_MODE_ACCENT_STYLE_ID)?.remove();
       button.removeEventListener("click", onButtonClick);
       container.removeEventListener("wheel", onWheel);

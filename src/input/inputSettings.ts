@@ -1,3 +1,5 @@
+import { getAppSettings } from "../settings/appSettings";
+
 export type InputModePreference = "auto" | "mouse" | "trackpad" | "touch";
 
 export interface MovementSensitivity {
@@ -34,95 +36,63 @@ export const DEFAULT_INPUT_SETTINGS: InputSettings = {
   globeAnchorRotation: true,
 };
 
+/** @deprecated Keys before the settings registry; migrated into `input.*` and left for rollback. */
 export const GLOBE_ANCHOR_ROTATION_STORAGE_KEY = "foss-earth.globeAnchorRotation";
-
+/** @deprecated See GLOBE_ANCHOR_ROTATION_STORAGE_KEY. */
 export const INPUT_MODE_STORAGE_KEY = "foss-earth.inputMode";
+/** @deprecated See GLOBE_ANCHOR_ROTATION_STORAGE_KEY. */
 export const INPUT_SENSITIVITY_STORAGE_KEY = "foss-earth.inputSensitivity";
+/** @deprecated See GLOBE_ANCHOR_ROTATION_STORAGE_KEY. */
 export const INPUT_SENSITIVITY_VERSION_KEY = "foss-earth.inputSensitivityVersion";
 export const INPUT_SENSITIVITY_VERSION = "1";
 
-/** Legacy keys written by an older Fundfolio embed — read once for migration. */
-const LEGACY_INPUT_MODE_STORAGE_KEY = "moir-park.map-input-mode";
-const LEGACY_INPUT_SENSITIVITY_STORAGE_KEY = "moir-park.map-input-sensitivity";
-const LEGACY_INPUT_SENSITIVITY_VERSION_KEY = "moir-park.map-input-sensitivity-version";
-const LEGACY_INPUT_SENSITIVITY_VERSION = "6";
-
 export type HudInputMode = Exclude<InputModePreference, "auto">;
 
-function isHudInputMode(value: string | null): value is HudInputMode {
+const MOVEMENTS = ["pan", "orbit", "zoom"] as const;
+const DEVICES = ["mouse", "trackpad", "touch"] as const;
+
+function isHudInputMode(value: unknown): value is HudInputMode {
   return value === "mouse" || value === "trackpad" || value === "touch";
 }
 
+/** The saved `input.mode`, when this device has it; otherwise trackpad or the first it has. */
 export function loadInputModePreference(availableModes: ReadonlySet<HudInputMode>): HudInputMode {
-  try {
-    const saved = window.localStorage.getItem(INPUT_MODE_STORAGE_KEY)
-      ?? window.localStorage.getItem(LEGACY_INPUT_MODE_STORAGE_KEY);
-    if (isHudInputMode(saved) && availableModes.has(saved)) {
-      return saved;
-    }
-  } catch {
-    // Ignore restricted storage.
-  }
-
+  const saved = getAppSettings().get("input.mode");
+  if (isHudInputMode(saved) && availableModes.has(saved)) return saved;
   return availableModes.has("trackpad") ? "trackpad" : availableModes.values().next().value ?? "mouse";
 }
 
 export function saveInputModePreference(mode: HudInputMode): void {
-  try {
-    window.localStorage.setItem(INPUT_MODE_STORAGE_KEY, mode);
-  } catch {
-    // Ignore restricted storage.
-  }
+  getAppSettings().set("input.mode", mode);
 }
 
+/** The nine `input.sensitivity.<device>.<movement>` parameters. */
 export function loadInputSensitivityPreference(): InputSensitivitySettings {
-  try {
-    const raw = window.localStorage.getItem(INPUT_SENSITIVITY_STORAGE_KEY)
-      ?? window.localStorage.getItem(LEGACY_INPUT_SENSITIVITY_STORAGE_KEY);
-    const savedVersion = window.localStorage.getItem(INPUT_SENSITIVITY_VERSION_KEY)
-      ?? window.localStorage.getItem(LEGACY_INPUT_SENSITIVITY_VERSION_KEY);
-    const next = normalizeSensitivitySettings(raw ? JSON.parse(raw) as Partial<InputSensitivitySettings> : {});
-    if (savedVersion !== INPUT_SENSITIVITY_VERSION && savedVersion !== LEGACY_INPUT_SENSITIVITY_VERSION) {
-      next.mouse.zoom = DEFAULT_INPUT_SENSITIVITY.mouse.zoom;
-      next.trackpad.zoom = DEFAULT_INPUT_SENSITIVITY.trackpad.zoom;
-      next.touch.pan = DEFAULT_INPUT_SENSITIVITY.touch.pan;
-      next.touch.orbit = DEFAULT_INPUT_SENSITIVITY.touch.orbit;
-      next.touch.zoom = DEFAULT_INPUT_SENSITIVITY.touch.zoom;
-      saveInputSensitivityPreference(next);
-    }
-    return next;
-  } catch {
-    return normalizeSensitivitySettings({});
-  }
+  const settings = getAppSettings();
+  const read = (device: typeof DEVICES[number], movement: typeof MOVEMENTS[number]): number => {
+    const value = settings.get(`input.sensitivity.${device}.${movement}`);
+    return typeof value === "number" ? value : 1;
+  };
+  return {
+    mouse: { pan: read("mouse", "pan"), orbit: read("mouse", "orbit"), zoom: read("mouse", "zoom") },
+    trackpad: { pan: read("trackpad", "pan"), orbit: read("trackpad", "orbit"), zoom: read("trackpad", "zoom") },
+    touch: { pan: read("touch", "pan"), orbit: read("touch", "orbit"), zoom: read("touch", "zoom") },
+  };
 }
 
 export function saveInputSensitivityPreference(settings: InputSensitivitySettings): void {
-  try {
-    window.localStorage.setItem(INPUT_SENSITIVITY_STORAGE_KEY, JSON.stringify(settings));
-    window.localStorage.setItem(INPUT_SENSITIVITY_VERSION_KEY, INPUT_SENSITIVITY_VERSION);
-  } catch {
-    // Ignore restricted storage.
-  }
+  const normalized = normalizeSensitivitySettings(settings);
+  getAppSettings().setMany(Object.fromEntries(DEVICES.flatMap(device => MOVEMENTS.map(movement => [
+    `input.sensitivity.${device}.${movement}`, normalized[device][movement],
+  ]))));
 }
 
 export function loadGlobeAnchorRotationPreference(): boolean {
-  try {
-    const stored = window.localStorage.getItem(GLOBE_ANCHOR_ROTATION_STORAGE_KEY);
-    if (stored === null) {
-      return DEFAULT_INPUT_SETTINGS.globeAnchorRotation;
-    }
-    return stored === "true";
-  } catch {
-    return DEFAULT_INPUT_SETTINGS.globeAnchorRotation;
-  }
+  return getAppSettings().get("input.globeAnchorRotation") !== false;
 }
 
 export function saveGlobeAnchorRotationPreference(enabled: boolean): void {
-  try {
-    window.localStorage.setItem(GLOBE_ANCHOR_ROTATION_STORAGE_KEY, String(enabled));
-  } catch {
-    // Ignore private-mode or restricted-storage failures.
-  }
+  getAppSettings().set("input.globeAnchorRotation", enabled);
 }
 
 export function clampSensitivity(value: number): number {

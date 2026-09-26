@@ -5,6 +5,9 @@ import {
   type RasterBaseMapSource,
 } from "./rasterBaseMaps";
 import { resolveTerrainSource, type TerrainSource } from "../../terrain/terrainTiles";
+import { getAppSettings } from "../../settings/appSettings";
+import { FOSS_EARTH_PARAMETERS, fossEarthUrlAliases } from "../../settings/catalogue";
+import { createSettingsRegistry, type SettingsRegistry } from "../../settings/registry";
 import type { RasterQualitySetting } from "./rasterQuality";
 
 export interface MapRuntimeConfig {
@@ -36,7 +39,13 @@ export interface ResolveMapRuntimeConfigOptions {
   terrainSource?: string | TerrainSource | null;
   rasterQuality?: RasterQualitySetting | null;
   rasterImagery?: RasterImageryMode | null;
+  /**
+   * A query to read instead of the page's, in a registry of its own: for tests
+   * and previews. Omitted, the app's registry, which read the page's query.
+   */
   searchParams?: URLSearchParams;
+  /** The registry to read and to give the app's defaults to; the app's when omitted. */
+  settings?: SettingsRegistry;
 }
 
 export function getGoogleApiKeyFromSearchParams(searchParams: URLSearchParams): string | null {
@@ -54,10 +63,21 @@ export function getMapSourcePreferenceFromSearchParams(searchParams: URLSearchPa
   return null;
 }
 
-export function setMapSourcePreference(source: string): void {
+/** Drops query parameters a saved choice replaces, so a reload does not bring the old one back. */
+function dropUrlParameters(names: readonly string[]): void {
+  if (typeof window === "undefined") return;
   const url = new URL(window.location.href);
-  url.searchParams.set("mapSource", source);
-  window.history.replaceState(null, "", url);
+  let changed = false;
+  for (const name of names) {
+    if (url.searchParams.has(name)) { url.searchParams.delete(name); changed = true; }
+  }
+  if (changed) window.history.replaceState(window.history.state, "", url);
+}
+
+/** Saves the basemap choice, `map.source.basemap`: "google" or a raster source id. */
+export function setMapSourcePreference(source: string, settings: SettingsRegistry = getAppSettings()): void {
+  settings.set("map.source.basemap", source);
+  dropUrlParameters(["mapSource", "tiles", `set.map.source.basemap`]);
 }
 
 export function getTerrainSourcePreferenceFromSearchParams(searchParams: URLSearchParams): string | null {
@@ -65,10 +85,10 @@ export function getTerrainSourcePreferenceFromSearchParams(searchParams: URLSear
   return value || null;
 }
 
-export function setTerrainSourcePreference(source: string): void {
-  const url = new URL(window.location.href);
-  url.searchParams.set("elevationSource", source);
-  window.history.replaceState(null, "", url);
+/** Saves the elevation provider, `map.source.elevation`. */
+export function setTerrainSourcePreference(source: string, settings: SettingsRegistry = getAppSettings()): void {
+  settings.set("map.source.elevation", source);
+  dropUrlParameters(["elevationSource", "terrainSource", "set.map.source.elevation"]);
 }
 
 export function getRasterQualityPreferenceFromSearchParams(searchParams: URLSearchParams): RasterQualitySetting {
@@ -88,27 +108,48 @@ export function setRasterQualityPreference(setting: RasterQualitySetting): void 
   window.history.replaceState(null, "", url);
 }
 
+function registryFor(options: ResolveMapRuntimeConfigOptions): SettingsRegistry {
+  if (options.settings) return options.settings;
+  if (!options.searchParams) return getAppSettings();
+  const isolated = createSettingsRegistry({ storage: null, searchParams: options.searchParams, urlAliases: fossEarthUrlAliases });
+  isolated.register(FOSS_EARTH_PARAMETERS);
+  return isolated;
+}
+
+/**
+ * The map the runtime starts with, from the `map.source.*` and
+ * `map.detail.imageryPath` parameters. The host's options become the app's
+ * defaults: a Google key makes Google 3D Tiles the default basemap, and a host
+ * basemap the default 2D one. A saved or URL choice still wins.
+ */
 export function resolveMapRuntimeConfig(
   options: ResolveMapRuntimeConfigOptions = {},
 ): MapRuntimeConfig {
-  const searchParams = options.searchParams ?? new URLSearchParams(window.location.search);
+  const settings = registryFor(options);
+  const searchParams = options.searchParams ?? new URLSearchParams(typeof window === "undefined" ? "" : window.location.search);
   const configuredBaseMap = resolveRasterBaseMapSource(options.baseMap ?? DEFAULT_RASTER_BASE_MAP_ID);
-  const sourcePreference = getMapSourcePreferenceFromSearchParams(searchParams);
-  const urlGoogleApiKey = options.googleApiKey ?? getGoogleApiKeyFromSearchParams(searchParams);
+  const savedKey = settings.get("map.source.googleKey");
+  const googleApiKey = options.googleApiKey?.trim() || (typeof savedKey === "string" && savedKey.trim() ? savedKey.trim() : null);
   const preferGoogleTiles = options.preferGoogleTiles !== false;
-  const shouldUseGoogle = sourcePreference === "google"
-    || (!sourcePreference && preferGoogleTiles && Boolean(urlGoogleApiKey));
+  if (preferGoogleTiles && googleApiKey) {
+    settings.setHostDefault("map.source.basemap", "google", "a Google Maps API key was given");
+  } else if (options.baseMap && isKnownRasterBaseMapId(configuredBaseMap.id)) {
+    settings.setHostDefault("map.source.basemap", configuredBaseMap.id, "the app's basemap");
+  }
+  const selected = String(settings.get("map.source.basemap"));
+  const shouldUseGoogle = selected === "google";
+  const imagery = settings.get("map.detail.imageryPath");
 
   return {
     // Keep the key available while a flat map is selected so a live switch
     // back to Google tiles does not need to reconstruct the application.
-    googleApiKey: urlGoogleApiKey,
-    rasterBaseMap: shouldUseGoogle
+    googleApiKey,
+    rasterBaseMap: selected === "google"
       ? configuredBaseMap
-      : resolveRasterBaseMapSource(sourcePreference ?? configuredBaseMap),
-    terrainSource: resolveTerrainSource(options.terrainSource ?? getTerrainSourcePreferenceFromSearchParams(searchParams)),
+      : isKnownRasterBaseMapId(selected) ? resolveRasterBaseMapSource(selected) : configuredBaseMap,
+    terrainSource: resolveTerrainSource(options.terrainSource ?? String(settings.get("map.source.elevation"))),
     rasterQuality: options.rasterQuality ?? getRasterQualityPreferenceFromSearchParams(searchParams),
-    rasterImagery: options.rasterImagery ?? getRasterImageryPreferenceFromSearchParams(searchParams),
+    rasterImagery: options.rasterImagery ?? (imagery === "legacy" ? "legacy" : DEFAULT_RASTER_IMAGERY),
     preferGoogleTiles: shouldUseGoogle,
   };
 }

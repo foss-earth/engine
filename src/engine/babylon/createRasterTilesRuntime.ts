@@ -1087,7 +1087,8 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
       }
     },
     setSource(source): void {
-      if (source.id === imagerySource.id) return;
+      // The same source with a key added or changed is a new source: its requests differ.
+      if (source.id === imagerySource.id && source.version === imagerySource.version && source.urlTemplate === imagerySource.urlTemplate) return;
       if (imageryRuntime) {
         // Imagery only: no mesh, grid or selection of terrain changes.
         imagerySource = source;

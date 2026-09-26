@@ -107,6 +107,40 @@ describe("Map tab detail editor", () => {
     expect(recommended.parentElement!.textContent).toMatch(/limited by the range/);
   });
 
+  it("puts a host's requirement on the Google track, draggable past the range, striping what it refuses", () => {
+    const controller = createMapDetailController({ storage: null });
+    controller.setRecommendationContext({ rendererDefaultErrorPx: 20, rendererMode: "webgl2" });
+    controller.setActiveSource({ key: "google", availability: "ready" });
+    controller.updatePolicy({ kind: "google", finestErrorPx: 4, coarsestErrorPx: 16384, defaultValue: 32 });
+    const onChange = vi.fn();
+    const marker = { id: "flight", kind: "google" as const, value: 4096, colour: "#ef4444", label: "Flight minimum", ariaLabel: "Flight minimum", draggable: true, requirement: true, onChange };
+    controller.setTrackMarker(marker);
+    const panel = createMapDetailPanel(controller);
+    document.body.append(panel.element);
+    const thumb = panel.element.querySelector<HTMLInputElement>('input[aria-label="Flight minimum"]')!;
+    expect(Number(thumb.value)).toBeCloseTo(12);
+    expect(thumb.style.getPropertyValue("--thumb-colour")).toBe("#ef4444");
+    const stripe = panel.element.querySelector<HTMLElement>(".foss-earth-track__stripe")!;
+    expect(stripe.hidden).toBe(false);
+    expect(panel.element.querySelector(".map-detail-panel__markers")!.textContent).toBe("Flight minimum: 4096 px");
+    thumb.value = "14";
+    thumb.dispatchEvent(new Event("input"));
+    expect(onChange).toHaveBeenLastCalledWith(16384);
+    // A requirement is not a preference: it is not clamped into the range.
+    thumb.value = "18";
+    thumb.dispatchEvent(new Event("input"));
+    expect(onChange).toHaveBeenLastCalledWith(262144);
+    expect(controller.getState()?.policy).toMatchObject({ finestErrorPx: 4, coarsestErrorPx: 16384 });
+    // Waived for the session: hollow, and nothing is refused.
+    controller.setTrackMarker({ ...marker, hollow: true });
+    expect(thumb.classList.contains("is-hollow")).toBe(true);
+    expect(stripe.hidden).toBe(true);
+    // A marker the user may not drag is a tick.
+    controller.setTrackMarker({ ...marker, draggable: false });
+    expect(panel.element.querySelector('input[aria-label="Flight minimum"]')).toBeNull();
+    expect(panel.element.querySelector(".foss-earth-track__marker-tick")).not.toBeNull();
+  });
+
   it("disables editing while detail is unavailable and says why", () => {
     const controller = createMapDetailController({ storage: null });
     controller.setActiveSource({ key: "raster:osm-standard", availability: "unavailable" });

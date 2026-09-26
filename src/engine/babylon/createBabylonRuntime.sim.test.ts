@@ -201,6 +201,9 @@ describe("createBabylonRuntime simulation mode", () => {
       update: vi.fn(), dispose: vi.fn(),
     });
     const { createBabylonRuntime } = await import("./createBabylonRuntime");
+    const { getAppSettings } = await import("../../settings/appSettings");
+    // A flight refines from its focus point, the simulation origin.
+    getAppSettings().setHostDefault("map.focus.refineFrom", "focus", "the flight");
     const runtime = await createBabylonRuntime(document.createElement("canvas"), { googleApiKey: "test", simMode: true });
 
     expect(runtime.getGoogleTerrainDetailState()).toEqual(detail);
@@ -215,9 +218,51 @@ describe("createBabylonRuntime simulation mode", () => {
     runtime.getWorldRoot()!.parent = new TransformNode("world-shift", runtime.scene);
     expect(callbacks.getTerrainDetailAnchor()).toEqual(Vector3.Zero());
 
-    runtime.setGoogleTerrainDetailAnchor("camera");
+    getAppSettings().set("map.focus.refineFrom", "camera");
     expect(runtime.getGoogleTerrainDetailAnchor()).toBe("camera");
     expect(callbacks.getTerrainDetailAnchor()).toBeNull();
+    runtime.destroy();
+  });
+
+  it("follows the map source and elevation parameters wherever they change", async () => {
+    mocks.createGoogleTilesRuntime.mockReturnValue({
+      tiles: { visibleTiles: new Set(), activeTiles: new Set(), group: {} },
+      update: vi.fn(), dispose: vi.fn(),
+    });
+    const { createBabylonRuntime } = await import("./createBabylonRuntime");
+    const { resolveRasterBaseMapSource } = await import("./rasterBaseMaps");
+    const { getAppSettings } = await import("../../settings/appSettings");
+    const settings = getAppSettings();
+    const runtime = await createBabylonRuntime(document.createElement("canvas"), {
+      googleApiKey: "test", preferGoogleTiles: false, rasterBaseMap: resolveRasterBaseMapSource("usgs-topo"), simMode: true,
+    });
+    expect(runtime.status.mode).toBe("raster-basemap");
+    settings.set("map.source.basemap", "google");
+    expect(runtime.status.mode).toBe("google-tiles");
+    settings.set("map.source.basemap", "osm-standard");
+    expect(runtime.status.rasterBaseMap?.id).toBe("osm-standard");
+    settings.set("map.source.elevation", "aws-terrarium");
+    expect(runtime.status.terrainSource?.id).toBe("aws-terrarium");
+    runtime.destroy();
+    settings.set("map.source.basemap", "usgs-topo");
+    expect(runtime.status.rasterBaseMap?.id).toBe("osm-standard");
+  });
+
+  it("requests a keyed source with the provider's key, and follows key changes", async () => {
+    const { createBabylonRuntime } = await import("./createBabylonRuntime");
+    const { resolveRasterBaseMapSource } = await import("./rasterBaseMaps");
+    const { getAppSettings } = await import("../../settings/appSettings");
+    const settings = getAppSettings();
+    const runtime = await createBabylonRuntime(document.createElement("canvas"), {
+      preferGoogleTiles: false, rasterBaseMap: resolveRasterBaseMapSource("carto-positron"), simMode: true,
+    });
+    const created = mocks.createRasterTilesRuntime.mock.calls[0][0] as { source: { urlTemplate: string } };
+    expect(created.source.urlTemplate).not.toContain("api_key");
+    settings.set("map.source.cartoKey", "k 1");
+    const raster = mocks.createRasterTilesRuntime.mock.results[0].value as { setSource: ReturnType<typeof vi.fn> };
+    expect(raster.setSource).toHaveBeenLastCalledWith(expect.objectContaining({ id: "carto-positron", urlTemplate: expect.stringMatching(/\?api_key=k%201$/) }));
+    // The rest of the app never sees the key.
+    expect(runtime.status.rasterBaseMap?.urlTemplate).not.toContain("api_key");
     runtime.destroy();
   });
 

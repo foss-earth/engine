@@ -42,6 +42,37 @@ export interface GoogleDetailPolicy {
 
 export type DetailPolicy = RasterDetailPolicy | GoogleDetailPolicy;
 
+/**
+ * A host's value on a detail track, such as a flight's minimum Google detail:
+ * a requirement drawn on the same scale as the user's range, which the user
+ * may drag when the host allows it.
+ */
+export interface DetailTrackMarker {
+  id: string;
+  /** Which track it sits on: its value is in that track's unit. */
+  kind: DetailKind;
+  value: number;
+  /** A CSS colour. */
+  colour: string;
+  /** Visible text beside it, such as "Flight minimum". */
+  label: string;
+  /** What a screen reader announces for its thumb or tick. */
+  ariaLabel: string;
+  draggable: boolean;
+  /** Drawn hollow, such as while the host has waived it for this session. */
+  hollow?: boolean;
+  /**
+   * A requirement: where it is finer than the range's coarse end, the part
+   * between them is striped, as detail the user allows but the host does not
+   * accept.
+   */
+  requirement?: boolean;
+  /** Also drawn as a tick on the HUD rail. */
+  onRail?: boolean;
+  /** Called with the new value as the user drags it; the host saves it. */
+  onChange?(value: number): void;
+}
+
 /** Why delivered detail can differ from the request. */
 export type DetailLimit = "source" | "memory" | "loading" | "backend" | "consumer";
 
@@ -70,6 +101,8 @@ export interface DetailState {
   effectiveTarget: number | null;
   pending: boolean;
   limits: readonly DetailLimit[];
+  /** Hosts' markers on this source's track. */
+  markers: readonly DetailTrackMarker[];
 }
 
 /** Supported raster offsets. Selectable ranges are subranges of this envelope. */
