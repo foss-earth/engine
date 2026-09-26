@@ -32,9 +32,9 @@ function harness(limits: Partial<ImageryResourceLimits> = {}, capacity = 8) {
   let time = 0;
   const residency = createImageryResidency({
     loader, store,
-    limits: { gpuBytes: 1e9, stagingBytes: 1e9, concurrentRequests: 8, queuedRequests: 100, uploadBytesPerUpdate: 1e9, cpuMsPerUpdate: 2, ...limits },
+    limits: { gpuBytes: 1e9, stagingBytes: 1e9, concurrentRequests: 8, queuedRequests: 100, uploadBytesPerUpdate: 1e9, cpuMsPerUpdate: 2,
+      missingRetryMs: 1000, retryDelayMs: { min: 2000, max: 30_000 }, ...limits },
     now: () => time,
-    missingTtlMs: 1000,
   });
   const image = (pages = 1, width = 256): PreparedImage => ({
     width, height: width, compressedBytes: 100,

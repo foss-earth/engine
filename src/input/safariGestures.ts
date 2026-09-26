@@ -1,5 +1,5 @@
 import type { CameraInputTarget } from "./inertialCameraController";
-import { MOVEMENT_SENSITIVITY_BASE, type InputSettings } from "./inputSettings";
+import { DEFAULT_INPUT_RATES, type InputSettings } from "./inputSettings";
 
 /**
  * Detect whether the current browser supports macOS Safari GestureEvents.
@@ -42,6 +42,8 @@ export function attachSafariGestures(
 ): () => void {
   let lastRotation = 0;
   let lastScale = 1;
+  // Rotate and pinch rates at sensitivity 1: `input.trackpad.*`.
+  const rates = () => options.getSettings?.().rates ?? DEFAULT_INPUT_RATES;
 
   function onGestureStart(e: Event): void {
     e.preventDefault();
@@ -60,7 +62,7 @@ export function attachSafariGestures(
     lastRotation = ge.rotation;
     if (Math.abs(rotDelta) > 0.1) {
       const sensitivity = options.getSettings?.().sensitivity.trackpad.orbit ?? 1;
-      camera.orbitBy(0, -rotDelta * sensitivity * MOVEMENT_SENSITIVITY_BASE);
+      camera.orbitBy(0, -rotDelta * sensitivity * rates().trackpadRotateRate);
     }
 
     const scaleDelta = ge.scale / lastScale;
@@ -69,7 +71,7 @@ export function attachSafariGestures(
     const factor = 1.5 - scaleDelta * 0.5;
     if (Math.abs(factor - 1) > 0.001) {
       const sensitivity = options.getSettings?.().sensitivity.trackpad.zoom ?? 1;
-      camera.zoomBy(Math.pow(factor, sensitivity * MOVEMENT_SENSITIVITY_BASE));
+      camera.zoomBy(Math.pow(factor, sensitivity * rates().trackpadGestureZoomExponent));
     }
   }
 

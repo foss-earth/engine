@@ -1,5 +1,6 @@
 import type { Airport, AirportPoint, AirportRunway } from "./types";
 import { bearing, distance } from "./geometry";
+import { searchTuning } from "../search/searchTuning";
 
 interface Element {
   type: string; id: number; lat?: number; lon?: number;
@@ -7,7 +8,6 @@ interface Element {
   tags?: Record<string, string>;
   geometry?: { lat: number; lon: number }[];
 }
-const CACHE_TTL = 24 * 60 * 60 * 1000;
 const cache = new Map<string, { expires: number; airports: Airport[] }>();
 const point = (p: { lat: number; lon: number }): AirportPoint => ({ latDeg: p.lat, lonDeg: p.lon });
 const validPoint = (p: AirportPoint) => Number.isFinite(p.latDeg) && Number.isFinite(p.lonDeg) && Math.abs(p.latDeg) <= 90 && Math.abs(p.lonDeg) <= 180;
@@ -76,7 +76,7 @@ async function getJson(url: string, signal: AbortSignal): Promise<unknown> {
   const controller = new AbortController();
   const cancel = () => controller.abort();
   signal.addEventListener("abort", cancel, { once: true });
-  const timer = setTimeout(cancel, 20000);
+  const timer = setTimeout(cancel, searchTuning().timeoutMs);
   if (signal.aborted) cancel();
   try {
     const response = await fetch(url, { signal: controller.signal });
@@ -110,8 +110,9 @@ export async function searchAirports(rawCode: string, signal: AbortSignal): Prom
   }
   signal.throwIfAborted();
   if (airports.length) {
-    if (cache.size >= 32) cache.delete(cache.keys().next().value!);
-    cache.set(code, { expires: Date.now() + CACHE_TTL, airports });
+    const { cacheEntries, cacheMs } = searchTuning();
+    while (cache.size >= cacheEntries) cache.delete(cache.keys().next().value!);
+    cache.set(code, { expires: Date.now() + cacheMs, airports });
   }
   return airports;
 }

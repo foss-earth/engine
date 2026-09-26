@@ -43,6 +43,8 @@ export const FOSS_EARTH_SECTION_TITLES: ReadonlyArray<readonly [string, string, 
   [CONTROLS_TAB, "controller", "Controller"],
   [RENDERER_TAB, "performance", "Performance debug"],
   [INTERFACE_TAB, "toolbar", "Toolbar"],
+  [INTERFACE_TAB, "log", "Log"],
+  [INTERFACE_TAB, "search", "Search"],
 ];
 
 function parseJson(raw: string): unknown {

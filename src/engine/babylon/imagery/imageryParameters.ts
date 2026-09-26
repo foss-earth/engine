@@ -12,6 +12,8 @@ export const IMAGERY_LIMIT_IDS = [
   "map.imagery.queuedRequests",
   "map.imagery.uploadPerFrame",
   "map.imagery.selectionTimePerFrame",
+  "map.imagery.missingRetryAfter",
+  "map.retryDelay",
 ] as const;
 
 /** The parameters that tune how imagery is chosen and drawn. */
@@ -34,6 +36,13 @@ function number(settings: SettingsRegistry, id: string): number {
   return value;
 }
 
+/** A range in seconds, in ms. */
+function seconds(settings: SettingsRegistry, id: string): { min: number; max: number } {
+  const value = settings.get(id);
+  if (typeof value !== "object" || value === null || !("min" in value)) throw new Error(`${id} is not a range.`);
+  return { min: value.min * 1000, max: value.max * 1000 };
+}
+
 export function imageryLimitsFrom(settings: SettingsRegistry): ImageryResourceLimits {
   return {
     gpuBytes: number(settings, "map.imagery.gpuBudget") * MiB,
@@ -42,6 +51,8 @@ export function imageryLimitsFrom(settings: SettingsRegistry): ImageryResourceLi
     queuedRequests: Math.round(number(settings, "map.imagery.queuedRequests")),
     uploadBytesPerUpdate: number(settings, "map.imagery.uploadPerFrame") * MiB,
     cpuMsPerUpdate: number(settings, "map.imagery.selectionTimePerFrame"),
+    missingRetryMs: number(settings, "map.imagery.missingRetryAfter") * 1000,
+    retryDelayMs: seconds(settings, "map.retryDelay"),
   };
 }
 

@@ -1,5 +1,6 @@
 import type { LocationSearchResult, LocationSearchProvider } from "./types";
 import type { AirportMode } from "../airports/types";
+import { searchTuning } from "./searchTuning";
 
 interface Place {
   place_id: number; osm_type?: string; osm_id?: number;
@@ -14,6 +15,8 @@ interface AirportSummary {
   municipality?: string; region_name?: string; country_name?: string;
 }
 const cache = new Map<string, { expires: number; value: unknown }>();
+/** The public geocoder's usage policy: at most one request a second. */
+const GEOCODER_INTERVAL_MS = 1100;
 let geocoderQueue: Promise<unknown> = Promise.resolve();
 let lastGeocoderRequest = 0;
 
@@ -21,12 +24,13 @@ async function json(url: string, signal: AbortSignal): Promise<unknown> {
   signal.throwIfAborted();
   const cached = cache.get(url);
   if (cached && cached.expires > Date.now()) return cached.value;
-  const response = await fetch(url, { signal: AbortSignal.any([signal, AbortSignal.timeout(20000)]) });
+  const { cacheEntries, cacheMs, timeoutMs } = searchTuning();
+  const response = await fetch(url, { signal: AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) });
   if (!response.ok) throw new Error(`Location lookup failed (${response.status}). Try again.`);
   const value: unknown = await response.json();
   signal.throwIfAborted();
-  if (cache.size >= 64) cache.delete(cache.keys().next().value!);
-  cache.set(url, { expires: Date.now() + 86400000, value });
+  while (cache.size >= cacheEntries) cache.delete(cache.keys().next().value!);
+  cache.set(url, { expires: Date.now() + cacheMs, value });
   return value;
 }
 
@@ -37,7 +41,7 @@ async function geocode(params: Record<string, string>, signal: AbortSignal): Pro
   const request = geocoderQueue.catch(() => {}).then(async () => {
     signal.throwIfAborted();
     if ((cache.get(url.href)?.expires ?? 0) <= Date.now()) {
-      const delay = Math.max(0, lastGeocoderRequest + 1100 - Date.now());
+      const delay = Math.max(0, lastGeocoderRequest + GEOCODER_INTERVAL_MS - Date.now());
       if (delay) await new Promise<void>((resolve, reject) => {
         const cancel = () => { clearTimeout(timer); reject(signal.reason); };
         const timer = setTimeout(() => { signal.removeEventListener("abort", cancel); resolve(); }, delay);

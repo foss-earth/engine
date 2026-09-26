@@ -1,8 +1,10 @@
+import { GAME_LOG_LINE_MS, GAME_LOG_MAX_LINES } from "../../log/gameLogDefaults";
+import { SEARCH_DEFAULTS } from "../../search/searchDefaults";
 import type { ParameterSpec } from "../types";
 
 /** The Settings tab: saved settings and About, which have no parameters. */
 export const SETTINGS_TAB = "settings";
-/** The Interface tab: the toolbar and theme. */
+/** The Interface tab: the toolbar, theme, log and search. */
 export const INTERFACE_TAB = "interface";
 /** Performance debug, in the Renderer tab: what the performance HUD shows, and the tuners. */
 const PERFORMANCE = { tab: "renderer", section: "performance" } as const;
@@ -78,6 +80,81 @@ export const INTERFACE_PARAMETERS: readonly ParameterSpec[] = [
     `interface.toolbar.${button}`, label, `Shows ${what}. Hiding it never hides what it opens: that stays under +.`,
     true, "A first-time visitor does not know that + opens the same things.", { tab: INTERFACE_TAB, section: "toolbar" }, "src/hud/hudButtonVisibility.ts",
   )),
+  {
+    id: "interface.log.lineDuration",
+    label: "Log line time",
+    description: "How long a finished line stays over the map before it fades. Opening the log shows every kept line again.",
+    unit: "s",
+    kind: "number",
+    bounds: () => ({ min: 1, max: 600 }),
+    step: 0.05,
+    scale: "log2",
+    default: GAME_LOG_LINE_MS / 1000,
+    defaultReason: "Long enough to read a line twice, before this became a parameter.",
+    home: { tab: INTERFACE_TAB, section: "log", level: "main" },
+    appliesLive: true,
+    source: "src/log/createGameLog.ts",
+  },
+  {
+    id: "search.cacheDuration",
+    label: "Keep search answers for",
+    description: "How long a place or airport lookup's answer is kept in this page, so asking again reads it instead of asking the service. Kept in memory only; a reload forgets it.",
+    unit: "h",
+    kind: "number",
+    bounds: () => ({ min: 0.01, max: 720 }),
+    step: 0.05,
+    scale: "log2",
+    default: SEARCH_DEFAULTS.cacheHours,
+    defaultReason: "A day, as the geocoder's usage policy asks answers to be cached.",
+    home: { tab: INTERFACE_TAB, section: "search", level: "main" },
+    appliesLive: true,
+    source: "src/search/searchTuning.ts",
+  },
+  {
+    id: "search.cacheEntries",
+    label: "Search answers kept",
+    description: "How many answers each lookup, places and airports, keeps; the oldest goes first.",
+    unit: "count",
+    kind: "number",
+    bounds: () => ({ min: 1, max: 4096 }),
+    step: 0.05,
+    scale: "log2",
+    default: SEARCH_DEFAULTS.cacheEntries,
+    defaultReason: "What the place lookup kept before this became a parameter; the airport lookup kept 32.",
+    home: { tab: INTERFACE_TAB, section: "search", level: "main" },
+    appliesLive: true,
+    source: "src/search/searchTuning.ts",
+  },
+  {
+    id: "search.timeout",
+    label: "Search timeout",
+    description: "How long a place or airport lookup may take before it gives up and says so.",
+    unit: "s",
+    kind: "number",
+    bounds: () => ({ min: 1, max: 300 }),
+    step: 0.05,
+    scale: "log2",
+    default: SEARCH_DEFAULTS.timeoutSeconds,
+    defaultReason: "What both lookups waited before this became a parameter.",
+    home: { tab: INTERFACE_TAB, section: "search", level: "main" },
+    appliesLive: true,
+    source: "src/search/searchTuning.ts",
+  },
+  {
+    id: "interface.log.maxLines",
+    label: "Log lines kept",
+    description: "How many lines the log keeps, newest first; older ones are dropped.",
+    unit: "count",
+    kind: "number",
+    bounds: () => ({ min: 5, max: 2000 }),
+    step: 0.05,
+    scale: "log2",
+    default: GAME_LOG_MAX_LINES,
+    defaultReason: "What the log kept before this became a parameter.",
+    home: { tab: INTERFACE_TAB, section: "log", level: "main" },
+    appliesLive: true,
+    source: "src/log/createGameLog.ts",
+  },
   ...PERFORMANCE_HUD_METRICS.map(([metric, label, visible, tooltip]) => toggle(
     `interface.performanceHud.${metric}`, `${label} on the toolbar`, tooltip,
     visible, visible ? "Shown by default: it is the first thing to look at." : "Hidden by default: a debugging reading.", PERFORMANCE, "src/app/createGlobeApp.ts",

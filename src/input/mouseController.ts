@@ -1,6 +1,6 @@
 import type { CameraInputTarget } from "./inertialCameraController";
 import { attachAnchorPanDebugOverlay, type AnchorPanDebugOverlay } from "./anchorPanDebugOverlay";
-import { DEFAULT_INPUT_RATES, MOVEMENT_SENSITIVITY_BASE, type InputSettings } from "./inputSettings";
+import { DEFAULT_INPUT_RATES, type InputSettings } from "./inputSettings";
 
 /**
  * Attach a mouse-button drag handler to the canvas.
@@ -137,7 +137,8 @@ export function attachMouseController(
 
     if (activeButton === 0 && !(options.isOrbitMode?.() ?? false)) {
       const sensitivity = options.getSettings?.().sensitivity.mouse.pan ?? 1;
-      camera.panBy(-dx * sensitivity * MOVEMENT_SENSITIVITY_BASE, -dy * sensitivity * MOVEMENT_SENSITIVITY_BASE, canvas.clientHeight);
+      const rate = rates().mousePanRate * sensitivity;
+      camera.panBy(-dx * rate, -dy * rate, canvas.clientHeight);
     } else {
       const sensitivity = options.getSettings?.().sensitivity.mouse.orbit ?? 1;
       const pitchSign = options.isOrbitMode?.() ? -1 : 1;

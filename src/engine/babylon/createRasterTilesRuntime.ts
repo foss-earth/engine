@@ -19,6 +19,7 @@ import { GLOBAL_TERRAIN } from "../../terrain/globalTerrain";
 import { createRasterSurfaceSampler } from "../../terrain/rasterSurfaceSampler";
 import type { SurfaceHit } from "../../terrain/surfaceQuery";
 import type { TerrainPerformanceCapture } from "../../terrain/terrainPerformanceCapture";
+import { retryDelayMs, type RetryDelay } from "../../terrain/retryDelay";
 import { meshPositions, patchesForGeometryCommit, stitchTerrainEdges, updateTerrainPositions } from "../../terrain/meshRefinement";
 import type { GlobeViewState } from "../types";
 import type { DetailLimit } from "../../terrain/mapDetailPolicy";
@@ -124,6 +125,8 @@ export interface RasterTilesRuntimeOptions {
   onDetailAdjusted?: (decision: AutoDetailDecision) => void;
   /** Texture samples for per-tile imagery; read when a texture is created. */
   anisotropy?: () => number;
+  /** How failed terrain and imagery downloads back off, ms: `map.retryDelay`; read at each failure. */
+  retryDelay?: () => RetryDelay;
   requestRender?: () => void;
   onLoadStart?: () => void;
   onDownloadBytes?: (bytes: number) => void;
@@ -201,10 +204,6 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
-/** Failed tile loads back off from 2 s to at most 30 s between requests. */
-function retryDelayMs(failures: number): number {
-  return Math.min(30_000, 2000 * 2 ** Math.max(0, failures - 1));
-}
 
 function tileXToLon(x: number, z: number): number {
   return (x / (2 ** z)) * 360 - 180;
@@ -380,7 +379,7 @@ function createTileRecord(
       // Keep the best geometry already available when detail fails, and ask
       // again later: coarse startup terrain must not become permanent.
       record.terrainFailures += 1;
-      record.terrainRetryAt = performance.now() + retryDelayMs(record.terrainFailures);
+      record.terrainRetryAt = performance.now() + retryDelayMs(record.terrainFailures, options.retryDelay?.());
       onRetryScheduled(record.terrainRetryAt);
       if (settlesInitialRecord) {
         terrainReady = true;
@@ -512,6 +511,10 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
     ...options,
     segments: Math.round(setting("map.terrain.tileSegments")),
     anisotropy: () => Math.round(setting("map.imagery.anisotropy")),
+    retryDelay: () => {
+      const seconds = range("map.retryDelay");
+      return { min: seconds.min * 1000, max: seconds.max * 1000 };
+    },
   };
 
   // Detail: the rail's imagery request, the terrain target it sets when
@@ -781,7 +784,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
       cache.delete(record.key);
       const failures = (imageryFailures.get(record.key) ?? 0) + 1;
       imageryFailures.set(record.key, failures);
-      const retryAt = performance.now() + retryDelayMs(failures);
+      const retryAt = performance.now() + retryDelayMs(failures, meshOptions.retryDelay?.());
       retryAfter.set(record.key, retryAt);
       scheduleRetry(retryAt);
       lastUsedTick.delete(record.key);

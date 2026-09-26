@@ -1,5 +1,6 @@
 import { PointerEventTypes } from "@babylonjs/core";
 import type { AbstractMesh, GeospatialCamera, Scene, Vector3 } from "@babylonjs/core";
+import { DEFAULT_INPUT_RATES } from "../input/inputRates";
 import type { PoiDescriptor } from "./types";
 
 export interface PoiTrackingHandle {
@@ -27,12 +28,17 @@ export interface PoiTrackingHandle {
   destroy(): void;
 }
 
-/** Maximum squared pixel distance between pointerdown and pointerup for a gesture to count as a click. */
-const CLICK_MAX_DISTANCE_SQ_PX = 25; // 5 px radius
+export interface PoiTrackingOptions {
+  /**
+   * How far a press may move and still be a click, px: `input.mouse.dragThreshold`,
+   * so a press the map took as a drag never also selects a point.
+   */
+  dragThresholdPx?: () => number;
+}
 
 /**
  * Creates a POI tracking controller that:
- *  - Watches left mouse clicks (pointerdown → pointerup with < 5 px drag).
+ *  - Watches left mouse clicks (pointerdown → pointerup moving less than the drag threshold).
  *  - On click: picks the scene at the click position.
  *    - If the hit mesh is a registered POI → enter tracking mode.
  *    - Otherwise (empty space or non-POI) → exit tracking if active.
@@ -44,7 +50,9 @@ const CLICK_MAX_DISTANCE_SQ_PX = 25; // 5 px radius
 export function createPoiTracking(
   scene: Scene,
   getCamera: () => GeospatialCamera | null,
+  options: PoiTrackingOptions = {},
 ): PoiTrackingHandle {
+  const dragThresholdPx = options.dragThresholdPx ?? (() => DEFAULT_INPUT_RATES.mouseDragThresholdPx);
   const meshToPoiMap = new Map<AbstractMesh, PoiDescriptor>();
   let currentPoi: PoiDescriptor | null = null;
   let pointerDownX = 0;
@@ -112,7 +120,7 @@ export function createPoiTracking(
       const dx = event.clientX - pointerDownX;
       const dy = event.clientY - pointerDownY;
       // Ignore if the pointer moved too far — this was a drag, not a click
-      if (dx * dx + dy * dy > CLICK_MAX_DISTANCE_SQ_PX) return;
+      if (Math.hypot(dx, dy) >= dragThresholdPx()) return;
 
       const canvas = scene.getEngine().getRenderingCanvas();
       const canvasRect = canvas?.getBoundingClientRect();

@@ -10,6 +10,7 @@
  */
 
 import type { DetailLimit } from "../../../terrain/mapDetailPolicy";
+import { retryDelayMs, type RetryDelay } from "../../../terrain/retryDelay";
 
 export interface ImageryResourceLimits {
   /** Estimated GPU bytes for the atlas, mips, gutters and page table. */
@@ -22,6 +23,10 @@ export interface ImageryResourceLimits {
   uploadBytesPerUpdate: number;
   /** Selection and preparation CPU per update before yielding, in ms. */
   cpuMsPerUpdate: number;
+  /** How long an image the server does not have stays missing before it is asked for again, ms. */
+  missingRetryMs: number;
+  /** How a failed download backs off, ms: the first wait, doubling with each failure in a row, up to the longest. */
+  retryDelayMs: RetryDelay;
 }
 
 /** One image's pages, each as its slot at every sampled level. */
@@ -113,8 +118,6 @@ export interface ImageryResidencyOptions {
   /** Called when residency changes in a way the display or selection should see. */
   onChange?: () => void;
   onError?: (error: Error, url: string) => void;
-  /** How long a missing tile stays missing before it may be asked for again. */
-  missingTtlMs?: number;
 }
 
 export interface ImageryResidency {
@@ -145,10 +148,6 @@ export interface ImageryResidency {
   dispose(): void;
 }
 
-function retryDelayMs(failures: number): number {
-  return Math.min(30_000, 2000 * 2 ** Math.max(0, failures - 1));
-}
-
 function decodedBytes(width: number, height: number): number {
   return width * height * 4;
 }
@@ -162,7 +161,6 @@ function preparedBytes(image: PreparedImage): number {
 export function createImageryResidency(options: ImageryResidencyOptions): ImageryResidency {
   const now = options.now ?? (() => performance.now());
   let limits = options.limits;
-  const missingTtlMs = options.missingTtlMs ?? 10 * 60_000;
   const entries = new Map<string, Entry>();
   const missing = new Map<string, number>();
   let demand = new Map<string, ImageryRequest>();
@@ -226,7 +224,7 @@ export function createImageryResidency(options: ImageryResidencyOptions): Imager
       if (image.width !== request.width || image.height !== request.height) {
         // A variant that is not the size it was declared is not that variant.
         entries.delete(request.imageKey);
-        missing.set(request.imageKey, now() + missingTtlMs);
+        missing.set(request.imageKey, now() + limits.missingRetryMs);
         missingRevision += 1;
         options.onError?.(new Error(`Map image was ${image.width}×${image.height}, expected ${request.width}×${request.height}.`), request.url);
         changed();
@@ -250,7 +248,7 @@ export function createImageryResidency(options: ImageryResidencyOptions): Imager
       }
       if (error instanceof ImageryMissingError) {
         entries.delete(request.imageKey);
-        missing.set(request.imageKey, now() + missingTtlMs);
+        missing.set(request.imageKey, now() + limits.missingRetryMs);
         missingRevision += 1;
         changed();
         return;
@@ -258,7 +256,7 @@ export function createImageryResidency(options: ImageryResidencyOptions): Imager
       // Rate limits, timeouts and network errors back off; they never mark a level missing.
       entry.state = "failed";
       entry.failures += 1;
-      entry.retryAt = now() + retryDelayMs(entry.failures);
+      entry.retryAt = now() + retryDelayMs(entry.failures, limits.retryDelayMs);
       entry.reservedBytes = 0;
       options.onError?.(error instanceof Error ? error : new Error(String(error)), request.url);
       changed();

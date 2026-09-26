@@ -184,6 +184,20 @@ describe("attachWheelController", () => {
     cleanup();
   });
 
+  it("pans a two-finger swipe by input.trackpad.panRate", async () => {
+    const { DEFAULT_INPUT_RATES, DEFAULT_INPUT_SETTINGS } = await import("./inputSettings");
+    vi.spyOn(performance, "now").mockReturnValue(1_000);
+    const canvas = createCanvas();
+    const camera = { panBy: vi.fn(), orbitBy: vi.fn(), zoomBy: vi.fn() };
+    const settings = { ...DEFAULT_INPUT_SETTINGS, rates: { ...DEFAULT_INPUT_RATES, trackpadPanRate: 0.3 } };
+    const cleanup = attachWheelController(canvas, camera, { isSafariWithGestures: false, getSettings: () => settings });
+
+    canvas.dispatchEvent(createWheelEvent({ deltaY: 12.25 }));
+    expect(camera.panBy).toHaveBeenCalledWith(0, expect.closeTo(3.675, 9), 800);
+
+    cleanup();
+  });
+
   it("zooms (not orbits) when shift is held in trackpad mode", () => {
     vi.spyOn(performance, "now").mockReturnValue(1_000);
     const canvas = createCanvas();

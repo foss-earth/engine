@@ -1,3 +1,4 @@
+import { DEFAULT_RETRY_DELAY_MS } from "../../terrain/retryDelay";
 import type { DeviceContext, ParameterBounds, ParameterSpec } from "../types";
 import { MAP_TAB } from "./map";
 
@@ -123,6 +124,26 @@ export const MAP_LOADING_PARAMETERS: readonly ParameterSpec[] = [
     description: "Processor time one frame may spend choosing and preparing imagery before it continues in the next.",
     reason: STARTING_VALUE, source: IMAGERY_RUNTIME,
   }),
+  quantity({
+    id: "map.imagery.missingRetryAfter", label: "Ask again for missing imagery after", unit: "s", min: 10, max: 86_400, fallback: 600, scale: "log2", step: 0.05,
+    description: "How long an image the server says it does not have is remembered before it is asked for again. Meanwhile a coarser level stands in.",
+    reason: "What the atlas remembered a missing image for before this became a parameter.", source: "src/engine/babylon/imagery/imageryResidency.ts",
+  }),
+  {
+    id: "map.retryDelay",
+    label: "Retry after a failed download",
+    description: "The wait before a failed terrain or 2D imagery download is tried again: the first wait, doubling with each failure in a row, up to the longest.",
+    unit: "s",
+    kind: "range",
+    bounds: () => ({ min: 0.25, max: 600 }),
+    scale: "log2",
+    step: 0.05,
+    default: { min: DEFAULT_RETRY_DELAY_MS.min / 1000, max: DEFAULT_RETRY_DELAY_MS.max / 1000 },
+    defaultReason: "What failed downloads backed off by before this became a parameter.",
+    home: { tab: MAP_TAB, section: "loading", level: "all" },
+    appliesLive: true,
+    source: "src/terrain/retryDelay.ts",
+  },
   quantity({
     id: "map.imagery.reselectWhileMoving", label: "2D imagery reselection while moving", unit: "ms", min: 0, max: 1000, fallback: 100, step: 10,
     description: "The shortest time between two choices of imagery while the view moves. The last view is always chosen for.",

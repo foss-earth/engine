@@ -32,8 +32,6 @@ export const DEFAULT_INPUT_SENSITIVITY: InputSensitivitySettings = {
   touch: { pan: 1, orbit: 1, zoom: 1 },
 };
 
-export const MOVEMENT_SENSITIVITY_BASE = 0.1;
-
 export const DEFAULT_INPUT_SETTINGS: InputSettings = {
   mode: "auto",
   sensitivity: DEFAULT_INPUT_SENSITIVITY,

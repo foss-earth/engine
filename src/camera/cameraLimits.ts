@@ -26,3 +26,23 @@ export const DEFAULT_CAMERA_LIMITS: CameraLimits = Object.freeze({
   pitchDeg: Object.freeze({ min: MIN_PITCH_DEG, max: MAX_PITCH_DEG }),
   zoomMeters: Object.freeze({ min: MIN_ZOOM_METERS, max: MAX_ZOOM_METERS }),
 });
+
+/**
+ * How the orbit target and the compass follow the ground under them:
+ * `camera.surfaceFollowSpeed`, `camera.orbitTargetZoomStep` and `camera.surfaceRetry`.
+ */
+export interface GroundFollow {
+  /** The fastest the orbit target and compass rise or fall with the ground, m/s. */
+  speedMetersPerSecond: number;
+  /** How far zooming in at the closest distance lowers a raised orbit target, per e-fold of zoom, m. */
+  zoomStepMeters: number;
+  /** How soon a ground height that was not loaded is looked up again, ms. */
+  retryMs: number;
+}
+
+/** What they were before they became parameters, and the parameters' defaults. */
+export const DEFAULT_GROUND_FOLLOW: GroundFollow = Object.freeze({
+  speedMetersPerSecond: 160,
+  zoomStepMeters: 750,
+  retryMs: 1500,
+});

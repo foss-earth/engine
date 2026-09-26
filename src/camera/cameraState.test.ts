@@ -53,6 +53,16 @@ describe("CameraController orbit target height", () => {
     expect(centerHeight(camera)).toBeCloseTo(264, 1);
   });
 
+  it("lowers a raised target by camera.orbitTargetZoomStep for each e-fold of zoom", () => {
+    const camera = createCamera(44.977753, -93.265011, 0, MIN_ZOOM_METERS);
+    const controller = new CameraController(camera);
+    controller.configureOrbitTargetHeight({ resolveSurfaceHeightMeters: () => 264, initialOffsetMeters: 1_000 });
+    controller.setGroundFollow({ ...controller.getGroundFollow(), zoomStepMeters: 100 });
+
+    controller.zoomBy(0.5);
+    expect(centerHeight(camera)).toBeCloseTo(1_264 - Math.LN2 * 100, 1);
+  });
+
   it("preserves orbit center height while panning across changing city heights", () => {
     let surfaceHeightMeters = 264;
     const camera = createCamera(44.977753, -93.265011, 0, 80);

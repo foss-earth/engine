@@ -56,7 +56,7 @@ declare global {
 }
 import { createRenderScheduler, type RenderScheduler } from "./renderScheduler";
 import { geodeticToEcef, DEG_TO_RAD } from "../../camera/cameraMath";
-import { CameraController, DEFAULT_CAMERA_LIMITS, type CameraLimits, type OrbitTargetHeightOptions } from "../../camera/cameraState";
+import { CameraController, DEFAULT_CAMERA_LIMITS, type CameraLimits, type GroundFollow, type OrbitTargetHeightOptions } from "../../camera/cameraState";
 import { createInputController, type InputController } from "../../input/createInputController";
 import { createInertialCameraController, type InertialCameraController } from "../../input/inertialCameraController";
 import type { GlobeNavigationIntentFrame } from "../../input/globeNavigation";
@@ -615,6 +615,13 @@ export async function createBabylonRuntime(
       zoomMeters: isNumberRange(zoom) ? zoom : DEFAULT_CAMERA_LIMITS.zoomMeters,
     };
   }
+  function groundFollow(): GroundFollow {
+    return {
+      speedMetersPerSecond: settings.get<number>("camera.surfaceFollowSpeed"),
+      zoomStepMeters: settings.get<number>("camera.orbitTargetZoomStep"),
+      retryMs: settings.get<number>("camera.surfaceRetry"),
+    };
+  }
   function inputRates(): InputRates {
     const rates = { ...DEFAULT_INPUT_RATES };
     for (const [field, id] of Object.entries(INPUT_RATE_IDS) as Array<[keyof InputRates, string]>) {
@@ -662,6 +669,7 @@ export async function createBabylonRuntime(
     if (!simMode || !scene.activeCamera) scene.activeCamera = geospatialCamera;
     cameraController = new CameraController(geospatialCamera);
     cameraController.setLimits(cameraLimits());
+    cameraController.setGroundFollow(groundFollow());
     const baseInertial = createInertialCameraController(cameraController, {
       decayPerFrame: () => settings.get<number>("camera.inertiaDecay"),
     });
@@ -1170,6 +1178,7 @@ export async function createBabylonRuntime(
       cameraController?.setLimits(cameraLimits());
       scheduler.requestRender();
     })),
+    ...["camera.surfaceFollowSpeed", "camera.orbitTargetZoomStep"].map(id => settings.watch(id, () => cameraController?.setGroundFollow(groundFollow()))),
     ...Object.values(INPUT_RATE_IDS).map(id => settings.watch(id, () => inputController?.setRates(inputRates()))),
   ];
 

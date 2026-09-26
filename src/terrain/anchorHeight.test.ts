@@ -70,6 +70,27 @@ describe("createAnchorHeightResolver", () => {
     expect(geodetic.altMeters).toBeCloseTo(10, 1);
   });
 
+  it("takes a new follow speed and retry time from the next lookup", () => {
+    let nowMs = 0;
+    const provider = vi.fn(() => null as number | null);
+    const resolver = createAnchorHeightResolver({ provider, nowMs: () => nowMs, providerMissRetryMs: 1000, maxVerticalSpeedMetersPerSecond: 100 });
+    resolver.resolve(anchorAt(10, 20, 0));
+    resolver.setTuning({ providerMissRetryMs: 10_000, maxVerticalSpeedMetersPerSecond: 1000 });
+    // The miss already waiting keeps its time; the next one waits the new one.
+    nowMs = 1001;
+    resolver.resolve(anchorAt(10, 20, 0));
+    expect(provider).toHaveBeenCalledTimes(2);
+    nowMs = 5000;
+    resolver.resolve(anchorAt(10, 20, 0));
+    expect(provider).toHaveBeenCalledTimes(2);
+
+    provider.mockReturnValue(300);
+    nowMs = 11_002;
+    const resolved = resolver.resolve(anchorAt(10, 20, 0));
+    // 100 ms (the stall cap) at 1000 m/s.
+    expect(ecefToGeodetic(resolved!.x, resolved!.y, resolved!.z).altMeters).toBeCloseTo(100, 1);
+  });
+
   it("uses fallback height when no provider data exists", () => {
     const resolver = createAnchorHeightResolver({ fallbackHeightMeters: 42 });
     const resolved = resolver.resolve(anchorAt(0, 0, 0));

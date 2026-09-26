@@ -1,4 +1,5 @@
 import { Vector3 } from "@babylonjs/core";
+import { DEFAULT_GROUND_FOLLOW } from "../camera/cameraLimits";
 import { DEG_TO_RAD, RAD_TO_DEG, ecefToGeodetic, geodeticToEcef } from "../camera/cameraMath";
 
 export interface AnchorHeightSample {
@@ -20,9 +21,9 @@ export interface AnchorHeightResolverOptions {
   provider?: AnchorHeightProvider;
   /** Disable for providers sampling streamed geometry whose LOD can change. */
   cacheProviderSamples?: boolean;
-  /** Maximum vertical motion speed for the displayed anchor height. */
+  /** Maximum vertical motion speed for the displayed anchor height: `camera.surfaceFollowSpeed`. */
   maxVerticalSpeedMetersPerSecond?: number;
-  /** How long to wait before retrying a provider miss for the same cell. */
+  /** How long to wait before retrying a provider miss for the same cell: `camera.surfaceRetry`. */
   providerMissRetryMs?: number;
   /** Optional clock override for tests. */
   nowMs?: () => number;
@@ -37,12 +38,12 @@ export interface AnchorHeightResolver {
   getCachedHeight(latDeg: number, lonDeg: number): number | null;
   clear(): void;
   setHeightOffset(meters: number): void;
+  /** New follow speed and retry time, from the next lookup. */
+  setTuning(tuning: Pick<AnchorHeightResolverOptions, "maxVerticalSpeedMetersPerSecond" | "providerMissRetryMs">): void;
 }
 
 const DEFAULT_CELL_SIZE_DEG = 0.002;
 const DEFAULT_FALLBACK_HEIGHT_METERS = 0;
-const DEFAULT_PROVIDER_MISS_RETRY_MS = 1500;
-const DEFAULT_MAX_VERTICAL_SPEED_METERS_PER_SECOND = 160;
 const MAX_SMOOTHING_DELTA_MS = 100;
 
 function normalizeLonDeg(lonDeg: number): number {
@@ -68,9 +69,8 @@ export function createAnchorHeightResolver(options: AnchorHeightResolverOptions 
   const cellSizeDeg = options.cellSizeDeg ?? DEFAULT_CELL_SIZE_DEG;
   const fallbackHeightMeters = options.fallbackHeightMeters ?? DEFAULT_FALLBACK_HEIGHT_METERS;
   let heightOffsetMeters = options.heightOffsetMeters ?? 0;
-  const providerMissRetryMs = options.providerMissRetryMs ?? DEFAULT_PROVIDER_MISS_RETRY_MS;
-  const maxVerticalSpeedMetersPerSecond = options.maxVerticalSpeedMetersPerSecond
-    ?? DEFAULT_MAX_VERTICAL_SPEED_METERS_PER_SECOND;
+  let providerMissRetryMs = options.providerMissRetryMs ?? DEFAULT_GROUND_FOLLOW.retryMs;
+  let maxVerticalSpeedMetersPerSecond = options.maxVerticalSpeedMetersPerSecond ?? DEFAULT_GROUND_FOLLOW.speedMetersPerSecond;
   const nowMs = options.nowMs ?? (() => performance.now());
   const heightCache = new Map<string, number>();
   const missRetryAtByCell = new Map<string, number>();
@@ -163,7 +163,12 @@ export function createAnchorHeightResolver(options: AnchorHeightResolverOptions 
     heightOffsetMeters = meters;
   }
 
-  return { resolve, resolveHeight: resolveBaseHeight, setSample, getCachedHeight, clear, setHeightOffset };
+  function setTuning(tuning: Pick<AnchorHeightResolverOptions, "maxVerticalSpeedMetersPerSecond" | "providerMissRetryMs">): void {
+    maxVerticalSpeedMetersPerSecond = tuning.maxVerticalSpeedMetersPerSecond ?? maxVerticalSpeedMetersPerSecond;
+    providerMissRetryMs = tuning.providerMissRetryMs ?? providerMissRetryMs;
+  }
+
+  return { resolve, resolveHeight: resolveBaseHeight, setSample, getCachedHeight, clear, setHeightOffset, setTuning };
 }
 
 export function sampleToAnchor(sample: AnchorHeightSample): Vector3 {

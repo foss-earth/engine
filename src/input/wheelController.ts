@@ -1,5 +1,5 @@
 import type { CameraInputTarget } from "./inertialCameraController";
-import { DEFAULT_INPUT_RATES, MOVEMENT_SENSITIVITY_BASE, type InputSettings } from "./inputSettings";
+import { DEFAULT_INPUT_RATES, type InputSettings } from "./inputSettings";
 
 type WheelGestureMode = "pan" | "pinchZoom" | "wheelZoom" | "orbit" | "ignore";
 
@@ -108,7 +108,8 @@ export function attachWheelController(
     // ── Trackpad two-finger swipe = pan ──────────────────────────────────
     if (session.mode === "pan") {
       const sensitivity = options.getSettings?.().sensitivity.trackpad.pan ?? 1;
-      camera.panBy(e.deltaX * sensitivity * MOVEMENT_SENSITIVITY_BASE, e.deltaY * sensitivity * MOVEMENT_SENSITIVITY_BASE, canvas.clientHeight);
+      const rate = rates().trackpadPanRate * sensitivity;
+      camera.panBy(e.deltaX * rate, e.deltaY * rate, canvas.clientHeight);
       return;
     }
 

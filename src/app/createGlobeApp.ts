@@ -439,15 +439,23 @@ export async function createGlobeApp(
     scene: runtime.scene,
     engine: runtime.engine,
   };
-  const poiTracking = createPoiTracking(runtime.scene, () => runtime.geospatialCamera);
+  const poiTracking = createPoiTracking(runtime.scene, () => runtime.geospatialCamera, {
+    dragThresholdPx: () => settings.get<number>("input.mouse.dragThreshold"),
+  });
   const culling = createHemisphereCulling(() => runtime.geospatialCamera?.globalPosition ?? null);
   const resolveSurfaceHeightMeters = (latDeg: number, lonDeg: number): number | null => (
     options.getSurfaceHeightMeters?.(latDeg, lonDeg) ?? runtime.surface?.sample(latDeg, lonDeg)?.heightMeters ?? null
   );
+  // The compass follows the ground as the orbit target does: `camera.surfaceFollowSpeed` and `camera.surfaceRetry`.
+  const anchorTuning = () => ({
+    maxVerticalSpeedMetersPerSecond: settings.get<number>("camera.surfaceFollowSpeed"),
+    providerMissRetryMs: settings.get<number>("camera.surfaceRetry"),
+  });
   const anchorHeights = createAnchorHeightResolver({
     provider: resolveSurfaceHeightMeters,
     cacheProviderSamples: false,
     heightOffsetMeters: compassHeightOffset(),
+    ...anchorTuning(),
   });
   runtime.configureOrbitTargetHeight({
     resolveSurfaceHeightMeters: anchorHeights.resolveHeight,
@@ -609,6 +617,7 @@ export async function createGlobeApp(
     settings.watch("interface.poiSpriteTuner", showTuners),
     settings.watch("interface.compassScaleTuner", showTuners),
     settings.watch("visualization.compass.heightOffset", applyCompassHeight),
+    ...["camera.surfaceFollowSpeed", "camera.surfaceRetry"].map(id => settings.watch(id, () => anchorHeights.setTuning(anchorTuning()))),
     settings.watch("input.globeAnchorRotation", value => runtime.setGlobeAnchorRotation?.(value === true)),
     ...INPUT_SENSITIVITY_IDS.map(id => settings.watch(id, () => runtime.setInputSensitivity?.(loadInputSensitivityPreference()))),
   ];
@@ -716,6 +725,8 @@ export async function createGlobeApp(
     { id: "toolbar", title: settings.getSectionTitle("interface", "toolbar"), element: sectionOf("interface", "toolbar", {
       footer: note("Hiding a button never hides its tab: every tab stays under +."),
     }), defaultOpen: false },
+    { id: "log", title: settings.getSectionTitle("interface", "log"), element: sectionOf("interface", "log"), defaultOpen: false },
+    { id: "search", title: settings.getSectionTitle("interface", "search"), element: sectionOf("interface", "search"), defaultOpen: false },
   ];
   const settingsSections: PanelSection[] = [
     { id: "presets", title: "Presets", element: presets.element, defaultOpen: false },

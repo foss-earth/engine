@@ -10,7 +10,7 @@ import {
   type ScreenPickInput,
 } from "./anchorPan";
 import { hasPickablePointAt } from "../sprites/picking";
-import { DEFAULT_CAMERA_LIMITS, type CameraLimits } from "./cameraLimits";
+import { DEFAULT_CAMERA_LIMITS, DEFAULT_GROUND_FOLLOW, type CameraLimits, type GroundFollow } from "./cameraLimits";
 import {
   geodeticToEcef,
   ecefToGeodetic,
@@ -24,14 +24,14 @@ import {
 
 export {
   DEFAULT_CAMERA_LIMITS,
+  DEFAULT_GROUND_FOLLOW,
   MAX_PITCH_DEG,
   MAX_ZOOM_METERS,
   MIN_PITCH_DEG,
   MIN_ZOOM_METERS,
   type CameraLimits,
+  type GroundFollow,
 } from "./cameraLimits";
-const ORBIT_TARGET_OFFSET_ZOOM_STEP_METERS = 750;
-const MAX_ORBIT_SURFACE_HEIGHT_SPEED_METERS_PER_SECOND = 160;
 const MAX_ORBIT_HEIGHT_SMOOTHING_DELTA_MS = 100;
 
 export interface OrbitTargetHeightOptions {
@@ -81,6 +81,7 @@ export class CameraController {
   private anchorPanDownClient: { x: number; y: number } | null = null;
 
   private limits: CameraLimits = DEFAULT_CAMERA_LIMITS;
+  private groundFollow: GroundFollow = DEFAULT_GROUND_FOLLOW;
 
   constructor(camera: GeospatialCamera) {
     this.camera = camera;
@@ -99,6 +100,15 @@ export class CameraController {
 
   getLimits(): CameraLimits {
     return this.limits;
+  }
+
+  /** How the orbit target follows the ground: from the next frame. */
+  setGroundFollow(follow: GroundFollow): void {
+    this.groundFollow = follow;
+  }
+
+  getGroundFollow(): GroundFollow {
+    return this.groundFollow;
   }
 
   private clampPitchDeg(pitchDeg: number): number {
@@ -127,7 +137,7 @@ export class CameraController {
 
     const deltaMs = Math.max(0, Math.min(MAX_ORBIT_HEIGHT_SMOOTHING_DELTA_MS, now - this.lastSurfaceHeightResolveMs));
     this.lastSurfaceHeightResolveMs = now;
-    const maxStep = MAX_ORBIT_SURFACE_HEIGHT_SPEED_METERS_PER_SECOND * (deltaMs / 1000);
+    const maxStep = this.groundFollow.speedMetersPerSecond * (deltaMs / 1000);
     const delta = targetHeightMeters - this.smoothedSurfaceHeightMeters;
     if (Math.abs(delta) <= maxStep) {
       this.smoothedSurfaceHeightMeters = targetHeightMeters;
@@ -371,7 +381,7 @@ export class CameraController {
       return;
     }
 
-    const offsetStepMeters = Math.max(1, Math.abs(Math.log(factor)) * ORBIT_TARGET_OFFSET_ZOOM_STEP_METERS);
+    const offsetStepMeters = Math.max(1, Math.abs(Math.log(factor)) * this.groundFollow.zoomStepMeters);
     this.orbitTargetOffsetMeters = Math.max(0, this.orbitTargetOffsetMeters - offsetStepMeters);
     this.applyViewState({ ...state, zoomMeters: this.limits.zoomMeters.min });
   }
