@@ -19,6 +19,7 @@ import { getAppSettings } from "../settings/appSettings";
 import { INPUT_SENSITIVITY_IDS, PERFORMANCE_HUD_METRICS } from "../settings/catalogue";
 import { createParameterControl, type ParameterControlHandle } from "../shell/settings/controls";
 import { createParameterSection, type ParameterSectionHandle } from "../shell/settings/parameterSection";
+import { createPresetsSection } from "../shell/settings/presetsSection";
 import { createSavedSettingsSection } from "../shell/settings/savedSettings";
 import type {
   GlobeHandle,
@@ -693,6 +694,7 @@ export async function createGlobeApp(
     group("Performance HUD", performanceIds),
     group("Extra panels", ["interface.poiSpriteTuner", "interface.compassScaleTuner"]),
   );
+  const presets = createPresetsSection(settings);
   const savedSettings = createSavedSettingsSection(settings);
   const inputMethodElement = inputMethodSectionEl
     ? sectionOf("controls", "input-method", { main: inputMethodSectionEl, covers: ["input.mode", ...INPUT_SENSITIVITY_IDS] })
@@ -716,6 +718,7 @@ export async function createGlobeApp(
     }), defaultOpen: false },
   ];
   const settingsSections: PanelSection[] = [
+    { id: "presets", title: "Presets", element: presets.element, defaultOpen: false },
     { id: "saved-settings", title: "Saved settings", element: savedSettings.element, defaultOpen: false },
     ...(aboutElement ? [{ id: "about", title: "About", element: aboutElement, defaultOpen: false }] : []),
   ];
@@ -883,6 +886,7 @@ export async function createGlobeApp(
       for (const stop of stopWatchingSettings) stop();
       for (const section of parameterSections) section.destroy();
       for (const control of parameterControls) control.destroy();
+      presets.destroy();
       savedSettings.destroy();
       unmountInlineInputMode?.();
       spriteTuner?.destroy();

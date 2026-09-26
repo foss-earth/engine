@@ -1136,6 +1136,58 @@
   opacity: 0.45;
 }
 
+/* Presets: each one's name, what it trades, its values in full, and what can be done with it. */
+.foss-earth-preset-status {
+  font-weight: 600;
+  opacity: 0.85;
+}
+
+.foss-earth-presets__list {
+  display: grid;
+  flex-basis: 100%;
+}
+
+.foss-earth-preset {
+  padding: 10px 0;
+  border-top: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.foss-earth-preset > .foss-earth-choices,
+.foss-earth-preset__values {
+  flex-basis: 100%;
+}
+
+.foss-earth-preset__values {
+  font-size: 12px;
+}
+
+.foss-earth-preset__values ul,
+.foss-earth-preset__changes {
+  flex-basis: 100%;
+  margin: 4px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+/* Save as preset joins the row it sits in. */
+.foss-earth-preset-save {
+  display: contents;
+}
+
+.foss-earth-preset-save[hidden],
+.foss-earth-preset input[hidden],
+.foss-earth-preset-save input[hidden] {
+  display: none;
+}
+
+.foss-earth-preset .foss-earth-parameter__text,
+.foss-earth-preset-save .foss-earth-parameter__text {
+  width: auto;
+  flex: 1 1 12em;
+  min-width: 0;
+}
+
 /* Show all parameters: one row per parameter, its control, what it does, where it came from. */
 .foss-earth-parameter-section__footer {
   justify-content: flex-start;
