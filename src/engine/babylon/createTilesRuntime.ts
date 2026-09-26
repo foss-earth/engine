@@ -63,8 +63,16 @@ export interface GoogleLoadingState {
   cachedBytes: number;
   /** Tiles waiting for a download slot. */
   queued: number;
+  /** Downloads and parses running now, which `map.google.downloads` and `.parses` bound. */
   downloading: number;
   parsing: number;
+  /** Downloaded tiles waiting for a parse slot. */
+  waitingToParse: number;
+  /**
+   * Tiles whose children the renderer is still preparing. Until they are
+   * ready it cannot ask for anything finer, though nothing is downloading.
+   */
+  preparingChildren: number;
 }
 
 const MiB = 1024 * 1024;
@@ -359,14 +367,19 @@ export function createGoogleTilesRuntime(options: GoogleTilesRuntimeOptions): Go
     getLoadingState() {
       // Present at run time in 0.4.24, though its declarations leave them out.
       const cache = tiles.lruCache as unknown as { itemSet?: Set<unknown>; cachedBytes?: number };
-      const queue = (value: unknown): number => (value as { currJobs?: number }).currJobs ?? 0;
-      const stats = (tiles as unknown as { stats?: { queued?: number } }).stats;
+      type Queue = { currJobs?: number; items?: unknown[] };
+      const running = (value: unknown): number => (value as Queue).currJobs ?? 0;
+      const waiting = (value: unknown): number => (value as Queue).items?.length ?? 0;
+      const renderer = tiles as unknown as { stats?: { queued?: number }; processNodeQueue?: Queue };
+      const children = renderer.processNodeQueue;
       return {
         cachedTiles: cache.itemSet?.size ?? 0,
         cachedBytes: cache.cachedBytes ?? 0,
-        queued: stats?.queued ?? 0,
-        downloading: queue(tiles.downloadQueue),
-        parsing: queue(tiles.parseQueue),
+        queued: renderer.stats?.queued ?? 0,
+        downloading: running(tiles.downloadQueue),
+        parsing: running(tiles.parseQueue),
+        waitingToParse: waiting(tiles.parseQueue),
+        preparingChildren: children ? running(children) + waiting(children) : 0,
       };
     },
     getTerrainDetailState() {

@@ -9,8 +9,10 @@ vi.mock("3d-tiles-renderer/babylonjs", () => ({
     visibleTiles = new Set();
     activeTiles = new Set();
     lruCache = { minSize: 0, maxSize: 0, minBytesSize: 0, maxBytesSize: 0, itemSet: new Set(), cachedBytes: 0 };
-    downloadQueue = { maxJobs: 0, currJobs: 0 };
-    parseQueue = { maxJobs: 0, currJobs: 0 };
+    downloadQueue = { maxJobs: 0, currJobs: 0, items: [] as unknown[] };
+    parseQueue = { maxJobs: 0, currJobs: 0, items: [] as unknown[] };
+    processNodeQueue = { maxJobs: 25, currJobs: 0, items: [] as unknown[] };
+    stats = { queued: 0 };
     listeners = new Map<string, Set<(event: unknown) => void>>();
     registerPlugin() {}
     calculateTileViewError(_tile: unknown, target: { inView: boolean; error: number; distanceFromCamera: number }) {
@@ -115,6 +117,25 @@ describe("Google collision surface revisions", () => {
     dispatch("tile-visibility-change", { visible: true });
     dispatch("dispose-model");
     expect(runtime.getRevision()).toBe(disposed);
+  });
+});
+
+describe("Google loading state", () => {
+  it("counts tiles waiting to parse and tiles whose children are being prepared, as the renderer's idle test does", () => {
+    const scene = { activeCamera: null, getEngine: () => ({}) } as unknown as Scene;
+    const runtime = createGoogleTilesRuntime({ scene, apiKey: "test" });
+    const tiles = runtime.tiles as unknown as {
+      stats: { queued: number };
+      downloadQueue: { currJobs: number };
+      parseQueue: { currJobs: number; items: unknown[] };
+      processNodeQueue: { currJobs: number; items: unknown[] };
+    };
+    Object.assign(tiles.stats, { queued: 1 });
+    Object.assign(tiles.downloadQueue, { currJobs: 2 });
+    Object.assign(tiles.parseQueue, { currJobs: 3, items: [{}, {}] });
+    Object.assign(tiles.processNodeQueue, { currJobs: 1, items: [{}, {}, {}] });
+    expect(runtime.getLoadingState()).toMatchObject({ queued: 1, downloading: 2, parsing: 3, waitingToParse: 2, preparingChildren: 4 });
+    runtime.dispose();
   });
 });
 

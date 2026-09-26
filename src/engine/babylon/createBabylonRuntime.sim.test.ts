@@ -384,7 +384,7 @@ describe("createBabylonRuntime simulation mode", () => {
       return 1;
     });
     vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
-    const loading = { cachedTiles: 10, cachedBytes: 0, queued: 3, downloading: 2, parsing: 1 };
+    const loading = { cachedTiles: 10, cachedBytes: 0, queued: 3, downloading: 2, parsing: 1, waitingToParse: 1, preparingChildren: 0 };
     mocks.createGoogleTilesRuntime.mockReturnValue({
       tiles: { visibleTiles: new Set(), activeTiles: new Set(), group: {} },
       getLoadingState: () => loading,
@@ -411,8 +411,12 @@ describe("createBabylonRuntime simulation mode", () => {
     };
     for (let i = 0; i < 4; i++) await frame();
     expect(settled).toBe(false);
+    // Nothing downloading, but children still being prepared: finer tiles are yet to be asked for.
+    Object.assign(loading, { queued: 0, downloading: 0, parsing: 0, waitingToParse: 0, preparingChildren: 4 });
+    for (let i = 0; i < 4; i++) await frame();
+    expect(settled).toBe(false);
     // Loaded: the refined surface is the ground, once two checks agree the renderer is idle.
-    Object.assign(loading, { queued: 0, downloading: 0, parsing: 0 });
+    Object.assign(loading, { preparingChildren: 0 });
     sample.mockReturnValue({
       point: { x: 0, y: 0, z: 0 }, normal: { x: 0, y: 1, z: 0 }, distanceMeters: 1,
       heightMeters: 300, meshId: "terrain", revision: 2, quality: 10, geometricErrorMeters: 4,

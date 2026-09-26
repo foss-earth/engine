@@ -1257,11 +1257,17 @@ export async function createBabylonRuntime(
     let lastTerrainSignature = "";
     let centerQuality: number | null = null;
     let settledChecks = 0;
-    /** Google tiles queued, downloading or parsing; null when not on Google or not known. */
+    /**
+     * Google tiles with work left: queued, downloading, parsing or with
+     * children being prepared, which is all the renderer's own idle test
+     * counts. Null when not on Google or not known.
+     */
     const googlePendingTiles = (): number | null => {
       if (sourceMode !== "google-tiles") return null;
       const loading = tilesRuntime?.getLoadingState?.();
-      return loading ? loading.queued + loading.downloading + loading.parsing : null;
+      return loading
+        ? loading.queued + loading.downloading + loading.parsing + loading.waitingToParse + loading.preparingChildren
+        : null;
     };
     let latestProgress: Parameters<NonNullable<TerrainPreparationOptions["onProgress"]>>[0] = {
       phase: "loading", readySamples: 0, totalSamples: points.length, progress: 0,
