@@ -73,6 +73,8 @@ declare global {
       runtime: BabylonRuntime;
       scenes: SceneController;
       readonly renderer: PanoramaRenderer | null;
+      /** The app's settings: the check resets automatic map detail before it times frames. */
+      settings: ReturnType<typeof getAppSettings>;
       /** The CPU reference the check holds the GPU's output against. */
       math: typeof panoramaMath & { effectiveOrbRadius: typeof effectiveOrbRadius };
     };
@@ -850,6 +852,7 @@ export async function createGlobeApp(
       runtime,
       scenes,
       get renderer() { return panoramaTestHooks.renderer; },
+      settings,
       math: { ...panoramaMath, effectiveOrbRadius },
     };
   }
