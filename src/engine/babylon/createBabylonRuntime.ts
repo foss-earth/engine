@@ -62,6 +62,7 @@ import { createInertialCameraController, type InertialCameraController } from ".
 import type { GlobeNavigationIntentFrame } from "../../input/globeNavigation";
 import { DEFAULT_INPUT_RATES, type InputModePreference, type InputRates, type InputSensitivitySettings } from "../../input/inputSettings";
 import { INPUT_RATE_IDS } from "../../settings/catalogue";
+import { createFrameProfileSession, type FrameProfileSession } from "../../perf/frameProfileSession";
 import { isNumberRange } from "../../settings/values";
 import type { GlobeViewState } from "../types";
 import {
@@ -329,6 +330,12 @@ export interface BabylonRuntime {
   getDeviceGeneration(): number;
   onDeviceLost(listener: () => void): () => void;
   onDeviceRestored(listener: () => void): () => void;
+  /**
+   * The runtime's frame profiling, off until switched on. The runtime closes
+   * each frame and times its own map work; a host adds its sections to
+   * `frameProfile.profiler`. See foss-earth/perf.
+   */
+  frameProfile: FrameProfileSession;
   destroy(): void;
 }
 
@@ -418,6 +425,9 @@ export async function createBabylonRuntime(
     force: options.rendererForce ?? (backend === "webgpu" || backend === "webgl2" || backend === "webgl" ? backend : null),
     antialias: settings.get("renderer.antialias") !== false,
   });
+  // One profiler per runtime; off, it leaves nothing attached to the scene.
+  const frameProfile = createFrameProfileSession({ scene, engine: renderer.engine });
+  const { profiler } = frameProfile;
   // Defaults and bounds that depend on the renderer can now be resolved.
   settings.setDeviceContext({
     rendererMode: renderer.mode,
@@ -565,16 +575,25 @@ export async function createBabylonRuntime(
       inFrame = true;
       focusCache = null;
       const frameNow = performance.now();
+      // The frame boundary: everything below, the host's simulation included, is this frame's.
+      frameProfile.frame(frameNow);
+      profiler.tag("engine frame", renderer.engine.frameId);
       terrainCapture?.beginFrame(frameNow);
+      let started = profiler.clock();
       if (!simMode) {
         inertialCameraController?.update();
       }
       updateTerrainPreparationCamera();
+      profiler.add("map/camera", started);
+      started = profiler.clock();
       tilesRuntime?.update();
+      profiler.add("map/google tiles", started);
+      started = profiler.clock();
       // Frames drawn while a lease holds navigation are not map frames.
       rasterTilesRuntime?.reportFrame(frameNow, frameNow - lastRasterFrameAt, document.hidden || mapsSuspended);
       lastRasterFrameAt = frameNow;
       rasterTilesRuntime?.update();
+      profiler.add("map/raster tiles", started);
       if (status.mode === "raster-basemap" && (rasterTilesRuntime?.getMetrics().visibleTiles ?? 0) > 0) {
         hideFallbackExperience();
       }
@@ -590,7 +609,9 @@ export async function createBabylonRuntime(
       renderer.engine.endFrame();
       // Sampling after render observes current mesh transforms, including the
       // simulation's floating origin. Refinement keeps running with no aircraft.
+      started = profiler.clock();
       preparationTick?.(frameNow);
+      profiler.add("map/terrain preparation", started);
       terrainCapture?.endFrame();
       inFrame = false;
       focusCache = null;
@@ -1813,7 +1834,9 @@ export async function createBabylonRuntime(
       deviceRestoredListeners.add(listener);
       return () => { deviceRestoredListeners.delete(listener); };
     },
+    frameProfile,
     destroy() {
+      frameProfile.dispose();
       navigation.dispose();
       renderer.engine.onContextLostObservable.remove(deviceLostObserver);
       renderer.engine.onContextRestoredObservable.remove(deviceRestoredObserver);

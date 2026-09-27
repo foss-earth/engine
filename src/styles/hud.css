@@ -1438,3 +1438,54 @@
 :root[data-theme="light"] .foss-earth-scene-url {
   background: rgba(255, 255, 255, 0.7);
 }
+
+/* ─── Frame budget ──────────────────────────────────────────────── */
+/* Controls flow as a paragraph grid; the measured numbers are a data table. */
+.foss-earth-frame-budget-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.foss-earth-frame-budget__results {
+  display: grid;
+  gap: 8px;
+}
+
+.foss-earth-frame-budget__results[hidden] {
+  display: none;
+}
+
+.foss-earth-frame-budget {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: "SF Mono", Menlo, monospace;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.foss-earth-frame-budget th,
+.foss-earth-frame-budget td {
+  padding: 3px 4px;
+  border-bottom: 1px solid var(--foss-earth-frame-budget-line, rgba(148, 163, 184, 0.24));
+  text-align: right;
+  white-space: nowrap;
+}
+
+.foss-earth-frame-budget th[scope="row"],
+.foss-earth-frame-budget thead th:first-child {
+  text-align: left;
+  font-weight: 500;
+}
+
+.foss-earth-frame-budget thead th,
+.foss-earth-frame-budget__group th {
+  color: var(--foss-earth-frame-budget-muted, inherit);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  opacity: 0.72;
+}
+
+.foss-earth-frame-budget__scroll {
+  overflow-x: auto;
+}

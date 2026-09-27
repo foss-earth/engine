@@ -40,6 +40,9 @@ import { createMapSourcePanel } from "../shell/mapSourcePanel";
 import { createMapDetailController, type MapDetailController } from "../shell/mapDetailController";
 import { connectMapDetailRuntime } from "../shell/connectMapDetailRuntime";
 import { createRendererPanel, getRendererLabel } from "../shell/rendererPanel";
+import { createFrameBudgetPanel } from "../shell/frameBudgetPanel";
+import { bindFrameProfileSettings } from "../perf/frameProfileSession";
+import { FRAME_PROFILING_IDS, frameProfilingParameters } from "../settings/catalogue/profiling";
 import { createOrbitCompass, type OrbitCompassHandle } from "../visualization/orbitCompass";
 import { createHemisphereCulling } from "../perf/culling";
 import { createPerformanceMetrics, type PerformanceSnapshot } from "../perf/metrics";
@@ -725,9 +728,26 @@ export async function createGlobeApp(
   const performanceIds = PERFORMANCE_HUD_METRICS.map(([metric]) => `interface.performanceHud.${metric}`);
   const performanceMain = document.createElement("div");
   performanceMain.className = "settings-section-content";
+  // The frame budget lives here, the one home of its profiling parameters.
+  if (!settings.has(FRAME_PROFILING_IDS.enabled)) settings.register(frameProfilingParameters({ tab: "renderer", section: "performance" }));
+  const unbindFrameProfile = bindFrameProfileSettings(settings, runtime.frameProfile);
+  const frameBudget = createFrameBudgetPanel({
+    session: runtime.frameProfile,
+    settings,
+    unmeasured: "work nobody has timed yet, the browser's own, and waiting for the display",
+    readings: ["scene.panorama.sourceGpuMiB", "scene.panorama.decodedMiB", "scene.panorama.encodedMiB"],
+    traceFileName: "foss-earth-frame-trace",
+  });
+  const frameBudgetGroup = document.createElement("div");
+  frameBudgetGroup.className = "settings-metric-menu";
+  const frameBudgetTitle = document.createElement("div");
+  frameBudgetTitle.className = "settings-section-title";
+  frameBudgetTitle.textContent = "Frame budget";
+  frameBudgetGroup.append(frameBudgetTitle, frameBudget.element);
   performanceMain.append(
     group("Performance HUD", performanceIds),
     group("Extra panels", ["interface.poiSpriteTuner", "interface.compassScaleTuner"]),
+    frameBudgetGroup,
   );
   const presets = createPresetsSection(settings);
   const savedSettings = createSavedSettingsSection(settings);
@@ -767,7 +787,10 @@ export async function createGlobeApp(
     sections: [{
       id: "performance",
       title: settings.getSectionTitle("renderer", "performance"),
-      element: sectionOf("renderer", "performance", { main: performanceMain, covers: [...performanceIds, "interface.poiSpriteTuner", "interface.compassScaleTuner"] }),
+      element: sectionOf("renderer", "performance", {
+        main: performanceMain,
+        covers: [...performanceIds, "interface.poiSpriteTuner", "interface.compassScaleTuner", ...Object.values(FRAME_PROFILING_IDS)],
+      }),
     }],
   });
   // Scenes: one mounted at a time; `?scene=<id>` loads a registered example.
@@ -1006,6 +1029,8 @@ export async function createGlobeApp(
       disconnectMapDetail();
       if (!options.mapDetail) mapDetail.dispose();
       rendererPanel.destroy();
+      frameBudget.destroy();
+      unbindFrameProfile();
       themeBtnEl?.removeEventListener("click", onThemeButtonClick);
       offThemeChangeForButton();
       offRendererActivity();
