@@ -7,8 +7,9 @@ import { MAP_AUTO_PARAMETERS } from "./auto";
 import { MAP_LOADING_PARAMETERS, MAP_SELECTION_PARAMETERS, MAP_TERRAIN_SELECTION_PARAMETERS } from "./loading";
 import { MAP_DETAIL_PARAMETERS, MAP_SOURCE_PARAMETERS, MAP_TAB } from "./map";
 import { RENDERER_PARAMETERS, RENDERER_TAB } from "./renderer";
+import { SCENE_PARAMETERS, SCENE_SECTION_TITLES, SCENES_TAB } from "./scenes";
 
-export { CONTROLS_TAB, INTERFACE_TAB, MAP_TAB, RENDERER_TAB, SETTINGS_TAB, PERFORMANCE_HUD_METRICS, TOOLBAR_BUTTONS };
+export { CONTROLS_TAB, INTERFACE_TAB, MAP_TAB, RENDERER_TAB, SCENES_TAB, SETTINGS_TAB, PERFORMANCE_HUD_METRICS, TOOLBAR_BUTTONS };
 export { INPUT_RATE_IDS, INPUT_SENSITIVITY_IDS } from "./controls";
 export { atlasLimitMiB } from "./loading";
 
@@ -23,6 +24,7 @@ export const FOSS_EARTH_PARAMETERS: readonly ParameterSpec[] = [
   ...RENDERER_PARAMETERS,
   ...CONTROLS_PARAMETERS,
   ...INTERFACE_PARAMETERS,
+  ...SCENE_PARAMETERS,
 ];
 
 export const FOSS_EARTH_SECTION_TITLES: ReadonlyArray<readonly [string, string, string]> = [
@@ -45,6 +47,7 @@ export const FOSS_EARTH_SECTION_TITLES: ReadonlyArray<readonly [string, string, 
   [INTERFACE_TAB, "toolbar", "Toolbar"],
   [INTERFACE_TAB, "log", "Log"],
   [INTERFACE_TAB, "search", "Search"],
+  ...SCENE_SECTION_TITLES,
 ];
 
 function parseJson(raw: string): unknown {
