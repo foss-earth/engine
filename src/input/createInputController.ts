@@ -24,10 +24,14 @@ export interface InputController {
   setRates(rates: Partial<InputRates>): void;
   getRates(): InputRates;
   /**
-   * While suspended, gestures reach no camera: a navigation lease owns input.
-   * Suspending ends an anchor drag and stops inertia.
+   * While suspended, the globe's controllers are detached: a navigation lease
+   * owns input, and every event reaches its listeners untouched. Suspending
+   * ends an anchor drag and stops inertia; resuming attaches them afresh, so
+   * a gesture that spanned the handover starts over.
    */
   setSuspended(suspended: boolean): void;
+  /** The input mode wheel and gesture events are read with. */
+  getMode(): InputModePreference;
   destroy(): void;
 }
 
@@ -68,20 +72,7 @@ export function createInputController(
   const docWheelHandler = (e: Event): void => { if (isCanvasEvent(e)) e.preventDefault(); };
   document.addEventListener("wheel", docWheelHandler, { passive: false });
 
-  // Every controller moves the camera through this gate, so suspension needs
-  // no change to them: their pointer bookkeeping continues, their effect stops.
   let suspended = false;
-  const target: CameraInputTarget = {
-    panBy: (dx, dy, height) => { if (!suspended) camera.panBy(dx, dy, height); },
-    orbitBy: (pitch, heading) => { if (!suspended) camera.orbitBy(pitch, heading); },
-    zoomBy: factor => { if (!suspended) camera.zoomBy(factor); },
-    cancelInertial: () => camera.cancelInertial?.(),
-    cancel: () => camera.cancel?.(),
-    beginAnchorPan: pick => (!suspended && camera.beginAnchorPan ? camera.beginAnchorPan(pick) : false),
-    panAnchorTo: (pick, sensitivity) => (!suspended && camera.panAnchorTo ? camera.panAnchorTo(pick, sensitivity) : false),
-    getAnchorPanScreenError: pick => (!suspended && camera.getAnchorPanScreenError ? camera.getAnchorPanScreenError(pick) : null),
-    endAnchorPan: () => camera.endAnchorPan?.(),
-  };
 
   const docGestureCleanup: Array<() => void> = [];
   if (hasSafariGestures) {
@@ -93,15 +84,24 @@ export function createInputController(
   }
 
   // ── Canvas-level handlers ────────────────────────────────────────
-  const detachWheel = attachWheelController(canvas, target, { isSafariWithGestures: hasSafariGestures, isOrbitMode: options.isOrbitMode, getSettings: () => settings });
-  const detachSafari = hasSafariGestures ? attachSafariGestures(canvas, target, { getSettings: () => settings }) : (): void => undefined;
-  const detachTouch = attachTouchController(canvas, target, { isOrbitMode: options.isOrbitMode, getSettings: () => settings });
-  const detachMouse = attachMouseController(canvas, target, { isOrbitMode: options.isOrbitMode, getSettings: () => settings });
+  // They run in the capture phase and stop the events they use, so while a
+  // lease owns input they are not attached at all.
+  const attachControllers = (): (() => void) => {
+    const detachers = [
+      attachWheelController(canvas, camera, { isSafariWithGestures: hasSafariGestures, isOrbitMode: options.isOrbitMode, getSettings: () => settings }),
+      hasSafariGestures ? attachSafariGestures(canvas, camera, { getSettings: () => settings }) : (): void => undefined,
+      attachTouchController(canvas, camera, { isOrbitMode: options.isOrbitMode, getSettings: () => settings }),
+      attachMouseController(canvas, camera, { isOrbitMode: options.isOrbitMode, getSettings: () => settings }),
+    ];
+    return () => { for (const detach of detachers) detach(); };
+  };
+  let detachControllers: (() => void) | null = attachControllers();
 
   return {
     setMode(mode: InputModePreference): void {
       settings.mode = mode;
     },
+    getMode: () => settings.mode,
     setSensitivity(sensitivity: Partial<InputSensitivitySettings>): void {
       settings.sensitivity = normalizeSensitivitySettings({
         mouse: { ...settings.sensitivity.mouse, ...sensitivity.mouse },
@@ -128,13 +128,15 @@ export function createInputController(
       if (suspended) {
         camera.endAnchorPan?.();
         camera.cancel?.();
+        detachControllers?.();
+        detachControllers = null;
+      } else {
+        detachControllers = attachControllers();
       }
     },
     destroy(): void {
-      detachWheel();
-      detachSafari();
-      detachTouch();
-      detachMouse();
+      detachControllers?.();
+      detachControllers = null;
       document.removeEventListener("wheel", docWheelHandler);
       for (const cleanup of docGestureCleanup) cleanup();
     },

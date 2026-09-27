@@ -259,6 +259,8 @@ export interface BabylonRuntime {
   setOrbitMode(active: boolean): void;
   /** Force or auto-detect the active input mode used by wheel/pointer controllers. */
   setInputMode(mode: InputModePreference): void;
+  /** The input mode wheel and gesture events are read with; a navigation lease's input reads them the same way. */
+  getInputMode(): InputModePreference;
   /** Set movement sensitivity multipliers for mouse, trackpad, and touch. */
   setInputSensitivity(sensitivity: Partial<InputSensitivitySettings>): void;
   /**
@@ -1746,6 +1748,9 @@ export async function createBabylonRuntime(
     },
     setInputMode(mode: InputModePreference): void {
       inputController?.setMode(mode);
+    },
+    getInputMode(): InputModePreference {
+      return inputController?.getMode() ?? "auto";
     },
     setInputSensitivity(sensitivity: Partial<InputSensitivitySettings>): void {
       inputController?.setSensitivity(sensitivity);

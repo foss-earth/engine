@@ -58,7 +58,7 @@ import {
   withStickDeadzone,
 } from "../input/globeNavigation";
 import { createHudBar } from "../shell/hudBar";
-import { createSceneHotspots, createScenesPanel } from "../shell/scenesPanel";
+import { createSceneHotspots, createSceneHud, createScenesPanel } from "../shell/scenesPanel";
 import { createSceneController, type SceneController } from "../scenes/sceneController";
 import { SCENE_EXAMPLES } from "../scenes/examples";
 import { effectiveOrbRadius, type PanoramaRenderer } from "../engine/babylon/panorama/panoramaRenderer";
@@ -382,8 +382,6 @@ export async function createGlobeApp(
       { kind: "button", id: "helpButton", title: "Controls help", ariaLabel: "Controls help", text: "?" },
       { kind: "button", id: "settingsButton", title: "Settings", ariaLabel: "Settings", className: "settings-button", text: "⚙" },
       { kind: "button", id: "scenesButton", title: "Scenes. Click to show or hide the Scenes tab.", ariaLabel: "Scenes", className: "scenes-button", text: "◎" },
-      { kind: "button", id: "sceneExitButton", title: "Leave the panorama for the view you entered it from. Escape does the same.", ariaLabel: "Exit panorama", appearance: "chip", className: "hud-chip-button scene-exit-button", text: "Exit panorama" },
-      { kind: "slot", id: "sceneCreditsSlot", className: "hud-chip-group scene-credits-slot", ariaLabel: "Panorama credits" },
       {
         kind: "button",
         id: "themeButton",
@@ -819,32 +817,8 @@ export async function createGlobeApp(
   const sceneHotspots = createSceneHotspots({ controller: scenes, container: canvas.parentElement ?? rootElement });
   const onScenesButtonClick = (): void => toggleTab("scenes");
   scenesBtnEl?.addEventListener("click", onScenesButtonClick);
-  const sceneExitBtnEl = rootElement.querySelector<HTMLButtonElement>("#sceneExitButton");
-  const sceneCreditsEl = rootElement.querySelector<HTMLElement>("#sceneCreditsSlot");
-  const onSceneExitClick = (): void => { void scenes.handle()?.exit(); };
-  sceneExitBtnEl?.addEventListener("click", onSceneExitClick);
-  // The Exit chip is there only while a panorama is entered; the credit chip while one is on screen.
-  const offSceneHud = scenes.subscribe(state => {
-    const phase = state.status?.phase;
-    if (sceneExitBtnEl) sceneExitBtnEl.hidden = !(phase === "immersive" || phase === "entering" || phase === "preparing");
-    if (sceneExitBtnEl) sceneExitBtnEl.textContent = phase === "immersive" ? "Exit panorama" : "Cancel";
-    if (sceneCreditsEl) {
-      const credits = state.status?.credits ?? [];
-      const shown = phase === "immersive" ? credits : [];
-      sceneCreditsEl.hidden = shown.length === 0;
-      sceneCreditsEl.replaceChildren(...shown.map(credit => {
-        const chip = document.createElement(credit.url ? "a" : "span");
-        chip.className = "hud-chip scene-credit-chip";
-        chip.textContent = credit.license ? `${credit.text} · ${credit.license}` : credit.text;
-        if (credit.url && chip instanceof HTMLAnchorElement) {
-          chip.href = credit.url;
-          chip.target = "_blank";
-          chip.rel = "noopener noreferrer";
-        }
-        return chip;
-      }));
-    }
-  });
+  // While a panorama is entered, its close button and credit take the map's place at the bar's right end.
+  const sceneHud = mapSourceSlot ? createSceneHud({ controller: scenes, container: mapSourceSlot, mapSource: mapSourceHud?.element }) : null;
   const requestedScene = params.get("scene");
   if (requestedScene) void scenes.load(requestedScene, { exampleId: true });
   if (panoramaTest) {
@@ -1020,9 +994,8 @@ export async function createGlobeApp(
       inputModeHud?.destroy();
       northBtnEl?.removeEventListener("click", resetNorth);
       offNavigationChange();
-      offSceneHud();
+      sceneHud?.destroy();
       scenesBtnEl?.removeEventListener("click", onScenesButtonClick);
-      sceneExitBtnEl?.removeEventListener("click", onSceneExitClick);
       sceneHotspots.destroy();
       scenesPanel.destroy();
       scenes.destroy();

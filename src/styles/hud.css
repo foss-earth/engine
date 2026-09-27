@@ -124,6 +124,28 @@
 /* ─── Map source: the bottom-right end of the bar ──────────────── */
 .map-source-hud-slot {
   margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+/*
+ * While a panorama is entered it takes the bar's right end: a close button
+ * where the detail rail sits, then the panorama's credit where the basemap's is.
+ */
+.scene-hud {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.scene-credit-chip {
+  gap: 5px;
+  text-decoration: none;
+}
+
+.scene-credit-chip .foss-earth-external-link-icon {
+  color: rgba(147, 197, 253, 0.92);
 }
 
 .map-source-hud {
@@ -556,7 +578,9 @@
 .hud-circle-button[hidden],
 .hud-chip[hidden],
 .hud-chip-group[hidden],
-.input-mode-control[hidden] {
+.input-mode-control[hidden],
+.map-source-hud[hidden],
+.scene-hud[hidden] {
   display: none;
 }
 

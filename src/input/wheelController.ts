@@ -1,7 +1,7 @@
 import type { CameraInputTarget } from "./inertialCameraController";
 import { DEFAULT_INPUT_RATES, type InputSettings } from "./inputSettings";
 
-type WheelGestureMode = "pan" | "pinchZoom" | "wheelZoom" | "orbit" | "ignore";
+export type WheelGestureMode = "pan" | "pinchZoom" | "wheelZoom" | "orbit" | "ignore";
 
 const WHEEL_GESTURE_IDLE_MS = 180;
 const PIXEL_DELTA_MODE = 0;
@@ -63,6 +63,32 @@ function classifyWheelGestureMode(
 }
 
 /**
+ * Reads each wheel event as one gesture's: the first event after a pause
+ * decides whether the gesture pans, orbits, zooms or is ignored, and the rest
+ * of it follows, so a swipe that picks up a modifier or a stray delta partway
+ * keeps its meaning. The globe and a panorama's look input read wheels alike.
+ */
+export function createWheelGestureClassifier(options: {
+  isSafariWithGestures: boolean;
+  isOrbitMode?: () => boolean;
+  mode: () => InputSettings["mode"];
+}): (e: WheelEvent) => WheelGestureMode {
+  let session: WheelGestureSession | null = null;
+  return (e) => {
+    const now = performance.now();
+    if (!session || now - session.lastEventTimeMs > WHEEL_GESTURE_IDLE_MS) {
+      session = {
+        mode: classifyWheelGestureMode(e, options.isSafariWithGestures, options.isOrbitMode?.() ?? false, options.mode()),
+        lastEventTimeMs: now,
+      };
+    } else {
+      session.lastEventTimeMs = now;
+    }
+    return session.mode;
+  };
+}
+
+/**
  * Attach a trackpad-aware wheel event handler to the canvas.
  *
  * Behavior matrix (matches foss-earth / Cesium parity):
@@ -81,32 +107,21 @@ export function attachWheelController(
   camera: CameraInputTarget,
   options: { isSafariWithGestures: boolean; isOrbitMode?: () => boolean; getSettings?: () => InputSettings },
 ): () => void {
-  const { isSafariWithGestures } = options;
   const rates = () => options.getSettings?.().rates ?? DEFAULT_INPUT_RATES;
-  let session: WheelGestureSession | null = null;
+  const classify = createWheelGestureClassifier({
+    isSafariWithGestures: options.isSafariWithGestures,
+    isOrbitMode: options.isOrbitMode,
+    mode: () => options.getSettings?.().mode ?? "auto",
+  });
 
   function onWheel(e: WheelEvent): void {
     e.preventDefault();
     // Prevent Babylon's own wheel/zoom handler from firing on the same event.
     e.stopImmediatePropagation();
-
-    const now = performance.now();
-    if (!session || now - session.lastEventTimeMs > WHEEL_GESTURE_IDLE_MS) {
-      session = {
-        mode: classifyWheelGestureMode(
-          e,
-          isSafariWithGestures,
-          options.isOrbitMode?.() ?? false,
-          options.getSettings?.().mode ?? "auto",
-        ),
-        lastEventTimeMs: now,
-      };
-    } else {
-      session.lastEventTimeMs = now;
-    }
+    const mode = classify(e);
 
     // ── Trackpad two-finger swipe = pan ──────────────────────────────────
-    if (session.mode === "pan") {
+    if (mode === "pan") {
       const sensitivity = options.getSettings?.().sensitivity.trackpad.pan ?? 1;
       const rate = rates().trackpadPanRate * sensitivity;
       camera.panBy(e.deltaX * rate, e.deltaY * rate, canvas.clientHeight);
@@ -114,7 +129,7 @@ export function attachWheelController(
     }
 
     // ── Shift+wheel = orbit (heading + pitch) ────────────────────────────
-    if (session.mode === "orbit") {
+    if (mode === "orbit") {
       const settings = options.getSettings?.();
       const sensitivity = settings?.mode === "mouse"
         ? settings.sensitivity.mouse.orbit
@@ -129,12 +144,12 @@ export function attachWheelController(
       return;
     }
 
-    if (session.mode === "ignore") {
+    if (mode === "ignore") {
       return;
     }
 
     // ── Ctrl+wheel = macOS trackpad pinch-to-zoom (non-Safari browsers) ──
-    if (session.mode === "pinchZoom") {
+    if (mode === "pinchZoom") {
       const sensitivity = options.getSettings?.().sensitivity.trackpad.zoom ?? 1;
       const factor = 1 + e.deltaY * rates().trackpadPinchZoomPerPx * sensitivity;
       camera.zoomBy(factor);
