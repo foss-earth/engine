@@ -46,7 +46,7 @@ function intersectsSegmentBounds(ray: Ray, minimum: Vector3, maximum: Vector3): 
  * even when a consumer moves the map under a floating origin. No cached heights. */
 export function createSurfaceQuery(scene: Scene, getWorldRoot: () => TransformNode | null,
   isSurface: (mesh: AbstractMesh) => boolean, getRevision: () => number = () => 0,
-  sampleOverride?: (latDeg: number, lonDeg: number) => SurfaceHit | null | undefined) {
+  sampleOverride?: (latDeg: number, lonDeg: number) => SurfaceHit | null | undefined): Required<SurfaceQuery> {
   function raycast(origin: EcefCoord, direction: EcefCoord, lengthMeters: number): SurfaceHit | null {
     if (![origin.x, origin.y, origin.z, direction.x, direction.y, direction.z, lengthMeters].every(Number.isFinite)
       || lengthMeters <= 0) return null;
@@ -85,6 +85,13 @@ export function createSurfaceQuery(scene: Scene, getWorldRoot: () => TransformNo
     return raycast(geodeticToEcef(lat, lon, 20000),
       { x: -Math.cos(lat) * Math.cos(lon), y: -Math.cos(lat) * Math.sin(lon), z: -Math.sin(lat) }, 40000);
   }
-  return { raycast, sample };
+  /** Changes when the displayed geometry does; a caller re-samples only then. */
+  const revision = (): number => getRevision();
+  return { raycast, sample, revision };
 }
-export type SurfaceQuery = ReturnType<typeof createSurfaceQuery>;
+export interface SurfaceQuery {
+  raycast(origin: EcefCoord, direction: EcefCoord, lengthMeters: number): SurfaceHit | null;
+  sample(latDeg: number, lonDeg: number): SurfaceHit | null;
+  /** The displayed geometry's revision; optional so a host's own query can leave it out. */
+  revision?(): number;
+}

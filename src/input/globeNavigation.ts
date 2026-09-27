@@ -28,6 +28,11 @@ export interface GlobeNavigationIntentFrame {
 
 export interface GlobeNavigationTarget {
   applyGlobeNavigationIntents(frame: GlobeNavigationIntentFrame): void;
+  /**
+   * Intents in any context but "globe", such as a panorama's look and exit,
+   * for whoever holds navigation.
+   */
+  applyNavigationIntents?(frame: ActionIntentFrame): void;
 }
 
 export interface GlobeGamepadAdapterOptions {
@@ -44,6 +49,16 @@ export const GLOBE_GAMEPAD_ACTIONS: readonly ActionDescriptor[] = [
   { id: "globe.resetNorth", label: "Reset north-up", category: "Navigation", kind: "command", contexts: ["globe"], available: true },
 ];
 
+/** Looking around a panorama: bound in the "panorama" context, which a scene's lease selects. */
+export const PANORAMA_GAMEPAD_ACTIONS: readonly ActionDescriptor[] = [
+  { id: "panorama.lookX", label: "Look left / right", category: "Panorama", kind: "rate", range: [-1, 1], contexts: ["panorama"], available: true },
+  { id: "panorama.lookY", label: "Look down / up", category: "Panorama", kind: "rate", range: [-1, 1], contexts: ["panorama"], available: true },
+  { id: "panorama.zoom", label: "Zoom in / out", category: "Panorama", kind: "rate", range: [-1, 1], contexts: ["panorama"], available: true },
+  { id: "panorama.exit", label: "Exit the panorama", category: "Panorama", kind: "command", contexts: ["panorama"], available: true },
+];
+
+const ADAPTER_ACTIONS: readonly ActionDescriptor[] = [...GLOBE_GAMEPAD_ACTIONS, ...PANORAMA_GAMEPAD_ACTIONS];
+
 /**
  * Host-owned action adapter. It deliberately works in rates and delegates
  * conversion to screen-space/inertial camera motion to the runtime.
@@ -55,10 +70,15 @@ export function createGlobeGamepadAdapter(
   let captureActive = false;
   return {
     namespace: "foss-earth",
-    actions: GLOBE_GAMEPAD_ACTIONS,
+    actions: ADAPTER_ACTIONS,
     getContext: () => options.getContext?.() ?? "globe",
     applyIntents(frame: ActionIntentFrame): void {
       if (captureActive) {
+        return;
+      }
+      if ((options.getContext?.() ?? "globe") !== "globe") {
+        const intents = frame.intents.filter((intent) => !intent.actionId.startsWith("globe."));
+        if (intents.length > 0) target.applyNavigationIntents?.({ ...frame, intents });
         return;
       }
       if (frame.intents.some((intent) => intent.actionId === "globe.resetNorth"
@@ -107,13 +127,13 @@ function buttonSource(slot: number, buttonIndex: number): BindingSource {
   return { selector: { kind: "gamepad-button", gamepadSlot: slot, buttonIndex } };
 }
 
-function stickRate(id: string, actionId: GlobeNavigationActionId, source: BindingSource, deadzone: number, invert = false): BindingSpec {
+function stickRate(id: string, actionId: string, source: BindingSource, deadzone: number, invert = false, context = "globe"): BindingSpec {
   return {
     id,
     actionId,
     kind: "single",
     semantics: "rate",
-    contexts: ["globe"],
+    contexts: [context],
     enabled: true,
     precedence: 0,
     transform: { ...DEFAULT_BINDING_TRANSFORM, deadzone, invert },
@@ -131,7 +151,7 @@ export function createStandardGlobeProfile(slot = 0, deadzone = DEFAULT_GLOBE_ST
     ...createDefaultProfile("foss-earth"),
     profileId: STANDARD_GLOBE_PROFILE_ID,
     name: STANDARD_GLOBE_PROFILE_NAME,
-    contexts: ["globe"],
+    contexts: ["globe", "panorama"],
     bindings: [
       stickRate("standard-pan-x", "globe.panX", axisSource(slot, 0), deadzone),
       // Stick Y reads negative when pushed up; up should move forward.
@@ -162,6 +182,34 @@ export function createStandardGlobeProfile(slot = 0, deadzone = DEFAULT_GLOBE_ST
         transform: { ...DEFAULT_BINDING_TRANSFORM, inputRange: [0, 1], outputRange: [0, 1] },
         // The top face button: Y on an Xbox layout.
         source: buttonSource(slot, 3),
+      },
+      // In a panorama the right stick looks the way it points, and the
+      // triggers zoom as they do on the globe.
+      stickRate("standard-panorama-look-x", "panorama.lookX", axisSource(slot, 2), deadzone, false, "panorama"),
+      stickRate("standard-panorama-look-y", "panorama.lookY", axisSource(slot, 3), deadzone, true, "panorama"),
+      {
+        id: "standard-panorama-zoom",
+        actionId: "panorama.zoom",
+        kind: "paired",
+        semantics: "rate",
+        contexts: ["panorama"],
+        enabled: true,
+        precedence: 0,
+        transform: { ...DEFAULT_BINDING_TRANSFORM, inputRange: [0, 1], outputRange: [-1, 1] },
+        positiveSource: buttonSource(slot, 7),
+        negativeSource: buttonSource(slot, 6),
+      },
+      {
+        id: "standard-panorama-exit",
+        actionId: "panorama.exit",
+        kind: "single",
+        semantics: "command",
+        contexts: ["panorama"],
+        enabled: true,
+        precedence: 0,
+        transform: { ...DEFAULT_BINDING_TRANSFORM, inputRange: [0, 1], outputRange: [0, 1] },
+        // The right face button: B on an Xbox layout.
+        source: buttonSource(slot, 1),
       },
     ],
   };

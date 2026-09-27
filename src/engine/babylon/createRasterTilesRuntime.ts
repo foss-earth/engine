@@ -147,6 +147,12 @@ export interface RasterTilesRuntime {
   setSource(source: RasterBaseMapSource): void;
   /** Stream a replacement elevation source onto the current displayed mesh. */
   setTerrainSource(source: TerrainSource): void;
+  /**
+   * While suspended, nothing is selected and no request starts: `update`
+   * returns at once and queued elevation waits. Downloads already running
+   * finish. Resuming selects again on the next frame.
+   */
+  setSuspended(suspended: boolean): void;
   getMetrics(): RasterTileMetrics;
   getRevision(): number;
   sample(latDeg: number, lonDeg: number): SurfaceHit | null;
@@ -562,8 +568,13 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
     0,
   );
   let terrainSource = options.terrainSource;
-  const createTerrainLoader = () => createTerrainTileLoader(terrainSource, options.onDownloadBytes, undefined, Boolean(capture),
-    capture ? milliseconds => { capture.counters.preparationCpuMs += milliseconds; } : undefined);
+  let suspended = false;
+  const createTerrainLoader = () => {
+    const loader = createTerrainTileLoader(terrainSource, options.onDownloadBytes, undefined, Boolean(capture),
+      capture ? milliseconds => { capture.counters.preparationCpuMs += milliseconds; } : undefined);
+    loader.setPaused(suspended);
+    return loader;
+  };
   let terrain = createTerrainLoader();
   let terrainGeneration = 0;
   // Persistent cache: tiles stay alive after they leave the desired set so we
@@ -1133,7 +1144,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
       };
     },
     update(): void {
-      if (disposed) return;
+      if (disposed || suspended) return;
       const started = capture ? performance.now() : 0, oldRevision = revision;
       const previousPreparation = capture?.counters.preparationCpuMs ?? 0;
       const view = readImageryView(options.scene, options.worldRoot ?? null);
@@ -1191,6 +1202,15 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
       // independently from the DEM and does not revise the physical surface.
       selectionDirty = true;
       options.requestRender?.();
+    },
+    setSuspended(next): void {
+      if (suspended === next || disposed) return;
+      suspended = next;
+      terrain.setPaused(next);
+      if (!next) {
+        selectionDirty = true;
+        options.requestRender?.();
+      }
     },
     setTerrainSource(source): void {
       if (terrainSource?.id === source.id) return;

@@ -21,6 +21,7 @@ vi.mock("../../terrain/terrainTiles", async importOriginal => ({
   ...await importOriginal<typeof import("../../terrain/terrainTiles")>(),
   createTerrainTileLoader: () => ({ dispose: pending.dispose,
     getMetrics: () => ({ active: 0, queued: 0, decodedBytes: 0 }),
+    setPaused: vi.fn(),
     loadPatch: (tile: TerrainTile) => new Promise<TerrainGrid>((resolve, reject) => pending.terrain.push({ tile, resolve, reject })) }),
 }));
 beforeEach(() => { pending.imagery = []; pending.imageryErrors = []; pending.terrain = []; pending.dispose.mockClear(); });

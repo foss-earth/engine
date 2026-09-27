@@ -43,6 +43,12 @@ export interface GoogleTilesRuntime {
   getTerrainDetailState(): GoogleTerrainDetailState;
   setTerrainDetailTarget(errorTarget: number | null): void;
   update(): void;
+  /**
+   * While suspended, nothing is selected (`update` does nothing) and the
+   * download and parse queues start no job; running jobs finish. Queued
+   * tiles wait for the next selection.
+   */
+  setSuspended(suspended: boolean): void;
   dispose(): void;
 }
 
@@ -79,15 +85,16 @@ const MiB = 1024 * 1024;
 export const GOOGLE_LOADING_IDS = ["map.google.cacheTiles", "map.google.cacheBytes", "map.google.downloads", "map.google.parses"] as const;
 
 /** The renderer's cache and queues as the `map.google.*` parameters say. */
-function applyLoadingParameters(tiles: TilesRenderer, settings: SettingsRegistry): void {
+function applyLoadingParameters(tiles: TilesRenderer, settings: SettingsRegistry, suspended = false): void {
   const count = settings.get<NumberRange>("map.google.cacheTiles");
   const bytes = settings.get<NumberRange>("map.google.cacheBytes");
   tiles.lruCache.minSize = Math.round(count.min);
   tiles.lruCache.maxSize = Math.round(count.max);
   tiles.lruCache.minBytesSize = bytes.min * MiB;
   tiles.lruCache.maxBytesSize = bytes.max * MiB;
-  tiles.downloadQueue.maxJobs = Math.round(settings.get<number>("map.google.downloads"));
-  tiles.parseQueue.maxJobs = Math.round(settings.get<number>("map.google.parses"));
+  // Suspended, the queues hold what they have and start nothing.
+  tiles.downloadQueue.maxJobs = suspended ? 0 : Math.round(settings.get<number>("map.google.downloads"));
+  tiles.parseQueue.maxJobs = suspended ? 0 : Math.round(settings.get<number>("map.google.parses"));
 }
 
 /**
@@ -269,10 +276,11 @@ export function createGoogleTilesRuntime(options: GoogleTilesRuntimeOptions): Go
   const tiles = new TilesRenderer(GOOGLE_3D_TILES_ROOT_URL, scene);
   applyViewMeasure(tiles, scene, options.getTerrainDetailAnchor, options.getFocus);
   const settings = options.settings ?? getAppSettings();
+  let suspended = false;
   applyLoadingParameters(tiles, settings);
   const loadingIds = new Set<string>(GOOGLE_LOADING_IDS);
   const unsubscribeSettings = settings.subscribe(changed => {
-    if ([...changed].some(id => loadingIds.has(id))) applyLoadingParameters(tiles, settings);
+    if ([...changed].some(id => loadingIds.has(id))) applyLoadingParameters(tiles, settings, suspended);
   });
   tiles.fetchOptions.mode = "cors";
   tiles.fetchOptions.cache = "default";
@@ -390,7 +398,16 @@ export function createGoogleTilesRuntime(options: GoogleTilesRuntimeOptions): Go
       tiles.errorTarget = overrideErrorTarget ?? defaultErrorTarget;
     },
     update() {
-      tiles.update();
+      if (!suspended) tiles.update();
+    },
+    setSuspended(next) {
+      if (suspended === next) return;
+      suspended = next;
+      applyLoadingParameters(tiles, settings, suspended);
+      if (!suspended) {
+        // Queued jobs wait for an addition or a completion to run; start them now.
+        for (const queue of [tiles.downloadQueue, tiles.parseQueue]) (queue as unknown as { scheduleJobRun?: () => void }).scheduleJobRun?.();
+      }
     },
     dispose() {
       unsubscribeSettings();

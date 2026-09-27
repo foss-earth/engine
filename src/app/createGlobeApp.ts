@@ -55,8 +55,19 @@ import {
   withStickDeadzone,
 } from "../input/globeNavigation";
 import { createHudBar } from "../shell/hudBar";
+import { createSceneHotspots, createScenesPanel } from "../shell/scenesPanel";
+import { createSceneController, type SceneController } from "../scenes/sceneController";
+import { SCENE_EXAMPLES } from "../scenes/examples";
+import type { PanoramaRenderer } from "../engine/babylon/panorama/panoramaRenderer";
 import type { PoiSpriteSizeParams } from "../hud/poiSpriteSizeTuner";
 import type { OrbitCompassScaleParams } from "../visualization/orbitCompass";
+
+declare global {
+  interface Window {
+    /** Test only, with `?panoramaTest=1`: what scripts/validation/panorama-campus.mjs drives and reads. */
+    __fossEarthPanoramaTest?: { runtime: BabylonRuntime; scenes: SceneController; readonly renderer: PanoramaRenderer | null };
+  }
+}
 
 export interface GlobeAppHandle extends GlobeHandle {
   runtime: BabylonRuntime;
@@ -73,6 +84,10 @@ export interface GlobeAppHandle extends GlobeHandle {
   mapTab: HTMLElement;
   /** The GPU renderer choice, for the host's Renderer tab. */
   rendererTab: HTMLElement;
+  /** Scenes to load and their panoramas, for the host's Scenes tab. */
+  scenesTab: HTMLElement;
+  /** The mounted scene, if any, and loading another. */
+  scenes: SceneController;
 }
 
 export interface GlobeAppOptions {
@@ -354,6 +369,9 @@ export async function createGlobeApp(
       },
       { kind: "button", id: "helpButton", title: "Controls help", ariaLabel: "Controls help", text: "?" },
       { kind: "button", id: "settingsButton", title: "Settings", ariaLabel: "Settings", className: "settings-button", text: "⚙" },
+      { kind: "button", id: "scenesButton", title: "Scenes. Click to show or hide the Scenes tab.", ariaLabel: "Scenes", className: "scenes-button", text: "◎" },
+      { kind: "button", id: "sceneExitButton", title: "Leave the panorama for the view you entered it from. Escape does the same.", ariaLabel: "Exit panorama", appearance: "chip", className: "hud-chip-button scene-exit-button", text: "Exit panorama" },
+      { kind: "slot", id: "sceneCreditsSlot", className: "hud-chip-group scene-credits-slot", ariaLabel: "Panorama credits" },
       {
         kind: "button",
         id: "themeButton",
@@ -575,8 +593,10 @@ export async function createGlobeApp(
 
   // The app follows its parameters wherever they are changed: their sections,
   // Show all parameters, an import or another tab.
+  const scenesBtnEl = rootElement.querySelector<HTMLButtonElement>("#scenesButton");
   const hudButtonElements: Record<HudButtonId, HTMLElement | null> = {
     help: helpBtnEl,
+    scenes: scenesBtnEl,
     settings: settingsBtnEl,
     theme: themeBtnEl,
     inputMode: rootElement.querySelector<HTMLElement>(".input-mode-control"),
@@ -629,7 +649,13 @@ export async function createGlobeApp(
   northBtnEl?.addEventListener("click", resetNorth);
 
   const gamepadSource = createBrowserInputSource({ target: window });
-  const gamepadAdapter = createGlobeGamepadAdapter(runtime, { onResetNorth: resetNorth });
+  // A navigation lease, such as an entered panorama, selects its own controller context.
+  const gamepadAdapter = createGlobeGamepadAdapter(runtime, {
+    onResetNorth: resetNorth,
+    getContext: () => runtime.getNavigationState()?.inputContext ?? "globe",
+  });
+  // The lease owns the camera: a tracked point must not move it meanwhile.
+  const offNavigationChange = runtime.onNavigationChange(state => poiTracking.setSuspended(state !== null));
   const selectedGamepadSlot = (): number => gamepadSource.getSelectedDevice()?.slot ?? 0;
   const stickDeadzone = (): number => settings.get<number>("input.gamepad.deadzone");
   const gamepadRuntime = new BindingRuntime({
@@ -744,6 +770,59 @@ export async function createGlobeApp(
       element: sectionOf("renderer", "performance", { main: performanceMain, covers: [...performanceIds, "interface.poiSpriteTuner", "interface.compassScaleTuner"] }),
     }],
   });
+  // Scenes: one mounted at a time; `?scene=<id>` loads a registered example.
+  const appBaseUrl = new URL(import.meta.env.BASE_URL ?? "/", window.location.href).href;
+  const params = new URLSearchParams(window.location.search);
+  const panoramaTest = params.get("panoramaTest") === "1";
+  const panoramaTestHooks: { renderer: PanoramaRenderer | null } = { renderer: null };
+  const scenes = createSceneController({
+    runtime,
+    settings,
+    canvas,
+    examples: SCENE_EXAMPLES,
+    baseUrl: appBaseUrl,
+    ...(panoramaTest ? { loadOptions: { internals: { onRenderer: renderer => { panoramaTestHooks.renderer = renderer; } } } } : {}),
+  });
+  const scenesPanel = createScenesPanel({ settings, controller: scenes });
+  const sceneHotspots = createSceneHotspots({ controller: scenes, container: canvas.parentElement ?? rootElement });
+  const onScenesButtonClick = (): void => toggleTab("scenes");
+  scenesBtnEl?.addEventListener("click", onScenesButtonClick);
+  const sceneExitBtnEl = rootElement.querySelector<HTMLButtonElement>("#sceneExitButton");
+  const sceneCreditsEl = rootElement.querySelector<HTMLElement>("#sceneCreditsSlot");
+  const onSceneExitClick = (): void => { void scenes.handle()?.exit(); };
+  sceneExitBtnEl?.addEventListener("click", onSceneExitClick);
+  // The Exit chip is there only while a panorama is entered; the credit chip while one is on screen.
+  const offSceneHud = scenes.subscribe(state => {
+    const phase = state.status?.phase;
+    if (sceneExitBtnEl) sceneExitBtnEl.hidden = !(phase === "immersive" || phase === "entering" || phase === "preparing");
+    if (sceneExitBtnEl) sceneExitBtnEl.textContent = phase === "immersive" ? "Exit panorama" : "Cancel";
+    if (sceneCreditsEl) {
+      const credits = state.status?.credits ?? [];
+      const shown = phase === "immersive" ? credits : [];
+      sceneCreditsEl.hidden = shown.length === 0;
+      sceneCreditsEl.replaceChildren(...shown.map(credit => {
+        const chip = document.createElement(credit.url ? "a" : "span");
+        chip.className = "hud-chip scene-credit-chip";
+        chip.textContent = credit.license ? `${credit.text} · ${credit.license}` : credit.text;
+        if (credit.url && chip instanceof HTMLAnchorElement) {
+          chip.href = credit.url;
+          chip.target = "_blank";
+          chip.rel = "noopener noreferrer";
+        }
+        return chip;
+      }));
+    }
+  });
+  const requestedScene = params.get("scene");
+  if (requestedScene) void scenes.load(requestedScene, { exampleId: true });
+  if (panoramaTest) {
+    window.__fossEarthPanoramaTest = {
+      runtime,
+      scenes,
+      get renderer() { return panoramaTestHooks.renderer; },
+    };
+  }
+
   void gamepadStore.listProfileIds("foss-earth").then(async (ids) => {
     const stored = ids.length > 0 ? await gamepadStore.loadProfile("foss-earth", ids[0]) : null;
     if (!stored || stored.hostNamespace !== "foss-earth") {
@@ -871,6 +950,8 @@ export async function createGlobeApp(
     settingsSections,
     mapTab: mapPanel.element,
     rendererTab: rendererPanel.element,
+    scenesTab: scenesPanel.element,
+    scenes,
     addLayer,
     removeLayer,
     getViewState(): GlobeViewState | null {
@@ -904,6 +985,14 @@ export async function createGlobeApp(
       compassScaleTuner?.destroy();
       inputModeHud?.destroy();
       northBtnEl?.removeEventListener("click", resetNorth);
+      offNavigationChange();
+      offSceneHud();
+      scenesBtnEl?.removeEventListener("click", onScenesButtonClick);
+      sceneExitBtnEl?.removeEventListener("click", onSceneExitClick);
+      sceneHotspots.destroy();
+      scenesPanel.destroy();
+      scenes.destroy();
+      if (window.__fossEarthPanoramaTest?.scenes === scenes) delete window.__fossEarthPanoramaTest;
       gamepadEditor?.destroy();
       offGamepadFrame();
       stopGamepadSource();

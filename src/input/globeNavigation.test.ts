@@ -3,8 +3,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BindingRuntime, validateProfileImport } from "@felipegalind0/gamepad-tools/core";
 import { createBrowserInputSource } from "@felipegalind0/gamepad-tools/browser";
+import type { ActionIntentFrame } from "@felipegalind0/gamepad-tools/core";
 import {
   GLOBE_GAMEPAD_ACTIONS,
+  PANORAMA_GAMEPAD_ACTIONS,
   createGlobeGamepadAdapter,
   createStandardGlobeProfile,
   withStickDeadzone,
@@ -63,10 +65,10 @@ function harness() {
 }
 
 describe("standard globe controller profile", () => {
-  it("binds every globe action and survives export and import for this host", () => {
+  it("binds every globe and panorama action and survives export and import for this host", () => {
     const profile = createStandardGlobeProfile();
     expect(new Set(profile.bindings.map((binding) => binding.actionId)))
-      .toEqual(new Set(GLOBE_GAMEPAD_ACTIONS.map((action) => action.id)));
+      .toEqual(new Set([...GLOBE_GAMEPAD_ACTIONS, ...PANORAMA_GAMEPAD_ACTIONS].map((action) => action.id)));
     // The binding editor recognises a built-in profile by its ID.
     expect(createStandardGlobeProfile().profileId).toBe(profile.profileId);
 
@@ -138,7 +140,7 @@ describe("standard globe controller profile", () => {
     expect(applyGlobeNavigationIntents).not.toHaveBeenCalled();
     const after = runtime.getProfile();
     const deadzones = (profile: typeof before) => profile.bindings.map(binding => [binding.id, binding.transform.deadzone]);
-    expect(deadzones(after)).toEqual(deadzones(before).map(([id, deadzone]) => [id, String(id).match(/pan|orbit/) ? 0.3 : deadzone]));
+    expect(deadzones(after)).toEqual(deadzones(before).map(([id, deadzone]) => [id, String(id).match(/pan-|orbit|look/) ? 0.3 : deadzone]));
     // Nothing to change: the same profile comes back.
     expect(withStickDeadzone(after, 0.3)).toBe(after);
     expect(deadzones(createStandardGlobeProfile(0, 0.3))).toEqual(deadzones(after));
@@ -154,5 +156,42 @@ describe("standard globe controller profile", () => {
     step();
     expect(applyGlobeNavigationIntents).not.toHaveBeenCalled();
     expect(onResetNorth).not.toHaveBeenCalled();
+  });
+});
+
+describe("panorama context", () => {
+  it("sends the right stick, triggers and B to whoever holds navigation, and moves no globe camera", () => {
+    const applyGlobeNavigationIntents = vi.fn<(frame: GlobeNavigationIntentFrame) => void>();
+    const applyNavigationIntents = vi.fn<(frame: ActionIntentFrame) => void>();
+    let context = "panorama";
+    const source = createBrowserInputSource({ target: window });
+    const runtime = new BindingRuntime({
+      profile: createStandardGlobeProfile(),
+      adapter: createGlobeGamepadAdapter({ applyGlobeNavigationIntents, applyNavigationIntents }, { getContext: () => context }),
+    });
+    const detach = source.subscribe((frame) => runtime.dispatch(frame));
+    cleanups.push(() => { detach(); runtime.dispose(); source.dispose(); });
+    axis(2, 0.8);
+    axis(3, -0.8);
+    axis(0, 0.9);
+    button(7, 1);
+    button(1, 1);
+    source.tick();
+    const intents = applyNavigationIntents.mock.calls.flatMap(([frame]) => frame.intents);
+    // The first frame of a source reports rest; the latest carries the stick.
+    const rate = (id: string) => intents.filter((intent) => intent.actionId === id && intent.kind === "rate").at(-1);
+    expect(rate("panorama.lookX")?.kind === "rate" && rate("panorama.lookX")?.value).toBeCloseTo(outsideDeadzone(0.8));
+    // Pushed up reads negative; up looks up.
+    expect(rate("panorama.lookY")?.kind === "rate" && rate("panorama.lookY")?.value).toBeCloseTo(outsideDeadzone(0.8));
+    expect(rate("panorama.zoom")?.kind === "rate" && rate("panorama.zoom")?.value).toBeCloseTo(1);
+    expect(intents.some((intent) => intent.actionId === "panorama.exit" && intent.kind === "command" && intent.edge === "press")).toBe(true);
+    expect(intents.some((intent) => intent.actionId.startsWith("globe."))).toBe(false);
+    expect(applyGlobeNavigationIntents).not.toHaveBeenCalled();
+
+    context = "globe";
+    applyNavigationIntents.mockClear();
+    source.tick();
+    expect(applyNavigationIntents).not.toHaveBeenCalled();
+    expect(applyGlobeNavigationIntents).toHaveBeenCalled();
   });
 });

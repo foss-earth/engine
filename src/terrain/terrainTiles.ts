@@ -112,6 +112,7 @@ export function createTerrainTileLoader(
   const settled = new Set<string>();
   const decodedArrays = trackMemory ? new Map<string, Float32Array>() : null;
   let active = 0;
+  let paused = false;
   const queue: Array<{ key: string; start: () => void }> = [];
   async function download(tile: TerrainTile, prioritize: boolean): Promise<TerrainGrid> {
     await new Promise<void>(resolve => {
@@ -136,7 +137,7 @@ export function createTerrainTileLoader(
   function awaitFallback(tile: TerrainTile): Promise<TerrainGrid> {
     return load({ z: tile.z - 1, x: Math.floor(tile.x / 2), y: Math.floor(tile.y / 2) }, true);
   }
-  function pump() { while (active < 6 && queue.length) { active++; queue.shift()!.start(); } }
+  function pump() { while (!paused && active < 6 && queue.length) { active++; queue.shift()!.start(); } }
   function load(tile: TerrainTile, prioritize = false): Promise<TerrainGrid> {
     if (controller.signal.aborted) return Promise.reject(new Error("Terrain loader disposed"));
     const shift = Math.max(0, tile.z - source.maxZoom);
@@ -180,6 +181,12 @@ export function createTerrainTileLoader(
     return { ...grid, neighbors: await Promise.all(neighbors) };
   }
   return { load, loadPatch,
+    /**
+     * Holds the queue: no download starts while paused, and those running
+     * finish. Queued tiles wait rather than fail, since their promises are
+     * shared by every tile record that asked.
+     */
+    setPaused(next: boolean) { paused = next; pump(); },
     getMetrics() { return { active, queued: queue.length,
       decodedBytes: decodedArrays ? [...new Set(decodedArrays.values())].reduce((sum, array) => sum + array.byteLength, 0) : null }; },
     dispose() { controller.abort(); cache.clear(); settled.clear(); decodedArrays?.clear(); } };

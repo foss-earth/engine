@@ -52,6 +52,7 @@ beforeEach(() => {
     getImageryDiagnostics: () => ({ mode: "legacy", atlas: null }),
     getDisplayedSourceId: () => options.source.id,
     reportFrame: vi.fn(),
+    setSuspended: vi.fn(),
     dispose: vi.fn(),
   }));
 });
@@ -64,7 +65,7 @@ describe("createBabylonRuntime simulation mode", () => {
     mocks.createGoogleTilesRuntime.mockReturnValue({
       tiles: { visibleTiles: new Set(), activeTiles: new Set(), group: {} },
       getRevision: () => revision,
-      update: vi.fn(), dispose: vi.fn(),
+      update: vi.fn(), setSuspended: vi.fn(), dispose: vi.fn(),
     });
     const { createBabylonRuntime } = await import("./createBabylonRuntime");
     const runtime = await createBabylonRuntime(document.createElement("canvas"), { googleApiKey: "test", simMode: true });
@@ -89,7 +90,7 @@ describe("createBabylonRuntime simulation mode", () => {
     vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
     mocks.createGoogleTilesRuntime.mockReturnValue({
       tiles: { visibleTiles: new Set(), activeTiles: new Set(), group: {} },
-      update: vi.fn(), dispose: vi.fn(),
+      update: vi.fn(), setSuspended: vi.fn(), dispose: vi.fn(),
     });
     const { createBabylonRuntime } = await import("./createBabylonRuntime");
     const runtime = await createBabylonRuntime(document.createElement("canvas"), { googleApiKey: "test", simMode: true });
@@ -157,7 +158,7 @@ describe("createBabylonRuntime simulation mode", () => {
   it("keeps the flight camera active through paused raster and Google map switches", async () => {
     mocks.createGoogleTilesRuntime.mockReturnValue({
       tiles: { visibleTiles: new Set(), activeTiles: new Set(), group: {} },
-      update: vi.fn(), dispose: vi.fn(),
+      update: vi.fn(), setSuspended: vi.fn(), dispose: vi.fn(),
     });
     const { createBabylonRuntime } = await import("./createBabylonRuntime");
     const runtime = await createBabylonRuntime(document.createElement("canvas"), { googleApiKey: "test", simMode: true });
@@ -176,7 +177,7 @@ describe("createBabylonRuntime simulation mode", () => {
   it("retains visible Google coverage until replacement raster coverage is ready", async () => {
     const googleRuntime = {
       tiles: { visibleTiles: new Set(["google-tile"]), activeTiles: new Set(["google-tile"]), group: {} },
-      update: vi.fn(), dispose: vi.fn(),
+      update: vi.fn(), setSuspended: vi.fn(), dispose: vi.fn(),
     };
     mocks.createGoogleTilesRuntime.mockReturnValue(googleRuntime);
     const { createBabylonRuntime } = await import("./createBabylonRuntime");
@@ -198,7 +199,7 @@ describe("createBabylonRuntime simulation mode", () => {
       tiles: { visibleTiles: new Set(), activeTiles: new Set(), group: {} },
       getTerrainDetailState: () => detail,
       setTerrainDetailTarget,
-      update: vi.fn(), dispose: vi.fn(),
+      update: vi.fn(), setSuspended: vi.fn(), dispose: vi.fn(),
     });
     const { createBabylonRuntime } = await import("./createBabylonRuntime");
     const { getAppSettings } = await import("../../settings/appSettings");
@@ -227,7 +228,7 @@ describe("createBabylonRuntime simulation mode", () => {
   it("lists a host's focus points and hands the selected one's region to the map", async () => {
     mocks.createGoogleTilesRuntime.mockReturnValue({
       tiles: { visibleTiles: new Set(), activeTiles: new Set(), group: {} },
-      update: vi.fn(), dispose: vi.fn(),
+      update: vi.fn(), setSuspended: vi.fn(), dispose: vi.fn(),
     });
     const { createBabylonRuntime } = await import("./createBabylonRuntime");
     const { getAppSettings } = await import("../../settings/appSettings");
@@ -315,7 +316,7 @@ describe("createBabylonRuntime simulation mode", () => {
   it("follows the map source and elevation parameters wherever they change", async () => {
     mocks.createGoogleTilesRuntime.mockReturnValue({
       tiles: { visibleTiles: new Set(), activeTiles: new Set(), group: {} },
-      update: vi.fn(), dispose: vi.fn(),
+      update: vi.fn(), setSuspended: vi.fn(), dispose: vi.fn(),
     });
     const { createBabylonRuntime } = await import("./createBabylonRuntime");
     const { resolveRasterBaseMapSource } = await import("./rasterBaseMaps");
@@ -359,7 +360,7 @@ describe("createBabylonRuntime simulation mode", () => {
     vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
     mocks.createGoogleTilesRuntime.mockReturnValue({
       tiles: { visibleTiles: new Set(), activeTiles: new Set(), group: {} },
-      update: vi.fn(), dispose: vi.fn(),
+      update: vi.fn(), setSuspended: vi.fn(), dispose: vi.fn(),
     });
     const { createBabylonRuntime } = await import("./createBabylonRuntime");
     const runtime = await createBabylonRuntime(document.createElement("canvas"), { googleApiKey: "test", simMode: true });
@@ -388,7 +389,7 @@ describe("createBabylonRuntime simulation mode", () => {
     mocks.createGoogleTilesRuntime.mockReturnValue({
       tiles: { visibleTiles: new Set(), activeTiles: new Set(), group: {} },
       getLoadingState: () => loading,
-      update: vi.fn(), dispose: vi.fn(),
+      update: vi.fn(), setSuspended: vi.fn(), dispose: vi.fn(),
     });
     const { createBabylonRuntime } = await import("./createBabylonRuntime");
     const runtime = await createBabylonRuntime(document.createElement("canvas"), { googleApiKey: "test", simMode: true });
@@ -437,7 +438,7 @@ describe("createBabylonRuntime simulation mode", () => {
     vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
     mocks.createGoogleTilesRuntime.mockReturnValue({
       tiles: { visibleTiles: new Set(), activeTiles: new Set(), group: {} },
-      update: vi.fn(), dispose: vi.fn(),
+      update: vi.fn(), setSuspended: vi.fn(), dispose: vi.fn(),
     });
     const { createBabylonRuntime } = await import("./createBabylonRuntime");
     const runtime = await createBabylonRuntime(document.createElement("canvas"), { googleApiKey: "test", simMode: true });

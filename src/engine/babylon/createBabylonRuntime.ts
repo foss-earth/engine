@@ -64,6 +64,19 @@ import { DEFAULT_INPUT_RATES, type InputModePreference, type InputRates, type In
 import { INPUT_RATE_IDS } from "../../settings/catalogue";
 import { isNumberRange } from "../../settings/values";
 import type { GlobeViewState } from "../types";
+import {
+  createNavigationOwner,
+  NAVIGATION_PRESENTATION_LAYER,
+  type NavigationAcquisition,
+  type NavigationLease,
+  type NavigationPresentation,
+  type NavigationRequest,
+  type NavigationSnapshot,
+  type NavigationState,
+} from "./navigationLease";
+import type { ActionIntentFrame } from "@felipegalind0/gamepad-tools/core";
+
+export { NAVIGATION_PRESENTATION_LAYER };
 
 const PLANET_RADIUS_METERS = 6_378_137;
 const DEFAULT_FALLBACK_BACKGROUND = new Color4(0.01, 0.02, 0.05, 1);
@@ -285,6 +298,37 @@ export interface BabylonRuntime {
   /** Hold continuous rendering only while the simulation is running. Defaults to true in simMode. */
   setSimRunning(running: boolean): void;
   setSimTick(callback: ((deltaSeconds: number) => void) | null): void;
+  /**
+   * Takes navigation for one owner, such as a panorama scene: the globe's
+   * input, point tracking and map selection pause until the lease ends.
+   * Busy while another owner or a simulation holds the camera.
+   */
+  acquireNavigation(request: NavigationRequest): NavigationAcquisition;
+  getNavigationState(): NavigationState | null;
+  onNavigationChange(listener: (state: NavigationState | null) => void): () => void;
+  /** The globe camera's whole state now, or null before it exists or in a simulation. */
+  captureNavigationSnapshot(): NavigationSnapshot | null;
+  /**
+   * Puts the globe camera back exactly as captured: the orbit target's ECEF
+   * position is used as saved, not re-derived from the surface. Refused
+   * (false) while a lease other than `lease` holds navigation.
+   */
+  restoreNavigationSnapshot(snapshot: NavigationSnapshot, lease?: NavigationLease): boolean;
+  /** The current lease's presented view, or null while the globe camera's view is drawn. */
+  getPresentationView(): NavigationPresentation | null;
+  /**
+   * Where controller intents go in a context other than "globe": the lease
+   * holder's handler. Returns a function that removes it.
+   */
+  setNavigationIntentHandler(lease: NavigationLease, handler: (frame: ActionIntentFrame) => void): () => void;
+  applyNavigationIntents(frame: ActionIntentFrame): void;
+  /**
+   * Increases on every WebGPU device loss. Resources made for an earlier
+   * generation are gone; after `onDeviceRestored` they can be made again.
+   */
+  getDeviceGeneration(): number;
+  onDeviceLost(listener: () => void): () => void;
+  onDeviceRestored(listener: () => void): () => void;
   destroy(): void;
 }
 
@@ -527,7 +571,8 @@ export async function createBabylonRuntime(
       }
       updateTerrainPreparationCamera();
       tilesRuntime?.update();
-      rasterTilesRuntime?.reportFrame(frameNow, frameNow - lastRasterFrameAt, document.hidden);
+      // Frames drawn while a lease holds navigation are not map frames.
+      rasterTilesRuntime?.reportFrame(frameNow, frameNow - lastRasterFrameAt, document.hidden || mapsSuspended);
       lastRasterFrameAt = frameNow;
       rasterTilesRuntime?.update();
       if (status.mode === "raster-basemap" && (rasterTilesRuntime?.getMetrics().visibleTiles ?? 0) > 0) {
@@ -588,8 +633,11 @@ export async function createBabylonRuntime(
   }
 
   let streamingHeld = false;
+  // While a lease holds navigation the maps start nothing, so a load in
+  // progress would hold continuous rendering until the lease ends.
+  let mapsSuspended = false;
   const beginStreaming = (): void => {
-    if (streamingHeld) return;
+    if (streamingHeld || mapsSuspended) return;
     streamingHeld = true;
     streamingActiveRef.value = true;
     scheduler.beginContinuous();
@@ -943,6 +991,7 @@ export async function createBabylonRuntime(
     } else if (rasterTilesRuntime.source.id !== rasterBaseMap.id) {
       rasterTilesRuntime.setSource(keyedSource(rasterBaseMap));
     }
+    rasterTilesRuntime.setSuspended(mapsSuspended);
 
     status.mode = "raster-basemap";
     status.rasterBaseMap = rasterBaseMap;
@@ -1065,6 +1114,7 @@ export async function createBabylonRuntime(
       if (googleTerrainDetailTarget !== null) {
         tilesRuntime.setTerrainDetailTarget(googleTerrainDetailTarget);
       }
+      tilesRuntime.setSuspended(mapsSuspended);
 
       tilesRuntime.tiles.checkCollisions = true;
       if (worldRoot) {
@@ -1460,8 +1510,96 @@ export async function createBabylonRuntime(
     });
   }
 
+  // ─── Navigation ownership ─────────────────────────────────────────
+  const captureNavigationSnapshot = (): NavigationSnapshot | null => {
+    const camera = geospatialCamera;
+    const view = cameraController?.getViewState();
+    if (simMode || !camera || !view) return null;
+    const { x, y, z } = camera.center;
+    return { version: 1, view, camera: { center: { x, y, z }, yaw: camera.yaw, pitch: camera.pitch, radius: camera.radius, fov: camera.fov } };
+  };
+  const restoreNavigationSnapshot = (snapshot: NavigationSnapshot, lease?: NavigationLease): boolean => {
+    const current = navigation.current();
+    const camera = geospatialCamera;
+    if ((current && current !== lease) || !camera || simMode) return false;
+    inertialCameraController?.cancel();
+    const { center, yaw, pitch, radius, fov } = snapshot.camera;
+    camera.center = new Vector3(center.x, center.y, center.z);
+    camera.yaw = yaw;
+    camera.pitch = pitch;
+    camera.radius = radius;
+    camera.fov = fov;
+    scheduler.requestRender();
+    return true;
+  };
+  let presentationMaskBefore: number | null = null;
+  let streamingBeforeSuspension = false;
+  let startupHoldBeforeSuspension = false;
+  let intentHandler: { lease: NavigationLease; handler: (frame: ActionIntentFrame) => void } | null = null;
+  const navigation = createNavigationOwner({
+    unavailable: () => (simMode ? "A simulation owns the camera." : geospatialCamera ? null : "The globe camera is not ready."),
+    snapshot: captureNavigationSnapshot,
+    suspend() {
+      inputController?.setSuspended(true);
+      inertialCameraController?.cancel();
+      mapsSuspended = true;
+      streamingBeforeSuspension = streamingHeld;
+      startupHoldBeforeSuspension = startupHeld;
+      endStreaming();
+      releaseStartupHold();
+      tilesRuntime?.setSuspended(true);
+      rasterTilesRuntime?.setSuspended(true);
+    },
+    resume() {
+      intentHandler = null;
+      mapsSuspended = false;
+      tilesRuntime?.setSuspended(false);
+      rasterTilesRuntime?.setSuspended(false);
+      inputController?.setSuspended(false);
+      // Continue a load the lease interrupted, if it still has work.
+      const google = tilesRuntime?.getLoadingState();
+      const googlePending = google ? google.queued + google.downloading + google.parsing + google.waitingToParse > 0 : false;
+      const rasterPending = (rasterTilesRuntime?.getLoadingDiagnostics?.().pendingTiles ?? 0) > 0;
+      if (streamingBeforeSuspension && (googlePending || rasterPending)) beginStreaming();
+      if (startupHoldBeforeSuspension && tilesRuntime && tilesRuntime.tiles.visibleTiles.size === 0 && !startupHeld) {
+        startupHeld = true;
+        scheduler.beginContinuous();
+      }
+      streamingBeforeSuspension = false;
+      startupHoldBeforeSuspension = false;
+    },
+    present(view) {
+      const camera = geospatialCamera;
+      if (!camera) return;
+      if (view) {
+        if (presentationMaskBefore === null) presentationMaskBefore = camera.layerMask;
+        camera.layerMask = NAVIGATION_PRESENTATION_LAYER;
+      } else if (presentationMaskBefore !== null) {
+        camera.layerMask = presentationMaskBefore;
+        presentationMaskBefore = null;
+      }
+    },
+    requestRender: () => scheduler.requestRender(),
+    beginContinuous: () => scheduler.beginContinuous(),
+    endContinuous: () => scheduler.endContinuous(),
+  });
+
+  // A lost WebGPU device ends navigation; its owner rebuilds after restoration.
+  let deviceGeneration = 0;
+  const deviceLostListeners = new Set<() => void>();
+  const deviceRestoredListeners = new Set<() => void>();
+  const deviceLostObserver = renderer.engine.onContextLostObservable.add(() => {
+    deviceGeneration += 1;
+    navigation.end("device-lost");
+    for (const listener of [...deviceLostListeners]) listener();
+  });
+  const deviceRestoredObserver = renderer.engine.onContextRestoredObservable.add(() => {
+    for (const listener of [...deviceRestoredListeners]) listener();
+    scheduler.requestRender();
+  });
+
   const applyGlobeNavigationIntents = (frame: GlobeNavigationIntentFrame): void => {
-    if (simMode || !inertialCameraController) {
+    if (simMode || !inertialCameraController || navigation.current()) {
       return;
     }
     const dt = Number.isFinite(frame.dt) ? Math.max(0, Math.min(0.1, frame.dt)) : 0;
@@ -1650,7 +1788,37 @@ export async function createBabylonRuntime(
     setSimTick(callback: ((deltaSeconds: number) => void) | null): void {
       simTick = callback;
     },
+    acquireNavigation: request => navigation.acquire(request),
+    getNavigationState: () => navigation.state(),
+    onNavigationChange: listener => navigation.subscribe(listener),
+    captureNavigationSnapshot,
+    restoreNavigationSnapshot,
+    getPresentationView: () => navigation.current()?.getPresentationView() ?? null,
+    setNavigationIntentHandler(lease, handler) {
+      if (navigation.current() !== lease || lease.released) return () => {};
+      const entry = { lease, handler };
+      intentHandler = entry;
+      return () => { if (intentHandler === entry) intentHandler = null; };
+    },
+    applyNavigationIntents(frame) {
+      const entry = intentHandler;
+      if (entry && navigation.current() === entry.lease) entry.handler(frame);
+    },
+    getDeviceGeneration: () => deviceGeneration,
+    onDeviceLost(listener) {
+      deviceLostListeners.add(listener);
+      return () => { deviceLostListeners.delete(listener); };
+    },
+    onDeviceRestored(listener) {
+      deviceRestoredListeners.add(listener);
+      return () => { deviceRestoredListeners.delete(listener); };
+    },
     destroy() {
+      navigation.dispose();
+      renderer.engine.onContextLostObservable.remove(deviceLostObserver);
+      renderer.engine.onContextRestoredObservable.remove(deviceRestoredObserver);
+      deviceLostListeners.clear();
+      deviceRestoredListeners.clear();
       for (const stop of stopWatchingSettings) stop();
       for (const remove of removeReadings) remove();
       cancelPreparation?.(new DOMException("Map runtime destroyed.", "AbortError"));

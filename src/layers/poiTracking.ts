@@ -24,6 +24,12 @@ export interface PoiTrackingHandle {
    * Intended for Phase 6 compass anchor integration.
    */
   getOrbitTarget(): Vector3 | null;
+  /**
+   * While suspended, clicks select nothing and the camera does not follow:
+   * a navigation lease owns the camera. The tracked point is kept, so the
+   * camera follows it again once resumed.
+   */
+  setSuspended(suspended: boolean): void;
   /** Remove all scene observers. Call before `scene.dispose()`. */
   destroy(): void;
 }
@@ -55,6 +61,7 @@ export function createPoiTracking(
   const dragThresholdPx = options.dragThresholdPx ?? (() => DEFAULT_INPUT_RATES.mouseDragThresholdPx);
   const meshToPoiMap = new Map<AbstractMesh, PoiDescriptor>();
   let currentPoi: PoiDescriptor | null = null;
+  let suspended = false;
   let pointerDownX = 0;
   let pointerDownY = 0;
 
@@ -93,7 +100,7 @@ export function createPoiTracking(
   // ── Before-render: keep orbit center locked to the tracked POI ────────────
 
   const renderObserver = scene.onBeforeRenderObservable.add(() => {
-    if (!currentPoi) return;
+    if (!currentPoi || suspended) return;
     const camera = getCamera();
     const pos = currentPoi.getPosition();
     if (camera && pos) {
@@ -106,7 +113,7 @@ export function createPoiTracking(
   const pointerObserver = scene.onPointerObservable.add((info) => {
     const event = info.event as PointerEvent;
     // Only react to primary mouse button — touch is handled by touchController
-    if (event.pointerType !== "mouse") return;
+    if (event.pointerType !== "mouse" || suspended) return;
 
     if (info.type === PointerEventTypes.POINTERDOWN) {
       if (event.button !== 0) return;
@@ -164,5 +171,9 @@ export function createPoiTracking(
     currentPoi = null;
   }
 
-  return { setPois, enterTracking, exitTracking, isTracking, getOrbitTarget, destroy };
+  function setSuspended(next: boolean): void {
+    suspended = next;
+  }
+
+  return { setPois, enterTracking, exitTracking, isTracking, getOrbitTarget, setSuspended, destroy };
 }
