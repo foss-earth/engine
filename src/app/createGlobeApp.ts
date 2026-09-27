@@ -61,14 +61,21 @@ import { createHudBar } from "../shell/hudBar";
 import { createSceneHotspots, createScenesPanel } from "../shell/scenesPanel";
 import { createSceneController, type SceneController } from "../scenes/sceneController";
 import { SCENE_EXAMPLES } from "../scenes/examples";
-import type { PanoramaRenderer } from "../engine/babylon/panorama/panoramaRenderer";
+import { effectiveOrbRadius, type PanoramaRenderer } from "../engine/babylon/panorama/panoramaRenderer";
+import * as panoramaMath from "../scenes/panoramaMath";
 import type { PoiSpriteSizeParams } from "../hud/poiSpriteSizeTuner";
 import type { OrbitCompassScaleParams } from "../visualization/orbitCompass";
 
 declare global {
   interface Window {
     /** Test only, with `?panoramaTest=1`: what scripts/validation/panorama-campus.mjs drives and reads. */
-    __fossEarthPanoramaTest?: { runtime: BabylonRuntime; scenes: SceneController; readonly renderer: PanoramaRenderer | null };
+    __fossEarthPanoramaTest?: {
+      runtime: BabylonRuntime;
+      scenes: SceneController;
+      readonly renderer: PanoramaRenderer | null;
+      /** The CPU reference the check holds the GPU's output against. */
+      math: typeof panoramaMath & { effectiveOrbRadius: typeof effectiveOrbRadius };
+    };
   }
 }
 
@@ -843,6 +850,7 @@ export async function createGlobeApp(
       runtime,
       scenes,
       get renderer() { return panoramaTestHooks.renderer; },
+      math: { ...panoramaMath, effectiveOrbRadius },
     };
   }
 
