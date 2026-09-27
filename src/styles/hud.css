@@ -552,8 +552,10 @@
 .foss-earth-map-cache small { display: block; }
 .foss-earth-map-cache__note { opacity: 0.72; font-size: 12px; }
 
-/* A toolbar button hidden in Settings. Its own display rule would otherwise win. */
+/* A toolbar button or chip hidden in Settings or by its state. Its own display rule would otherwise win. */
 .hud-circle-button[hidden],
+.hud-chip[hidden],
+.hud-chip-group[hidden],
 .input-mode-control[hidden] {
   display: none;
 }
