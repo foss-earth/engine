@@ -60,6 +60,7 @@ import {
 import { createHudBar } from "../shell/hudBar";
 import { createSceneHotspots, createSceneHud, createScenesPanel } from "../shell/scenesPanel";
 import { createPanoramaTabs, type PanoramaTabs } from "../shell/panoramaTabs";
+import { connectSceneLog } from "../shell/sceneLog";
 import { createSceneController, type SceneController, type SceneExample } from "../scenes/sceneController";
 import { SCENE_EXAMPLES } from "../scenes/examples";
 import { effectiveOrbRadius, type PanoramaRenderer } from "../engine/babylon/panorama/panoramaRenderer";
@@ -825,6 +826,7 @@ export async function createGlobeApp(
     ...(panoramaTest ? { loadOptions: { internals: { onRenderer: renderer => { panoramaTestHooks.renderer = renderer; } } } } : {}),
   });
   const scenesPanel = createScenesPanel({ settings, controller: scenes });
+  const offSceneLog = connectSceneLog(scenes, gameLog);
   const panoramaTabs = createPanoramaTabs({
     settings,
     controller: scenes,
@@ -1016,6 +1018,7 @@ export async function createGlobeApp(
       sceneHotspots.destroy();
       scenesPanel.destroy();
       panoramaTabs.destroy();
+      offSceneLog();
       scenes.destroy();
       if (window.__fossEarthPanoramaTest?.scenes === scenes) delete window.__fossEarthPanoramaTest;
       gamepadEditor?.destroy();
