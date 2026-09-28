@@ -59,7 +59,7 @@ import {
 } from "../input/globeNavigation";
 import { createHudBar } from "../shell/hudBar";
 import { createSceneHotspots, createSceneHud, createScenesPanel } from "../shell/scenesPanel";
-import { createSceneController, type SceneController } from "../scenes/sceneController";
+import { createSceneController, type SceneController, type SceneExample } from "../scenes/sceneController";
 import { SCENE_EXAMPLES } from "../scenes/examples";
 import { effectiveOrbRadius, type PanoramaRenderer } from "../engine/babylon/panorama/panoramaRenderer";
 import * as panoramaMath from "../scenes/panoramaMath";
@@ -114,6 +114,14 @@ export interface GlobeAppOptions {
   onCompassScaleChange?: (params: OrbitCompassScaleParams) => void;
   /** A detail controller the host configured; the app creates one otherwise. */
   mapDetail?: MapDetailController;
+  /**
+   * The scenes this app offers: listed in Scenes → Content, and the only ones
+   * `?scene=<id>` opens. Their URLs resolve against the app's base URL.
+   * Default: FOSS Earth's example scenes.
+   */
+  scenes?: readonly SceneExample[];
+  /** The id of one of `scenes` to open at start, when the address names none with `?scene=`. */
+  initialScene?: string;
   /**
    * The host's tab overlay, filled once it mounts. The toolbar buttons toggle
    * its tabs: \u2699 Settings, input method Controls, the position Location,
@@ -800,7 +808,7 @@ export async function createGlobeApp(
       }),
     }],
   });
-  // Scenes: one mounted at a time; `?scene=<id>` loads a registered example.
+  // Scenes: one mounted at a time; `?scene=<id>` loads one the app offers, else the host's initial scene.
   const appBaseUrl = new URL(import.meta.env.BASE_URL ?? "/", window.location.href).href;
   const params = new URLSearchParams(window.location.search);
   const panoramaTest = params.get("panoramaTest") === "1";
@@ -809,7 +817,7 @@ export async function createGlobeApp(
     runtime,
     settings,
     canvas,
-    examples: SCENE_EXAMPLES,
+    examples: options.scenes ?? SCENE_EXAMPLES,
     baseUrl: appBaseUrl,
     ...(panoramaTest ? { loadOptions: { internals: { onRenderer: renderer => { panoramaTestHooks.renderer = renderer; } } } } : {}),
   });
@@ -819,7 +827,7 @@ export async function createGlobeApp(
   scenesBtnEl?.addEventListener("click", onScenesButtonClick);
   // While a panorama is entered, its close button and credit take the map's place at the bar's right end.
   const sceneHud = mapSourceSlot ? createSceneHud({ controller: scenes, container: mapSourceSlot, mapSource: mapSourceHud?.element }) : null;
-  const requestedScene = params.get("scene");
+  const requestedScene = params.get("scene") ?? options.initialScene;
   if (requestedScene) void scenes.load(requestedScene, { exampleId: true });
   if (panoramaTest) {
     window.__fossEarthPanoramaTest = {
