@@ -14,7 +14,6 @@ export const TOOLBAR_BUTTONS = [
   ["settings", "Settings (⚙)", "the ⚙ button that opens the Settings tab"],
   ["theme", "Theme", "the light and dark theme button"],
   ["inputMode", "Input method", "the input method button, which opens the Controls tab"],
-  ["scenes", "Scenes (◎)", "the ◎ button that opens the Scenes tab"],
 ] as const;
 
 export const PERFORMANCE_HUD_METRICS = [

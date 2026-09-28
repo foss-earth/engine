@@ -393,7 +393,6 @@ export async function createGlobeApp(
       },
       { kind: "button", id: "helpButton", title: "Controls help", ariaLabel: "Controls help", text: "?" },
       { kind: "button", id: "settingsButton", title: "Settings", ariaLabel: "Settings", className: "settings-button", text: "⚙" },
-      { kind: "button", id: "scenesButton", title: "Scenes. Click to show or hide the Scenes tab.", ariaLabel: "Scenes", className: "scenes-button", text: "◎" },
       {
         kind: "button",
         id: "themeButton",
@@ -615,10 +614,8 @@ export async function createGlobeApp(
 
   // The app follows its parameters wherever they are changed: their sections,
   // Show all parameters, an import or another tab.
-  const scenesBtnEl = rootElement.querySelector<HTMLButtonElement>("#scenesButton");
   const hudButtonElements: Record<HudButtonId, HTMLElement | null> = {
     help: helpBtnEl,
-    scenes: scenesBtnEl,
     settings: settingsBtnEl,
     theme: themeBtnEl,
     inputMode: rootElement.querySelector<HTMLElement>(".input-mode-control"),
@@ -833,8 +830,6 @@ export async function createGlobeApp(
     openSettings: () => options.overlayApiRef?.current?.openOrSelectTab("panorama-settings"),
   });
   const sceneHotspots = createSceneHotspots({ controller: scenes, container: canvas.parentElement ?? rootElement });
-  const onScenesButtonClick = (): void => toggleTab("scenes");
-  scenesBtnEl?.addEventListener("click", onScenesButtonClick);
   // While a panorama is entered, its credit takes the map's place at the bar's right end.
   const sceneHud = mapSourceSlot ? createSceneHud({ controller: scenes, container: mapSourceSlot, mapSource: mapSourceHud?.element, mapOnly: hudStatusEl ? [hudStatusEl] : [] }) : null;
   const requestedScene = params.get("scene") ?? options.initialScene;
@@ -1014,7 +1009,6 @@ export async function createGlobeApp(
       northBtnEl?.removeEventListener("click", resetNorth);
       offNavigationChange();
       sceneHud?.destroy();
-      scenesBtnEl?.removeEventListener("click", onScenesButtonClick);
       sceneHotspots.destroy();
       scenesPanel.destroy();
       panoramaTabs.destroy();
