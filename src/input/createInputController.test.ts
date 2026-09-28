@@ -40,6 +40,8 @@ describe("the globe's input controller", () => {
   });
 
   it("while suspended, leaves every event to a lease's input, and consumes them again once resumed", () => {
+    let clock = 1_000;
+    vi.spyOn(performance, "now").mockImplementation(() => clock);
     const { canvas, camera, controller } = setup();
     controller.setSuspended(true);
     const later = vi.fn();
@@ -56,9 +58,27 @@ describe("the globe's input controller", () => {
 
     controller.setSuspended(false);
     later.mockClear();
+    clock += 1_000;
     canvas.dispatchEvent(new WheelEvent("wheel", { deltaY: 100, bubbles: true, cancelable: true }));
     expect(camera.zoomBy).toHaveBeenCalledTimes(1);
     expect(later).not.toHaveBeenCalled();
+    vi.restoreAllMocks();
+  });
+
+  it("ignores a wheel gesture under way when it resumes, as a swipe's momentum is, until the gesture pauses", () => {
+    let clock = 1_000;
+    vi.spyOn(performance, "now").mockImplementation(() => clock);
+    const { canvas, camera, controller } = setup();
+    controller.setSuspended(true);
+    const swipe = () => canvas.dispatchEvent(new WheelEvent("wheel", { deltaX: 12.5, deltaY: 3.5, bubbles: true, cancelable: true }));
+    swipe();
+    controller.setSuspended(false);
+    for (let i = 0; i < 10; i++) { clock += 16; swipe(); }
+    expect(camera.panBy).not.toHaveBeenCalled();
+    clock += 400;
+    swipe();
+    expect(camera.panBy).toHaveBeenCalledTimes(1);
+    vi.restoreAllMocks();
   });
 
   it("lets a panorama drag look as the pointer moves, and stop when the button is released", () => {
@@ -76,6 +96,24 @@ describe("the globe's input controller", () => {
     canvas.dispatchEvent(mouse("pointermove", 400, 0));
     expect(model.get().headingDeg).toBeCloseTo(171);
     input.detach();
+  });
+
+  it("does not let a panorama look with a swipe under way when looking begins, such as the globe's momentum", () => {
+    let clock = 1_000;
+    vi.spyOn(performance, "now").mockImplementation(() => clock);
+    const { canvas, controller } = setup();
+    const swipe = () => canvas.dispatchEvent(new WheelEvent("wheel", { deltaX: 12.5, deltaY: 3.5, bubbles: true, cancelable: true }));
+    swipe();
+    controller.setSuspended(true);
+    const model = createLookModel({ headingDeg: 180, pitchDeg: 0, verticalFovDeg: 60 }, () => LOOK, () => {});
+    const input = attachLookInput({ canvas, model, onExit: vi.fn(), onUserInput: vi.fn(), requestFrame: vi.fn(), inputMode: () => "trackpad", precedingWheelMs: clock });
+    for (let i = 0; i < 5; i++) { clock += 16; swipe(); }
+    expect(model.get().headingDeg).toBe(180);
+    clock += 400;
+    swipe();
+    expect(model.get().headingDeg).not.toBe(180);
+    input.detach();
+    vi.restoreAllMocks();
   });
 
   it("reports the input mode a lease's input reads wheels with", () => {

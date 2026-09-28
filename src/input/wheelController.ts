@@ -3,7 +3,8 @@ import { DEFAULT_INPUT_RATES, type InputSettings } from "./inputSettings";
 
 export type WheelGestureMode = "pan" | "pinchZoom" | "wheelZoom" | "orbit" | "ignore";
 
-const WHEEL_GESTURE_IDLE_MS = 180;
+/** The pause, ms, that ends one wheel gesture; a trackpad swipe's momentum after the fingers lift is still the swipe. */
+export const WHEEL_GESTURE_IDLE_MS = 180;
 const PIXEL_DELTA_MODE = 0;
 const FRACTIONAL_DELTA_EPSILON = 0.001;
 
@@ -72,8 +73,14 @@ export function createWheelGestureClassifier(options: {
   isSafariWithGestures: boolean;
   isOrbitMode?: () => boolean;
   mode: () => InputSettings["mode"];
+  /**
+   * When the last wheel event came before this classifier began reading
+   * them (`performance.now()`). The gesture it belongs to, if it goes on,
+   * was another reader's, and is ignored to its end.
+   */
+  precedingWheelMs?: number;
 }): (e: WheelEvent) => WheelGestureMode {
-  let session: WheelGestureSession | null = null;
+  let session: WheelGestureSession | null = options.precedingWheelMs === undefined ? null : { mode: "ignore", lastEventTimeMs: options.precedingWheelMs };
   return (e) => {
     const now = performance.now();
     if (!session || now - session.lastEventTimeMs > WHEEL_GESTURE_IDLE_MS) {
@@ -85,6 +92,38 @@ export function createWheelGestureClassifier(options: {
       session.lastEventTimeMs = now;
     }
     return session.mode;
+  };
+}
+
+export interface WheelGestureWatch {
+  /** Whether the wheel event being handled now began a gesture, rather than continuing one. */
+  begins(): boolean;
+  /** When the last wheel event came, `performance.now()`: for a reader that starts while a gesture may be under way. */
+  lastEventMs(): number;
+  dispose(): void;
+}
+
+/**
+ * Watches the canvas's wheel events from the window's capture phase, before
+ * any handler can stop them, to tell a gesture's first event from the rest:
+ * whoever handles an event can then ask whether it began a gesture, and a
+ * reader attached later, when the last one came.
+ */
+export function watchWheelGestures(canvas: HTMLElement): WheelGestureWatch {
+  let last = Number.NEGATIVE_INFINITY;
+  let begins = true;
+  const onWheel = (event: Event): void => {
+    const target = event.target as Node | null;
+    if (target !== canvas && !(target && canvas.contains(target))) return;
+    const now = performance.now();
+    begins = now - last > WHEEL_GESTURE_IDLE_MS;
+    last = now;
+  };
+  window.addEventListener("wheel", onWheel, { capture: true, passive: true });
+  return {
+    begins: () => begins,
+    lastEventMs: () => last,
+    dispose: () => window.removeEventListener("wheel", onWheel, { capture: true }),
   };
 }
 
@@ -105,13 +144,14 @@ export function createWheelGestureClassifier(options: {
 export function attachWheelController(
   canvas: HTMLCanvasElement,
   camera: CameraInputTarget,
-  options: { isSafariWithGestures: boolean; isOrbitMode?: () => boolean; getSettings?: () => InputSettings },
+  options: { isSafariWithGestures: boolean; isOrbitMode?: () => boolean; getSettings?: () => InputSettings; precedingWheelMs?: number },
 ): () => void {
   const rates = () => options.getSettings?.().rates ?? DEFAULT_INPUT_RATES;
   const classify = createWheelGestureClassifier({
     isSafariWithGestures: options.isSafariWithGestures,
     isOrbitMode: options.isOrbitMode,
     mode: () => options.getSettings?.().mode ?? "auto",
+    precedingWheelMs: options.precedingWheelMs,
   });
 
   function onWheel(e: WheelEvent): void {

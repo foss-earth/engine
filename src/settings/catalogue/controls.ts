@@ -101,7 +101,7 @@ export const CAMERA_PARAMETERS: readonly ParameterSpec[] = [
   {
     id: "camera.inertiaDecay",
     label: "Glide",
-    description: "How much of its speed the camera keeps each 60 Hz frame after a drag or flick ends: 0 stops at once, more glides further.",
+    description: "How much of its speed the camera keeps each 60 Hz frame after a drag or flick ends, or after a flight into or out of a 360 image is cut short: 0 stops at once, more glides further.",
     unit: "per-frame",
     kind: "number",
     bounds: () => ({ min: 0, max: 0.99 }),

@@ -60,7 +60,8 @@ import { createRenderScheduler, type RenderScheduler } from "./renderScheduler";
 import { geodeticToEcef, DEG_TO_RAD } from "../../camera/cameraMath";
 import { CameraController, DEFAULT_CAMERA_LIMITS, type CameraLimits, type GroundFollow, type OrbitTargetHeightOptions } from "../../camera/cameraState";
 import { createInputController, type InputController } from "../../input/createInputController";
-import { createInertialCameraController, type InertialCameraController } from "../../input/inertialCameraController";
+import { createInertialCameraController, DEFAULT_INERTIA_DECAY_PER_FRAME, type InertialCameraController } from "../../input/inertialCameraController";
+import type { CameraHandling } from "../../camera/cameraLimits";
 import type { GlobeNavigationIntentFrame } from "../../input/globeNavigation";
 import { DEFAULT_INPUT_RATES, type InputModePreference, type InputRates, type InputSensitivitySettings } from "../../input/inputSettings";
 import { INPUT_RATE_IDS } from "../../settings/catalogue";
@@ -327,6 +328,13 @@ export interface BabylonRuntime {
    * snapshot is restored or the lease ends. Refused (false) otherwise.
    */
   placeNavigationCamera(lease: NavigationLease, view: NavigationPresentation): boolean;
+  /**
+   * What the globe camera holds to on its own: its tilt and distance limits
+   * (`camera.pitchLimits`, `camera.zoomLimits`) and how much speed a glide
+   * keeps each 60 Hz frame (`camera.inertiaDecay`). An owner that placed the
+   * camera and hands it back moving brakes and settles it by these.
+   */
+  getCameraHandling(): CameraHandling;
   /** The current lease's presented view, or null while the globe camera's view is drawn. */
   getPresentationView(): NavigationPresentation | null;
   /**
@@ -1556,13 +1564,16 @@ export async function createBabylonRuntime(
     const camera = geospatialCamera;
     if ((current && current !== lease) || !camera || simMode) return false;
     inertialCameraController?.cancel();
-    restoreCameraLimits();
     const { center, yaw, pitch, radius, fov } = snapshot.camera;
+    // From a placed view, the camera reaches the orbit with collisions still
+    // off: each of the steps below moves the eye, and the steps between are
+    // not places it passes through.
     camera.center = new Vector3(center.x, center.y, center.z);
     camera.yaw = yaw;
     camera.pitch = pitch;
     camera.radius = radius;
     camera.fov = fov;
+    restoreCameraLimits();
     scheduler.requestRender();
     return true;
   };
@@ -1874,6 +1885,10 @@ export async function createBabylonRuntime(
     captureNavigationSnapshot,
     restoreNavigationSnapshot,
     placeNavigationCamera,
+    getCameraHandling(): CameraHandling {
+      const decay = settings.get("camera.inertiaDecay");
+      return { ...(cameraController?.getLimits() ?? cameraLimits()), glideKeepPerFrame: typeof decay === "number" ? decay : DEFAULT_INERTIA_DECAY_PER_FRAME };
+    },
     getPresentationView: () => navigation.current()?.getPresentationView() ?? null,
     setNavigationIntentHandler(lease, handler) {
       if (navigation.current() !== lease || lease.released) return () => {};

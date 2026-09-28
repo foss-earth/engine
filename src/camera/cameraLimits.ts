@@ -22,6 +22,15 @@ export interface CameraLimits {
   zoomMeters: { min: number; max: number };
 }
 
+/**
+ * What the globe camera holds to on its own, for an owner handing it back in
+ * motion: its limits, and the share of its speed a glide keeps each 60 Hz
+ * frame (`camera.inertiaDecay`).
+ */
+export interface CameraHandling extends CameraLimits {
+  glideKeepPerFrame: number;
+}
+
 export const DEFAULT_CAMERA_LIMITS: CameraLimits = Object.freeze({
   pitchDeg: Object.freeze({ min: MIN_PITCH_DEG, max: MAX_PITCH_DEG }),
   zoomMeters: Object.freeze({ min: MIN_ZOOM_METERS, max: MAX_ZOOM_METERS }),

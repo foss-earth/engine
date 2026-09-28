@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ComputeLookAtFromYawPitchToRef, Vector3 } from "@babylonjs/core";
-import { flightIn, flightOut, INSIDE_SHARE, levelUp, orbitAngles, orbitBasis, orbitLook, poseView, type FlightPose } from "./panoramaFlight";
+import { coast, flightIn, flightOut, INSIDE_SHARE, levelUp, orbitAngles, orbitBasis, orbitHolding, orbitLook, poseView, type FlightPose, type GlobeHold } from "./panoramaFlight";
 import { add, cross, dot, enuDirection, enuFrame, geodeticPoint, handoffReady, length, normalize, orbGeometry, scale, sub, type Vec3 } from "./panoramaMath";
 
 const close = (a: Vec3, b: Vec3, digits = 9) => a.forEach((value, index) => expect(value).toBeCloseTo(b[index], digits));
@@ -114,5 +114,88 @@ describe("the flight out of an orb", () => {
 
   it("does not fly to a view inside the sphere", () => {
     expect(flightOut(start, marker, 700, overview)).toBeNull();
+  });
+});
+
+describe("a flight cut short", () => {
+  const overview = { center: { x: 0, y: 0, z: 0 }, yaw: 0.3, pitch: Math.PI / 2 - (40 * Math.PI) / 180, radius: 600, fov: Math.PI / 4 };
+  // The image looked 20° above the horizon, rolled 3°, with a wider view than the globe's.
+  const out = flightOut(pose(marker, 250, 20, 3, 75), marker, 4, overview)!;
+  const into = flightIn(pose(add(marker, toEcef([-150, -130, 80])), 10, -25, 0.4), marker, 6)!;
+  const hold: GlobeHold = { verticalFovRad: overview.fov, pitchDeg: { min: 1, max: 89 }, zoomMinMeters: 25, glideKeepPerFrame: 0.82 };
+  const decay = -Math.log(0.82) / (1000 / 60);
+  const tiltDeg = (forward: Vec3) => (Math.asin(-dot(forward, normalize(marker))) * 180) / Math.PI;
+  const rollDeg = (each: FlightPose) => (Math.atan2(dot(cross(levelUp(each.forward, normalize(marker), each.up), each.up), each.forward), dot(levelUp(each.forward, normalize(marker), each.up), each.up)) * 180) / Math.PI;
+
+  it("goes on from where it got to, at the speed it had, along its own path", () => {
+    const glide = coast(out, 0.2, 0.0015, marker, hold, 0);
+    const first = glide.pose(0);
+    const path = out.pose(0.2);
+    close(first.position, path.position, 9);
+    close(first.forward, path.forward);
+    close(first.up, path.up);
+    expect(first.verticalFovRad).toBeCloseTo(path.verticalFovRad, 12);
+    expect((glide.progress(1e-3) - 0.2) / 1e-3).toBeCloseTo(0.0015, 6);
+    for (const ms of [30, 90, 200]) close(glide.pose(ms).position, out.pose(glide.progress(ms)).position, 6);
+  });
+
+  it("brakes as the globe camera's glide does, and comes to rest", () => {
+    const glide = coast(out, 0.2, 0.0015, marker, hold, 0);
+    // The speed falls to 0.82 of itself every 60 Hz frame: the distance left halves as the speed does.
+    const left = (ms: number) => glide.progress(glide.durationMs) - glide.progress(ms);
+    expect(left(1000 / 60) / left(0)).toBeCloseTo(0.82, 3);
+    expect(glide.progress(glide.durationMs) - 0.2).toBeCloseTo(0.0015 / decay, 3);
+    expect(glide.settled(glide.durationMs)).toBe(1);
+    expect(glide.durationMs).toBeGreaterThan(300);
+    expect(glide.durationMs).toBeLessThan(1000);
+  });
+
+  it("turns meanwhile to what the globe camera holds: its field of view, level, tilted within its limits", () => {
+    const glide = coast(out, 0.05, 0.0015, marker, hold, 0);
+    expect(tiltDeg(glide.pose(0).forward)).toBeLessThan(-1);
+    expect(Math.abs(rollDeg(glide.pose(0)))).toBeGreaterThan(1);
+    const last = glide.pose(glide.durationMs);
+    expect(tiltDeg(last.forward)).toBeCloseTo(1, 9);
+    expect(rollDeg(last)).toBeCloseTo(0, 9);
+    expect(last.verticalFovRad).toBeCloseTo(overview.fov, 12);
+    // Half way through the braking, half way there.
+    const half = Math.log(2) / decay;
+    expect(glide.settled(half)).toBeCloseTo(0.5, 2);
+    const along = out.pose(glide.progress(half)).verticalFovRad;
+    expect(glide.pose(half).verticalFovRad).toBeCloseTo(along + (overview.fov - along) * glide.settled(half), 12);
+  });
+
+  it("ends as the globe camera's orbit holding the eye where it stopped, no nearer than its zoom limit", () => {
+    for (const glide of [coast(out, 0.05, 0.0015, marker, hold, 0), coast(into, 0.7, 0.001, marker, hold, 0)]) {
+      const last = glide.pose(glide.durationMs);
+      const { camera, view } = glide.end;
+      const center: Vec3 = [camera.center.x, camera.center.y, camera.center.z];
+      const look = orbitLook(center, camera.yaw, camera.pitch);
+      close(sub(center, scale(look, camera.radius)), last.position, 6);
+      close(look, last.forward, 9);
+      expect(camera.radius).toBeGreaterThanOrEqual(25);
+      expect(camera.fov).toBe(overview.fov);
+      expect(view.zoomMeters).toBe(camera.radius);
+      expect(view.pitchDeg).toBeGreaterThanOrEqual(1 - 1e-3);
+    }
+  });
+
+  it("stops at once, turned to what the globe camera holds, when its glide keeps nothing", () => {
+    const glide = coast(into, 0.7, 0.001, marker, { ...hold, glideKeepPerFrame: 0 }, 0);
+    expect(glide.durationMs).toBe(0);
+    close(glide.pose(0).position, into.pose(0.7).position, 9);
+    expect(rollDeg(glide.pose(0))).toBeCloseTo(0, 9);
+  });
+
+  it("orbits the marker when the eye looks at it from beyond the zoom limit, and a point past it when nearer", () => {
+    const far = out.pose(0.9);
+    const held = orbitHolding(far, marker, hold, 0).camera;
+    close([held.center.x, held.center.y, held.center.z], marker, 6);
+    expect(held.radius).toBeCloseTo(length(sub(marker, far.position)), 6);
+    const near = out.pose(0.1);
+    expect(length(sub(marker, near.position))).toBeLessThan(25);
+    const closer = orbitHolding(near, marker, hold, 0).camera;
+    expect(closer.radius).toBe(25);
+    close([closer.center.x, closer.center.y, closer.center.z], add(near.position, scale(near.forward, 25)), 6);
   });
 });

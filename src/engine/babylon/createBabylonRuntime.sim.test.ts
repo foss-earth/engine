@@ -538,6 +538,43 @@ describe("createBabylonRuntime navigation camera", () => {
       runtime.destroy();
     }
   });
+
+  it("settles a placed camera into its own orbit without moving the eye, and says what it holds to", async () => {
+    mocks.createInputController.mockReturnValue({ setRates: vi.fn(), setSuspended: vi.fn(), destroy: vi.fn() });
+    const { createBabylonRuntime } = await import("./createBabylonRuntime");
+    const { enuDirection, enuFrame, geodeticPoint, add, scale } = await import("../../scenes/panoramaMath");
+    const { orbitHolding, levelUp } = await import("../../scenes/panoramaFlight");
+    const runtime = await createBabylonRuntime(document.createElement("canvas"));
+    const camera = runtime.geospatialCamera!;
+    runtime.scene.useRightHandedSystem = true;
+    try {
+      const handling = runtime.getCameraHandling();
+      expect(handling).toMatchObject({ pitchDeg: { min: 1, max: 89 }, zoomMeters: { min: 25 }, glideKeepPerFrame: 0.82 });
+      const acquired = runtime.acquireNavigation({ owner: "test", inputContext: "panorama" });
+      if (!acquired.ok) throw new Error(acquired.message);
+      const { lease } = acquired;
+      // 3 m from an orb, looking 30° down at it: nearer than the zoom limit.
+      const frame = enuFrame(-93.235, 44.974);
+      const toEcef = (v: readonly [number, number, number]) => add(add(scale(frame.east, v[0]), scale(frame.north, v[1])), scale(frame.up, v[2]));
+      const marker = geodeticPoint(-93.235, 44.974, 252);
+      const forward = toEcef(enuDirection(70, -30));
+      const position = add(marker, scale(forward, -3));
+      const pose = { position, forward, up: levelUp(forward, frame.up, frame.up), verticalFovRad: 1.2 };
+      expect(runtime.placeNavigationCamera(lease, { position: { x: position[0], y: position[1], z: position[2] }, forward: { x: forward[0], y: forward[1], z: forward[2] }, up: { x: pose.up[0], y: pose.up[1], z: pose.up[2] }, verticalFovRad: 1.2 })).toBe(true);
+      const hold = { verticalFovRad: 0.8, pitchDeg: handling.pitchDeg, zoomMinMeters: handling.zoomMeters.min, glideKeepPerFrame: handling.glideKeepPerFrame };
+      expect(runtime.restoreNavigationSnapshot(orbitHolding(pose, marker, hold, 0), lease)).toBe(true);
+      const m = camera.getViewMatrix(true).m;
+      [camera.position.x, camera.position.y, camera.position.z].forEach((value, i) => expect(value).toBeCloseTo(position[i], 6));
+      [-m[2], -m[6], -m[10]].forEach((value, i) => expect(value).toBeCloseTo(forward[i], 6));
+      expect(camera.radius).toBeCloseTo(25, 9);
+      expect(camera.fov).toBe(0.8);
+      expect(camera.checkCollisions).toBe(true);
+      expect(camera.limits.radiusMin).toBe(25);
+      lease.release("exit");
+    } finally {
+      runtime.destroy();
+    }
+  });
 });
 
 describe("createBabylonRuntime renderer parameters", () => {

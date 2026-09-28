@@ -8,13 +8,17 @@
  * itself (docs/validation/panorama-visual-contract.md), so the handoff to or
  * from the fullscreen image is exact.
  *
+ * A flight the person cuts short does not jump to either end: it brakes
+ * along its own path as the globe camera's glide brakes a flick, and settles
+ * into the globe camera's own orbit where it stops (`coast`).
+ *
  * Orbit angles follow the globe camera's convention (Babylon's
  * GeospatialCamera): at a centre, up is the geocentric direction, yaw turns
  * clockwise from north, and pitch runs from 0 looking straight down to π/2
  * at the horizon. Pure: ECEF metres and unit vectors in float64.
  */
 import type { NavigationSnapshot } from "../engine/babylon/navigationLease";
-import { add, cross, dot, length, normalize, pointGeodetic, RAD_TO_DEG, scale, sub, type Vec3, type ViewBasis } from "./panoramaMath";
+import { add, cross, DEG_TO_RAD, dot, length, normalize, pointGeodetic, RAD_TO_DEG, scale, sub, type Vec3, type ViewBasis } from "./panoramaMath";
 
 /** Where the eye is and how it looks: a navigation presentation's quantities. */
 export interface FlightPose {
@@ -162,4 +166,102 @@ export function flightOut(start: Omit<FlightPose, "position">, marker: Vec3, rad
       camera: { center: { x: marker[0], y: marker[1], z: marker[2] }, yaw, pitch: overview.pitch, radius: far, fov: overview.fov },
     },
   };
+}
+
+/** What the globe camera holds to on its own, which a coast settles into. */
+export interface GlobeHold {
+  /** The globe camera's field of view: the overview's. */
+  verticalFovRad: number;
+  /** Its tilt limits, degrees down from the horizon (`camera.pitchLimits`). */
+  pitchDeg: { min: number; max: number };
+  /** The nearest it orbits a point, metres (`camera.zoomLimits`). */
+  zoomMinMeters: number;
+  /** The share of its speed a glide keeps each 60 Hz frame (`camera.inertiaDecay`). */
+  glideKeepPerFrame: number;
+}
+
+export interface Coast {
+  durationMs: number;
+  /** How much of the braking is done at `ms`, from 0 to 1. */
+  settled(ms: number): number;
+  /** The flight's eased progress along its path at `ms`. */
+  progress(ms: number): number;
+  pose(ms: number): FlightPose;
+  /** The globe camera's orbit where the coast ends. */
+  end: NavigationSnapshot;
+}
+
+/** The frame the glide's decay is given per. */
+const GLIDE_FRAME_MS = 1000 / 60;
+/** A coast has settled once this share of its motion is left: nothing on screen still moves. */
+const COAST_REST_SHARE = 0.001;
+
+/**
+ * The globe camera's own orbit holding `pose`'s eye and look: about the
+ * point on its line of sight nearest `pivot`, or at the zoom limit if that
+ * is farther, with the globe's field of view. Its up is level; a tilt
+ * outside the limits is the globe camera's to clamp.
+ */
+export function orbitHolding(pose: FlightPose, pivot: Vec3, hold: GlobeHold, fallbackYaw: number): NavigationSnapshot {
+  const reach = Math.max(hold.zoomMinMeters, dot(sub(pivot, pose.position), pose.forward));
+  const center = add(pose.position, scale(pose.forward, reach));
+  const { yaw, pitch } = orbitAngles(center, pose.forward, fallbackYaw);
+  const place = pointGeodetic(center);
+  return {
+    version: 1,
+    view: {
+      latDeg: place.latitudeDeg,
+      lonDeg: place.longitudeDeg,
+      headingDeg: (((yaw * RAD_TO_DEG) % 360) + 360) % 360,
+      pitchDeg: 90 * (1 - (2 * pitch) / Math.PI),
+      zoomMeters: reach,
+    },
+    camera: { center: { x: center[0], y: center[1], z: center[2] }, yaw, pitch, radius: reach, fov: hold.verticalFovRad },
+  };
+}
+
+/** `forward` tilted into the tilt limits about `vertical`, degrees down from the horizon. */
+function withinTilt(forward: Vec3, vertical: Vec3, pitchDeg: { min: number; max: number }, fallback: Vec3): Vec3 {
+  const down = Math.asin(Math.max(-1, Math.min(1, -dot(forward, vertical)))) * RAD_TO_DEG;
+  const allowed = Math.max(pitchDeg.min, Math.min(pitchDeg.max, down));
+  if (allowed === down) return forward;
+  const across = sub(forward, scale(vertical, dot(forward, vertical)));
+  const level = length(across) > 1e-9 ? normalize(across) : normalize(sub(fallback, scale(vertical, dot(fallback, vertical))));
+  const tilt = allowed * DEG_TO_RAD;
+  return normalize(sub(scale(level, Math.cos(tilt)), scale(vertical, Math.sin(tilt))));
+}
+
+/**
+ * A flight cut short at eased progress `s`, moving at `rate` progress per
+ * ms: it brakes along its own path, keeping `hold.glideKeepPerFrame` of its
+ * speed each 60 Hz frame as the globe camera's glide does. Meanwhile, and at
+ * the same rate, what the globe camera cannot hold turns into what it can:
+ * the field of view to the globe's, the roll to level, a tilt outside the
+ * limits to the nearest inside. It ends as the globe camera's orbit about
+ * the point on its line of sight nearest `pivot`, the flight's marker, so
+ * nothing moves at the handover.
+ */
+export function coast(flight: Flight, s: number, rate: number, pivot: Vec3, hold: GlobeHold, fallbackYaw: number): Coast {
+  const keep = Math.max(0, Math.min(0.999, hold.glideKeepPerFrame));
+  // Speed falls as exp(−decay·ms); a glide that keeps nothing stops at once.
+  const decay = keep > 0 ? -Math.log(keep) / GLIDE_FRAME_MS : Number.POSITIVE_INFINITY;
+  const durationMs = Number.isFinite(decay) ? Math.log(1 / COAST_REST_SHARE) / decay : 0;
+  // Braking from `rate`, progress goes on by rate/decay in all; the coast ends with the last share of it left.
+  const onward = Number.isFinite(decay) ? (Math.max(0, rate) / decay) * (1 - COAST_REST_SHARE) : 0;
+  const vertical = normalize(pivot);
+  const settled = (ms: number): number => (ms >= durationMs ? 1 : (1 - Math.exp(-decay * Math.max(0, ms))) / (1 - COAST_REST_SHARE));
+  const progress = (ms: number): number => Math.min(1, s + onward * settled(ms));
+  const pose = (ms: number): FlightPose => {
+    const w = settled(ms);
+    const path = flight.pose(progress(ms));
+    const roll = angleAbout(levelUp(path.forward, vertical, path.up), path.up, path.forward);
+    const forward = slerp(path.forward, withinTilt(path.forward, vertical, hold.pitchDeg, path.up), w, path.up);
+    return {
+      position: path.position,
+      forward,
+      up: turnAbout(levelUp(forward, vertical, path.up), forward, roll * (1 - w)),
+      verticalFovRad: path.verticalFovRad + (hold.verticalFovRad - path.verticalFovRad) * w,
+    };
+  };
+  return { durationMs, settled, progress, pose, end: orbitHolding(pose(durationMs), pivot, hold, fallbackYaw) };
 }

@@ -1,5 +1,5 @@
 import type { CameraInputTarget } from "./inertialCameraController";
-import { attachWheelController } from "./wheelController";
+import { attachWheelController, watchWheelGestures } from "./wheelController";
 import { attachSafariGestures, isSafariGestureSupported } from "./safariGestures";
 import { attachTouchController } from "./touchController";
 import { attachMouseController } from "./mouseController";
@@ -27,7 +27,9 @@ export interface InputController {
    * While suspended, the globe's controllers are detached: a navigation lease
    * owns input, and every event reaches its listeners untouched. Suspending
    * ends an anchor drag and stops inertia; resuming attaches them afresh, so
-   * a gesture that spanned the handover starts over.
+   * a gesture that spanned the handover starts over, and a wheel gesture
+   * under way, such as the momentum of a swipe the lease read, is ignored
+   * to its end.
    */
   setSuspended(suspended: boolean): void;
   /** The input mode wheel and gesture events are read with. */
@@ -73,6 +75,8 @@ export function createInputController(
   document.addEventListener("wheel", docWheelHandler, { passive: false });
 
   let suspended = false;
+  // Seen while suspended too, so that resuming knows whether a wheel gesture is under way.
+  const wheels = watchWheelGestures(canvas);
 
   const docGestureCleanup: Array<() => void> = [];
   if (hasSafariGestures) {
@@ -88,7 +92,7 @@ export function createInputController(
   // lease owns input they are not attached at all.
   const attachControllers = (): (() => void) => {
     const detachers = [
-      attachWheelController(canvas, camera, { isSafariWithGestures: hasSafariGestures, isOrbitMode: options.isOrbitMode, getSettings: () => settings }),
+      attachWheelController(canvas, camera, { isSafariWithGestures: hasSafariGestures, isOrbitMode: options.isOrbitMode, getSettings: () => settings, precedingWheelMs: wheels.lastEventMs() }),
       hasSafariGestures ? attachSafariGestures(canvas, camera, { getSettings: () => settings }) : (): void => undefined,
       attachTouchController(canvas, camera, { isOrbitMode: options.isOrbitMode, getSettings: () => settings }),
       attachMouseController(canvas, camera, { isOrbitMode: options.isOrbitMode, getSettings: () => settings }),
@@ -138,6 +142,7 @@ export function createInputController(
       detachControllers?.();
       detachControllers = null;
       document.removeEventListener("wheel", docWheelHandler);
+      wheels.dispose();
       for (const cleanup of docGestureCleanup) cleanup();
     },
   };
