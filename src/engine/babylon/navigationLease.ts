@@ -54,6 +54,24 @@ export interface NavigationPresentation {
   readonly verticalFovRad: number;
 }
 
+/** How a placed camera goes on moving when its owner hands it back to the globe. */
+export interface NavigationGlide {
+  /** The eye's velocity, m/s. */
+  readonly velocity: EcefVector;
+  /** How fast the look direction turns: its derivative, 1/s. */
+  readonly turn: EcefVector;
+  /** The field of view the camera eases to, radians. */
+  readonly fovRad: number;
+  /**
+   * When the owner's own motion began (`performance.now()`): input begun
+   * since is the person's, taking the camera over, and goes on moving it; a
+   * wheel gesture from before is ignored to its end.
+   */
+  readonly inputSince: number;
+  /** A mouse press that took the camera over and is still held, which goes on as a drag. */
+  readonly press?: { readonly pointerId: number; readonly button: number; readonly clientX: number; readonly clientY: number } | null;
+}
+
 export interface NavigationRequest {
   /** Who asks, for messages: "foss-earth.scenes". */
   readonly owner: string;

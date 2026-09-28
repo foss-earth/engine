@@ -2,6 +2,14 @@ import type { CameraInputTarget } from "./inertialCameraController";
 import { attachAnchorPanDebugOverlay, type AnchorPanDebugOverlay } from "./anchorPanDebugOverlay";
 import { DEFAULT_INPUT_RATES, type InputSettings } from "./inputSettings";
 
+/** A mouse press already held when the handler attaches, and where the pointer is. */
+export interface HeldPress {
+  pointerId: number;
+  button: number;
+  clientX: number;
+  clientY: number;
+}
+
 /**
  * Attach a mouse-button drag handler to the canvas.
  *
@@ -16,14 +24,15 @@ import { DEFAULT_INPUT_RATES, type InputSettings } from "./inputSettings";
  * not also fire.
  *
  * The context-menu is suppressed to prevent the right-click menu from
- * interrupting orbit.
+ * interrupting orbit. A `heldPress`, such as one that took the camera over
+ * from a lease's owner, goes on as if pressed where the pointer is now.
  *
  * @returns Cleanup function that removes all registered listeners.
  */
 export function attachMouseController(
   canvas: HTMLCanvasElement,
   camera: CameraInputTarget,
-  options: { isOrbitMode?: () => boolean; getSettings?: () => InputSettings } = {},
+  options: { isOrbitMode?: () => boolean; getSettings?: () => InputSettings; heldPress?: HeldPress | null } = {},
 ): () => void {
   // Below the drag threshold a press is a click, and events pass through to
   // Babylon so picking and sphere-click handlers still fire.
@@ -70,14 +79,18 @@ export function attachMouseController(
 
   function onPointerDown(e: PointerEvent): void {
     if (e.pointerType !== "mouse") return;
-    if (e.button !== 0 && e.button !== 2) return;
     // Do NOT stop propagation here — let Babylon's picking system see the event.
+    beginPress(e);
+  }
+
+  function beginPress(e: HeldPress): void {
+    if (e.button !== 0 && e.button !== 2) return;
     activeButton = e.button as 0 | 2;
     isDragging = false;
     anchorPanActive = false;
     startX = prevX = e.clientX;
     startY = prevY = e.clientY;
-    canvas.setPointerCapture(e.pointerId);
+    try { canvas.setPointerCapture(e.pointerId); } catch { /* a held press's pointer may be gone */ }
 
     if (shouldUseAnchorPan(e.button) && camera.beginAnchorPan) {
       anchorPanActive = camera.beginAnchorPan({
@@ -177,6 +190,7 @@ export function attachMouseController(
   canvas.addEventListener("pointerup", onPointerUp, opts);
   canvas.addEventListener("pointercancel", onPointerUp, opts as EventListenerOptions);
   canvas.addEventListener("contextmenu", onContextMenu, opts as EventListenerOptions);
+  if (options.heldPress) beginPress(options.heldPress);
 
   return (): void => {
     anchorPanDebugOverlay.destroy();

@@ -57,10 +57,11 @@ declare global {
   }
 }
 import { createRenderScheduler, type RenderScheduler } from "./renderScheduler";
-import { geodeticToEcef, DEG_TO_RAD } from "../../camera/cameraMath";
+import { geodeticToEcef, ecefToGeodetic, DEG_TO_RAD, RAD_TO_DEG } from "../../camera/cameraMath";
+import { orbitCenterOnSight, orbitGlideRates, withinTilt, type GlideVec3 } from "../../camera/cameraGlide";
 import { CameraController, DEFAULT_CAMERA_LIMITS, type CameraLimits, type GroundFollow, type OrbitTargetHeightOptions } from "../../camera/cameraState";
-import { createInputController, type InputController } from "../../input/createInputController";
-import { createInertialCameraController, DEFAULT_INERTIA_DECAY_PER_FRAME, type InertialCameraController } from "../../input/inertialCameraController";
+import { createInputController, type InputController, type InputHandback } from "../../input/createInputController";
+import { createInertialCameraController, DEFAULT_INERTIA_DECAY_PER_FRAME, MAX_ZOOM_LOG_DELTA_PER_FRAME, type InertialCameraController } from "../../input/inertialCameraController";
 import type { CameraHandling } from "../../camera/cameraLimits";
 import type { GlobeNavigationIntentFrame } from "../../input/globeNavigation";
 import { DEFAULT_INPUT_RATES, type InputModePreference, type InputRates, type InputSensitivitySettings } from "../../input/inputSettings";
@@ -71,7 +72,9 @@ import type { GlobeViewState } from "../types";
 import {
   createNavigationOwner,
   NAVIGATION_PRESENTATION_LAYER,
+  type EcefVector,
   type NavigationAcquisition,
+  type NavigationGlide,
   type NavigationLease,
   type NavigationPresentation,
   type NavigationRequest,
@@ -335,6 +338,19 @@ export interface BabylonRuntime {
    * camera and hands it back moving brakes and settles it by these.
    */
   getCameraHandling(): CameraHandling;
+  /**
+   * Hands a placed camera back to the globe moving, before `lease` ends: at
+   * `view`'s eye and look, orbiting the point where its line of sight comes
+   * down to the orbit target's height near `pivot`, and gliding on at
+   * `motion`'s velocity and turn as after a flick, slowing by
+   * `camera.inertiaDecay`. Nearer that point than `camera.zoomLimits`
+   * allows, it may come as near as its glide takes it, until it is out past
+   * the limit. A tilt beyond `camera.pitchLimits` comes inside at once and
+   * the roll levels; the field of view eases to `motion.fovRad` at the
+   * glide's rate. When the lease ends, input begun since `motion.inputSince`
+   * goes on moving the camera. Refused (false) unless `lease` holds navigation.
+   */
+  glideNavigationCamera(lease: NavigationLease, view: NavigationPresentation, pivot: EcefVector, motion: NavigationGlide): boolean;
   /** The current lease's presented view, or null while the globe camera's view is drawn. */
   getPresentationView(): NavigationPresentation | null;
   /**
@@ -602,6 +618,7 @@ export async function createBabylonRuntime(
       let started = profiler.clock();
       if (!simMode) {
         inertialCameraController?.update();
+        stepFovReturn(frameNow);
       }
       updateTerrainPreparationCamera();
       profiler.add("map/camera", started);
@@ -639,7 +656,7 @@ export async function createBabylonRuntime(
         recordMapDebugEvent("scene-render", { mode: status.mode, enabledMeshes: scene.meshes.filter(mesh => mesh.isEnabled()).length });
       }
     },
-    shouldKeepRendering: () => simRunning || (inertialCameraController?.isActive() ?? false),
+    shouldKeepRendering: () => simRunning || (inertialCameraController?.isActive() ?? false) || fovReturn !== null,
     minFrameIntervalMs: () => {
       const cap = settings.get("renderer.frameRateCap");
       return typeof cap === "number" && cap > 0 ? 1000 / cap : 0;
@@ -1262,6 +1279,7 @@ export async function createBabylonRuntime(
       scheduler.requestRender();
     })),
     settings.watch("camera.fieldOfView", () => {
+      fovReturn = null;
       if (geospatialCamera) geospatialCamera.fov = cameraFieldOfViewRad();
       scheduler.requestRender();
     }),
@@ -1557,14 +1575,18 @@ export async function createBabylonRuntime(
     const view = cameraController?.getViewState();
     if (simMode || !camera || !view) return null;
     const { x, y, z } = camera.center;
-    return { version: 1, view, camera: { center: { x, y, z }, yaw: camera.yaw, pitch: camera.pitch, radius: camera.radius, fov: camera.fov } };
+    // A field of view on its way back is the one it returns to.
+    return { version: 1, view, camera: { center: { x, y, z }, yaw: camera.yaw, pitch: camera.pitch, radius: camera.radius, fov: fovReturn?.target ?? camera.fov } };
   };
   const restoreNavigationSnapshot = (snapshot: NavigationSnapshot, lease?: NavigationLease): boolean => {
     const current = navigation.current();
     const camera = geospatialCamera;
     if ((current && current !== lease) || !camera || simMode) return false;
     inertialCameraController?.cancel();
+    fovReturn = null;
     const { center, yaw, pitch, radius, fov } = snapshot.camera;
+    // A view saved nearer than the zoom limit, after a handback, is kept as near.
+    cameraController?.allowNearer(radius);
     // From a placed view, the camera reaches the orbit with collisions still
     // off: each of the steps below moves the eye, and the steps between are
     // not places it passes through.
@@ -1586,11 +1608,15 @@ export async function createBabylonRuntime(
     camera.limits.pitchMin = liftedCameraLimits.pitchMin;
     camera.limits.pitchMax = liftedCameraLimits.pitchMax;
     // The zoom limit may have changed meanwhile; its setting is the source.
-    camera.limits.radiusMin = (cameraController?.getLimits() ?? cameraLimits()).zoomMeters.min;
+    camera.limits.radiusMin = cameraController?.zoomMinMeters() ?? cameraLimits().zoomMeters.min;
     liftedCameraLimits = null;
   }
   /** Metres from a placed eye to the orbit centre it turns about: any point on its line of sight. */
   const PLACED_REACH_METERS = 1;
+  /** The frame `camera.inertiaDecay` is given per. */
+  const GLIDE_FRAME_MS = 1000 / 60;
+  /** A field of view within this of the globe's, radians, has returned to it. */
+  const FOV_RETURNED_RAD = 1e-4;
   const placeNavigationCamera = (lease: NavigationLease, view: NavigationPresentation): boolean => {
     const camera = geospatialCamera;
     if (navigation.current() !== lease || lease.released || !camera || simMode) return false;
@@ -1619,6 +1645,65 @@ export async function createBabylonRuntime(
     scheduler.requestRender();
     return true;
   };
+  // A handed-back camera's field of view easing to the globe's, at the glide's rate.
+  let fovReturn: { target: number; lastMs: number | null } | null = null;
+  // Input already under way that goes on to the globe when the lease ends.
+  let pendingHandback: InputHandback | null = null;
+  function glideKeepPerFrame(): number {
+    const decay = settings.get("camera.inertiaDecay");
+    return Math.max(0, Math.min(0.999, typeof decay === "number" ? decay : DEFAULT_INERTIA_DECAY_PER_FRAME));
+  }
+  function stepFovReturn(nowMs: number): void {
+    const camera = geospatialCamera;
+    if (!fovReturn || !camera || navigation.current()) return;
+    const dt = fovReturn.lastMs === null ? GLIDE_FRAME_MS : Math.max(0, Math.min(100, nowMs - fovReturn.lastMs));
+    fovReturn.lastMs = nowMs;
+    camera.fov = fovReturn.target + (camera.fov - fovReturn.target) * Math.pow(glideKeepPerFrame(), dt / GLIDE_FRAME_MS);
+    if (Math.abs(camera.fov - fovReturn.target) < FOV_RETURNED_RAD) {
+      camera.fov = fovReturn.target;
+      fovReturn = null;
+    }
+  }
+  const glideNavigationCamera = (lease: NavigationLease, view: NavigationPresentation, pivot: EcefVector, motion: NavigationGlide): boolean => {
+    const camera = geospatialCamera;
+    const controller = cameraController;
+    if (navigation.current() !== lease || lease.released || !camera || !controller || simMode) return false;
+    inertialCameraController?.cancel();
+    const vector = (value: EcefVector): GlideVec3 => [value.x, value.y, value.z];
+    const unit = (value: GlideVec3): GlideVec3 => { const size = Math.hypot(...value); return [value[0] / size, value[1] / size, value[2] / size]; };
+    const eye = vector(view.position);
+    const at = vector(pivot);
+    const forward = withinTilt(unit(vector(view.forward)), unit(at), controller.getLimits().pitchDeg, vector(view.up));
+    const place = ecefToGeodetic(pivot.x, pivot.y, pivot.z);
+    const center = orbitCenterOnSight(eye, forward, at, controller.orbitTargetHeightAt(place.latRad * RAD_TO_DEG, place.lonRad * RAD_TO_DEG));
+    const radius = Math.hypot(center[0] - eye[0], center[1] - eye[1], center[2] - eye[2]);
+    const anglesOf = (look: GlideVec3, about: GlideVec3): { yaw: number; pitch: number } => {
+      const angles = ComputeYawPitchFromLookAtToRef(new Vector3(...look), new Vector3(...about), scene.useRightHandedSystem, camera.yaw, new Vector2());
+      return { yaw: angles.x, pitch: angles.y };
+    };
+    const angles = anglesOf(forward, center);
+    const canvasHeightPx = Math.max(1, canvas.clientHeight || canvas.height || 1);
+    const rates = orbitGlideRates({ center, forward, radius, verticalFovRad: view.verticalFovRad, canvasHeightPx }, vector(motion.velocity), vector(motion.turn), anglesOf);
+    const frame = GLIDE_FRAME_MS / 1000;
+    // As near as the glide's zoom takes it: each frame's step, capped as the glide caps it, summed as the glide slows.
+    const zoomStep = Math.max(-MAX_ZOOM_LOG_DELTA_PER_FRAME, Math.min(MAX_ZOOM_LOG_DELTA_PER_FRAME, rates.zoomLog * frame));
+    controller.allowNearer(radius * Math.exp(Math.min(0, zoomStep) / (1 - glideKeepPerFrame())));
+    // Collisions are still off from the placement, so the steps below are not swept through the ground.
+    camera.center = new Vector3(...center);
+    camera.yaw = angles.yaw;
+    camera.pitch = angles.pitch;
+    camera.radius = radius;
+    camera.fov = view.verticalFovRad;
+    controller.followGroundFromHere();
+    restoreCameraLimits();
+    fovReturn = motion.fovRad !== view.verticalFovRad ? { target: motion.fovRad, lastMs: null } : null;
+    pendingHandback = { keepWheelSince: motion.inputSince, press: motion.press ?? null };
+    inertialCameraController?.panBy(rates.panPx.x * frame, rates.panPx.y * frame, canvasHeightPx);
+    inertialCameraController?.orbitBy(rates.orbitDeg.pitch * frame, rates.orbitDeg.heading * frame);
+    inertialCameraController?.zoomBy(Math.exp(rates.zoomLog * frame));
+    scheduler.requestRender();
+    return true;
+  };
   let presentationMaskBefore: number | null = null;
   let streamingBeforeSuspension = false;
   let startupHoldBeforeSuspension = false;
@@ -1629,6 +1714,9 @@ export async function createBabylonRuntime(
     suspend() {
       inputController?.setSuspended(true);
       inertialCameraController?.cancel();
+      // A field of view on its way back arrives at once: the lease's overview has it.
+      if (fovReturn && geospatialCamera) geospatialCamera.fov = fovReturn.target;
+      fovReturn = null;
       mapsSuspended = true;
       streamingBeforeSuspension = streamingHeld;
       startupHoldBeforeSuspension = startupHeld;
@@ -1643,7 +1731,8 @@ export async function createBabylonRuntime(
       mapsSuspended = false;
       tilesRuntime?.setSuspended(false);
       rasterTilesRuntime?.setSuspended(false);
-      inputController?.setSuspended(false);
+      inputController?.setSuspended(false, pendingHandback ?? undefined);
+      pendingHandback = null;
       // Continue a load the lease interrupted, if it still has work.
       const google = tilesRuntime?.getLoadingState();
       const googlePending = google ? google.queued + google.downloading + google.parsing + google.waitingToParse > 0 : false;
@@ -1885,6 +1974,7 @@ export async function createBabylonRuntime(
     captureNavigationSnapshot,
     restoreNavigationSnapshot,
     placeNavigationCamera,
+    glideNavigationCamera,
     getCameraHandling(): CameraHandling {
       const decay = settings.get("camera.inertiaDecay");
       return { ...(cameraController?.getLimits() ?? cameraLimits()), glideKeepPerFrame: typeof decay === "number" ? decay : DEFAULT_INERTIA_DECAY_PER_FRAME };

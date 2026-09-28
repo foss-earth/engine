@@ -539,38 +539,64 @@ describe("createBabylonRuntime navigation camera", () => {
     }
   });
 
-  it("settles a placed camera into its own orbit without moving the eye, and says what it holds to", async () => {
-    mocks.createInputController.mockReturnValue({ setRates: vi.fn(), setSuspended: vi.fn(), destroy: vi.fn() });
+  it("hands a placed camera back moving: the eye where it was, gliding on, as near as it was, and input begun since carrying on", async () => {
+    let scheduledFrame: FrameRequestCallback | null = null;
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation(callback => {
+      scheduledFrame = callback;
+      return 1;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
+    const setSuspended = vi.fn();
+    mocks.createInputController.mockReturnValue({ setRates: vi.fn(), setSuspended, destroy: vi.fn() });
     const { createBabylonRuntime } = await import("./createBabylonRuntime");
-    const { enuDirection, enuFrame, geodeticPoint, add, scale } = await import("../../scenes/panoramaMath");
-    const { orbitHolding, levelUp } = await import("../../scenes/panoramaFlight");
+    const { enuDirection, enuFrame, geodeticPoint, add, scale, sub, dot, length, cross, normalize } = await import("../../scenes/panoramaMath");
     const runtime = await createBabylonRuntime(document.createElement("canvas"));
     const camera = runtime.geospatialCamera!;
     runtime.scene.useRightHandedSystem = true;
+    const frames = (count: number) => {
+      for (let i = 0; i < count; i++) {
+        const run = scheduledFrame;
+        scheduledFrame = null;
+        run?.(performance.now());
+      }
+    };
     try {
-      const handling = runtime.getCameraHandling();
-      expect(handling).toMatchObject({ pitchDeg: { min: 1, max: 89 }, zoomMeters: { min: 25 }, glideKeepPerFrame: 0.82 });
+      expect(runtime.getCameraHandling()).toMatchObject({ pitchDeg: { min: 1, max: 89 }, zoomMeters: { min: 25 }, glideKeepPerFrame: 0.82 });
+      // The orbit target sits at the orb's height here, as ground following keeps it.
+      runtime.configureOrbitTargetHeight({ resolveSurfaceHeightMeters: () => 252 });
       const acquired = runtime.acquireNavigation({ owner: "test", inputContext: "panorama" });
       if (!acquired.ok) throw new Error(acquired.message);
       const { lease } = acquired;
-      // 3 m from an orb, looking 30° down at it: nearer than the zoom limit.
+      // 3 m from an orb, looking 30° down at it, rolled, with a wide view: nearer than the zoom limit.
       const frame = enuFrame(-93.235, 44.974);
       const toEcef = (v: readonly [number, number, number]) => add(add(scale(frame.east, v[0]), scale(frame.north, v[1])), scale(frame.up, v[2]));
       const marker = geodeticPoint(-93.235, 44.974, 252);
       const forward = toEcef(enuDirection(70, -30));
       const position = add(marker, scale(forward, -3));
-      const pose = { position, forward, up: levelUp(forward, frame.up, frame.up), verticalFovRad: 1.2 };
-      expect(runtime.placeNavigationCamera(lease, { position: { x: position[0], y: position[1], z: position[2] }, forward: { x: forward[0], y: forward[1], z: forward[2] }, up: { x: pose.up[0], y: pose.up[1], z: pose.up[2] }, verticalFovRad: 1.2 })).toBe(true);
-      const hold = { verticalFovRad: 0.8, pitchDeg: handling.pitchDeg, zoomMinMeters: handling.zoomMeters.min, glideKeepPerFrame: handling.glideKeepPerFrame };
-      expect(runtime.restoreNavigationSnapshot(orbitHolding(pose, marker, hold, 0), lease)).toBe(true);
+      const up = normalize(cross(normalize(cross(forward, frame.up)), forward));
+      const ecefOf = (v: readonly number[]) => ({ x: v[0], y: v[1], z: v[2] });
+      const view = { position: ecefOf(position), forward: ecefOf(forward), up: ecefOf(up), verticalFovRad: 1.2 };
+      expect(runtime.placeNavigationCamera(lease, view)).toBe(true);
+      // Backing away from the orb at 20 m/s, as a flight out does.
+      const motion = { velocity: ecefOf(scale(forward, -20)), turn: ecefOf([0, 0, 0]), fovRad: 0.8, inputSince: 123, press: null };
+      expect(runtime.glideNavigationCamera(lease, view, ecefOf(marker), motion)).toBe(true);
       const m = camera.getViewMatrix(true).m;
       [camera.position.x, camera.position.y, camera.position.z].forEach((value, i) => expect(value).toBeCloseTo(position[i], 6));
       [-m[2], -m[6], -m[10]].forEach((value, i) => expect(value).toBeCloseTo(forward[i], 6));
-      expect(camera.radius).toBeCloseTo(25, 9);
-      expect(camera.fov).toBe(0.8);
+      // Orbiting the orb 3 m off, which the zoom limit would not allow, with the view's field of view for now.
+      expect(camera.radius).toBeCloseTo(3, 6);
+      expect(camera.limits.radiusMin).toBeCloseTo(3, 6);
+      expect(camera.fov).toBe(1.2);
       expect(camera.checkCollisions).toBe(true);
-      expect(camera.limits.radiusMin).toBe(25);
-      lease.release("exit");
+      lease.release("cancelled");
+      expect(setSuspended).toHaveBeenLastCalledWith(false, { keepWheelSince: 123, press: null });
+      // The glide carries it on outward, and the field of view goes back to the globe's.
+      frames(5);
+      expect(camera.radius).toBeGreaterThan(3.5);
+      expect(dot(sub([camera.position.x, camera.position.y, camera.position.z], position), scale(forward, -1))).toBeGreaterThan(0.5);
+      expect(camera.fov).toBeLessThan(1.2);
+      expect(camera.fov).toBeGreaterThan(0.8);
+      expect(length(sub([camera.center.x, camera.center.y, camera.center.z], marker))).toBeLessThan(1e-6);
     } finally {
       runtime.destroy();
     }

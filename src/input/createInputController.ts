@@ -2,7 +2,7 @@ import type { CameraInputTarget } from "./inertialCameraController";
 import { attachWheelController, watchWheelGestures } from "./wheelController";
 import { attachSafariGestures, isSafariGestureSupported } from "./safariGestures";
 import { attachTouchController } from "./touchController";
-import { attachMouseController } from "./mouseController";
+import { attachMouseController, type HeldPress } from "./mouseController";
 import {
   DEFAULT_INPUT_RATES,
   DEFAULT_INPUT_SETTINGS,
@@ -29,12 +29,23 @@ export interface InputController {
    * ends an anchor drag and stops inertia; resuming attaches them afresh, so
    * a gesture that spanned the handover starts over, and a wheel gesture
    * under way, such as the momentum of a swipe the lease read, is ignored
-   * to its end.
+   * to its end, unless `handback` says it is the person's and goes on.
    */
-  setSuspended(suspended: boolean): void;
+  setSuspended(suspended: boolean, handback?: InputHandback): void;
   /** The input mode wheel and gesture events are read with. */
   getMode(): InputModePreference;
   destroy(): void;
+}
+
+/**
+ * What the person was already doing when a lease gave input back, taking
+ * the camera over from its owner: the globe carries it on.
+ */
+export interface InputHandback {
+  /** A wheel gesture under way that began at or after this time (`performance.now()`) goes on; one from before is ignored to its end. */
+  keepWheelSince?: number;
+  /** A mouse press held since before the handback, which goes on as a drag from where the pointer is. */
+  press?: HeldPress | null;
 }
 
 /**
@@ -90,12 +101,13 @@ export function createInputController(
   // ── Canvas-level handlers ────────────────────────────────────────
   // They run in the capture phase and stop the events they use, so while a
   // lease owns input they are not attached at all.
-  const attachControllers = (): (() => void) => {
+  const attachControllers = (handback?: InputHandback): (() => void) => {
+    const keepWheel = handback?.keepWheelSince !== undefined && wheels.gestureStartMs() >= handback.keepWheelSince;
     const detachers = [
-      attachWheelController(canvas, camera, { isSafariWithGestures: hasSafariGestures, isOrbitMode: options.isOrbitMode, getSettings: () => settings, precedingWheelMs: wheels.lastEventMs() }),
+      attachWheelController(canvas, camera, { isSafariWithGestures: hasSafariGestures, isOrbitMode: options.isOrbitMode, getSettings: () => settings, ...(keepWheel ? {} : { precedingWheelMs: wheels.lastEventMs() }) }),
       hasSafariGestures ? attachSafariGestures(canvas, camera, { getSettings: () => settings }) : (): void => undefined,
       attachTouchController(canvas, camera, { isOrbitMode: options.isOrbitMode, getSettings: () => settings }),
-      attachMouseController(canvas, camera, { isOrbitMode: options.isOrbitMode, getSettings: () => settings }),
+      attachMouseController(canvas, camera, { isOrbitMode: options.isOrbitMode, getSettings: () => settings, heldPress: handback?.press ?? null }),
     ];
     return () => { for (const detach of detachers) detach(); };
   };
@@ -126,7 +138,7 @@ export function createInputController(
     getRates(): InputRates {
       return { ...(settings.rates ?? DEFAULT_INPUT_RATES) };
     },
-    setSuspended(next: boolean): void {
+    setSuspended(next: boolean, handback?: InputHandback): void {
       if (suspended === next) return;
       suspended = next;
       if (suspended) {
@@ -135,7 +147,7 @@ export function createInputController(
         detachControllers?.();
         detachControllers = null;
       } else {
-        detachControllers = attachControllers();
+        detachControllers = attachControllers(handback);
       }
     },
     destroy(): void {

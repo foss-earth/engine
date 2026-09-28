@@ -40,7 +40,8 @@ const STOP_EPSILON_DEG = 0.002;
 const STOP_EPSILON_ZOOM_LOG = 0.00005;
 const MAX_PAN_DELTA_PER_FRAME_PX = 80;
 const MAX_ORBIT_DELTA_PER_FRAME_DEG = 12;
-const MAX_ZOOM_LOG_DELTA_PER_FRAME = 0.14;
+/** The most a 60 Hz frame of glide may zoom, as a natural log of the distance. */
+export const MAX_ZOOM_LOG_DELTA_PER_FRAME = 0.14;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));

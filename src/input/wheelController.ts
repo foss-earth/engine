@@ -100,6 +100,8 @@ export interface WheelGestureWatch {
   begins(): boolean;
   /** When the last wheel event came, `performance.now()`: for a reader that starts while a gesture may be under way. */
   lastEventMs(): number;
+  /** When the gesture under way, or the last one, began. */
+  gestureStartMs(): number;
   dispose(): void;
 }
 
@@ -111,18 +113,21 @@ export interface WheelGestureWatch {
  */
 export function watchWheelGestures(canvas: HTMLElement): WheelGestureWatch {
   let last = Number.NEGATIVE_INFINITY;
+  let started = Number.NEGATIVE_INFINITY;
   let begins = true;
   const onWheel = (event: Event): void => {
     const target = event.target as Node | null;
     if (target !== canvas && !(target && canvas.contains(target))) return;
     const now = performance.now();
     begins = now - last > WHEEL_GESTURE_IDLE_MS;
+    if (begins) started = now;
     last = now;
   };
   window.addEventListener("wheel", onWheel, { capture: true, passive: true });
   return {
     begins: () => begins,
     lastEventMs: () => last,
+    gestureStartMs: () => started,
     dispose: () => window.removeEventListener("wheel", onWheel, { capture: true }),
   };
 }

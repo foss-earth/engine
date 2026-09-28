@@ -82,6 +82,11 @@ export class CameraController {
 
   private limits: CameraLimits = DEFAULT_CAMERA_LIMITS;
   private groundFollow: GroundFollow = DEFAULT_GROUND_FOLLOW;
+  /**
+   * The nearest the camera may orbit after a view was handed back nearer
+   * than the zoom limit, until it is out past the limit; null otherwise.
+   */
+  private zoomFloorMeters: number | null = null;
 
   constructor(camera: GeospatialCamera) {
     this.camera = camera;
@@ -93,9 +98,37 @@ export class CameraController {
       pitchDeg: { min: Math.min(limits.pitchDeg.min, limits.pitchDeg.max), max: Math.max(limits.pitchDeg.min, limits.pitchDeg.max) },
       zoomMeters: { min: Math.min(limits.zoomMeters.min, limits.zoomMeters.max), max: Math.max(limits.zoomMeters.min, limits.zoomMeters.max) },
     };
-    this.camera.limits.radiusMin = this.limits.zoomMeters.min;
+    if (this.zoomFloorMeters !== null && this.zoomFloorMeters >= this.limits.zoomMeters.min) this.zoomFloorMeters = null;
+    this.camera.limits.radiusMin = this.zoomMinMeters();
     this.camera.limits.radiusMax = this.limits.zoomMeters.max;
     this.applyViewState(this.syncFromCamera(), this.getCurrentCenterHeightMeters());
+  }
+
+  /** The nearest the camera may orbit now: the zoom limit, or nearer after a view handed back nearer (`allowNearer`). */
+  zoomMinMeters(): number {
+    return this.zoomFloorMeters ?? this.limits.zoomMeters.min;
+  }
+
+  /**
+   * Lets a view handed back nearer its orbit target than the zoom limit stay
+   * as near as `nearestMeters`: it comes no nearer, and the limit returns
+   * once it is out past it.
+   */
+  allowNearer(nearestMeters: number): void {
+    this.zoomFloorMeters = nearestMeters < this.limits.zoomMeters.min ? Math.max(0, nearestMeters) : null;
+    this.camera.limits.radiusMin = this.zoomMinMeters();
+  }
+
+  /** Where the orbit target sits over a point: the ground there and the target's offset, or null before the ground is known. */
+  orbitTargetHeightAt(latDeg: number, lonDeg: number): number | null {
+    const surface = this.resolveSurfaceHeightMeters?.(latDeg, lonDeg);
+    return typeof surface === "number" ? surface + this.orbitTargetOffsetMeters : null;
+  }
+
+  /** Ground following starts from the orbit target's height now, rising or falling from there at its speed. */
+  followGroundFromHere(): void {
+    this.smoothedSurfaceHeightMeters = this.getCurrentCenterHeightMeters() - this.orbitTargetOffsetMeters;
+    this.lastSurfaceHeightResolveMs = performance.now();
   }
 
   getLimits(): CameraLimits {
@@ -116,7 +149,14 @@ export class CameraController {
   }
 
   private clampZoomMeters(zoom: number): number {
-    return Math.max(this.limits.zoomMeters.min, Math.min(this.limits.zoomMeters.max, zoom));
+    return Math.max(this.zoomMinMeters(), Math.min(this.limits.zoomMeters.max, zoom));
+  }
+
+  /** Out past the zoom limit, a view handed back near is under the limit again. */
+  private relaxZoomFloor(zoom: number): void {
+    if (this.zoomFloorMeters === null || zoom < this.limits.zoomMeters.min) return;
+    this.zoomFloorMeters = null;
+    this.camera.limits.radiusMin = this.zoomMinMeters();
   }
 
   configureOrbitTargetHeight(options: OrbitTargetHeightOptions | null): void {
@@ -203,7 +243,9 @@ export class CameraController {
     this.camera.center = new Vector3(x, y, z);
     this.camera.yaw = normalizeHeadingDeg(state.headingDeg) * DEG_TO_RAD;
     this.camera.pitch = surfacePitchDegToBabylonPitch(this.clampPitchDeg(state.pitchDeg));
-    this.camera.radius = this.clampZoomMeters(state.zoomMeters);
+    const zoom = this.clampZoomMeters(state.zoomMeters);
+    this.camera.radius = zoom;
+    this.relaxZoomFloor(zoom);
   }
 
   /**
@@ -376,13 +418,13 @@ export class CameraController {
     const state = this.syncFromCamera();
     const requestedZoomMeters = state.zoomMeters * factor;
 
-    if (requestedZoomMeters >= this.limits.zoomMeters.min || factor >= 1 || this.orbitTargetOffsetMeters <= 0) {
+    if (requestedZoomMeters >= this.zoomMinMeters() || factor >= 1 || this.orbitTargetOffsetMeters <= 0) {
       this.setViewState({ zoomMeters: this.clampZoomMeters(requestedZoomMeters) });
       return;
     }
 
     const offsetStepMeters = Math.max(1, Math.abs(Math.log(factor)) * this.groundFollow.zoomStepMeters);
     this.orbitTargetOffsetMeters = Math.max(0, this.orbitTargetOffsetMeters - offsetStepMeters);
-    this.applyViewState({ ...state, zoomMeters: this.limits.zoomMeters.min });
+    this.applyViewState({ ...state, zoomMeters: this.zoomMinMeters() });
   }
 }

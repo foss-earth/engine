@@ -98,6 +98,41 @@ describe("the globe's input controller", () => {
     input.detach();
   });
 
+  it("carries on a wheel gesture begun since a lease's owner began its motion, and ignores one from before", () => {
+    let clock = 1_000;
+    vi.spyOn(performance, "now").mockImplementation(() => clock);
+    const { canvas, camera, controller } = setup();
+    const swipe = () => canvas.dispatchEvent(new WheelEvent("wheel", { deltaX: 12.5, deltaY: 3.5, bubbles: true, cancelable: true }));
+    controller.setSuspended(true);
+    // A swipe's momentum from before the owner's flight began at 1010.
+    swipe();
+    clock += 16;
+    swipe();
+    controller.setSuspended(false, { keepWheelSince: 1_010 });
+    clock += 16;
+    swipe();
+    expect(camera.panBy).not.toHaveBeenCalled();
+    // A swipe begun during it, which took the camera over, pans at once.
+    controller.setSuspended(true);
+    clock += 400;
+    const flightBegan = clock - 100;
+    swipe();
+    controller.setSuspended(false, { keepWheelSince: flightBegan });
+    clock += 16;
+    swipe();
+    expect(camera.panBy).toHaveBeenCalledTimes(1);
+    vi.restoreAllMocks();
+  });
+
+  it("carries on a mouse press held through the handback as a drag from where the pointer is", () => {
+    const { canvas, camera, controller } = setup();
+    controller.setSuspended(true);
+    controller.setSuspended(false, { press: { pointerId: 1, button: 0, clientX: 100, clientY: 400 } });
+    canvas.dispatchEvent(mouse("pointermove", 160, 1));
+    expect(camera.panBy).toHaveBeenCalled();
+    canvas.dispatchEvent(mouse("pointerup", 160, 0));
+  });
+
   it("does not let a panorama look with a swipe under way when looking begins, such as the globe's momentum", () => {
     let clock = 1_000;
     vi.spyOn(performance, "now").mockImplementation(() => clock);

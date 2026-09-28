@@ -95,3 +95,44 @@ describe("CameraController orbit target height", () => {
     expect(centerHeight(camera)).toBeCloseTo(initialHeight, 1);
   });
 });
+describe("CameraController after a view handed back nearer than the zoom limit", () => {
+  function nearCamera(radius: number): GeospatialCamera {
+    return Object.assign(createCamera(44.977753, -93.265011, 0, radius), { limits: { radiusMin: MIN_ZOOM_METERS, radiusMax: 1e8 } });
+  }
+
+  it("lets it come as near as allowed and no nearer, until it is out past the limit", () => {
+    const camera = nearCamera(8);
+    const controller = new CameraController(camera);
+    controller.allowNearer(6);
+    expect(controller.zoomMinMeters()).toBe(6);
+    expect(camera.limits.radiusMin).toBe(6);
+    controller.zoomBy(0.5);
+    expect(camera.radius).toBe(6);
+    controller.zoomBy(2);
+    expect(camera.radius).toBe(12);
+    // Back in again, still as near as allowed.
+    controller.zoomBy(0.25);
+    expect(camera.radius).toBe(6);
+    // Out past the limit, the limit holds again.
+    controller.zoomBy(10);
+    expect(camera.radius).toBe(60);
+    expect(controller.zoomMinMeters()).toBe(MIN_ZOOM_METERS);
+    expect(camera.limits.radiusMin).toBe(MIN_ZOOM_METERS);
+    controller.zoomBy(0.1);
+    expect(camera.radius).toBe(MIN_ZOOM_METERS);
+  });
+
+  it("needs nothing for a view at or beyond the limit", () => {
+    const camera = nearCamera(40);
+    const controller = new CameraController(camera);
+    controller.allowNearer(30);
+    expect(controller.zoomMinMeters()).toBe(MIN_ZOOM_METERS);
+  });
+
+  it("says where the orbit target sits over a point, once the ground there is known", () => {
+    const controller = new CameraController(nearCamera(40));
+    expect(controller.orbitTargetHeightAt(44.97, -93.26)).toBeNull();
+    controller.configureOrbitTargetHeight({ resolveSurfaceHeightMeters: () => 264, initialOffsetMeters: 3 });
+    expect(controller.orbitTargetHeightAt(44.97, -93.26)).toBe(267);
+  });
+});
