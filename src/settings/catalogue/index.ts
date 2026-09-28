@@ -201,6 +201,16 @@ function mapSourceAlias(value: string): string | null {
   return isKnownRasterBaseMapId(lower) ? lower : null;
 }
 
+/**
+ * The query names each of these parameters is read from besides
+ * `?set.<id>=`. The first is the one written back to the address bar.
+ */
+export const FOSS_EARTH_URL_NAMES: Readonly<Record<string, readonly string[]>> = {
+  "map.source.basemap": ["mapSource", "tiles"],
+  "map.source.elevation": ["elevationSource", "terrainSource"],
+  "map.source.googleKey": ["key", "googleKey"],
+};
+
 /** The URL parameters FOSS Earth read before the registry, mapped onto parameters for this session. */
 export function fossEarthUrlAliases(params: URLSearchParams): UrlAliasResult {
   const values: Record<string, string> = {};

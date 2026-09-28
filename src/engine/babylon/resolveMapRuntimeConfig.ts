@@ -67,21 +67,12 @@ export function getMapSourcePreferenceFromSearchParams(searchParams: URLSearchPa
   return null;
 }
 
-/** Drops query parameters a saved choice replaces, so a reload does not bring the old one back. */
-function dropUrlParameters(names: readonly string[]): void {
-  if (typeof window === "undefined") return;
-  const url = new URL(window.location.href);
-  let changed = false;
-  for (const name of names) {
-    if (url.searchParams.has(name)) { url.searchParams.delete(name); changed = true; }
-  }
-  if (changed) window.history.replaceState(window.history.state, "", url);
-}
-
-/** Saves the basemap choice, `map.source.basemap`: "google" or a raster source id. */
+/**
+ * Saves the basemap choice, `map.source.basemap`: "google" or a raster source
+ * id. The app's registry writes it to the address bar as `?mapSource=`.
+ */
 export function setMapSourcePreference(source: string, settings: SettingsRegistry = getAppSettings()): void {
   settings.set("map.source.basemap", source);
-  dropUrlParameters(["mapSource", "tiles", `set.map.source.basemap`]);
 }
 
 export function getTerrainSourcePreferenceFromSearchParams(searchParams: URLSearchParams): string | null {
@@ -89,10 +80,9 @@ export function getTerrainSourcePreferenceFromSearchParams(searchParams: URLSear
   return value || null;
 }
 
-/** Saves the elevation provider, `map.source.elevation`. */
+/** Saves the elevation provider, `map.source.elevation`, written to the address bar as `?elevationSource=`. */
 export function setTerrainSourcePreference(source: string, settings: SettingsRegistry = getAppSettings()): void {
   settings.set("map.source.elevation", source);
-  dropUrlParameters(["elevationSource", "terrainSource", "set.map.source.elevation"]);
 }
 
 /** A development and rollback switch: `?rasterImagery=atlas` or `legacy`; anything else is the default. */
