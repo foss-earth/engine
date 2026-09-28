@@ -7,6 +7,7 @@ import { evaluateTerrainReadiness, terrainReadinessSamples, validateTerrainPrepa
 import {
   Color3,
   Color4,
+  ComputeYawPitchFromLookAtToRef,
   Engine,
   GeospatialCamera,
   HemisphericLight,
@@ -17,6 +18,7 @@ import {
   StandardMaterial,
   TransformNode,
   UniversalCamera,
+  Vector2,
   Vector3,
   WebGPUEngine,
 } from "@babylonjs/core";
@@ -317,6 +319,14 @@ export interface BabylonRuntime {
    * (false) while a lease other than `lease` holds navigation.
    */
   restoreNavigationSnapshot(snapshot: NavigationSnapshot, lease?: NavigationLease): boolean;
+  /**
+   * While `lease` holds navigation, puts the globe camera's eye at the view's
+   * position, looking along its forward with its up and field of view: nearer
+   * than the zoom limit, at any pitch and through the ground, as a flight into
+   * a panorama's orb needs. The camera's limits and collisions return when a
+   * snapshot is restored or the lease ends. Refused (false) otherwise.
+   */
+  placeNavigationCamera(lease: NavigationLease, view: NavigationPresentation): boolean;
   /** The current lease's presented view, or null while the globe camera's view is drawn. */
   getPresentationView(): NavigationPresentation | null;
   /**
@@ -1546,12 +1556,55 @@ export async function createBabylonRuntime(
     const camera = geospatialCamera;
     if ((current && current !== lease) || !camera || simMode) return false;
     inertialCameraController?.cancel();
+    restoreCameraLimits();
     const { center, yaw, pitch, radius, fov } = snapshot.camera;
     camera.center = new Vector3(center.x, center.y, center.z);
     camera.yaw = yaw;
     camera.pitch = pitch;
     camera.radius = radius;
     camera.fov = fov;
+    scheduler.requestRender();
+    return true;
+  };
+  // A placed camera's lifted limits and collisions, until a snapshot is restored or the lease ends.
+  let liftedCameraLimits: { collisions: boolean; pitchMin: number; pitchMax: number } | null = null;
+  function restoreCameraLimits(): void {
+    const camera = geospatialCamera;
+    if (!liftedCameraLimits || !camera) return;
+    camera.checkCollisions = liftedCameraLimits.collisions;
+    camera.limits.pitchMin = liftedCameraLimits.pitchMin;
+    camera.limits.pitchMax = liftedCameraLimits.pitchMax;
+    // The zoom limit may have changed meanwhile; its setting is the source.
+    camera.limits.radiusMin = (cameraController?.getLimits() ?? cameraLimits()).zoomMeters.min;
+    liftedCameraLimits = null;
+  }
+  /** Metres from a placed eye to the orbit centre it turns about: any point on its line of sight. */
+  const PLACED_REACH_METERS = 1;
+  const placeNavigationCamera = (lease: NavigationLease, view: NavigationPresentation): boolean => {
+    const camera = geospatialCamera;
+    if (navigation.current() !== lease || lease.released || !camera || simMode) return false;
+    inertialCameraController?.cancel();
+    if (!liftedCameraLimits) {
+      liftedCameraLimits = { collisions: camera.checkCollisions, pitchMin: camera.limits.pitchMin, pitchMax: camera.limits.pitchMax };
+      camera.checkCollisions = false;
+      camera.limits.radiusMin = 0;
+      camera.limits.pitchMin = 0;
+      camera.limits.pitchMax = Math.PI;
+    }
+    const forward = new Vector3(view.forward.x, view.forward.y, view.forward.z).normalize();
+    const center = new Vector3(view.position.x, view.position.y, view.position.z).addInPlace(forward.scale(PLACED_REACH_METERS));
+    const angles = ComputeYawPitchFromLookAtToRef(forward, center, scene.useRightHandedSystem, camera.yaw, new Vector2());
+    camera.center = center;
+    camera.yaw = angles.x;
+    // Straight up or down would wrap; stay just inside.
+    camera.pitch = Math.min(Math.PI - 1e-6, Math.max(1e-6, angles.y));
+    camera.radius = PLACED_REACH_METERS;
+    camera.fov = view.verticalFovRad;
+    // Babylon keeps its own up level; a placed view may roll. Set after the
+    // orientation, before the view matrix is built from it again.
+    camera.upVector.set(view.up.x, view.up.y, view.up.z);
+    // A collision offset left from before could alias Babylon's scratch vectors; placed, there is none.
+    camera.perFrameCollisionOffset = new Vector3();
     scheduler.requestRender();
     return true;
   };
@@ -1575,6 +1628,7 @@ export async function createBabylonRuntime(
     },
     resume() {
       intentHandler = null;
+      restoreCameraLimits();
       mapsSuspended = false;
       tilesRuntime?.setSuspended(false);
       rasterTilesRuntime?.setSuspended(false);
@@ -1819,6 +1873,7 @@ export async function createBabylonRuntime(
     onNavigationChange: listener => navigation.subscribe(listener),
     captureNavigationSnapshot,
     restoreNavigationSnapshot,
+    placeNavigationCamera,
     getPresentationView: () => navigation.current()?.getPresentationView() ?? null,
     setNavigationIntentHandler(lease, handler) {
       if (navigation.current() !== lease || lease.released) return () => {};

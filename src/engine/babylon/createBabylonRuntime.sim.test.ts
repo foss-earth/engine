@@ -491,6 +491,55 @@ describe("createBabylonRuntime camera and input parameters", () => {
   });
 });
 
+describe("createBabylonRuntime navigation camera", () => {
+  it("puts the globe camera anywhere while a lease holds it, and gives back its limits and collisions", async () => {
+    mocks.createInputController.mockReturnValue({ setRates: vi.fn(), setSuspended: vi.fn(), destroy: vi.fn() });
+    const { createBabylonRuntime } = await import("./createBabylonRuntime");
+    const { enuDirection, enuFrame, geodeticPoint, add, scale, cross, normalize } = await import("../../scenes/panoramaMath");
+    const runtime = await createBabylonRuntime(document.createElement("canvas"));
+    const camera = runtime.geospatialCamera!;
+    // Right-handed, as the app's renderer makes its scene.
+    runtime.scene.useRightHandedSystem = true;
+    try {
+      const acquired = runtime.acquireNavigation({ owner: "test", inputContext: "panorama" });
+      if (!acquired.ok) throw new Error(acquired.message);
+      const { lease } = acquired;
+      // 3 m above the ground, looking 20° above the horizon, rolled 5°: nearer than the zoom limit and above the pitch limit.
+      const frame = enuFrame(-93.235, 44.974);
+      const toEcef = (v: readonly [number, number, number]) => add(add(scale(frame.east, v[0]), scale(frame.north, v[1])), scale(frame.up, v[2]));
+      const position = geodeticPoint(-93.235, 44.974, 253);
+      const forward = toEcef(enuDirection(70, 20));
+      const level = toEcef(enuDirection(70, 110));
+      const roll = (5 * Math.PI) / 180;
+      const up = add(scale(level, Math.cos(roll)), scale(normalize(cross(forward, level)), Math.sin(roll)));
+      const view = { position: { x: position[0], y: position[1], z: position[2] }, forward: { x: forward[0], y: forward[1], z: forward[2] }, up: { x: up[0], y: up[1], z: up[2] }, verticalFovRad: 1.2 };
+
+      expect(runtime.placeNavigationCamera(lease, view)).toBe(true);
+      const m = camera.getViewMatrix(true).m;
+      [camera.position.x, camera.position.y, camera.position.z].forEach((value, i) => expect(value).toBeCloseTo(position[i], 6));
+      [-m[2], -m[6], -m[10]].forEach((value, i) => expect(value).toBeCloseTo(forward[i], 6));
+      [m[1], m[5], m[9]].forEach((value, i) => expect(value).toBeCloseTo(up[i], 6));
+      expect(camera.fov).toBe(1.2);
+      expect(camera.checkCollisions).toBe(false);
+
+      expect(runtime.restoreNavigationSnapshot(lease.overview, lease)).toBe(true);
+      expect(camera.checkCollisions).toBe(true);
+      expect(camera.limits.radiusMin).toBe(25);
+      expect(camera.limits.pitchMax).toBeCloseTo(Math.PI / 2 - 0.01, 9);
+      expect(camera.radius).toBeCloseTo(lease.overview.camera.radius, 6);
+
+      // Placed again, the lease's end gives the limits back too; without the lease, nothing moves.
+      expect(runtime.placeNavigationCamera(lease, view)).toBe(true);
+      lease.release("exit");
+      expect(camera.checkCollisions).toBe(true);
+      expect(camera.limits.radiusMin).toBe(25);
+      expect(runtime.placeNavigationCamera(lease, view)).toBe(false);
+    } finally {
+      runtime.destroy();
+    }
+  });
+});
+
 describe("createBabylonRuntime renderer parameters", () => {
   it("draws at renderer.resolutionScale and clips the globe camera as renderer.clipping says", async () => {
     mocks.createInputController.mockReturnValue({ setRates: vi.fn(), destroy: vi.fn() });
