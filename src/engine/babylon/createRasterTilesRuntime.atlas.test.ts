@@ -323,7 +323,7 @@ describe("raster runtime with atlas imagery", () => {
 
   it("coarsens enabled detail toward its range when frames are slow, says why, and returns when they are fast", async () => {
     const settings = getAppSettings();
-    settings.setMany({ "map.auto.frameTimeGoal": 16, "map.auto.coarsenWindows": 1, "map.auto.interval": 0, "map.auto.refineWindows": 2, "map.auto.step": 0.5 });
+    settings.setMany({ "map.auto.terrainDetail": true, "map.auto.imageryDetail": true, "map.auto.frameTimeGoal": 16, "map.auto.coarsenWindows": 1, "map.auto.interval": 0, "map.auto.refineWindows": 2, "map.auto.step": 0.5 });
     const onDetailAdjusted = vi.fn();
     const { runtime, settle, engine, onDetailFeedback } = await setup(0, undefined, { onDetailAdjusted });
     await settle();
