@@ -59,6 +59,7 @@ import {
 } from "../input/globeNavigation";
 import { createHudBar } from "../shell/hudBar";
 import { createSceneHotspots, createSceneHud, createScenesPanel } from "../shell/scenesPanel";
+import { createPanoramaTabs, type PanoramaTabs } from "../shell/panoramaTabs";
 import { createSceneController, type SceneController, type SceneExample } from "../scenes/sceneController";
 import { SCENE_EXAMPLES } from "../scenes/examples";
 import { effectiveOrbRadius, type PanoramaRenderer } from "../engine/babylon/panorama/panoramaRenderer";
@@ -98,6 +99,8 @@ export interface GlobeAppHandle extends GlobeHandle {
   rendererTab: HTMLElement;
   /** Scenes to load and their panoramas, for the host's Scenes tab. */
   scenesTab: HTMLElement;
+  /** The panorama's own tab and 360 image settings, for the window overlay's `panoramaTabs`. */
+  panoramaTabs: PanoramaTabs;
   /** The mounted scene, if any, and loading another. */
   scenes: SceneController;
 }
@@ -822,11 +825,16 @@ export async function createGlobeApp(
     ...(panoramaTest ? { loadOptions: { internals: { onRenderer: renderer => { panoramaTestHooks.renderer = renderer; } } } } : {}),
   });
   const scenesPanel = createScenesPanel({ settings, controller: scenes });
+  const panoramaTabs = createPanoramaTabs({
+    settings,
+    controller: scenes,
+    openSettings: () => options.overlayApiRef?.current?.openOrSelectTab("panorama-settings"),
+  });
   const sceneHotspots = createSceneHotspots({ controller: scenes, container: canvas.parentElement ?? rootElement });
   const onScenesButtonClick = (): void => toggleTab("scenes");
   scenesBtnEl?.addEventListener("click", onScenesButtonClick);
-  // While a panorama is entered, its close button and credit take the map's place at the bar's right end.
-  const sceneHud = mapSourceSlot ? createSceneHud({ controller: scenes, container: mapSourceSlot, mapSource: mapSourceHud?.element }) : null;
+  // While a panorama is entered, its credit takes the map's place at the bar's right end.
+  const sceneHud = mapSourceSlot ? createSceneHud({ controller: scenes, container: mapSourceSlot, mapSource: mapSourceHud?.element, mapOnly: hudStatusEl ? [hudStatusEl] : [] }) : null;
   const requestedScene = params.get("scene") ?? options.initialScene;
   if (requestedScene) void scenes.load(requestedScene, { exampleId: true });
   if (panoramaTest) {
@@ -967,6 +975,7 @@ export async function createGlobeApp(
     mapTab: mapPanel.element,
     rendererTab: rendererPanel.element,
     scenesTab: scenesPanel.element,
+    panoramaTabs,
     scenes,
     addLayer,
     removeLayer,
@@ -1006,6 +1015,7 @@ export async function createGlobeApp(
       scenesBtnEl?.removeEventListener("click", onScenesButtonClick);
       sceneHotspots.destroy();
       scenesPanel.destroy();
+      panoramaTabs.destroy();
       scenes.destroy();
       if (window.__fossEarthPanoramaTest?.scenes === scenes) delete window.__fossEarthPanoramaTest;
       gamepadEditor?.destroy();

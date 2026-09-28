@@ -130,8 +130,8 @@
 }
 
 /*
- * While a panorama is entered it takes the bar's right end: a close button
- * where the detail rail sits, then the panorama's credit where the basemap's is.
+ * While a panorama is entered its credit takes the bar's right end, where the
+ * basemap's is. Its tab and Escape are the ways out.
  */
 .scene-hud {
   display: inline-flex;
