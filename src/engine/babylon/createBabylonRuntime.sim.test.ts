@@ -492,6 +492,72 @@ describe("createBabylonRuntime camera and input parameters", () => {
 });
 
 describe("createBabylonRuntime navigation camera", () => {
+  it("keeps globe input and momentum during terrain preparation, and initializes each new destination", async () => {
+    let scheduledFrame: FrameRequestCallback | null = null;
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation(callback => {
+      scheduledFrame = callback;
+      return 1;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
+    mocks.createInputController.mockReturnValue({ setRates: vi.fn(), destroy: vi.fn() });
+    mocks.createGoogleTilesRuntime.mockReturnValue({
+      tiles: { visibleTiles: new Set(), activeTiles: new Set(), group: {} },
+      update: vi.fn(), setSuspended: vi.fn(), dispose: vi.fn(),
+    });
+    const { createBabylonRuntime } = await import("./createBabylonRuntime");
+    const runtime = await createBabylonRuntime(document.createElement("canvas"), { googleApiKey: "test" });
+    vi.spyOn(runtime.surface, "sample").mockReturnValue(null);
+    const camera = runtime.geospatialCamera!;
+    const first = new AbortController();
+    const second = new AbortController();
+    const frame = () => {
+      const callback = scheduledFrame;
+      scheduledFrame = null;
+      callback?.(performance.now());
+    };
+    try {
+      const preparation = runtime.prepareTerrain({ latDeg: 45, lonDeg: -93, radiusMeters: 1000, signal: first.signal }).catch(error => error);
+      const destination = camera.center.clone();
+      const preparationPitch = camera.pitch;
+      expect(camera.radius).toBe(3000);
+      runtime.applyGlobeNavigationIntents({ dt: 1 / 60, intents: [
+        { actionId: "globe.panX", value: 1 },
+        { actionId: "globe.orbitHeading", value: 1 },
+        { actionId: "globe.orbitPitch", value: 1 },
+        { actionId: "globe.zoom", value: 1 },
+      ] });
+      frame();
+      expect(Vector3.Distance(camera.center, destination)).toBeGreaterThan(0);
+      expect(camera.yaw).toBeGreaterThan(0);
+      expect(camera.pitch).toBeGreaterThan(0);
+      expect(camera.radius).toBeLessThan(3000);
+      const movingYaw = camera.yaw;
+      frame();
+      expect(camera.yaw).toBeGreaterThan(movingYaw);
+      const interruptedYaw = camera.yaw;
+      const interruptedRadius = camera.radius;
+      first.abort();
+      await expect(preparation).resolves.toMatchObject({ name: "AbortError" });
+      expect(camera.yaw).toBe(interruptedYaw);
+      expect(camera.radius).toBe(interruptedRadius);
+      frame();
+      expect(camera.yaw).toBeGreaterThan(interruptedYaw);
+      expect(camera.radius).toBeLessThan(interruptedRadius);
+
+      const next = runtime.prepareTerrain({ latDeg: 46, lonDeg: -92, radiusMeters: 2000, signal: second.signal }).catch(error => error);
+      expect(camera.radius).toBe(6000);
+      expect(camera.yaw).toBe(0);
+      expect(camera.pitch).toBe(preparationPitch);
+      expect(Vector3.Distance(camera.center, destination)).toBeGreaterThan(1000);
+      second.abort();
+      await expect(next).resolves.toMatchObject({ name: "AbortError" });
+    } finally {
+      first.abort();
+      second.abort();
+      runtime.destroy();
+    }
+  });
+
   it("puts the globe camera anywhere while a lease holds it, and gives back its limits and collisions", async () => {
     mocks.createInputController.mockReturnValue({ setRates: vi.fn(), setSuspended: vi.fn(), destroy: vi.fn() });
     const { createBabylonRuntime } = await import("./createBabylonRuntime");

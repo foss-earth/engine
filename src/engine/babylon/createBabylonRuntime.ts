@@ -857,15 +857,19 @@ export async function createBabylonRuntime(
       camera = preparationCamera;
     } else {
       const geospatial = ensureGeospatialCamera();
-      const center = geodeticToEcef(
-        preparationViewState.latDeg * DEG_TO_RAD,
-        preparationViewState.lonDeg * DEG_TO_RAD,
-        0,
-      );
-      geospatial.center = new Vector3(center.x, center.y, center.z);
-      geospatial.radius = Math.max(3000, preparationRadiusMeters * 3);
-      geospatial.yaw = 0;
-      geospatial.pitch = 0;
+      if (activePreparationCamera !== geospatial) {
+        const center = geodeticToEcef(
+          preparationViewState.latDeg * DEG_TO_RAD,
+          preparationViewState.lonDeg * DEG_TO_RAD,
+          0,
+        );
+        geospatial.center = new Vector3(center.x, center.y, center.z);
+        geospatial.radius = Math.max(3000, preparationRadiusMeters * 3);
+        geospatial.yaw = 0;
+        geospatial.pitch = 0;
+      }
+      // Prepare the destination once. Later input and its inertia must remain
+      // visible to the caller so it can cancel preparation without losing motion.
       geospatial.setEnabled(true);
       camera = geospatial;
     }
