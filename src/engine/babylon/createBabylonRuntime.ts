@@ -57,6 +57,7 @@ declare global {
   }
 }
 import { createRenderScheduler, type RenderScheduler } from "./renderScheduler";
+import { createPresentationCandidates } from "./presentationCandidates";
 import { geodeticToEcef, ecefToGeodetic, DEG_TO_RAD, RAD_TO_DEG } from "../../camera/cameraMath";
 import { orbitCenterOnSight, orbitGlideRates, withinTilt, type GlideVec3 } from "../../camera/cameraGlide";
 import { CameraController, DEFAULT_CAMERA_LIMITS, type CameraLimits, type GroundFollow, type OrbitTargetHeightOptions } from "../../camera/cameraState";
@@ -65,7 +66,7 @@ import { createInertialCameraController, DEFAULT_INERTIA_DECAY_PER_FRAME, MAX_ZO
 import type { CameraHandling } from "../../camera/cameraLimits";
 import type { GlobeNavigationIntentFrame } from "../../input/globeNavigation";
 import { DEFAULT_INPUT_RATES, type InputModePreference, type InputRates, type InputSensitivitySettings } from "../../input/inputSettings";
-import { INPUT_RATE_IDS } from "../../settings/catalogue";
+import { INPUT_RATE_IDS, RENDERER_EXPERIMENT_IDS } from "../../settings/catalogue";
 import { createFrameProfileSession, type FrameProfileSession } from "../../perf/frameProfileSession";
 import { isNumberRange } from "../../settings/values";
 import type { GlobeViewState } from "../types";
@@ -463,6 +464,11 @@ export async function createBabylonRuntime(
   });
   // One profiler per runtime; off, it leaves nothing attached to the scene.
   const frameProfile = createFrameProfileSession({ scene, engine: renderer.engine });
+  const presentationCandidates = createPresentationCandidates(scene, NAVIGATION_PRESENTATION_LAYER);
+  const applyPresentationCandidates = (): void => presentationCandidates.setEnabled(
+    settings.has(RENDERER_EXPERIMENT_IDS.presentationCandidates) && settings.get(RENDERER_EXPERIMENT_IDS.presentationCandidates) === true,
+  );
+  applyPresentationCandidates();
   const { profiler } = frameProfile;
   // Defaults and bounds that depend on the renderer can now be resolved.
   settings.setDeviceContext({
@@ -1278,6 +1284,10 @@ export async function createBabylonRuntime(
     }),
     // A lower cap takes effect from the next frame; a higher one needs a frame to start from.
     settings.watch("renderer.frameRateCap", () => scheduler.requestRender()),
+    ...(settings.has(RENDERER_EXPERIMENT_IDS.presentationCandidates) ? [settings.watch(RENDERER_EXPERIMENT_IDS.presentationCandidates, () => {
+      applyPresentationCandidates();
+      scheduler.requestRender();
+    })] : []),
     ...["renderer.clipping", "renderer.clipping.fixed"].map(id => settings.watch(id, () => {
       applyClipping();
       scheduler.requestRender();
@@ -2006,6 +2016,7 @@ export async function createBabylonRuntime(
     frameProfile,
     destroy() {
       frameProfile.dispose();
+      presentationCandidates.dispose();
       navigation.dispose();
       renderer.engine.onContextLostObservable.remove(deviceLostObserver);
       renderer.engine.onContextRestoredObservable.remove(deviceRestoredObserver);

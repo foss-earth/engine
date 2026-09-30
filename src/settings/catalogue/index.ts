@@ -6,11 +6,12 @@ import { INTERFACE_PARAMETERS, INTERFACE_TAB, PERFORMANCE_HUD_METRICS, SETTINGS_
 import { MAP_AUTO_PARAMETERS } from "./auto";
 import { MAP_LOADING_PARAMETERS, MAP_SELECTION_PARAMETERS, MAP_TERRAIN_SELECTION_PARAMETERS } from "./loading";
 import { MAP_DETAIL_PARAMETERS, MAP_SOURCE_PARAMETERS, MAP_TAB } from "./map";
-import { RENDERER_PARAMETERS, RENDERER_TAB } from "./renderer";
+import { RENDERER_EXPERIMENT_IDS, RENDERER_EXPERIMENT_PARAMETERS, RENDERER_PARAMETERS, RENDERER_TAB } from "./renderer";
 import { PANORAMA_SETTINGS_TAB, PANORAMA_TAB, SCENE_PARAMETERS, SCENE_SECTION_TITLES, SCENES_TAB } from "./scenes";
 
 export { CONTROLS_TAB, INTERFACE_TAB, MAP_TAB, PANORAMA_SETTINGS_TAB, PANORAMA_TAB, RENDERER_TAB, SCENES_TAB, SETTINGS_TAB, PERFORMANCE_HUD_METRICS, TOOLBAR_BUTTONS };
 export { INPUT_RATE_IDS, INPUT_SENSITIVITY_IDS } from "./controls";
+export { RENDERER_EXPERIMENT_IDS };
 export { atlasLimitMiB } from "./loading";
 
 /** Every parameter FOSS Earth owns. Hosts register theirs alongside. */
@@ -22,6 +23,7 @@ export const FOSS_EARTH_PARAMETERS: readonly ParameterSpec[] = [
   ...MAP_SELECTION_PARAMETERS,
   ...MAP_TERRAIN_SELECTION_PARAMETERS,
   ...RENDERER_PARAMETERS,
+  ...RENDERER_EXPERIMENT_PARAMETERS,
   ...CONTROLS_PARAMETERS,
   ...INTERFACE_PARAMETERS,
   ...SCENE_PARAMETERS,
@@ -37,6 +39,7 @@ export const FOSS_EARTH_SECTION_TITLES: ReadonlyArray<readonly [string, string, 
   [RENDERER_TAB, "backend", "Renderer"],
   [RENDERER_TAB, "frame", "Resolution and frame rate"],
   [RENDERER_TAB, "clipping", "Depth range"],
+  [RENDERER_TAB, "experiments", "Work-saving experiments"],
   [CONTROLS_TAB, "input-method", "Input method"],
   [CONTROLS_TAB, "camera", "Camera"],
   [CONTROLS_TAB, "orbit", "Orbit"],
