@@ -63,6 +63,7 @@ import { createPanoramaTabs, type PanoramaTabs } from "../shell/panoramaTabs";
 import { connectSceneLog } from "../shell/sceneLog";
 import { createSceneController, type SceneController, type SceneExample } from "../scenes/sceneController";
 import { SCENE_EXAMPLES } from "../scenes/examples";
+import { sceneMediaStore, type MediaStore } from "../scenes/mediaStore";
 import { effectiveOrbRadius, type PanoramaRenderer } from "../engine/babylon/panorama/panoramaRenderer";
 import * as panoramaMath from "../scenes/panoramaMath";
 import type { PoiSpriteSizeParams } from "../hud/poiSpriteSizeTuner";
@@ -79,6 +80,8 @@ declare global {
       settings: ReturnType<typeof getAppSettings>;
       /** The CPU reference the check holds the GPU's output against. */
       math: typeof panoramaMath & { effectiveOrbRadius: typeof effectiveOrbRadius };
+      /** The images kept between visits: scripts/validation/scene-revisit.mjs reads and clears them. */
+      media: MediaStore;
     };
   }
 }
@@ -841,6 +844,7 @@ export async function createGlobeApp(
       get renderer() { return panoramaTestHooks.renderer; },
       settings,
       math: { ...panoramaMath, effectiveOrbRadius },
+      media: sceneMediaStore,
     };
   }
 
