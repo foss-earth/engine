@@ -2,7 +2,7 @@ import { GAME_LOG_LINE_MS, GAME_LOG_MAX_LINES } from "../../log/gameLogDefaults"
 import { SEARCH_DEFAULTS } from "../../search/searchDefaults";
 import type { ParameterSpec } from "../types";
 
-/** The Settings tab: saved settings and About, which have no parameters. */
+/** The Settings tab: presets, saved settings, the app's own files and About. */
 export const SETTINGS_TAB = "settings";
 /** The Interface tab: the toolbar, theme, log and search. */
 export const INTERFACE_TAB = "interface";
@@ -60,6 +60,18 @@ function metres(id: string, label: string, description: string, fallback: number
 }
 
 export const INTERFACE_PARAMETERS: readonly ParameterSpec[] = [
+  {
+    id: "app.keepFiles",
+    label: "Keep the app's files",
+    description: "Keeps the app's own files on this device once they have been downloaded, so a later visit starts without asking the network for them, however long ago the last one was. Each file's name carries its content, so a kept file is never out of date: a new version of the app has new names, which are downloaded once, and the old files go. The page itself always comes from the network. Off forgets them and leaves the app to the browser's own cache. Scene images are kept apart: Scenes → Saved images.",
+    unit: "none",
+    kind: "boolean",
+    default: true,
+    defaultReason: "GitHub Pages lets the browser keep a file for ten minutes. On a visit to the UMN tour eleven minutes after the last, the browser asked for every file of the app again, and 1.55 of its 1.72 MiB came again in full (docs/proposals/panorama-scenes.md, \"Loading once\").",
+    home: { tab: SETTINGS_TAB, section: "app-files", level: "main" },
+    appliesLive: true,
+    source: "src/app/appFiles.ts",
+  },
   {
     id: "interface.theme",
     label: "Theme",

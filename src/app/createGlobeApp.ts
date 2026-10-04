@@ -21,6 +21,8 @@ import { createParameterControl, type ParameterControlHandle } from "../shell/se
 import { createParameterSection, type ParameterSectionHandle } from "../shell/settings/parameterSection";
 import { createPresetsSection } from "../shell/settings/presetsSection";
 import { createSavedSettingsSection } from "../shell/settings/savedSettings";
+import { createAppFilesSection } from "../shell/appFilesSection";
+import { keepAppFiles } from "./appFiles";
 import type {
   GlobeHandle,
   GlobeLayerContext,
@@ -770,6 +772,9 @@ export async function createGlobeApp(
   );
   const presets = createPresetsSection(settings);
   const savedSettings = createSavedSettingsSection(settings);
+  // The app's own files, kept by its service worker as Settings → App files asks.
+  const appFiles = keepAppFiles(settings);
+  const appFilesSection = createAppFilesSection(appFiles);
   const inputMethodElement = inputMethodSectionEl
     ? sectionOf("controls", "input-method", { main: inputMethodSectionEl, covers: ["input.mode", ...INPUT_SENSITIVITY_IDS] })
     : null;
@@ -796,6 +801,7 @@ export async function createGlobeApp(
   const settingsSections: PanelSection[] = [
     { id: "presets", title: "Presets", element: presets.element, defaultOpen: false },
     { id: "saved-settings", title: "Saved settings", element: savedSettings.element, defaultOpen: false },
+    { id: "app-files", title: settings.getSectionTitle("settings", "app-files"), element: sectionOf("settings", "app-files", { footer: appFilesSection.element }), defaultOpen: false },
     ...(aboutElement ? [{ id: "about", title: "About", element: aboutElement, defaultOpen: false }] : []),
   ];
   // Performance debug is about what the renderer does, so it is the Renderer tab's.
@@ -1006,6 +1012,8 @@ export async function createGlobeApp(
       for (const control of parameterControls) control.destroy();
       presets.destroy();
       savedSettings.destroy();
+      appFilesSection.destroy();
+      appFiles.dispose();
       unmountInlineInputMode?.();
       spriteTuner?.destroy();
       compassScaleTuner?.destroy();
