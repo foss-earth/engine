@@ -231,6 +231,9 @@ export function getLoadedBundleName(): string {
   return bundle ?? "dev";
 }
 
+/** About's last line. It was "Deploy", which an iPhone running a page four releases old showed with the newest deploy. */
+const SITE_DEPLOY_LABEL = "Site's latest deploy";
+
 async function getCurrentDeploySha(): Promise<string | null> {
   if (!REPOSITORY_SLUG) {
     return null;
@@ -256,7 +259,8 @@ function hydrateDeployShaLine(line: HTMLElement | null): void {
   }
 
   void getCurrentDeploySha().then((sha) => {
-    line.textContent = sha ? `Deploy: ${sha.slice(0, 12)}` : "Deploy: unavailable";
+    // The site's, asked of GitHub now: a page a browser kept from before it shows this deploy too, so it says nothing of what runs.
+    line.textContent = `${SITE_DEPLOY_LABEL}: ${sha ? sha.slice(0, 12) : "unavailable"}`;
   });
 }
 
@@ -381,7 +385,7 @@ export async function createGlobeApp(
           <p id="settingsSourceLine" class="settings-line">Source: ${SOURCE_VERSION}</p>
           ${fossEarthSource() ? `<p id="settingsFossEarthLine" class="settings-line">FOSS Earth: ${fossEarthSource()}</p>` : ""}
           <p id="settingsBundleLine" class="settings-line">Bundle: ${getLoadedBundleName()}</p>
-          <p id="settingsDeployLine" class="settings-line">Deploy: loading</p>
+          <p id="settingsDeployLine" class="settings-line">${SITE_DEPLOY_LABEL}: loading</p>
         </div>
       </div>
 
