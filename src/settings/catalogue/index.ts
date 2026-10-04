@@ -51,6 +51,7 @@ export const FOSS_EARTH_SECTION_TITLES: ReadonlyArray<readonly [string, string, 
   [INTERFACE_TAB, "log", "Log"],
   [INTERFACE_TAB, "search", "Search"],
   [SETTINGS_TAB, "app-files", "App files"],
+  [SETTINGS_TAB, "diagnostics", "Diagnostics"],
   ...SCENE_SECTION_TITLES,
 ];
 

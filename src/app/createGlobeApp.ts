@@ -6,7 +6,7 @@ import { mountBindingEditor, type BindingEditorHandle } from "@felipegalind0/gam
 import "@felipegalind0/gamepad-tools/styles.css";
 import { Matrix, Vector3 } from "@babylonjs/core";
 import { createBabylonRuntime, type BabylonRuntime } from "../engine/babylon/createBabylonRuntime";
-import { createGameLog, type GameLogTone } from "../log/createGameLog";
+import { createGameLog, type GameLogLine, type GameLogTone } from "../log/createGameLog";
 import { applyRendererChoice } from "../engine/babylon/rendererPreference";
 import { RASTER_BASE_MAP_SOURCES, type RasterBaseMapSource } from "../engine/babylon/rasterBaseMaps";
 import {
@@ -21,7 +21,10 @@ import { createParameterControl, type ParameterControlHandle } from "../shell/se
 import { createParameterSection, type ParameterSectionHandle } from "../shell/settings/parameterSection";
 import { createPresetsSection } from "../shell/settings/presetsSection";
 import { createSavedSettingsSection } from "../shell/settings/savedSettings";
-import { createAppFilesSection } from "../shell/appFilesSection";
+import { createAppFilesSection, describeAppFiles } from "../shell/appFilesSection";
+import { createDiagnosticsSection } from "../shell/diagnosticsSection";
+import { stepKind } from "../diagnostics/sessionTrail";
+import { startAppDiagnostics, type AppDiagnostics } from "./appDiagnostics";
 import { keepAppFiles } from "./appFiles";
 import type {
   GlobeHandle,
@@ -84,6 +87,8 @@ declare global {
       math: typeof panoramaMath & { effectiveOrbRadius: typeof effectiveOrbRadius };
       /** The images kept between visits: scripts/validation/scene-revisit.mjs reads and clears them. */
       media: MediaStore;
+      /** The visit's trail and report: scripts/validation/diagnostics.mjs reads them. */
+      diagnostics: AppDiagnostics;
     };
   }
 }
@@ -207,12 +212,17 @@ const PERFORMANCE_METRIC_DEFINITIONS: readonly PerformanceMetricDefinition[] = [
 ];
 
 
-function getLoadedBundleName(): string {
+/** What identifies the app that runs, for Settings → About and the diagnostics report. */
+export const getAppIdentity = (): { build: string; source: string; bundle: string } => ({ build: BUILD_TIME, source: SOURCE_VERSION, bundle: getLoadedBundleName() });
+
+/** The page's built script, whatever the app's entry is called: "index-1a2B3c4D.js", or "dev" for one not built. */
+export function getLoadedBundleName(): string {
   const scripts = Array.from(document.querySelectorAll<HTMLScriptElement>("script[src]"));
   const bundle = scripts
     .map((script) => script.src)
     .map((src) => new URL(src, window.location.href).pathname.split("/").pop() ?? "")
-    .find((name) => /^index-[\w-]+\.js$/.test(name));
+    // A build names each file with its content's hash.
+    .find((name) => /^[\w.]+-[\w-]{8}\.js$/.test(name));
 
   return bundle ?? "dev";
 }
@@ -429,17 +439,28 @@ export async function createGlobeApp(
   const settingsDeployLine = rootElement.querySelector<HTMLElement>("#settingsDeployLine");
   hydrateDeployShaLine(settingsDeployLine);
 
-  const gameLog = createGameLog();
-  let lastLoggedStatus = "";
-  const logStatus = (text: string, tone: GameLogTone): void => {
-    if (text === lastLoggedStatus) return;
-    lastLoggedStatus = text;
-    gameLog.print({ text, tone });
-  };
-
   // One registry for the page: the map source, renderer and every other
   // parameter below are read from it and follow it.
   const settings = getAppSettings();
+
+  // Every line of the log is a step of the visit's trail, which Settings → Diagnostics copies as a report.
+  const diagnostics = startAppDiagnostics({
+    log: createGameLog(),
+    settings,
+    identity: getAppIdentity(),
+  });
+  const gameLog = diagnostics.log;
+  let lastLoggedStatus = "";
+  const statusLines = new Map<string, GameLogLine>();
+  const logStatus = (text: string, tone: GameLogTone): void => {
+    if (text === lastLoggedStatus) return;
+    lastLoggedStatus = text;
+    // The same trouble with another tile's address is the same line with its latest wording, not a line for every tile.
+    const kind = `${tone} ${stepKind(text)}`;
+    const line = statusLines.get(kind);
+    if (line) line.update({ text, tone });
+    else statusLines.set(kind, gameLog.print({ text, tone }));
+  };
 
   let onMapStatus: ((status: BabylonRuntime["status"]) => void) | null = null;
   const applyRuntimeStatus = (status: BabylonRuntime["status"]): void => {
@@ -475,6 +496,7 @@ export async function createGlobeApp(
     onStatusChange: applyRuntimeStatus,
     settings,
   });
+  diagnostics.attachRuntime(runtime);
   const compassHeightOffset = (): number => {
     const value = settings.get("visualization.compass.heightOffset");
     return typeof value === "number" ? value : 0;
@@ -775,6 +797,8 @@ export async function createGlobeApp(
   // The app's own files, kept by its service worker as Settings → App files asks.
   const appFiles = keepAppFiles(settings);
   const appFilesSection = createAppFilesSection(appFiles);
+  diagnostics.addState(async () => `App files: ${describeAppFiles(await appFiles.status())}`);
+  const diagnosticsSection = createDiagnosticsSection(diagnostics);
   const inputMethodElement = inputMethodSectionEl
     ? sectionOf("controls", "input-method", { main: inputMethodSectionEl, covers: ["input.mode", ...INPUT_SENSITIVITY_IDS] })
     : null;
@@ -802,6 +826,7 @@ export async function createGlobeApp(
     { id: "presets", title: "Presets", element: presets.element, defaultOpen: false },
     { id: "saved-settings", title: "Saved settings", element: savedSettings.element, defaultOpen: false },
     { id: "app-files", title: settings.getSectionTitle("settings", "app-files"), element: sectionOf("settings", "app-files", { footer: appFilesSection.element }), defaultOpen: false },
+    { id: "diagnostics", title: settings.getSectionTitle("settings", "diagnostics"), element: sectionOf("settings", "diagnostics", { footer: diagnosticsSection.element }), defaultOpen: false },
     ...(aboutElement ? [{ id: "about", title: "About", element: aboutElement, defaultOpen: false }] : []),
   ];
   // Performance debug is about what the renderer does, so it is the Renderer tab's.
@@ -833,6 +858,7 @@ export async function createGlobeApp(
   });
   const scenesPanel = createScenesPanel({ settings, controller: scenes });
   const offSceneLog = connectSceneLog(scenes, gameLog);
+  const offSceneTrail = scenes.subscribe(state => diagnostics.sceneChanged(state));
   const panoramaTabs = createPanoramaTabs({
     settings,
     controller: scenes,
@@ -851,6 +877,7 @@ export async function createGlobeApp(
       settings,
       math: { ...panoramaMath, effectiveOrbRadius },
       media: sceneMediaStore,
+      diagnostics,
     };
   }
 
@@ -1013,6 +1040,9 @@ export async function createGlobeApp(
       presets.destroy();
       savedSettings.destroy();
       appFilesSection.destroy();
+      diagnosticsSection.destroy();
+      offSceneTrail();
+      diagnostics.destroy();
       appFiles.dispose();
       unmountInlineInputMode?.();
       spriteTuner?.destroy();

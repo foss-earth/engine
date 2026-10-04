@@ -1,3 +1,4 @@
+import { TRAIL_STEPS_DEFAULT } from "../../diagnostics/sessionTrail";
 import { GAME_LOG_LINE_MS, GAME_LOG_MAX_LINES } from "../../log/gameLogDefaults";
 import { SEARCH_DEFAULTS } from "../../search/searchDefaults";
 import type { ParameterSpec } from "../types";
@@ -71,6 +72,33 @@ export const INTERFACE_PARAMETERS: readonly ParameterSpec[] = [
     home: { tab: SETTINGS_TAB, section: "app-files", level: "main" },
     appliesLive: true,
     source: "src/app/appFiles.ts",
+  },
+  {
+    id: "diagnostics.trail",
+    label: "Remember how a visit ended",
+    description: "Keeps each visit's steps on this device: what loaded, the log's lines, warnings, errors and the 360 image entered. A page that a browser stops, as a phone does to one that takes too much memory, runs nothing as it goes, so these steps are how the next visit can say that it happened and the report what it was doing. Nothing is sent anywhere. Off removes this visit's steps from the device; this visit's report still has them.",
+    unit: "none",
+    kind: "boolean",
+    default: true,
+    defaultReason: "On 2026-10-03 the UMN tour kept crashing on an iPhone, and nothing said what it had been doing, on which renderer, or which version of the app it was (docs/diagnostics.md).",
+    home: { tab: SETTINGS_TAB, section: "diagnostics", level: "main" },
+    appliesLive: true,
+    source: "src/diagnostics/sessionTrail.ts",
+  },
+  {
+    id: "diagnostics.trailSteps",
+    label: "Steps kept",
+    description: "How many of a visit's latest steps are held for its report and kept for the next visit. A step is one line of at most 300 characters; the same line again is counted, not added.",
+    unit: "count",
+    kind: "number",
+    bounds: () => ({ min: 10, max: 1000 }),
+    step: 0.05,
+    scale: "log2",
+    default: TRAIL_STEPS_DEFAULT,
+    defaultReason: "Opening an example scene and entering its 360 image is 15 steps (docs/diagnostics.md), so 80 hold a visit of many images, with each kind of trouble as one step however often it comes. They are 24 KB at most, written to this device as a step is added.",
+    home: { tab: SETTINGS_TAB, section: "diagnostics", level: "main" },
+    appliesLive: true,
+    source: "src/diagnostics/sessionTrail.ts",
   },
   {
     id: "interface.theme",
