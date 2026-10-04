@@ -1,9 +1,10 @@
+import { CHECK_PUBLISHED_EVERY_DEFAULT } from "../../app/publishedVersion";
 import { TRAIL_STEPS_DEFAULT } from "../../diagnostics/sessionTrail";
 import { GAME_LOG_LINE_MS, GAME_LOG_MAX_LINES } from "../../log/gameLogDefaults";
 import { SEARCH_DEFAULTS } from "../../search/searchDefaults";
 import type { ParameterSpec } from "../types";
 
-/** The Settings tab: presets, saved settings, the app's own files and About. */
+/** The Settings tab: presets, saved settings, the app's own files and version, diagnostics and About. */
 export const SETTINGS_TAB = "settings";
 /** The Interface tab: the toolbar, theme, log and search. */
 export const INTERFACE_TAB = "interface";
@@ -64,7 +65,7 @@ export const INTERFACE_PARAMETERS: readonly ParameterSpec[] = [
   {
     id: "app.keepFiles",
     label: "Keep the app's files",
-    description: "Keeps the app's own files on this device once they have been downloaded, so a later visit starts without asking the network for them, however long ago the last one was. Each file's name carries its content, so a kept file is never out of date: a new version of the app has new names, which are downloaded once, and the old files go. The page itself always comes from the network. Off forgets them and leaves the app to the browser's own cache. Scene images are kept apart: Scenes → Saved images.",
+    description: "Keeps the app's own files on this device once they have been downloaded, so a later visit starts without asking the network for them, however long ago the last one was. Each file's name carries its content, so a kept file is never out of date: a new version of the app has new names, which are downloaded once, and the old files go. The page itself is not kept: it is the browser's to ask the network for. Off forgets them and leaves the app to the browser's own cache. Scene images are kept apart: Scenes → Saved images.",
     unit: "none",
     kind: "boolean",
     default: true,
@@ -72,6 +73,45 @@ export const INTERFACE_PARAMETERS: readonly ParameterSpec[] = [
     home: { tab: SETTINGS_TAB, section: "app-files", level: "main" },
     appliesLive: true,
     source: "src/app/appFiles.ts",
+  },
+  {
+    id: "app.checkPublished",
+    label: "Ask which version is published",
+    description: "Asks this site for the page itself when the app starts, when the page is shown again and while it stays shown, no more often than the time below, and compares the build written in it with this page's. A browser that restores a tab, as a phone does, may show its own copy of the page from days before, and with it that day's app; this is how the app can tell. The answer is the page, a few kilobytes, or a few hundred bytes when it has not changed. Off asks nothing, and the app is whichever one the browser shows.",
+    unit: "none",
+    kind: "boolean",
+    default: true,
+    defaultReason: "On 2026-10-04 an iPhone was still running the UMN tour's app of two days and four releases before, from Safari's copy of the page, and nothing said so (docs/app-files.md).",
+    home: { tab: SETTINGS_TAB, section: "app-files", level: "main" },
+    appliesLive: true,
+    source: "src/app/publishedVersion.ts",
+  },
+  {
+    id: "app.checkPublishedEvery",
+    label: "Ask again after",
+    description: "How long after asking the site which version is published the app asks again, while the page is shown or when it is shown again.",
+    unit: { id: "min", text: "min" },
+    kind: "number",
+    bounds: () => ({ min: 1, max: 1440 }),
+    step: 0.05,
+    scale: "log2",
+    default: CHECK_PUBLISHED_EVERY_DEFAULT,
+    defaultReason: "GitHub Pages tells a browser that its copy of a page is good for ten minutes, so asking again after ten asks no more often than the browser itself would.",
+    home: { tab: SETTINGS_TAB, section: "app-files", level: "main" },
+    appliesLive: true,
+    source: "src/app/publishedVersion.ts",
+  },
+  {
+    id: "app.reloadOlderPage",
+    label: "Reload an older page by itself",
+    description: "When this page is an older version of the app than the published one and nobody has touched it yet, as when a browser has just opened its own copy, the page reloads at once and its log says so. It does that once for a published version: a browser that answers with its old copy again is not asked forever. A page that has been touched is never reloaded by itself: its log says a newer version is published, with a button. Off always leaves it to the button.",
+    unit: "none",
+    kind: "boolean",
+    default: true,
+    defaultReason: "A visitor cannot tell that the page a browser restored is an old one, and an old app may not read today's scene: on 2026-10-03 one showed an error in place of the UMN tour (docs/app-files.md).",
+    home: { tab: SETTINGS_TAB, section: "app-files", level: "main" },
+    appliesLive: true,
+    source: "src/app/publishedVersion.ts",
   },
   {
     id: "diagnostics.trail",
@@ -95,7 +135,7 @@ export const INTERFACE_PARAMETERS: readonly ParameterSpec[] = [
     step: 0.05,
     scale: "log2",
     default: TRAIL_STEPS_DEFAULT,
-    defaultReason: "Opening an example scene and entering its 360 image is 15 steps (docs/diagnostics.md), so 80 hold a visit of many images, with each kind of trouble as one step however often it comes. They are 24 KB at most, written to this device as a step is added.",
+    defaultReason: "Opening an example scene and entering its 360 image is 16 steps (docs/diagnostics.md), so 80 hold a visit of many images, with each kind of trouble as one step however often it comes. They are 24 KB at most, written to this device as a step is added.",
     home: { tab: SETTINGS_TAB, section: "diagnostics", level: "main" },
     appliesLive: true,
     source: "src/diagnostics/sessionTrail.ts",

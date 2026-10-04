@@ -26,6 +26,8 @@ import { createDiagnosticsSection } from "../shell/diagnosticsSection";
 import { stepKind } from "../diagnostics/sessionTrail";
 import { startAppDiagnostics, type AppDiagnostics } from "./appDiagnostics";
 import { keepAppFiles } from "./appFiles";
+import { fossEarthSource, type AppIdentity } from "./appIdentity";
+import { describePublishedVersion, watchPublishedVersion, type PublishedVersionWatch } from "./publishedVersion";
 import type {
   GlobeHandle,
   GlobeLayerContext,
@@ -89,6 +91,8 @@ declare global {
       media: MediaStore;
       /** The visit's trail and report: scripts/validation/diagnostics.mjs reads them. */
       diagnostics: AppDiagnostics;
+      /** Whether this page is the published one: scripts/validation/published-version.mjs reads it. */
+      publishedVersion: PublishedVersionWatch;
     };
   }
 }
@@ -213,7 +217,7 @@ const PERFORMANCE_METRIC_DEFINITIONS: readonly PerformanceMetricDefinition[] = [
 
 
 /** What identifies the app that runs, for Settings → About and the diagnostics report. */
-export const getAppIdentity = (): { build: string; source: string; bundle: string } => ({ build: BUILD_TIME, source: SOURCE_VERSION, bundle: getLoadedBundleName() });
+export const getAppIdentity = (): AppIdentity => ({ build: BUILD_TIME, source: SOURCE_VERSION, fossEarth: fossEarthSource(), bundle: getLoadedBundleName() });
 
 /** The page's built script, whatever the app's entry is called: "index-1a2B3c4D.js", or "dev" for one not built. */
 export function getLoadedBundleName(): string {
@@ -375,6 +379,7 @@ export async function createGlobeApp(
         <div id="settingsAboutSection" class="settings-section-content">
           <p id="settingsBuildLine" class="settings-line">Build: ${BUILD_TIME}</p>
           <p id="settingsSourceLine" class="settings-line">Source: ${SOURCE_VERSION}</p>
+          ${fossEarthSource() ? `<p id="settingsFossEarthLine" class="settings-line">FOSS Earth: ${fossEarthSource()}</p>` : ""}
           <p id="settingsBundleLine" class="settings-line">Bundle: ${getLoadedBundleName()}</p>
           <p id="settingsDeployLine" class="settings-line">Deploy: loading</p>
         </div>
@@ -450,6 +455,9 @@ export async function createGlobeApp(
     identity: getAppIdentity(),
   });
   const gameLog = diagnostics.log;
+  // Asked while the renderer starts: a browser may have opened its own copy of an older page, which then reloads before it has shown anything.
+  const publishedVersion = watchPublishedVersion({ settings, log: gameLog });
+  diagnostics.addState(() => `Published: ${describePublishedVersion(publishedVersion.state(), publishedVersion.now())}`);
   let lastLoggedStatus = "";
   const statusLines = new Map<string, GameLogLine>();
   const logStatus = (text: string, tone: GameLogTone): void => {
@@ -796,7 +804,7 @@ export async function createGlobeApp(
   const savedSettings = createSavedSettingsSection(settings);
   // The app's own files, kept by its service worker as Settings → App files asks.
   const appFiles = keepAppFiles(settings);
-  const appFilesSection = createAppFilesSection(appFiles);
+  const appFilesSection = createAppFilesSection(appFiles, publishedVersion);
   diagnostics.addState(async () => `App files: ${describeAppFiles(await appFiles.status())}`);
   const diagnosticsSection = createDiagnosticsSection(diagnostics);
   const inputMethodElement = inputMethodSectionEl
@@ -878,6 +886,7 @@ export async function createGlobeApp(
       math: { ...panoramaMath, effectiveOrbRadius },
       media: sceneMediaStore,
       diagnostics,
+      publishedVersion,
     };
   }
 
@@ -1043,6 +1052,7 @@ export async function createGlobeApp(
       diagnosticsSection.destroy();
       offSceneTrail();
       diagnostics.destroy();
+      publishedVersion.dispose();
       appFiles.dispose();
       unmountInlineInputMode?.();
       spriteTuner?.destroy();
