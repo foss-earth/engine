@@ -59,9 +59,10 @@ export interface GlobeHandle {
    */
   onThemeChange(cb: (theme: GlobeTheme) => void): () => void;
   /**
-   * Render the scene on the next animation frame. The globe renders on demand,
-   * so external code that mutates scene content (e.g. layer sprite data) must
-   * call this to make the change visible.
+   * Render the scene on the next animation frame. The globe renders on demand:
+   * meshes and lights entering or leaving the scene ask for a frame of their
+   * own, but external code that changes content already in it (e.g. layer
+   * sprite data) must call this to make the change visible.
    */
   requestRender(): void;
 }

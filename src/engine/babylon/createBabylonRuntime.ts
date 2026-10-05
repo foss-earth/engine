@@ -57,6 +57,7 @@ declare global {
   }
 }
 import { createRenderScheduler, type RenderScheduler } from "./renderScheduler";
+import { createSceneUpdates } from "./sceneUpdates";
 import { createPresentationCandidates } from "./presentationCandidates";
 import { geodeticToEcef, ecefToGeodetic, DEG_TO_RAD, RAD_TO_DEG } from "../../camera/cameraMath";
 import { orbitCenterOnSight, orbitGlideRates, withinTilt, type GlideVec3 } from "../../camera/cameraGlide";
@@ -280,9 +281,12 @@ export interface BabylonRuntime {
   setGlobeAnchorRotation(enabled: boolean): void;
   getGlobeAnchorRotation(): boolean;
   /**
-   * Render-on-demand controls. The runtime no longer runs an unconditional
-   * render loop; consumers must call requestRender() after any external scene
-   * mutation (theme change, layer mutation, etc.) to see the result.
+   * Render-on-demand controls: a frame is drawn only when one is asked for.
+   * Meshes and lights entering or leaving the scene ask for theirs, and so does
+   * a frame that skipped a mesh still compiling or loading, once it is ready
+   * (sceneUpdates.ts). Any other change to what the scene shows - moving,
+   * showing, hiding or recolouring something already in it - must call
+   * requestRender() to be seen.
    */
   requestRender(): void;
   beginContinuous(): void;
@@ -550,6 +554,9 @@ export async function createBabylonRuntime(
   // Both maps' updates in one frame see the same focus position; outside a
   // frame, such as a host's own update, it is read fresh.
   let inFrame = false;
+  // From the start of a tick until its render: meshes added now are drawn by
+  // that render, so they ask for no frame of their own (sceneUpdates.ts).
+  let preparingFrame = false;
   let focusCache: { value: { x: number; y: number; z: number } | null } | null = null;
   /** The selected focus point, read at most once per rendered frame. */
   const focusPosition = (): { x: number; y: number; z: number } | null => {
@@ -612,47 +619,56 @@ export async function createBabylonRuntime(
     terrainSource: activeTerrainSource,
     lastError: null,
   };
+  /** Everything a frame does before its render, the host's simulation last. */
+  const prepareFrame = (frameNow: number): void => {
+    // The frame boundary: everything below, the host's simulation included, is this frame's.
+    frameProfile.frame(frameNow);
+    profiler.tag("engine frame", renderer.engine.frameId);
+    terrainCapture?.beginFrame(frameNow);
+    let started = profiler.clock();
+    if (!simMode) {
+      inertialCameraController?.update();
+      stepFovReturn(frameNow);
+    }
+    updateTerrainPreparationCamera();
+    profiler.add("map/camera", started);
+    started = profiler.clock();
+    tilesRuntime?.update();
+    profiler.add("map/google tiles", started);
+    started = profiler.clock();
+    // Frames drawn while a lease holds navigation are not map frames.
+    rasterTilesRuntime?.reportFrame(frameNow, frameNow - lastRasterFrameAt, document.hidden || mapsSuspended);
+    lastRasterFrameAt = frameNow;
+    rasterTilesRuntime?.update();
+    profiler.add("map/raster tiles", started);
+    if (status.mode === "raster-basemap" && (rasterTilesRuntime?.getMetrics().visibleTiles ?? 0) > 0) {
+      hideFallbackExperience();
+    }
+    // beginFrame/endFrame are normally invoked by engine.runRenderLoop's
+    // internal _processFrame. We bypass that loop, so we must bracket the
+    // render ourselves — WebGPU only presents the swap chain inside
+    // endFrame(), and engine.getFps() / frameId are only updated in
+    // beginFrame(). Without this the canvas stays black on WebGPU.
+    renderer.engine.beginFrame();
+    const deltaSeconds = Math.max(renderer.engine.getDeltaTime() / 1000, 1 / 240);
+    simTick?.(deltaSeconds);
+  };
   const scheduler: RenderScheduler = createRenderScheduler({
     tick: () => {
       inFrame = true;
       focusCache = null;
       const frameNow = performance.now();
-      // The frame boundary: everything below, the host's simulation included, is this frame's.
-      frameProfile.frame(frameNow);
-      profiler.tag("engine frame", renderer.engine.frameId);
-      terrainCapture?.beginFrame(frameNow);
-      let started = profiler.clock();
-      if (!simMode) {
-        inertialCameraController?.update();
-        stepFovReturn(frameNow);
+      preparingFrame = true;
+      try {
+        prepareFrame(frameNow);
+      } finally {
+        preparingFrame = false;
       }
-      updateTerrainPreparationCamera();
-      profiler.add("map/camera", started);
-      started = profiler.clock();
-      tilesRuntime?.update();
-      profiler.add("map/google tiles", started);
-      started = profiler.clock();
-      // Frames drawn while a lease holds navigation are not map frames.
-      rasterTilesRuntime?.reportFrame(frameNow, frameNow - lastRasterFrameAt, document.hidden || mapsSuspended);
-      lastRasterFrameAt = frameNow;
-      rasterTilesRuntime?.update();
-      profiler.add("map/raster tiles", started);
-      if (status.mode === "raster-basemap" && (rasterTilesRuntime?.getMetrics().visibleTiles ?? 0) > 0) {
-        hideFallbackExperience();
-      }
-      // beginFrame/endFrame are normally invoked by engine.runRenderLoop's
-      // internal _processFrame. We bypass that loop, so we must bracket the
-      // render ourselves — WebGPU only presents the swap chain inside
-      // endFrame(), and engine.getFps() / frameId are only updated in
-      // beginFrame(). Without this the canvas stays black on WebGPU.
-      renderer.engine.beginFrame();
-      const deltaSeconds = Math.max(renderer.engine.getDeltaTime() / 1000, 1 / 240);
-      simTick?.(deltaSeconds);
       scene.render();
       renderer.engine.endFrame();
       // Sampling after render observes current mesh transforms, including the
       // simulation's floating origin. Refinement keeps running with no aircraft.
-      started = profiler.clock();
+      const started = profiler.clock();
       preparationTick?.(frameNow);
       profiler.add("map/terrain preparation", started);
       terrainCapture?.endFrame();
@@ -667,6 +683,20 @@ export async function createBabylonRuntime(
       const cap = settings.get("renderer.frameRateCap");
       return typeof cap === "number" && cap > 0 ? 1000 / cap : 0;
     },
+  });
+
+  // Frames for what enters or leaves the scene, and one more after a frame
+  // that skipped something not yet ready to draw (sceneUpdates.ts). It judges a
+  // frame when the scheduler goes idle after it; one about to run makes any
+  // wait moot. A hidden page draws nothing, and draws once on its return.
+  const sceneUpdates = createSceneUpdates({
+    scene,
+    requestRender: () => scheduler.requestRender(),
+    isPreparingFrame: () => preparingFrame,
+  });
+  const stopSettling = scheduler.onActiveChange(active => {
+    if (active) sceneUpdates.cancelSettle();
+    else if (!document.hidden) sceneUpdates.settle();
   });
 
   // Credits are the shell's to show: the map source HUD links the basemap's,
@@ -2032,6 +2062,9 @@ export async function createBabylonRuntime(
       statusListeners.clear();
       rasterDetailListeners.clear();
       downloadMeter.destroy();
+      // Before the scheduler stops: stopping goes idle, which would settle.
+      stopSettling();
+      sceneUpdates.dispose();
       scheduler.stop();
       clearGoogleWatchdog();
 

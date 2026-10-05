@@ -155,6 +155,63 @@ describe("createBabylonRuntime simulation mode", () => {
     runtime.destroy();
   });
 
+  it("draws a model that was not ready on its first frame once it is, without the camera moving, and draws nothing meanwhile", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    let scheduledFrame: FrameRequestCallback | null = null;
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback: FrameRequestCallback) => {
+      scheduledFrame = callback;
+      return 1;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
+    const { createBabylonRuntime } = await import("./createBabylonRuntime");
+    const runtime = await createBabylonRuntime(document.createElement("canvas"), { simMode: true });
+    try {
+      runtime.scene.activeCamera = new FreeCamera("flight-camera", new Vector3(0, 0, -10), runtime.scene);
+      runtime.setSimRunning(false);
+      const frames = vi.fn();
+      runtime.setSimTick(frames);
+      const flush = () => {
+        const callback = scheduledFrame;
+        scheduledFrame = null;
+        callback?.(performance.now());
+      };
+      flush();
+      await vi.advanceTimersByTimeAsync(5);
+      flush();
+      frames.mockClear();
+      expect(runtime.isRendering()).toBe(false);
+
+      // A model arrives between frames whose material is still compiling.
+      let ready = false;
+      const model = MeshBuilder.CreateBox("aircraft", { size: 2 }, runtime.scene);
+      // Geometry is there; only the complete check, which the material answers, fails.
+      vi.spyOn(model, "isReady").mockImplementation((completeCheck?: boolean) => !completeCheck || ready);
+      // Babylon reports it a millisecond later; that asks for one frame.
+      await vi.advanceTimersByTimeAsync(5);
+      expect(scheduledFrame).not.toBeNull();
+      flush();
+      expect(frames).toHaveBeenCalledOnce();
+      const active = runtime.scene.getActiveMeshes();
+      expect(active.data.slice(0, active.length)).toContain(model);
+      expect(runtime.isRendering()).toBe(false);
+
+      // It could not be drawn: no frame is drawn while it compiles...
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(scheduledFrame).toBeNull();
+      // ...and exactly one once it is ready.
+      ready = true;
+      await vi.advanceTimersByTimeAsync(300);
+      expect(scheduledFrame).not.toBeNull();
+      flush();
+      expect(frames).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(scheduledFrame).toBeNull();
+    } finally {
+      runtime.destroy();
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps the flight camera active through paused raster and Google map switches", async () => {
     mocks.createGoogleTilesRuntime.mockReturnValue({
       tiles: { visibleTiles: new Set(), activeTiles: new Set(), group: {} },
