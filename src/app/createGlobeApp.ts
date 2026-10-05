@@ -266,24 +266,18 @@ function hydrateDeployShaLine(line: HTMLElement | null): void {
   });
 }
 
-const HUD_FIT_REASONS = {
-  shown: "Fits in the toolbar's single row, in priority order.",
-  omitted: "Omitted to keep the toolbar to one row before the detail slider and attribution.",
-};
-
-function readVisiblePerformanceMetrics(automatic: ReadonlyMap<string, boolean>): Set<PerformanceMetricId> {
+function readVisiblePerformanceMetrics(): Set<PerformanceMetricId> {
   return new Set(PERFORMANCE_METRIC_DEFINITIONS
-    .filter((metric) => readHudPreference(`interface.performanceHud.${metric.id}`, automatic).wanted)
+    .filter((metric) => readHudPreference(`interface.performanceHud.${metric.id}`).wanted)
     .map((metric) => metric.id));
 }
 
-function readHudPreference(id: string, automatic: ReadonlyMap<string, boolean>): { wanted: boolean; chosen: boolean } {
+function readHudPreference(id: string): { wanted: boolean; chosen: boolean } {
   const state = getAppSettings().inspect(id);
   const chosen = state.provenance !== "default" && state.provenance !== "host-default";
-  // Fitting publishes a host default so an omitted item's checkbox is off.
-  // Preserve the app's original default, including a consumer's host default,
-  // to decide whether it is eligible again as space grows.
-  return { wanted: chosen ? state.value === true : automatic.get(id) === true, chosen };
+  // A default stays enabled while fitting omits its chip. Only a person's
+  // explicit choice pins an item on or hides it, independently of geometry.
+  return { wanted: state.value === true, chosen };
 }
 
 function renderPerformanceChips(
@@ -466,10 +460,6 @@ export async function createGlobeApp(
   // One registry for the page: the map source, renderer and every other
   // parameter below are read from it and follow it.
   const settings = getAppSettings();
-  const automaticHudVisibility = new Map([
-    ...HUD_BUTTON_IDS.map(hudButtonParameterId),
-    ...PERFORMANCE_HUD_METRICS.map(([metric]) => `interface.performanceHud.${metric}`),
-  ].map(id => [id, settings.inspect(id).defaultValue === true]));
 
   // Every line of the log is a step of the visit's trail, which Settings → Diagnostics copies as a report.
   const diagnostics = startAppDiagnostics({
@@ -634,7 +624,7 @@ export async function createGlobeApp(
   const northButton: NorthButtonHandle | null = northBtnSvgEl ? createNorthButton(northBtnSvgEl) : null;
   const helpModal: HelpModalHandle | null = helpModalEl ? createHelpModal(helpModalEl) : null;
 
-  let visiblePerformanceMetrics = readVisiblePerformanceMetrics(automaticHudVisibility);
+  let visiblePerformanceMetrics = readVisiblePerformanceMetrics();
   let lastPerfSnapshot: PerformanceSnapshot | null = null;
 
   // ── Debug panels ──────────────────────────────────────────────
@@ -684,7 +674,7 @@ export async function createGlobeApp(
   const applyHudButtonVisibility = (): void => {
     for (const id of HUD_BUTTON_IDS) {
       const element = hudButtonElements[id];
-      if (element) element.toggleAttribute("data-hud-choice-hidden", !readHudPreference(hudButtonParameterId(id), automaticHudVisibility).wanted);
+      if (element) element.toggleAttribute("data-hud-choice-hidden", !readHudPreference(hudButtonParameterId(id)).wanted);
     }
   };
   applyHudButtonVisibility();
@@ -693,24 +683,16 @@ export async function createGlobeApp(
     ...PERFORMANCE_HUD_METRICS.map(([metric]) => `interface.performanceHud.${metric}`),
   ]);
   const fitItem = (element: HTMLElement, priority: number, id: string): HudBarFitItem => {
-    const { chosen, wanted } = readHudPreference(id, automaticHudVisibility);
+    const { chosen, wanted } = readHudPreference(id);
     return {
-      element, priority, keepVisible: chosen && wanted,
-      onFit: visible => {
-        if (chosen) return;
-        const derivedFrom = visible ? HUD_FIT_REASONS.shown : HUD_FIT_REASONS.omitted;
-        const state = settings.inspect(id);
-        if (state.layers.hostDefault?.value !== visible || state.layers.hostDefault.derivedFrom !== derivedFrom) {
-          settings.setHostDefault(id, visible, derivedFrom);
-        }
-      },
+      element, priority, keepVisible: chosen && wanted, reserveSpace: priority <= 2,
     };
   };
   const hudFit = mapSourceSlot ? fitHudBar(hudBar.element, mapSourceSlot, () => [
     ...(northBtnEl ? [{ element: northBtnEl, priority: 0, keepVisible: true }] : []),
     ...HUD_BUTTON_IDS.flatMap((id, index) => {
       const element = hudButtonElements[id];
-      return element && readHudPreference(hudButtonParameterId(id), automaticHudVisibility).wanted
+      return element && readHudPreference(hudButtonParameterId(id)).wanted
         ? [fitItem(element, id === "help" ? 1 : index + 2, hudButtonParameterId(id))] : [];
     }),
     ...Array.from(perfMetricsPill?.querySelectorAll<HTMLElement>("[data-perf-metric]") ?? [], element =>
@@ -735,18 +717,10 @@ export async function createGlobeApp(
     }),
     settings.subscribe(changed => {
       if (![...changed].some(id => fittingIds.has(id))) return;
-      for (const id of changed) {
-        if (!fittingIds.has(id)) continue;
-        const state = settings.inspect(id);
-        const reason = state.layers.hostDefault?.derivedFrom;
-        if (reason && reason !== HUD_FIT_REASONS.shown && reason !== HUD_FIT_REASONS.omitted) {
-          automaticHudVisibility.set(id, state.defaultValue === true);
-        }
-      }
       // Choosing or resetting an equal value changes provenance, which a
       // value watcher cannot see. Both availability and fitting follow it.
       applyHudButtonVisibility();
-      visiblePerformanceMetrics = readVisiblePerformanceMetrics(automaticHudVisibility);
+      visiblePerformanceMetrics = readVisiblePerformanceMetrics();
       if (lastPerfSnapshot && perfMetricsPill) renderPerformanceChips(perfMetricsPill, lastPerfSnapshot, visiblePerformanceMetrics);
       hudFit?.update();
     }),
