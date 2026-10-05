@@ -13,9 +13,11 @@ const PERFORMANCE = { tab: "renderer", section: "performance" } as const;
 
 export const TOOLBAR_BUTTONS = [
   ["help", "Help (?)", "the ? button that opens the controls help"],
-  ["settings", "Settings (⚙)", "the ⚙ button that opens the Settings tab"],
-  ["theme", "Theme", "the light and dark theme button"],
+  ["renderer", "Renderer", "the WebGPU or WebGL indicator that opens the Renderer tab"],
   ["inputMode", "Input method", "the input method button, which opens the Controls tab"],
+  ["theme", "Theme button", "the light and dark theme button"],
+  ["settings", "Settings (⚙)", "the ⚙ button that opens the Settings tab"],
+  ["position", "Camera position", "the latitude, longitude, heading, pitch and zoom readout that opens Location"],
 ] as const;
 
 export const PERFORMANCE_HUD_METRICS = [
@@ -26,7 +28,7 @@ export const PERFORMANCE_HUD_METRICS = [
   ["drawCalls", "Draw calls", false, "GPU draw calls submitted for the current frame when the renderer exposes them."],
   ["tiles", "Map tiles (#/#t)", false, "Visible map tiles over active map tiles managed by the tile runtime."],
   ["culling", "Culling", false, "Visible tracked objects over total tracked objects after hemisphere culling."],
-  ["memory", "Memory", true, "Approximate JavaScript heap memory currently used by the page."],
+  ["memory", "Memory", false, "Approximate JavaScript heap memory currently used by the page."],
 ] as const;
 
 function toggle(id: string, label: string, description: string, fallback: boolean, reason: string, home: { tab: string; section: string }, source: string, level: "main" | "all" = "main"): ParameterSpec {
@@ -152,14 +154,17 @@ export const INTERFACE_PARAMETERS: readonly ParameterSpec[] = [
     ],
     default: "dark",
     defaultReason: "A dark frame keeps attention on the map.",
-    home: { tab: INTERFACE_TAB, section: "toolbar", level: "all" },
+    home: { tab: INTERFACE_TAB, section: "toolbar", level: "main" },
     appliesLive: true,
     source: "src/theme/theme.ts",
   },
-  ...TOOLBAR_BUTTONS.map(([button, label, what]) => toggle(
-    `interface.toolbar.${button}`, label, `Shows ${what}. Hiding it never hides what it opens: that stays under +.`,
-    true, "A first-time visitor does not know that + opens the same things.", { tab: INTERFACE_TAB, section: "toolbar" }, "src/hud/hudButtonVisibility.ts",
-  )),
+  ...TOOLBAR_BUTTONS.map(([button, label, what]) => ({
+    ...toggle(
+      `interface.toolbar.${button}`, label, `Shows ${what}. By default it appears when it fits in one row, in priority order. Enabling it yourself keeps it shown, wrapping if needed; reset returns to fitting. Hiding it never hides its tab under +.`,
+      true, "Shown when it fits after the higher-priority controls and before the detail slider and attribution.", { tab: INTERFACE_TAB, section: "toolbar" }, "src/hud/hudButtonVisibility.ts",
+    ),
+    persistDefault: true,
+  })),
   {
     id: "interface.log.lineDuration",
     label: "Log line time",
@@ -235,10 +240,13 @@ export const INTERFACE_PARAMETERS: readonly ParameterSpec[] = [
     appliesLive: true,
     source: "src/log/createGameLog.ts",
   },
-  ...PERFORMANCE_HUD_METRICS.map(([metric, label, visible, tooltip]) => toggle(
-    `interface.performanceHud.${metric}`, `${label} on the toolbar`, tooltip,
-    visible, visible ? "Shown by default: it is the first thing to look at." : "Hidden by default: a debugging reading.", PERFORMANCE, "src/app/createGlobeApp.ts",
-  )),
+  ...PERFORMANCE_HUD_METRICS.map(([metric, label, visible, tooltip]) => ({
+    ...toggle(
+      `interface.performanceHud.${metric}`, `${label} on the toolbar`, `${tooltip} Enabling it yourself keeps it shown, wrapping if needed; reset returns to the default.`,
+      visible, visible ? "Shown when it fits after north and help: it is the first reading to look at." : "Hidden by default: a debugging reading.", PERFORMANCE, "src/app/createGlobeApp.ts",
+    ),
+    persistDefault: true,
+  })),
   toggle("interface.poiSpriteTuner", "POI sprite size tuner", "Shows the panel that tunes the size of point-of-interest sprites.",
     false, "A debugging panel.", PERFORMANCE, "src/hud/poiSpriteSizeTuner.ts"),
   toggle("interface.compassScaleTuner", "Compass scale tuner", "Shows the panel that tunes the orbit compass's size.",

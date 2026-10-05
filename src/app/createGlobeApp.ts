@@ -19,6 +19,7 @@ import { getAppSettings } from "../settings/appSettings";
 import { INPUT_SENSITIVITY_IDS, PERFORMANCE_HUD_METRICS } from "../settings/catalogue";
 import { createParameterControl, type ParameterControlHandle } from "../shell/settings/controls";
 import { createParameterSection, type ParameterSectionHandle } from "../shell/settings/parameterSection";
+import { createThemeControl } from "../shell/settings/themeControl";
 import { createPresetsSection } from "../shell/settings/presetsSection";
 import { createSavedSettingsSection } from "../shell/settings/savedSettings";
 import { createAppFilesSection, describeAppFiles } from "../shell/appFilesSection";
@@ -40,7 +41,7 @@ import { MAX_PITCH_DEG } from "../camera/cameraState";
 import { createStatusHud, type StatusHudHandle } from "../hud/statusHud";
 import { createNorthButton, type NorthButtonHandle } from "../hud/northButton";
 import { createHelpModal, type HelpModalHandle } from "../hud/helpModal";
-import { HUD_BUTTON_IDS, hudButtonParameterId, loadHudButtonVisibility, type HudButtonId } from "../hud/hudButtonVisibility";
+import { HUD_BUTTON_IDS, hudButtonParameterId, type HudButtonId } from "../hud/hudButtonVisibility";
 import type { PanelSection } from "../shell/SectionsPanel";
 import type { WindowOverlayHandle } from "../shell/WindowOverlay";
 import { createMapSourcePanel } from "../shell/mapSourcePanel";
@@ -65,6 +66,7 @@ import {
   withStickDeadzone,
 } from "../input/globeNavigation";
 import { createHudBar } from "../shell/hudBar";
+import { fitHudBar, type HudBarFitItem } from "../shell/hudBarFit";
 import { createSceneHotspots, createSceneHud, createScenesPanel } from "../shell/scenesPanel";
 import { createPanoramaTabs, type PanoramaTabs } from "../shell/panoramaTabs";
 import { connectSceneLog } from "../shell/sceneLog";
@@ -264,11 +266,24 @@ function hydrateDeployShaLine(line: HTMLElement | null): void {
   });
 }
 
-function readVisiblePerformanceMetrics(): Set<PerformanceMetricId> {
-  const settings = getAppSettings();
+const HUD_FIT_REASONS = {
+  shown: "Fits in the toolbar's single row, in priority order.",
+  omitted: "Omitted to keep the toolbar to one row before the detail slider and attribution.",
+};
+
+function readVisiblePerformanceMetrics(automatic: ReadonlyMap<string, boolean>): Set<PerformanceMetricId> {
   return new Set(PERFORMANCE_METRIC_DEFINITIONS
-    .filter((metric) => settings.get(`interface.performanceHud.${metric.id}`) === true)
+    .filter((metric) => readHudPreference(`interface.performanceHud.${metric.id}`, automatic).wanted)
     .map((metric) => metric.id));
+}
+
+function readHudPreference(id: string, automatic: ReadonlyMap<string, boolean>): { wanted: boolean; chosen: boolean } {
+  const state = getAppSettings().inspect(id);
+  const chosen = state.provenance !== "default" && state.provenance !== "host-default";
+  // Fitting publishes a host default so an omitted item's checkbox is off.
+  // Preserve the app's original default, including a consumer's host default,
+  // to decide whether it is eligible again as space grows.
+  return { wanted: chosen ? state.value === true : automatic.get(id) === true, chosen };
 }
 
 function renderPerformanceChips(
@@ -416,7 +431,8 @@ export async function createGlobeApp(
         },
       },
       { kind: "button", id: "helpButton", title: "Controls help", ariaLabel: "Controls help", text: "?" },
-      { kind: "button", id: "settingsButton", title: "Settings", ariaLabel: "Settings", className: "settings-button", text: "⚙" },
+      { kind: "slot", id: "perfMetricsPill", className: "hud-chip-group perf-chip-group", ariaLabel: "Performance metrics" },
+      { kind: "button", id: "rendererModePill", title: "GPU renderer API. Click to show or hide the Renderer tab.", ariaLabel: "GPU renderer API", appearance: "chip", className: "hud-chip-button hud-chip--gpu", text: "GPU" },
       {
         kind: "button",
         id: "themeButton",
@@ -431,8 +447,7 @@ export async function createGlobeApp(
           return icon;
         },
       },
-      { kind: "button", id: "rendererModePill", title: "GPU renderer API. Click to show or hide the Renderer tab.", ariaLabel: "GPU renderer API", appearance: "chip", className: "hud-chip-button hud-chip--gpu", text: "GPU" },
-      { kind: "slot", id: "perfMetricsPill", className: "hud-chip-group perf-chip-group", ariaLabel: "Performance metrics" },
+      { kind: "button", id: "settingsButton", title: "Settings", ariaLabel: "Settings", className: "settings-button", text: "⚙" },
       { kind: "button", id: "hudStatus", appearance: "chip", className: "hud-chip-button hud-status-text", ariaLive: "polite", ariaLabel: "Camera position", title: "Latitude, longitude, heading, pitch and zoom distance. Click to show or hide the Location tab." },
       { kind: "slot", id: "mapSourceSlot", className: "map-source-hud-slot" },
     ],
@@ -451,6 +466,10 @@ export async function createGlobeApp(
   // One registry for the page: the map source, renderer and every other
   // parameter below are read from it and follow it.
   const settings = getAppSettings();
+  const automaticHudVisibility = new Map([
+    ...HUD_BUTTON_IDS.map(hudButtonParameterId),
+    ...PERFORMANCE_HUD_METRICS.map(([metric]) => `interface.performanceHud.${metric}`),
+  ].map(id => [id, settings.inspect(id).defaultValue === true]));
 
   // Every line of the log is a step of the visit's trail, which Settings → Diagnostics copies as a report.
   const diagnostics = startAppDiagnostics({
@@ -615,7 +634,7 @@ export async function createGlobeApp(
   const northButton: NorthButtonHandle | null = northBtnSvgEl ? createNorthButton(northBtnSvgEl) : null;
   const helpModal: HelpModalHandle | null = helpModalEl ? createHelpModal(helpModalEl) : null;
 
-  let visiblePerformanceMetrics = readVisiblePerformanceMetrics();
+  let visiblePerformanceMetrics = readVisiblePerformanceMetrics(automaticHudVisibility);
   let lastPerfSnapshot: PerformanceSnapshot | null = null;
 
   // ── Debug panels ──────────────────────────────────────────────
@@ -638,8 +657,8 @@ export async function createGlobeApp(
   };
   showTuners();
 
-  const inputModeHud: InputModeHudHandle | null = themeBtnEl
-    ? createInputModeHud(rootElement, themeBtnEl, {
+  const inputModeHud: InputModeHudHandle | null = rendererModePill
+    ? createInputModeHud(rootElement, rendererModePill, {
         onModeChange: (mode) => runtime.setInputMode?.(mode),
         onSensitivityChange: (sensitivity) => runtime.setInputSensitivity?.(sensitivity),
         onToggle: () => toggleTab("controls"),
@@ -655,21 +674,48 @@ export async function createGlobeApp(
   // Show all parameters, an import or another tab.
   const hudButtonElements: Record<HudButtonId, HTMLElement | null> = {
     help: helpBtnEl,
+    renderer: rendererModePill,
     settings: settingsBtnEl,
     theme: themeBtnEl,
     inputMode: rootElement.querySelector<HTMLElement>(".input-mode-control"),
+    position: hudStatusEl,
   };
-  // The toolbar buttons stay on by default: a first-time visitor may not know
-  // that + opens the same things. Hiding one never hides its content, because
-  // every one of them has a home in these sections or under +.
+  // Setting visibility and scene visibility are independent of automatic fit.
   const applyHudButtonVisibility = (): void => {
-    const visibility = loadHudButtonVisibility();
     for (const id of HUD_BUTTON_IDS) {
       const element = hudButtonElements[id];
-      if (element) element.hidden = !visibility[id];
+      if (element) element.toggleAttribute("data-hud-choice-hidden", !readHudPreference(hudButtonParameterId(id), automaticHudVisibility).wanted);
     }
   };
   applyHudButtonVisibility();
+  const fittingIds = new Set([
+    ...HUD_BUTTON_IDS.map(hudButtonParameterId),
+    ...PERFORMANCE_HUD_METRICS.map(([metric]) => `interface.performanceHud.${metric}`),
+  ]);
+  const fitItem = (element: HTMLElement, priority: number, id: string): HudBarFitItem => {
+    const { chosen, wanted } = readHudPreference(id, automaticHudVisibility);
+    return {
+      element, priority, keepVisible: chosen && wanted,
+      onFit: visible => {
+        if (chosen) return;
+        const derivedFrom = visible ? HUD_FIT_REASONS.shown : HUD_FIT_REASONS.omitted;
+        const state = settings.inspect(id);
+        if (state.layers.hostDefault?.value !== visible || state.layers.hostDefault.derivedFrom !== derivedFrom) {
+          settings.setHostDefault(id, visible, derivedFrom);
+        }
+      },
+    };
+  };
+  const hudFit = mapSourceSlot ? fitHudBar(hudBar.element, mapSourceSlot, () => [
+    ...(northBtnEl ? [{ element: northBtnEl, priority: 0, keepVisible: true }] : []),
+    ...HUD_BUTTON_IDS.flatMap((id, index) => {
+      const element = hudButtonElements[id];
+      return element && readHudPreference(hudButtonParameterId(id), automaticHudVisibility).wanted
+        ? [fitItem(element, id === "help" ? 1 : index + 2, hudButtonParameterId(id))] : [];
+    }),
+    ...Array.from(perfMetricsPill?.querySelectorAll<HTMLElement>("[data-perf-metric]") ?? [], element =>
+      fitItem(element, element.dataset.perfMetric === "fps" ? 2 : 10, `interface.performanceHud.${element.dataset.perfMetric}`)),
+  ]) : null;
   const applyCompassHeight = (): void => {
     const meters = compassHeightOffset();
     anchorHeights.setHeightOffset(meters);
@@ -687,11 +733,23 @@ export async function createGlobeApp(
         ? { text: `Map detail coarsened ${levels} level${levels === 1 ? "" : "s"} to hold the frame time: ${why}.`, tone: "warning" }
         : { text: `Map detail returned ${levels} level${levels === 1 ? "" : "s"} toward what you asked for: ${why}.`, tone: "info" });
     }),
-    ...HUD_BUTTON_IDS.map(id => settings.watch(hudButtonParameterId(id), applyHudButtonVisibility)),
-    ...PERFORMANCE_HUD_METRICS.map(([metric]) => settings.watch(`interface.performanceHud.${metric}`, () => {
-      visiblePerformanceMetrics = readVisiblePerformanceMetrics();
+    settings.subscribe(changed => {
+      if (![...changed].some(id => fittingIds.has(id))) return;
+      for (const id of changed) {
+        if (!fittingIds.has(id)) continue;
+        const state = settings.inspect(id);
+        const reason = state.layers.hostDefault?.derivedFrom;
+        if (reason && reason !== HUD_FIT_REASONS.shown && reason !== HUD_FIT_REASONS.omitted) {
+          automaticHudVisibility.set(id, state.defaultValue === true);
+        }
+      }
+      // Choosing or resetting an equal value changes provenance, which a
+      // value watcher cannot see. Both availability and fitting follow it.
+      applyHudButtonVisibility();
+      visiblePerformanceMetrics = readVisiblePerformanceMetrics(automaticHudVisibility);
       if (lastPerfSnapshot && perfMetricsPill) renderPerformanceChips(perfMetricsPill, lastPerfSnapshot, visiblePerformanceMetrics);
-    })),
+      hudFit?.update();
+    }),
     settings.watch("interface.poiSpriteTuner", showTuners),
     settings.watch("interface.compassScaleTuner", showTuners),
     settings.watch("visualization.compass.heightOffset", applyCompassHeight),
@@ -827,8 +885,11 @@ export async function createGlobeApp(
     { id: "controller", title: settings.getSectionTitle("controls", "controller"),
       element: sectionOf("controls", "controller", { main: controllerSectionEl ?? undefined }), defaultOpen: false },
   ];
+  const themeControl = createThemeControl(settings);
   const interfaceSections: PanelSection[] = [
     { id: "toolbar", title: settings.getSectionTitle("interface", "toolbar"), element: sectionOf("interface", "toolbar", {
+      main: themeControl.element,
+      covers: ["interface.theme"],
       footer: note("Hiding a button never hides its tab: every tab stays under +."),
     }), defaultOpen: false },
     { id: "log", title: settings.getSectionTitle("interface", "log"), element: sectionOf("interface", "log"), defaultOpen: false },
@@ -1044,12 +1105,14 @@ export async function createGlobeApp(
         hudObserver = null;
       }
       statusHud?.destroy();
+      hudFit?.destroy();
       northButton?.destroy();
       helpModal?.destroy();
       settingsBtnEl?.removeEventListener("click", onSettingsButtonClick);
       for (const stop of stopWatchingSettings) stop();
       for (const section of parameterSections) section.destroy();
       for (const control of parameterControls) control.destroy();
+      themeControl.destroy();
       presets.destroy();
       savedSettings.destroy();
       appFilesSection.destroy();

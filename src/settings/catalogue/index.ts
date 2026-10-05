@@ -138,9 +138,10 @@ export const FOSS_EARTH_MIGRATIONS: readonly LegacyMigration[] = [
     migrate: raw => {
       const parsed = parseJson(raw);
       if (!Array.isArray(parsed)) return null;
-      // Only what the user changed from each reading's default.
+      // Only what the user changed from the old defaults: FPS and memory.
+      // Today's memory default is off, but an old explicit off still stays off.
       return Object.fromEntries(PERFORMANCE_HUD_METRICS
-        .filter(([metric, , visible]) => parsed.includes(metric) !== visible)
+        .filter(([metric]) => parsed.includes(metric) !== (metric === "fps" || metric === "memory"))
         .map(([metric]) => [`interface.performanceHud.${metric}`, parsed.includes(metric)]));
     },
   },

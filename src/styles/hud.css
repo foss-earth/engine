@@ -52,6 +52,44 @@
   pointer-events: auto;
 }
 
+.hud-bar--fitted > *,
+.hud-bar--fitted .perf-chip {
+  flex-shrink: 0;
+}
+
+/* Keep omitted readings measurable without adding a row or taking focus. */
+.hud-bar--fitted [data-hud-overflow-hidden] {
+  position: absolute;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.hud-bar [data-hud-choice-hidden] {
+  display: none;
+}
+
+.hud-bar--fitted > .map-source-hud-slot {
+  order: 1000;
+  min-width: 0;
+  flex-shrink: 1;
+}
+
+.hud-bar--fitted .map-source-hud,
+.hud-bar--fitted .map-source-hud__chip,
+.hud-bar--fitted .map-source-hud__provider {
+  min-width: 0;
+}
+
+.hud-bar--fitted .map-source-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hud-bar--fitted .map-source-hud__credit {
+  flex-shrink: 0;
+}
+
 .hud-chip,
 .hud-circle-button {
   min-height: 28px;
@@ -137,14 +175,28 @@
   display: inline-flex;
   align-items: center;
   gap: 3px;
+  min-width: 0;
+}
+
+.scene-credits-slot {
+  display: inline-flex;
+  gap: 3px;
+  min-width: 0;
 }
 
 .scene-credit-chip {
   gap: 5px;
   text-decoration: none;
+  min-width: 0;
+}
+
+.scene-credit-chip__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .scene-credit-chip .foss-earth-external-link-icon {
+  flex-shrink: 0;
   color: rgba(147, 197, 253, 0.92);
 }
 
