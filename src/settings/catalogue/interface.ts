@@ -8,8 +8,35 @@ import type { ParameterSpec } from "../types";
 export const SETTINGS_TAB = "settings";
 /** The Interface tab: the toolbar, theme, log and search. */
 export const INTERFACE_TAB = "interface";
-/** Performance debug, in the Renderer tab: what the performance HUD shows, and the tuners. */
+/** Performance debug, in the Renderer tab: tuners and measurements. */
 const PERFORMANCE = { tab: "renderer", section: "performance" } as const;
+
+export type ToolbarVisibility = "on" | "auto" | "off";
+
+function toolbarVisibility(id: string, label: string, description: string, fallback: ToolbarVisibility, reason: string, source: string): ParameterSpec<ToolbarVisibility> {
+  return {
+    id,
+    label,
+    description: `${description} On keeps it shown, wrapping if needed. Auto shows it when it fits in one row, in priority order. Off hides it.`,
+    unit: "none",
+    kind: "choice",
+    choices: [
+      { id: "on", label: "On", icon: "toggle-on", description: "Always show, wrapping if needed." },
+      { id: "auto", label: "Auto", shortLabel: "A", description: "Show when it fits in one row, in priority order." },
+      { id: "off", label: "Off", icon: "toggle-off", description: "Keep hidden." },
+    ],
+    legacyValues: [
+      { value: true, replacement: "on" },
+      { value: false, replacement: "off" },
+    ],
+    default: fallback,
+    defaultReason: reason,
+    persistDefault: true,
+    home: { tab: INTERFACE_TAB, section: "toolbar", level: "main" },
+    appliesLive: true,
+    source,
+  };
+}
 
 export const TOOLBAR_BUTTONS = [
   ["help", "Help (?)", "the ? button that opens the controls help"],
@@ -17,8 +44,36 @@ export const TOOLBAR_BUTTONS = [
   ["inputMode", "Input method", "the input method button, which opens the Controls tab"],
   ["theme", "Theme button", "the light and dark theme button"],
   ["settings", "Settings (⚙)", "the ⚙ button that opens the Settings tab"],
+  ["fullscreen", "Fullscreen", "the button that enters or leaves fullscreen"],
   ["position", "Camera position", "the latitude, longitude, heading, pitch and zoom readout that opens Location"],
 ] as const;
+
+/** Toolbar ordering and automatic fitting share the same editable priorities. */
+export const TOOLBAR_PRIORITIES = [
+  ["north", "North", 0],
+  ["help", "Help (?)", 1],
+  ["fps", "FPS", 2],
+  ["renderer", "Renderer", 3],
+  ["inputMode", "Input method", 4],
+  ["theme", "Theme button", 5],
+  ["settings", "Settings (⚙)", 6],
+  ["fullscreen", "Fullscreen", 7],
+  ["position", "Camera position", 8],
+  ["frame", "Frame time", 10],
+  ["p95", "P95 frame time", 11],
+  ["activeMeshes", "Active meshes (#⬟)", 12],
+  ["drawCalls", "Draw calls", 13],
+  ["tiles", "Map tiles (#/#t)", 14],
+  ["culling", "Culling", 15],
+  ["memory", "Memory", 16],
+] as const;
+
+export type ToolbarItemId = typeof TOOLBAR_PRIORITIES[number][0];
+export const TOOLBAR_EDIT_PRIORITIES_ID = "interface.toolbar.editPriorities";
+
+export function toolbarPriorityParameterId(item: ToolbarItemId): string {
+  return `interface.toolbar.priority.${item}`;
+}
 
 export const PERFORMANCE_HUD_METRICS = [
   ["fps", "FPS", true, "Frames per second rendered by the map."],
@@ -158,12 +213,31 @@ export const INTERFACE_PARAMETERS: readonly ParameterSpec[] = [
     appliesLive: true,
     source: "src/theme/theme.ts",
   },
-  ...TOOLBAR_BUTTONS.map(([button, label, what]) => ({
-    ...toggle(
-      `interface.toolbar.${button}`, label, `Shows ${what}. By default it appears when it fits in one row, in priority order. Enabling it yourself keeps it shown, wrapping if needed; reset returns to fitting. Hiding it never hides its tab under +.`,
-      true, "Shown when it fits after the higher-priority controls and before the detail slider and attribution.", { tab: INTERFACE_TAB, section: "toolbar" }, "src/hud/hudButtonVisibility.ts",
-    ),
-    persistDefault: true,
+  ...TOOLBAR_BUTTONS.map(([button, label, what]) => toolbarVisibility(
+    `interface.toolbar.${button}`, label, `Shows ${what}.`,
+    "auto", "Shown when it fits after the higher-priority controls and before the detail slider and attribution.", "src/hud/hudButtonVisibility.ts",
+  )),
+  ...PERFORMANCE_HUD_METRICS.map(([metric, label, visible, tooltip]) => toolbarVisibility(
+    `interface.performanceHud.${metric}`, label, tooltip,
+    visible ? "auto" : "off", visible ? "Shown when it fits after north and help: it is the first reading to look at." : "Hidden by default: a debugging reading.", "src/app/createGlobeApp.ts",
+  )),
+  toggle(TOOLBAR_EDIT_PRIORITIES_ID, "Edit priorities", "Shows the toolbar priority numbers so you can change their order and which automatic items fit first. Turning this off hides the editors and keeps your chosen priorities.",
+    false, "Priority numbers stay hidden until you choose to edit them.", { tab: INTERFACE_TAB, section: "toolbar" }, "src/shell/settings/parameterSection.ts"),
+  ...TOOLBAR_PRIORITIES.map(([item, label, priority]): ParameterSpec<number> => ({
+    id: toolbarPriorityParameterId(item),
+    label: `${label} priority`,
+    description: `Lower numbers place ${label} earlier and give it room before other automatic toolbar items. Items with equal priorities keep their default order.${item === "north" ? " North stays available at every priority." : ""}`,
+    unit: "count",
+    kind: "number",
+    bounds: () => ({ min: 0, max: 99 }),
+    step: 1,
+    numberControl: "field",
+    default: priority,
+    defaultReason: "North and help come first, followed by FPS, renderer, input method, theme, settings, fullscreen, position and additional performance readings.",
+    home: { tab: INTERFACE_TAB, section: "toolbar", level: "main" },
+    visibleWhen: { id: TOOLBAR_EDIT_PRIORITIES_ID, value: true },
+    appliesLive: true,
+    source: "src/app/createGlobeApp.ts",
   })),
   {
     id: "interface.log.lineDuration",
@@ -240,13 +314,6 @@ export const INTERFACE_PARAMETERS: readonly ParameterSpec[] = [
     appliesLive: true,
     source: "src/log/createGameLog.ts",
   },
-  ...PERFORMANCE_HUD_METRICS.map(([metric, label, visible, tooltip]) => ({
-    ...toggle(
-      `interface.performanceHud.${metric}`, `${label} on the toolbar`, `${tooltip} Enabling it yourself keeps it shown, wrapping if needed; reset returns to the default.`,
-      visible, visible ? "Shown when it fits after north and help: it is the first reading to look at." : "Hidden by default: a debugging reading.", PERFORMANCE, "src/app/createGlobeApp.ts",
-    ),
-    persistDefault: true,
-  })),
   toggle("interface.poiSpriteTuner", "POI sprite size tuner", "Shows the panel that tunes the size of point-of-interest sprites.",
     false, "A debugging panel.", PERFORMANCE, "src/hud/poiSpriteSizeTuner.ts"),
   toggle("interface.compassScaleTuner", "Compass scale tuner", "Shows the panel that tunes the orbit compass's size.",

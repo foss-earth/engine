@@ -16,7 +16,7 @@ import {
 } from "../engine/babylon/resolveMapRuntimeConfig";
 import { TERRAIN_SOURCES, type TerrainSource } from "../terrain/terrainTiles";
 import { getAppSettings } from "../settings/appSettings";
-import { INPUT_SENSITIVITY_IDS, PERFORMANCE_HUD_METRICS } from "../settings/catalogue";
+import { INPUT_SENSITIVITY_IDS, PERFORMANCE_HUD_METRICS, TOOLBAR_PRIORITIES, toolbarPriorityParameterId } from "../settings/catalogue";
 import { createParameterControl, type ParameterControlHandle } from "../shell/settings/controls";
 import { createParameterSection, type ParameterSectionHandle } from "../shell/settings/parameterSection";
 import { createThemeControl } from "../shell/settings/themeControl";
@@ -39,6 +39,7 @@ import { createPoiTracking } from "../layers/poiTracking";
 import { createLayerRegistry } from "../layers/layerRegistry";
 import { MAX_PITCH_DEG } from "../camera/cameraState";
 import { createStatusHud, type StatusHudHandle } from "../hud/statusHud";
+import { PERFORMANCE_METRIC_DEFINITIONS, renderPerformanceChips, type PerformanceMetricId } from "../hud/performanceChips";
 import { createNorthButton, type NorthButtonHandle } from "../hud/northButton";
 import { createHelpModal, type HelpModalHandle } from "../hud/helpModal";
 import { HUD_BUTTON_IDS, hudButtonParameterId, type HudButtonId } from "../hud/hudButtonVisibility";
@@ -67,6 +68,7 @@ import {
 } from "../input/globeNavigation";
 import { createHudBar } from "../shell/hudBar";
 import { fitHudBar, type HudBarFitItem } from "../shell/hudBarFit";
+import { attachFullscreenButton } from "../shell/fullscreen";
 import { createSceneHotspots, createSceneHud, createScenesPanel } from "../shell/scenesPanel";
 import { createPanoramaTabs, type PanoramaTabs } from "../shell/panoramaTabs";
 import { connectSceneLog } from "../shell/sceneLog";
@@ -156,68 +158,6 @@ const BUILD_TIME = __BUILD_TIME__;
 const SOURCE_VERSION = __SOURCE_VERSION__;
 const REPOSITORY_SLUG = __REPOSITORY_SLUG__;
 
-type PerformanceMetricId = "fps" | "frame" | "p95" | "activeMeshes" | "drawCalls" | "tiles" | "culling" | "memory";
-
-/** How each toolbar reading is drawn; whether it is shown is `interface.performanceHud.<id>`. */
-interface PerformanceMetricDefinition {
-  id: PerformanceMetricId;
-  settingsLabel: string;
-  tooltip: string;
-  format(snapshot: PerformanceSnapshot): string | null;
-}
-
-const PERFORMANCE_METRIC_DEFINITIONS: readonly PerformanceMetricDefinition[] = [
-  {
-    id: "fps",
-    settingsLabel: "FPS",
-    tooltip: "Frames per second rendered by the map.",
-    format: (snapshot) => `${Math.round(snapshot.fps)}fps`,
-  },
-  {
-    id: "frame",
-    settingsLabel: "Frame time",
-    tooltip: "Average time spent rendering each frame.",
-    format: (snapshot) => `${snapshot.frameMs.toFixed(1)}ms`,
-  },
-  {
-    id: "p95",
-    settingsLabel: "P95 frame time",
-    tooltip: "95th percentile frame time over the recent sample window.",
-    format: (snapshot) => `p95 ${snapshot.p95FrameMs.toFixed(1)}ms`,
-  },
-  {
-    id: "activeMeshes",
-    settingsLabel: "Active meshes (#⬟)",
-    tooltip: "Babylon meshes currently active in the scene.",
-    format: (snapshot) => `${snapshot.activeMeshes}⬟`,
-  },
-  {
-    id: "drawCalls",
-    settingsLabel: "Draw calls",
-    tooltip: "GPU draw calls submitted for the current frame when the renderer exposes them.",
-    format: (snapshot) => snapshot.drawCalls === null ? null : `d${snapshot.drawCalls}`,
-  },
-  {
-    id: "tiles",
-    settingsLabel: "Map tiles (#/#t)",
-    tooltip: "Visible map tiles over active map tiles managed by the tile runtime.",
-    format: (snapshot) => snapshot.tiles ? `${snapshot.tiles.visibleTiles}/${snapshot.tiles.activeTiles}t` : null,
-  },
-  {
-    id: "culling",
-    settingsLabel: "Culling",
-    tooltip: "Visible tracked objects over total tracked objects after hemisphere culling.",
-    format: (snapshot) => snapshot.culling.total > 0 ? `c${snapshot.culling.visible}/${snapshot.culling.total}` : null,
-  },
-  {
-    id: "memory",
-    settingsLabel: "Memory",
-    tooltip: "Approximate JavaScript heap memory currently used by the page.",
-    format: (snapshot) => snapshot.memoryMb === null ? null : `${Math.round(snapshot.memoryMb)}MB`,
-  },
-];
-
-
 /** What identifies the app that runs, for Settings → About and the diagnostics report. */
 export const getAppIdentity = (): AppIdentity => ({ build: BUILD_TIME, source: SOURCE_VERSION, fossEarth: fossEarthSource(), bundle: getLoadedBundleName() });
 
@@ -272,46 +212,9 @@ function readVisiblePerformanceMetrics(): Set<PerformanceMetricId> {
     .map((metric) => metric.id));
 }
 
-function readHudPreference(id: string): { wanted: boolean; chosen: boolean } {
-  const state = getAppSettings().inspect(id);
-  const chosen = state.provenance !== "default" && state.provenance !== "host-default";
-  // A default stays enabled while fitting omits its chip. Only a person's
-  // explicit choice pins an item on or hides it, independently of geometry.
-  return { wanted: state.value === true, chosen };
-}
-
-function renderPerformanceChips(
-  element: HTMLElement,
-  snapshot: PerformanceSnapshot,
-  visibleMetrics: ReadonlySet<PerformanceMetricId>,
-): void {
-  const existing = new Map(Array.from(element.children, (child) => [
-    (child as HTMLElement).dataset.perfMetric, child as HTMLElement,
-  ]));
-  const chips = PERFORMANCE_METRIC_DEFINITIONS.flatMap((metric) => {
-    if (!visibleMetrics.has(metric.id)) return [];
-    const value = metric.format(snapshot);
-    if (value === null) return [];
-
-    const chip = existing.get(metric.id) ?? document.createElement("span");
-    chip.className = "hud-chip perf-chip";
-    chip.dataset.perfMetric = metric.id;
-    chip.title = metric.tooltip;
-    chip.setAttribute("aria-label", `${metric.settingsLabel}: ${value}`);
-    if (chip.textContent !== value) chip.textContent = value;
-    return chip;
-  });
-
-  // Keep retained chips mounted so CSS animations are not restarted each frame.
-  const retained = new Set(chips);
-  for (const child of existing.values()) {
-    if (!retained.has(child)) child.remove();
-  }
-  let cursor = element.firstChild;
-  for (const chip of chips) {
-    if (chip === cursor) cursor = cursor.nextSibling;
-    else element.insertBefore(chip, cursor);
-  }
+function readHudPreference(id: string): { wanted: boolean; pinned: boolean } {
+  const mode = getAppSettings().get(id);
+  return { wanted: mode === "on" || mode === "auto", pinned: mode === "on" };
 }
 
 function getFallbackNoticeMessage(status: BabylonRuntime["status"]): string {
@@ -442,6 +345,7 @@ export async function createGlobeApp(
         },
       },
       { kind: "button", id: "settingsButton", title: "Settings", ariaLabel: "Settings", className: "settings-button", text: "⚙" },
+      { kind: "button", id: "fullscreenButton", title: "Enter fullscreen", ariaLabel: "Enter fullscreen", text: "⛶" },
       { kind: "button", id: "hudStatus", appearance: "chip", className: "hud-chip-button hud-status-text", ariaLive: "polite", ariaLabel: "Camera position", title: "Latitude, longitude, heading, pitch and zoom distance. Click to show or hide the Location tab." },
       { kind: "slot", id: "mapSourceSlot", className: "map-source-hud-slot" },
     ],
@@ -616,6 +520,8 @@ export async function createGlobeApp(
   const helpModalEl = rootElement.querySelector<HTMLElement>("#helpModal");
   const settingsBtnEl = rootElement.querySelector<HTMLButtonElement>("#settingsButton");
   const themeBtnEl = rootElement.querySelector<HTMLButtonElement>("#themeButton");
+  const fullscreenBtnEl = rootElement.querySelector<HTMLButtonElement>("#fullscreenButton");
+  const detachFullscreen = fullscreenBtnEl ? attachFullscreenButton(fullscreenBtnEl) : null;
   const themeBtnIconEl = themeBtnEl?.querySelector<HTMLElement>(".theme-button-icon") ?? null;
   const poiExitBtnEl = rootElement.querySelector<HTMLButtonElement>("#poiExitBtn");
   const extraPanelsGridEl = rootElement.querySelector<HTMLElement>("#extraPanelsGrid");
@@ -669,6 +575,7 @@ export async function createGlobeApp(
     theme: themeBtnEl,
     inputMode: rootElement.querySelector<HTMLElement>(".input-mode-control"),
     position: hudStatusEl,
+    fullscreen: fullscreenBtnEl,
   };
   // Setting visibility and scene visibility are independent of automatic fit.
   const applyHudButtonVisibility = (): void => {
@@ -681,23 +588,26 @@ export async function createGlobeApp(
   const fittingIds = new Set([
     ...HUD_BUTTON_IDS.map(hudButtonParameterId),
     ...PERFORMANCE_HUD_METRICS.map(([metric]) => `interface.performanceHud.${metric}`),
+    ...TOOLBAR_PRIORITIES.map(([item]) => toolbarPriorityParameterId(item)),
   ]);
-  const fitItem = (element: HTMLElement, priority: number, id: string): HudBarFitItem => {
-    const { chosen, wanted } = readHudPreference(id);
-    return {
-      element, priority, keepVisible: chosen && wanted, reserveSpace: priority <= 2,
-    };
-  };
-  const hudFit = mapSourceSlot ? fitHudBar(hudBar.element, mapSourceSlot, () => [
-    ...(northBtnEl ? [{ element: northBtnEl, priority: 0, keepVisible: true }] : []),
-    ...HUD_BUTTON_IDS.flatMap((id, index) => {
-      const element = hudButtonElements[id];
-      return element && readHudPreference(hudButtonParameterId(id)).wanted
-        ? [fitItem(element, id === "help" ? 1 : index + 2, hudButtonParameterId(id))] : [];
-    }),
-    ...Array.from(perfMetricsPill?.querySelectorAll<HTMLElement>("[data-perf-metric]") ?? [], element =>
-      fitItem(element, element.dataset.perfMetric === "fps" ? 2 : 10, `interface.performanceHud.${element.dataset.perfMetric}`)),
-  ]) : null;
+  const hudFit = mapSourceSlot ? fitHudBar(hudBar.element, mapSourceSlot, () => {
+    const items = TOOLBAR_PRIORITIES.flatMap(([item]): HudBarFitItem[] => {
+      const priority = settings.get<number>(toolbarPriorityParameterId(item));
+      if (item === "north") return northBtnEl ? [{ element: northBtnEl, priority, keepVisible: true, reserveSpace: true, essential: true }] : [];
+      const button = HUD_BUTTON_IDS.find(id => id === item);
+      const element = button ? hudButtonElements[button]
+        : perfMetricsPill?.querySelector<HTMLElement>(`[data-perf-metric="${item}"]`);
+      const id = button ? hudButtonParameterId(button) : `interface.performanceHud.${item}`;
+      const { wanted, pinned } = readHudPreference(id);
+      return element && wanted ? [{ element, priority, keepVisible: pinned }] : [];
+    });
+    // Reserve the first two available controls after North (Help and FPS by
+    // default). Pinning one keeps the same core; edited priorities change it.
+    const core = items.filter(item => !item.reserveSpace && !item.element.closest("[hidden]"))
+      .sort((a, b) => a.priority - b.priority);
+    for (const item of core.slice(0, 2)) item.reserveSpace = true;
+    return items;
+  }) : null;
   const applyCompassHeight = (): void => {
     const meters = compassHeightOffset();
     anchorHeights.setHeightOffset(meters);
@@ -717,8 +627,7 @@ export async function createGlobeApp(
     }),
     settings.subscribe(changed => {
       if (![...changed].some(id => fittingIds.has(id))) return;
-      // Choosing or resetting an equal value changes provenance, which a
-      // value watcher cannot see. Both availability and fitting follow it.
+      // On pins the chip, Auto fits it by priority, and Off removes it.
       applyHudButtonVisibility();
       visiblePerformanceMetrics = readVisiblePerformanceMetrics();
       if (lastPerfSnapshot && perfMetricsPill) renderPerformanceChips(perfMetricsPill, lastPerfSnapshot, visiblePerformanceMetrics);
@@ -812,7 +721,6 @@ export async function createGlobeApp(
     }
     return element;
   };
-  const performanceIds = PERFORMANCE_HUD_METRICS.map(([metric]) => `interface.performanceHud.${metric}`);
   const performanceMain = document.createElement("div");
   performanceMain.className = "settings-section-content";
   // The frame budget lives here, the one home of its profiling parameters.
@@ -832,7 +740,6 @@ export async function createGlobeApp(
   frameBudgetTitle.textContent = "Frame budget";
   frameBudgetGroup.append(frameBudgetTitle, frameBudget.element);
   performanceMain.append(
-    group("Performance HUD", performanceIds),
     group("Extra panels", ["interface.poiSpriteTuner", "interface.compassScaleTuner"]),
     frameBudgetGroup,
   );
@@ -886,7 +793,7 @@ export async function createGlobeApp(
       title: settings.getSectionTitle("renderer", "performance"),
       element: sectionOf("renderer", "performance", {
         main: performanceMain,
-        covers: [...performanceIds, "interface.poiSpriteTuner", "interface.compassScaleTuner", ...Object.values(FRAME_PROFILING_IDS)],
+        covers: ["interface.poiSpriteTuner", "interface.compassScaleTuner", ...Object.values(FRAME_PROFILING_IDS)],
       }),
     }],
   });
@@ -1081,6 +988,7 @@ export async function createGlobeApp(
       statusHud?.destroy();
       hudFit?.destroy();
       northButton?.destroy();
+      detachFullscreen?.();
       helpModal?.destroy();
       settingsBtnEl?.removeEventListener("click", onSettingsButtonClick);
       for (const stop of stopWatchingSettings) stop();

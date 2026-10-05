@@ -10,6 +10,8 @@ import { RENDERER_EXPERIMENT_IDS, RENDERER_EXPERIMENT_PARAMETERS, RENDERER_PARAM
 import { PANORAMA_SETTINGS_TAB, PANORAMA_TAB, SCENE_PARAMETERS, SCENE_SECTION_TITLES, SCENES_TAB } from "./scenes";
 
 export { CONTROLS_TAB, INTERFACE_TAB, MAP_TAB, PANORAMA_SETTINGS_TAB, PANORAMA_TAB, RENDERER_TAB, SCENES_TAB, SETTINGS_TAB, PERFORMANCE_HUD_METRICS, TOOLBAR_BUTTONS };
+export { TOOLBAR_EDIT_PRIORITIES_ID, TOOLBAR_PRIORITIES, toolbarPriorityParameterId } from "./interface";
+export type { ToolbarItemId, ToolbarVisibility } from "./interface";
 export { INPUT_RATE_IDS, INPUT_SENSITIVITY_IDS } from "./controls";
 export { RENDERER_EXPERIMENT_IDS };
 export { atlasLimitMiB } from "./loading";
@@ -130,7 +132,13 @@ export const FOSS_EARTH_MIGRATIONS: readonly LegacyMigration[] = [
     migrate: raw => {
       const parsed = parseJson(raw);
       if (!isObject(parsed)) return null;
-      return Object.fromEntries(TOOLBAR_BUTTONS.filter(([button]) => parsed[button] === false).map(([button]) => [`interface.toolbar.${button}`, false]));
+      return Object.fromEntries(TOOLBAR_BUTTONS.flatMap(([button]) => {
+        const value = parsed[button];
+        // The old object included every default-true button, so only false
+        // expressed a change. Named choices already express the user's intent.
+        if (value === false) return [[`interface.toolbar.${button}`, "off"]];
+        return value === "on" || value === "auto" || value === "off" ? [[`interface.toolbar.${button}`, value]] : [];
+      }));
     },
   },
   {
@@ -142,7 +150,7 @@ export const FOSS_EARTH_MIGRATIONS: readonly LegacyMigration[] = [
       // Today's memory default is off, but an old explicit off still stays off.
       return Object.fromEntries(PERFORMANCE_HUD_METRICS
         .filter(([metric]) => parsed.includes(metric) !== (metric === "fps" || metric === "memory"))
-        .map(([metric]) => [`interface.performanceHud.${metric}`, parsed.includes(metric)]));
+        .map(([metric]) => [`interface.performanceHud.${metric}`, parsed.includes(metric) ? "on" : "off"]));
     },
   },
   { key: "foss-earth.poiSpriteTunerVisible", migrate: booleanString("interface.poiSpriteTuner") },

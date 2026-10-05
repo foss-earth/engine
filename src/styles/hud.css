@@ -584,6 +584,30 @@
   transition: background-color 320ms ease, border-color 320ms ease, color 320ms ease;
 }
 
+.perf-chip--fps {
+  box-sizing: border-box;
+  height: 28px;
+  flex-direction: column;
+  gap: 1px;
+  padding: 2px 8px;
+}
+
+.perf-chip--fps .perf-chip__value {
+  font-size: 11px;
+  line-height: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.perf-chip--fps .perf-chip__unit {
+  color: #9ca3af;
+  font-size: 7px;
+  line-height: 8px;
+}
+
+:root[data-theme="light"] .perf-chip--fps .perf-chip__unit {
+  color: #6b7280;
+}
+
 /* Scheduler activity is separate from renderer capability (WebGPU/WebGL). */
 .hud-chip--gpu.is-rendering {
   --hud-activity-fill: rgba(5, 46, 22, 0.9);
@@ -1167,6 +1191,60 @@
 
 .foss-earth-parameter__header > .foss-earth-choices__heading {
   flex-basis: auto;
+}
+
+.foss-earth-parameter--number-field {
+  font-size: 12px;
+}
+
+.foss-earth-parameter--number-field > .foss-earth-parameter__header {
+  align-items: center;
+  justify-content: flex-start;
+  gap: 4px;
+}
+
+/* Short choices share one paragraph with the label and its accessory buttons. */
+.foss-earth-parameter--compact-choice {
+  flex-basis: auto;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.foss-earth-parameter--compact-choice > .foss-earth-parameter__header {
+  flex-basis: auto;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 4px;
+}
+
+.foss-earth-parameter--compact-choice .foss-earth-choices__heading {
+  margin-right: 2px;
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
+  opacity: 1;
+}
+
+.foss-earth-parameter--compact-choice .foss-earth-parameter__pills > .foss-earth-choice {
+  position: relative;
+  justify-content: center;
+  min-width: 28px;
+  padding: 4px 5px;
+}
+
+.foss-earth-choice__icon {
+  display: block;
+  width: 16px;
+  height: 16px;
+}
+
+.foss-earth-parameter--compact-choice .foss-earth-parameter__pills input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
 }
 
 .foss-earth-parameter__actions {
