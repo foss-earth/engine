@@ -9,6 +9,7 @@ import { getAppSettings } from "../../settings/appSettings";
 import type { SettingsRegistry } from "../../settings/registry";
 import type { NumberRange } from "../../settings/types";
 import { isSphereBelowHorizon } from "../../terrain/imagery/imageryGeometry";
+import { whenMeshesReady } from "./sceneUpdates";
 
 const GOOGLE_3D_TILES_ROOT_URL = "https://tile.googleapis.com/v1/3dtiles/root.json";
 
@@ -29,6 +30,8 @@ export interface GoogleTilesRuntimeOptions {
   onLoadError?: (error: Error, url: string) => void;
   onLoadStart?: () => void;
   onLoadEnd?: (visibleTiles: number, activeTiles: number) => void;
+  /** The camera-visible loaded geometric error changed after a traversal. */
+  onDetailFeedback?: () => void;
   /** The registry holding `map.google.*`, followed live. The app's when omitted. */
   settings?: SettingsRegistry;
 }
@@ -106,6 +109,13 @@ export interface GoogleTerrainDetailState {
   defaultErrorTarget: number;
   errorTarget: number;
   overrideErrorTarget: number | null;
+  /**
+   * Largest screen-space geometric error of the loaded, camera-visible tile
+   * set, in pixels. Independent of the request and refinement anchor. Null
+   * means no measurable loaded coverage; Infinity means the camera is inside
+   * a tile's bounds, so its projected error has no finite bound.
+   */
+  loadedErrorTarget: number | null;
 }
 
 const MIN_TERRAIN_ERROR_TARGET = 1;
@@ -147,6 +157,45 @@ function tileSphere(tile: TileWithBabylonBounds): { center: { x: number; y: numb
 
 interface TilesRendererWithViewError extends TilesRenderer {
   calculateTileViewError(tile: TileWithBabylonBounds, target: TileViewErrorTarget): void;
+}
+
+/** Reuse the traversal's camera measurement before any focus/anchor overrides. */
+function observeLoadedError(tiles: TilesRenderer): () => number | null {
+  const errors = new WeakMap<Tile, number | null>();
+  const renderer = tiles as TilesRendererWithViewError;
+  const calculate = renderer.calculateTileViewError.bind(renderer);
+  renderer.calculateTileViewError = (tile, target) => {
+    calculate(tile, target);
+    errors.set(tile, target.inView && !Number.isNaN(target.error) && target.error >= 0 ? target.error : null);
+  };
+  return () => {
+    let worst: number | null = null;
+    // Selection is complete now: partially downloaded descendants and tiles
+    // kept only for the focus region do not describe the displayed detail.
+    for (const tile of tiles.visibleTiles) {
+      const error = errors.get(tile);
+      if (error != null) worst = worst === null ? error : Math.max(worst, error);
+    }
+    return worst;
+  };
+}
+
+interface TilesRendererWithParsing extends TilesRenderer {
+  parseTile(buffer: ArrayBuffer, tile: Tile & { engineData: { scene: TransformNode | null } }, extension: string, uri: string, signal: AbortSignal): Promise<void>;
+}
+
+/** A parsed tile must remain unavailable to REPLACE traversal until it can draw. */
+function prepareDrawableTiles(tiles: TilesRenderer, signal: AbortSignal): void {
+  const renderer = tiles as TilesRendererWithParsing;
+  const parseTile = renderer.parseTile.bind(renderer);
+  renderer.parseTile = async (buffer, tile, extension, uri, tileSignal) => {
+    await parseTile(buffer, tile, extension, uri, tileSignal);
+    const model = tile.engineData.scene;
+    if (!model || tileSignal.aborted || signal.aborted) return;
+    // The adapter keeps the model disabled. Resolving parse marks the tile
+    // LOADED and allows its parent to disappear on the next traversal.
+    await whenMeshesReady(model.getChildMeshes(), { signal: AbortSignal.any([tileSignal, signal]) });
+  };
 }
 
 /**
@@ -274,6 +323,10 @@ export function createGoogleTilesRuntime(options: GoogleTilesRuntimeOptions): Go
   }
 
   const tiles = new TilesRenderer(GOOGLE_3D_TILES_ROOT_URL, scene);
+  const drawableLifetime = new AbortController();
+  prepareDrawableTiles(tiles, drawableLifetime.signal);
+  const readLoadedError = observeLoadedError(tiles);
+  let loadedErrorTarget: number | null = null;
   applyViewMeasure(tiles, scene, options.getTerrainDetailAnchor, options.getFocus);
   const settings = options.settings ?? getAppSettings();
   let suspended = false;
@@ -391,14 +444,20 @@ export function createGoogleTilesRuntime(options: GoogleTilesRuntimeOptions): Go
       };
     },
     getTerrainDetailState() {
-      return { defaultErrorTarget, errorTarget: tiles.errorTarget, overrideErrorTarget };
+      return { defaultErrorTarget, errorTarget: tiles.errorTarget, overrideErrorTarget, loadedErrorTarget };
     },
     setTerrainDetailTarget(nextErrorTarget) {
       overrideErrorTarget = normaliseTerrainDetailTarget(nextErrorTarget);
       tiles.errorTarget = overrideErrorTarget ?? defaultErrorTarget;
     },
     update() {
-      if (!suspended) tiles.update();
+      if (suspended) return;
+      tiles.update();
+      const next = readLoadedError();
+      if (next !== loadedErrorTarget) {
+        loadedErrorTarget = next;
+        options.onDetailFeedback?.();
+      }
     },
     setSuspended(next) {
       if (suspended === next) return;
@@ -410,6 +469,7 @@ export function createGoogleTilesRuntime(options: GoogleTilesRuntimeOptions): Go
       }
     },
     dispose() {
+      drawableLifetime.abort();
       unsubscribeSettings();
       tiles.removeEventListener("tiles-load-start", handleLoadStart);
       tiles.removeEventListener("tiles-load-end", handleLoadEnd);

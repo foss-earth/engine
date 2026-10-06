@@ -4,6 +4,7 @@ import {
   createImagerySelector,
   estimateFocusPages,
   imageKey,
+  measureImageryView,
   type ImageryPlan,
   type ImagerySelectionInput,
   type ImagerySourceCapabilities,
@@ -71,6 +72,19 @@ const OBLIQUE: TestViewOptions = { latDeg: 36.1, lonDeg: -112.1, altitudeMeters:
 const HORIZON: TestViewOptions = { latDeg: 47.6, lonDeg: -122.3, altitudeMeters: 300, pitchDeg: 88, headingDeg: 90 };
 
 describe("projected imagery selection", () => {
+  it("measures disjoint root fallback outside selected leaves without a new selection", () => {
+    const root = { z: 2, x: 0, y: 0 };
+    const leaf = { z: 4, x: 1, y: 1 };
+    const measured = measureImageryView(input(OVERHEAD), [leaf], [root]);
+    expect(measured).toHaveLength(7);
+    expect(measured.map(region => region.tile)).toContainEqual(leaf);
+    expect(measured.reduce((sum, region) => sum + 4 ** (root.z - region.tile.z), 0)).toBe(1);
+    for (const region of measured) for (const other of measured) {
+      if (region === other) continue;
+      expect(tileContains(region.tile, other.tile)).toBe(false);
+    }
+  });
+
   it("selects about one finer level when image pixels project twice as large", () => {
     const base = select(input({ ...OVERHEAD, renderWidth: 1280, renderHeight: 720 }));
     const doubled = select(input({ ...OVERHEAD, renderWidth: 2560, renderHeight: 1440 }));

@@ -7,12 +7,13 @@ import type { MapDetailController } from "./mapDetailController";
 export interface MapDetailRuntime {
   readonly status: Pick<BabylonRuntimeStatus, "mode" | "rasterBaseMap">;
   readonly renderer: { mode: string };
-  getGoogleTerrainDetailState(): { defaultErrorTarget: number } | null;
+  getGoogleTerrainDetailState(): { defaultErrorTarget: number; loadedErrorTarget?: number | null } | null;
   setGoogleTerrainDetailTarget(errorTarget: number | null): void;
   setRasterDetailTarget(offset: number): void;
   getRasterDetailFeedback(): RasterDetailFeedback | null;
   subscribeStatus(listener: (status: BabylonRuntimeStatus) => void): () => void;
   onRasterDetailFeedback(listener: () => void): () => void;
+  onGoogleDetailFeedback?(listener: () => void): () => void;
   isStreamingTiles(): boolean;
   onTilesStreamingChange(listener: (streaming: boolean) => void): () => void;
 }
@@ -26,9 +27,25 @@ export interface MapDetailRuntime {
 export function connectMapDetailRuntime(controller: MapDetailController, runtime: MapDetailRuntime): () => void {
   let appliedGoogle: number | null = null;
   let appliedRaster: number | null = null;
+  let rasterKey: string | null = null;
+  const reportGoogleDelivery = (): void => {
+    if (runtime.status.mode !== "google-tiles") return;
+    const streaming = runtime.isStreamingTiles();
+    controller.reportDelivery(GOOGLE_DETAIL_KEY, {
+      pending: streaming,
+      limits: streaming ? ["loading"] : [],
+      loadedTarget: runtime.getGoogleTerrainDetailState()?.loadedErrorTarget ?? null,
+    });
+  };
 
   const sync = (): void => {
     const { mode, rasterBaseMap } = runtime.status;
+    const nextRasterKey = mode === "raster-basemap" && rasterBaseMap ? rasterDetailKey(rasterBaseMap.id) : null;
+    if (nextRasterKey !== rasterKey) {
+      // Source/runtime replacements must receive the target even if unchanged.
+      appliedRaster = null;
+      rasterKey = nextRasterKey;
+    }
     const google = runtime.getGoogleTerrainDetailState();
     controller.setRecommendationContext({
       rendererMode: runtime.renderer.mode,
@@ -36,23 +53,27 @@ export function connectMapDetailRuntime(controller: MapDetailController, runtime
     });
     if (mode === "google-tiles") {
       controller.setActiveSource({ key: GOOGLE_DETAIL_KEY, availability: google ? "ready" : "initializing" });
-      const streaming = runtime.isStreamingTiles();
-      controller.reportDelivery(GOOGLE_DETAIL_KEY, { pending: streaming, limits: streaming ? ["loading"] : [] });
+      reportGoogleDelivery();
       return;
     }
     // A later return to Google must apply its target to the new tiles runtime.
     appliedGoogle = null;
     if (mode === "raster-basemap" && rasterBaseMap) {
       const key = rasterDetailKey(rasterBaseMap.id);
-      const feedback = runtime.getRasterDetailFeedback();
+      let feedback = runtime.getRasterDetailFeedback();
       controller.setActiveSource({
         key,
         availability: feedback?.support === "ready" ? "ready" : "unavailable",
         reason: feedback?.reason,
       });
+      // Activating the source applies its target synchronously. Keep any newer
+      // feedback that setter emitted, rather than restoring the previous target.
+      feedback = runtime.getRasterDetailFeedback();
       controller.reportDelivery(key, feedback && {
         pending: feedback.pending,
         limits: feedback.limits,
+        activeTarget: feedback.activeTarget,
+        loadedTarget: feedback.loadedTarget,
         effectiveTarget: feedback.effectiveTarget,
       });
       return;
@@ -77,6 +98,7 @@ export function connectMapDetailRuntime(controller: MapDetailController, runtime
   const unsubscribeController = controller.subscribe(apply);
   const unsubscribeStatus = runtime.subscribeStatus(() => { sync(); apply(); });
   const unsubscribeRaster = runtime.onRasterDetailFeedback(() => { sync(); apply(); });
+  const unsubscribeGoogle = runtime.onGoogleDetailFeedback?.(reportGoogleDelivery);
   const unsubscribeStreaming = runtime.onTilesStreamingChange(() => sync());
   sync();
   apply();
@@ -84,6 +106,7 @@ export function connectMapDetailRuntime(controller: MapDetailController, runtime
     unsubscribeController();
     unsubscribeStatus();
     unsubscribeRaster();
+    unsubscribeGoogle?.();
     unsubscribeStreaming();
   };
 }

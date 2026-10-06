@@ -84,11 +84,22 @@ Map → Detail contains, in paragraph-grid layout:
 The map-source button continues to toggle the Map tab; no popover or second
 range editor is added. The HUD is the sole interactive temporary-detail rail;
 the tab edits persistent policy. A default tick identifies the resolved saved
-default independently of the endpoints. The existing blue marker may represent
-an effective policy target only when one scalar exists. It must never imply
-that all requested imagery has loaded. Raster uses a loading/limited status when
-different patches have different delivered detail, rather than inventing an
-average zoom as an achieved-quality marker.
+default independently of the endpoints. An I-beam represents the detail
+currently drawn (`loadedTarget`). It moves as sharper tiles become visible,
+even with the request and automatic adjustment unchanged, and remains visible
+above the thumb when the two coincide. Its value is included in the rail's
+accessible description and tooltip. Unknown loaded detail hides the marker;
+values outside the selectable range pin it to the appropriate end without
+clamping the measurement. Changing a request never moves this marker by itself.
+
+Raster's reading is a visible-area-weighted estimate of displayed image pixel
+size, expressed in the same binary resolution offsets as the request. Google's
+reading is the largest native screen-space geometric error among the loaded
+tiles visible to the camera. Focus-only tiles do not enter either reading.
+These measurements are distinct from requested/applied targets and from
+loading/source/resource limits; the tooltip names the measurement and keeps
+those limits visible. Refinement events and view changes update the I-beam;
+there is no timer or simulated loading animation.
 
 Keyboard, pointer and touch operation must agree with the visual direction.
 Provide an accessible value description such as “Normal”, “one level finer than
@@ -380,6 +391,8 @@ interface DetailState {
   resolvedDefault: number;
   sessionOverride: number | null;
   requestedTarget: number;
+  activeTarget: number | null;
+  loadedTarget: number | null;
   effectiveTarget: number | null;
   pending: boolean;
   limits: readonly ("source" | "memory" | "loading" | "backend" | "consumer")[];
@@ -393,8 +406,13 @@ without replacing that saved mode with a number. Normal's range includes 0;
 a clamped Google recommendation is explicitly labelled as limited by the range.
 Persist the Google recommendation policy ID, preserving its meaning on reload.
 `renderer-default` resolves the captured plugin default, distinct from a user
-default or the device-hint recommendation. Raster `effectiveTarget` is
-`null` when spatially varying delivery has no single meaningful target.
+default or the device-hint recommendation. `activeTarget` is the current policy
+target after any app requirement or automatic adjustment; it remains available
+while loading or source limits apply. Raster `effectiveTarget` is `null` when
+spatially varying delivery has no single meaningful target. `loadedTarget`
+separately reports measured displayed detail and drives the I-beam, including
+during partial loading or resource limits. It never falls back to a policy
+target when the renderer has no measurement.
 
 Operations: read state, subscribe, update saved policy, set session override,
 clear session override, reset active policy and dispose. Validate finite values
@@ -561,7 +579,7 @@ and [`benchmarks/map-detail/`](../../benchmarks/map-detail/README.md).
    forced host policies, seeds, consumer requirements and change notification.
    `connectMapDetailRuntime` makes it the one writer of the renderer's target.
    The HUD rail (`mapDetailSlider.ts`) has two ordinary ends, a default tick and a
-   marker only for a single effective Google target; the Map tab's Detail group
+   moving I-beam for measured loaded raster/Google detail; the Map tab's Detail group
    (`mapDetailPanel.ts`) edits range, Normal or Custom default, Restore and Reset.
    0sfs imports `osfs.world-detail-target` once (`src/flight/worldDetail.ts`),
    keeps Flight minimum, the anchor and the waiver in its own Settings, and holds a

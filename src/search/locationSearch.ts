@@ -1,6 +1,7 @@
 import type { LocationSearchResult, LocationSearchProvider } from "./types";
 import type { AirportMode } from "../airports/types";
 import { searchTuning } from "./searchTuning";
+import { cachedLookup } from "./lookupCache";
 
 interface Place {
   place_id: number; osm_type?: string; osm_id?: number;
@@ -14,7 +15,6 @@ interface AirportSummary {
   type?: string; distance_km?: number;
   municipality?: string; region_name?: string; country_name?: string;
 }
-const cache = new Map<string, { expires: number; value: unknown }>();
 /** The public geocoder's usage policy: at most one request a second. */
 const GEOCODER_INTERVAL_MS = 1100;
 let geocoderQueue: Promise<unknown> = Promise.resolve();
@@ -22,40 +22,53 @@ let lastGeocoderRequest = 0;
 
 async function json(url: string, signal: AbortSignal): Promise<unknown> {
   signal.throwIfAborted();
-  const cached = cache.get(url);
-  if (cached && cached.expires > Date.now()) return cached.value;
-  const { cacheEntries, cacheMs, timeoutMs } = searchTuning();
+  const { timeoutMs } = searchTuning();
   const response = await fetch(url, { signal: AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) });
   if (!response.ok) throw new Error(`Location lookup failed (${response.status}). Try again.`);
   const value: unknown = await response.json();
   signal.throwIfAborted();
-  while (cache.size >= cacheEntries) cache.delete(cache.keys().next().value!);
-  cache.set(url, { expires: Date.now() + cacheMs, value });
   return value;
+}
+
+const record = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
+const optionalString = (value: unknown) => value === undefined || value === null || typeof value === "string";
+const optionalStrings = (value: unknown) => value === undefined || value === null || (record(value) && Object.values(value).every(optionalString));
+function validPlaces(value: unknown): value is Place[] {
+  return Array.isArray(value) && value.every(place => record(place) && typeof place.place_id === "number"
+    && typeof place.display_name === "string" && typeof place.lat === "string" && typeof place.lon === "string"
+    && optionalString(place.name) && optionalStrings(place.address) && optionalStrings(place.extratags));
+}
+function validNearby(value: unknown): value is { data: AirportSummary[] } {
+  return record(value) && Array.isArray(value.data) && value.data.every(airport => record(airport)
+    && typeof airport.code === "string" && typeof airport.name === "string"
+    && typeof airport.latitude === "number" && typeof airport.longitude === "number"
+    && [airport.iata, airport.icao, airport.type, airport.municipality, airport.region_name, airport.country_name].every(optionalString));
 }
 
 async function geocode(params: Record<string, string>, signal: AbortSignal): Promise<Place[]> {
   const url = new URL("https://nominatim.openstreetmap.org/search");
   for (const [key, value] of Object.entries({ format: "jsonv2", limit: "6", addressdetails: "1", extratags: "1", ...params })) url.searchParams.set(key, value);
-  // The public geocoder allows one request/second and submit-based search, not autocomplete.
-  const request = geocoderQueue.catch(() => {}).then(async () => {
-    signal.throwIfAborted();
-    if ((cache.get(url.href)?.expires ?? 0) <= Date.now()) {
+  const cacheUrl = new URL(url);
+  for (const [key, value] of Object.entries(params)) cacheUrl.searchParams.set(key, value.trim().replace(/\s+/g, " ").toLowerCase());
+  // Cache hits bypass the network queue; the public geocoder permits one request/second.
+  return cachedLookup(cacheUrl.href, signal, validPlaces, lookupSignal => {
+    const request = geocoderQueue.catch(() => {}).then(async () => {
+      lookupSignal.throwIfAborted();
       const delay = Math.max(0, lastGeocoderRequest + GEOCODER_INTERVAL_MS - Date.now());
       if (delay) await new Promise<void>((resolve, reject) => {
-        const cancel = () => { clearTimeout(timer); reject(signal.reason); };
-        const timer = setTimeout(() => { signal.removeEventListener("abort", cancel); resolve(); }, delay);
-        signal.addEventListener("abort", cancel, { once: true });
+        const cancel = () => { clearTimeout(timer); reject(lookupSignal.reason); };
+        const timer = setTimeout(() => { lookupSignal.removeEventListener("abort", cancel); resolve(); }, delay);
+        lookupSignal.addEventListener("abort", cancel, { once: true });
       });
-      signal.throwIfAborted();
+      lookupSignal.throwIfAborted();
       lastGeocoderRequest = Date.now();
-    }
-    const result = await json(url.href, signal);
-    if (!Array.isArray(result)) throw new Error("Invalid location search response.");
-    return result as Place[];
+      const result = await json(url.href, lookupSignal);
+      if (!validPlaces(result)) throw new Error("Invalid location search response.");
+      return result;
+    });
+    geocoderQueue = request;
+    return request;
   });
-  geocoderQueue = request;
-  return request;
 }
 const isCity = (place: Place) => ["city", "town", "village", "municipality"].includes(place.addresstype ?? place.type ?? "");
 const validCoordinates = (lat: number, lon: number) => Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180;
@@ -92,8 +105,11 @@ export async function nearbyAirports(latDeg: number, lonDeg: number, signal: Abo
   if (!validCoordinates(latDeg, lonDeg)) throw new Error("Invalid city coordinates.");
   const url = new URL("https://api.freeairportdb.com/v1/airports/nearby");
   for (const [key, value] of Object.entries({ lat: String(latDeg), lng: String(lonDeg), radius: "80", limit: "50" })) url.searchParams.set(key, value);
-  const response = await json(url.href, signal) as { data?: AirportSummary[] };
-  if (!Array.isArray(response.data)) throw new Error("Nearby airports are temporarily unavailable.");
+  const response = await cachedLookup(url.href, signal, validNearby, async lookupSignal => {
+    const value = await json(url.href, lookupSignal);
+    if (!validNearby(value)) throw new Error("Nearby airports are temporarily unavailable.");
+    return value;
+  });
   const rank = (type?: string) => type === "large_airport" ? 0 : type === "medium_airport" ? 1 : 2;
   const unique = new Map<string, AirportSummary>();
   for (const airport of response.data) {

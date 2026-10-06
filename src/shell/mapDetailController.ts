@@ -50,6 +50,10 @@ export interface MapDetailActiveSource {
 export interface MapDetailDelivery {
   pending: boolean;
   limits: readonly DetailLimit[];
+  /** Raster only: the current policy offset, including automatic adjustment. */
+  activeTarget?: number | null;
+  /** Actual loaded view detail, in raster offsets or Google screen-space error pixels. */
+  loadedTarget?: number | null;
   /** Raster only: the one delivered offset when every region agrees, otherwise null. */
   effectiveTarget?: number | null;
 }
@@ -289,6 +293,8 @@ export function createMapDetailController(options: MapDetailControllerOptions = 
       defaultLimitedByRange: resolved?.limitedByRange ?? false,
       sessionOverride,
       requestedTarget,
+      activeTarget: kind === "google" ? effectiveTarget : delivery?.activeTarget ?? effectiveTarget,
+      loadedTarget: delivery?.loadedTarget ?? null,
       effectiveTarget,
       pending: availability === "ready" && (delivery?.pending ?? false),
       limits: availability === "ready" ? composeLimits(active.key, requirementApplied) : [],
@@ -306,6 +312,8 @@ export function createMapDetailController(options: MapDetailControllerOptions = 
       && a.defaultLimitedByRange === b.defaultLimitedByRange
       && a.sessionOverride === b.sessionOverride
       && a.requestedTarget === b.requestedTarget
+      && a.activeTarget === b.activeTarget
+      && a.loadedTarget === b.loadedTarget
       && a.effectiveTarget === b.effectiveTarget
       && a.pending === b.pending
       && sameLimits(a.limits, b.limits)
@@ -467,7 +475,8 @@ export function createMapDetailController(options: MapDetailControllerOptions = 
     },
     reportDelivery(key, delivery) {
       if (delivery) {
-        deliveries.set(key, { pending: delivery.pending, limits: [...delivery.limits], effectiveTarget: delivery.effectiveTarget ?? null });
+        deliveries.set(key, { pending: delivery.pending, limits: [...delivery.limits], activeTarget: delivery.activeTarget,
+          loadedTarget: delivery.loadedTarget, effectiveTarget: delivery.effectiveTarget ?? null });
       } else {
         deliveries.delete(key);
       }

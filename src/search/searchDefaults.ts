@@ -4,7 +4,7 @@
 export const SEARCH_DEFAULTS = Object.freeze({
   /** How long an answer is kept, hours. */
   cacheHours: 24,
-  /** How many answers each lookup keeps. */
+  /** How many answers the shared device cache keeps across all lookup types. */
   cacheEntries: 64,
   /** How long one request may take, seconds. */
   timeoutSeconds: 20,

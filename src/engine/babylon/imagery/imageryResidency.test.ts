@@ -30,18 +30,20 @@ function harness(limits: Partial<ImageryResourceLimits> = {}, capacity = 8) {
     upload: slot => { uploads.push(slot); },
   };
   let time = 0;
+  const onChange = vi.fn();
   const residency = createImageryResidency({
     loader, store,
     limits: { gpuBytes: 1e9, stagingBytes: 1e9, concurrentRequests: 8, queuedRequests: 100, uploadBytesPerUpdate: 1e9, cpuMsPerUpdate: 2,
       missingRetryMs: 1000, retryDelayMs: { min: 2000, max: 30_000 }, ...limits },
     now: () => time,
+    onChange,
   });
   const image = (pages = 1, width = 256): PreparedImage => ({
     width, height: width, compressedBytes: 100,
     pages: Array.from({ length: pages }, () => [new Uint8Array(1000)]),
   });
   const flush = async () => { for (let i = 0; i < 5; i++) await Promise.resolve(); };
-  return { residency, loader, store, pending, uploads, free, image, flush, advance: (ms: number) => { time += ms; } };
+  return { residency, loader, store, pending, uploads, free, image, flush, onChange, advance: (ms: number) => { time += ms; } };
 }
 
 const request = (key: string, priority = 1, extra: Partial<ImageryRequest> = {}): ImageryRequest => ({
@@ -151,6 +153,38 @@ describe("imagery residency", () => {
     expect(loader.load).toHaveBeenCalledTimes(2);
   });
 
+  it("wakes selection when missing imagery expires even after the coarse plan stops demanding it", async () => {
+    const { residency, pending, flush, advance, onChange } = harness();
+    residency.setDemand([request("detail")]);
+    residency.pump();
+    pending[0].reject(new ImageryMissingError("404"));
+    await flush();
+    // A missing node makes the selector keep its parent; the missing image
+    // is consequently absent from demand until availability changes.
+    residency.setDemand([request("parent")]);
+    const missingRevision = residency.getMissingRevision();
+    expect(residency.nextWakeAt()).toBe(1000);
+    advance(1000);
+    onChange.mockClear();
+    residency.pump();
+    expect(residency.getMissingRevision()).toBeGreaterThan(missingRevision);
+    expect(onChange).toHaveBeenCalledOnce();
+    expect(residency.isMissing("detail")).toBe(false);
+    expect(residency.nextWakeAt()).toBeNull();
+  });
+
+  it("invalidates missing availability when selection observes an expired record first", async () => {
+    const { residency, pending, flush, advance } = harness();
+    residency.setDemand([request("detail")]);
+    residency.pump();
+    pending[0].reject(new ImageryMissingError("404"));
+    await flush();
+    const missingRevision = residency.getMissingRevision();
+    advance(1000);
+    expect(residency.isMissing("detail")).toBe(false);
+    expect(residency.getMissingRevision()).toBeGreaterThan(missingRevision);
+  });
+
   it("backs off after failures without marking the tile missing", async () => {
     const { residency, pending, flush, advance, loader } = harness();
     residency.setDemand([request("flaky")]);
@@ -190,6 +224,22 @@ describe("imagery residency", () => {
     // Another source: the old source's in-flight request is cancelled.
     residency.setDemand([request("x", 1, { sourceKey: "t@1" })]);
     expect(pending[1].signal.aborted).toBe(true);
+  });
+
+  it("wakes queued work after the last request from the old view completes", async () => {
+    const { residency, pending, image, flush, onChange } = harness({ concurrentRequests: 1 });
+    residency.setDemand([request("old-view")]);
+    residency.pump();
+    residency.setDemand([request("current-view")]);
+    residency.pump();
+    expect(pending).toHaveLength(1);
+    onChange.mockClear();
+    pending[0].resolve(image());
+    await flush();
+    expect(onChange).toHaveBeenCalledOnce();
+    residency.pump();
+    expect(pending.map(item => item.url)).toEqual(["https://tiles/old-view", "https://tiles/current-view"]);
+    expect(residency.stats().staged).toBe(0);
   });
 
   it("disposal cancels requests and frees every slot", async () => {

@@ -94,9 +94,13 @@ export interface DetailState {
   defaultLimitedByRange: boolean;
   sessionOverride: number | null;
   requestedTarget: number;
+  /** The current policy target, including automatic adjustment, not achieved detail. */
+  activeTarget: number | null;
+  /** Measured loaded detail in this view, in the policy's units; never a request. */
+  loadedTarget: number | null;
   /**
-   * The single target the renderer uses, when one exists. Raster reports null
-   * while different regions have different delivered detail.
+   * For Google, the composed policy target. For raster, the delivered offset
+   * once every region meets it; null while delivery is loading or limited.
    */
   effectiveTarget: number | null;
   pending: boolean;

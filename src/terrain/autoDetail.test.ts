@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { createAutoDetailController, type AutoDetailTuning } from "./autoDetail";
+import { MAP_AUTO_PARAMETERS } from "../settings/catalogue/auto";
 
-/** Today's values: 1 s windows, 20 and 14 ms at 60 Hz, two and ten windows, 5 s apart, quarter levels. */
+/** Explicit conservative tuning; the shipped recovery threshold is checked separately. */
 const TUNING: AutoDetailTuning = {
   goalMs: null, coarsenAbove: 1.2, refineBelow: 0.84, windowMs: 1000,
   coarsenWindows: 2, refineWindows: 10, step: 0.25, intervalMs: 5000,
@@ -20,6 +21,38 @@ function run(controller: ReturnType<typeof createAutoDetailController>, from: nu
 }
 
 describe("automatic detail adjustment", () => {
+  it("does not let a single short scheduling interval poison the display goal", () => {
+    const controller = createAutoDetailController(TUNING);
+    controller.setRoom(3);
+    let { now } = run(controller, 0, 3, 1000 / 60);
+    controller.observe(now += 3, 3, false);
+    const healthy = run(controller, now, 60, 1000 / 60);
+    expect(controller.getState().goalMs).toBeCloseTo(1000 / 60, 6);
+    expect(healthy.decisions).toEqual([]);
+    expect(controller.getAdjustment()).toBe(0);
+  });
+
+  it("restores detail at the measured display rate with the shipped recovery threshold", () => {
+    const refineBelow = MAP_AUTO_PARAMETERS.find(spec => spec.id === "map.auto.refineBelow")!.default as number;
+    const controller = createAutoDetailController({ ...TUNING, refineBelow });
+    controller.setRoom(3);
+    const healthy = run(controller, 0, 3, 1000 / 60);
+    const overloaded = run(controller, healthy.now, 14, 25);
+    expect(controller.getAdjustment()).toBeGreaterThan(0);
+    const recovered = run(controller, overloaded.now, 60, 1000 / 60);
+    expect(recovered.decisions.length).toBeGreaterThan(0);
+    expect(controller.getAdjustment()).toBe(0);
+  });
+
+  it("discards incomplete windows and consecutive counts across suspension", () => {
+    const controller = createAutoDetailController({ ...TUNING, goalMs: 16, intervalMs: 0 });
+    controller.setRoom(3);
+    const first = run(controller, 0, 1.2, 30);
+    controller.observe(first.now + 1000, 1000, true);
+    const second = run(controller, first.now + 1000, 1.2, 30);
+    expect(second.decisions).toEqual([]);
+  });
+
   it("measures the display's interval as its goal and coarsens by steps when frames are slow", () => {
     const controller = createAutoDetailController(TUNING);
     controller.setRoom(2);
@@ -60,7 +93,7 @@ describe("automatic detail adjustment", () => {
     controller.setRoom(0.5);
     run(controller, 0, 10, 40);
     expect(controller.getAdjustment()).toBe(0.5);
-    expect(controller.setRoom(0.25)).toMatchObject({ from: 0.5, to: 0.25 });
+    expect(controller.setRoom(0.25)).toMatchObject({ from: 0.5, to: 0.25, reason: "settings" });
     expect(controller.getAdjustment()).toBe(0.25);
     // With nothing enabled, it neither coarsens nor waits to.
     controller.setRoom(0);

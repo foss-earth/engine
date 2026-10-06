@@ -314,9 +314,16 @@
 
 /* ─── Map detail rail, left of the map source chip ─────────────── */
 .map-detail-control {
+  --map-detail-loaded-colour: var(--globe-accent-bright, #38bdf8);
+  --map-detail-loaded-outline: #061422;
   flex: 0 0 41px;
   width: 41px;
   margin: 0 4px;
+}
+
+:root[data-theme="light"] .map-detail-control {
+  --map-detail-loaded-colour: var(--globe-accent-hover, #0369a1);
+  --map-detail-loaded-outline: #fff;
 }
 
 .map-detail-control__rail {
@@ -337,37 +344,49 @@
   box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.14), 0 0 8px rgba(246, 211, 101, 0.28);
 }
 
-.map-detail-control__active-marker {
+/* Loaded detail is an I-beam, visible over the requested thumb even when they
+   coincide. The rail's side margins leave room for both caps at either end. */
+.map-detail-control__loaded-marker {
   position: absolute;
-  z-index: 3;
-  top: 3px;
+  z-index: 5;
+  top: 5px;
   width: 2px;
   height: 18px;
-  border-radius: 999px;
-  background: #4eb9ff;
-  box-shadow: 0 0 0 1px rgba(6, 20, 34, 0.82), 0 0 8px rgba(78, 185, 255, 0.9);
+  background: var(--map-detail-loaded-colour);
+  box-shadow: 0 0 0 1px var(--map-detail-loaded-outline);
   pointer-events: none;
   transform: translateX(-50%);
 }
 
-.map-detail-control__active-marker::before {
+.map-detail-control__loaded-marker::before,
+.map-detail-control__loaded-marker::after {
   position: absolute;
-  top: -3px;
-  left: -3px;
-  width: 0;
-  height: 0;
-  border-right: 3px solid transparent;
-  border-bottom: 4px solid #4eb9ff;
-  border-left: 3px solid transparent;
+  left: 50%;
+  width: 8px;
+  height: 2px;
+  background: var(--map-detail-loaded-colour);
+  box-shadow: 0 0 0 1px var(--map-detail-loaded-outline);
+  pointer-events: none;
+  transform: translateX(-50%);
   content: "";
+}
+
+.map-detail-control__loaded-marker::before {
+  top: 0;
+}
+
+.map-detail-control__loaded-marker::after {
+  bottom: 0;
 }
 
 .map-detail-control__slider {
   position: absolute;
   z-index: 4;
   top: 4px;
-  left: 0;
-  width: 100%;
+  /* Native range travel excludes half the thumb at each end. Expand its box
+     so thumb centres, default ticks and loaded-detail percentages coincide. */
+  left: -6px;
+  width: calc(100% + 12px);
   height: 20px;
   margin: 0;
   padding: 0;
@@ -430,7 +449,7 @@
 }
 
 .map-detail-control__default-tick[hidden],
-.map-detail-control__active-marker[hidden] {
+.map-detail-control__loaded-marker[hidden] {
   display: none;
 }
 
@@ -459,12 +478,6 @@
 }
 
 .map-detail-control__marker.is-beyond-range {
-  opacity: 0.85;
-}
-
-/* An app holds the renderer finer than the rail reaches: pin the marker to the left end. */
-.map-detail-control__active-marker.is-beyond-range {
-  left: 0 !important;
   opacity: 0.85;
 }
 
@@ -1151,7 +1164,7 @@
   display: none;
 }
 
-/* A switch, help, reset and source keep their own widths in one wrapping row. */
+/* Controls first, then help, the label and the source at their own widths. */
 .foss-earth-parameter--inline {
   display: flex;
   flex-wrap: wrap;
@@ -1174,15 +1187,29 @@
 }
 
 .foss-earth-parameter__pills {
-  display: contents;
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
 }
 
 .foss-earth-parameter__header {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  justify-content: space-between;
-  gap: 2px 12px;
+  justify-content: flex-start;
+  gap: 4px;
+}
+
+.foss-earth-parameter--inline > .foss-earth-parameter__header {
+  align-items: center;
+  font-size: 12px;
+}
+
+.foss-earth-parameter--inline > .foss-earth-parameter__header > .foss-earth-choice:not(.foss-earth-parameter__icon-action) {
+  justify-content: center;
+  min-width: 28px;
+  padding: 4px 5px;
 }
 
 .foss-earth-parameter--group > .foss-earth-parameter__header {
@@ -1239,7 +1266,7 @@
   height: 16px;
 }
 
-.foss-earth-parameter--compact-choice .foss-earth-parameter__pills input {
+.foss-earth-parameter--compact-choice .foss-earth-parameter__pills input[type="radio"] {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -1247,11 +1274,79 @@
   clip-path: inset(50%);
 }
 
-.foss-earth-parameter__actions {
+.foss-earth-parameter--compact-choice .foss-earth-parameter__pills {
+  flex: none;
+  flex-wrap: nowrap;
+}
+
+.foss-earth-parameter__inline-field {
   display: inline-flex;
-  flex-wrap: wrap;
+  flex: none;
   align-items: center;
-  gap: 4px;
+}
+
+.foss-earth-two-position-slider {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  width: 64px;
+  height: 28px;
+  align-items: center;
+  border-radius: 14px;
+  font-size: 16px;
+}
+
+.foss-earth-two-position-slider--text {
+  width: 112px;
+  font-size: 11px;
+}
+
+.foss-earth-two-position-slider__track {
+  position: absolute;
+  inset: 0;
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  border-radius: inherit;
+  background: rgba(148, 163, 184, 0.12);
+}
+
+.foss-earth-two-position-slider__thumb {
+  position: absolute;
+  inset: 3px auto 3px 3px;
+  left: calc(3px + var(--slider-position, 0) * 50%);
+  width: calc(50% - 6px);
+  border-radius: 11px;
+  background: rgba(56, 189, 248, 0.32);
+  box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.65);
+}
+
+.foss-earth-two-position-slider__option {
+  position: relative;
+  width: 50%;
+  text-align: center;
+  pointer-events: none;
+}
+
+.foss-earth-two-position-slider__input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.foss-earth-two-position-slider:focus-within {
+  outline: 2px solid #38bdf8;
+  outline-offset: 2px;
+}
+
+.foss-earth-two-position-slider.is-disabled {
+  opacity: 0.45;
+}
+
+.foss-earth-two-position-slider.is-disabled input {
+  cursor: default;
 }
 
 .foss-earth-parameter__icon-action {

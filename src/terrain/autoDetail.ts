@@ -18,6 +18,8 @@ export interface AutoDetailTuning {
 
 export interface AutoDetailDecision {
   at: number;
+  /** Omitted by older hosts for a frame-time decision. */
+  reason?: "frame-time" | "settings";
   /** Levels coarser than requested, before and after. */
   from: number;
   to: number;
@@ -52,20 +54,22 @@ export function createAutoDetailController(initial: AutoDetailTuning) {
   let windowStartedAt: number | null = null;
   let total = 0;
   let frames = 0;
+  const intervals: number[] = [];
   let slow = 0;
   let fast = 0;
   let nextChangeAt = 0;
   let lastMeanMs: number | null = null;
   let lastDecision: AutoDetailDecision | null = null;
 
-  const restartWindow = (): void => { windowStartedAt = null; total = 0; frames = 0; };
+  const restartWindow = (): void => { windowStartedAt = null; total = 0; frames = 0; intervals.length = 0; };
+  const resetObservation = (): void => { restartWindow(); slow = 0; fast = 0; };
   const goal = (): number | null => {
     const aimed = tuning.goalMs ?? measuredGoal;
     return aimed === null ? null : Math.max(aimed, tuning.leastGoalMs ?? 0);
   };
 
   function decide(now: number, to: number, mean: number, goalMs: number): AutoDetailDecision {
-    lastDecision = { at: now, from: adjustment, to, meanFrameMs: mean, goalMs };
+    lastDecision = { at: now, reason: "frame-time", from: adjustment, to, meanFrameMs: mean, goalMs };
     adjustment = to;
     slow = 0;
     fast = 0;
@@ -77,7 +81,7 @@ export function createAutoDetailController(initial: AutoDetailTuning) {
     getState: (): AutoDetailState => ({ adjustment, room, goalMs: goal(), lastMeanMs, lastDecision }),
     getAdjustment: () => adjustment,
     setTuning(next: AutoDetailTuning): void {
-      if (next.windowMs !== tuning.windowMs) restartWindow();
+      if (next.windowMs !== tuning.windowMs || next.goalMs !== tuning.goalMs || next.leastGoalMs !== tuning.leastGoalMs) resetObservation();
       tuning = next;
     },
     /**
@@ -86,22 +90,33 @@ export function createAutoDetailController(initial: AutoDetailTuning) {
      */
     setRoom(next: number): AutoDetailDecision | null {
       room = Math.max(0, next);
+      if (room === 0) { resetObservation(); nextChangeAt = 0; }
       if (adjustment <= room) return null;
-      const decision = { at: lastDecision?.at ?? 0, from: adjustment, to: room, meanFrameMs: lastMeanMs ?? 0, goalMs: goal() ?? 0 };
+      const decision: AutoDetailDecision = { at: lastDecision?.at ?? 0, reason: "settings", from: adjustment, to: room, meanFrameMs: lastMeanMs ?? 0, goalMs: goal() ?? 0 };
       adjustment = room;
       lastDecision = decision;
       return decision;
     },
     /** Returns a decision when the adjustment changed. */
     observe(now: number, frameMs: number, suspended: boolean): AutoDetailDecision | null {
-      if (suspended || !Number.isFinite(frameMs) || frameMs <= 0 || frameMs > 250) return null;
-      // Vsync holds frames at the refresh interval: the shortest interval seen is the display's.
-      if (frameMs >= 2) measuredGoal = measuredGoal === null ? frameMs : Math.min(measuredGoal, frameMs);
+      if (suspended || !Number.isFinite(frameMs) || frameMs <= 0 || frameMs > 250) {
+        resetObservation();
+        return null;
+      }
       if (windowStartedAt === null) windowStartedAt = now;
       total += frameMs;
       frames += 1;
+      if (frameMs >= 2) intervals.push(frameMs);
       if (now - windowStartedAt < tuning.windowMs) return null;
       const mean = total / frames;
+      // A short scheduling interval is not a new display refresh rate. Use
+      // the median of a complete observation window before lowering the goal.
+      // Slower windows still cannot move the goal to match an overloaded app.
+      if (intervals.length > 0) {
+        intervals.sort((a, b) => a - b);
+        const median = intervals[Math.floor(intervals.length / 2)];
+        measuredGoal = measuredGoal === null ? median : Math.min(measuredGoal, median);
+      }
       restartWindow();
       lastMeanMs = mean;
       const goalMs = goal();

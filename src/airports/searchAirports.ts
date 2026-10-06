@@ -1,6 +1,8 @@
 import type { Airport, AirportPoint, AirportRunway } from "./types";
 import { bearing, distance } from "./geometry";
 import { searchTuning } from "../search/searchTuning";
+import { aliasLookup, cachedLookup } from "../search/lookupCache";
+import { isAirport } from "./validateAirport";
 
 interface Element {
   type: string; id: number; lat?: number; lon?: number;
@@ -8,7 +10,21 @@ interface Element {
   tags?: Record<string, string>;
   geometry?: { lat: number; lon: number }[];
 }
-const cache = new Map<string, { expires: number; airports: Airport[] }>();
+interface AirportLookup { airports: Airport[]; aliases: string[] }
+const record = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
+function validLookup(value: unknown): value is AirportLookup {
+  return record(value) && Array.isArray(value.airports) && value.airports.every(isAirport)
+    && Array.isArray(value.aliases) && value.aliases.every(code => typeof code === "string" && /^[A-Z0-9]{3,4}$/.test(code));
+}
+function validElements(value: unknown): value is Element[] {
+  const coordinates = (p: unknown) => record(p) && typeof p.lat === "number" && typeof p.lon === "number";
+  return Array.isArray(value) && value.every(element => record(element) && typeof element.type === "string"
+    && typeof element.id === "number" && (element.tags === undefined || (record(element.tags)
+      && Object.values(element.tags).every(tag => typeof tag === "string")))
+    && (element.center === undefined || coordinates(element.center))
+    && (element.geometry === undefined || (Array.isArray(element.geometry) && element.geometry.every(coordinates))));
+}
+const lookupKey = (code: string) => `airport-runways:${code}`;
 const point = (p: { lat: number; lon: number }): AirportPoint => ({ latDeg: p.lat, lonDeg: p.lon });
 const validPoint = (p: AirportPoint) => Number.isFinite(p.latDeg) && Number.isFinite(p.lonDeg) && Math.abs(p.latDeg) <= 90 && Math.abs(p.lonDeg) <= 180;
 function elevation(value?: string): number | undefined {
@@ -73,46 +89,53 @@ export function parseAirports(elements: Element[], code: string): Airport[] {
 }
 
 async function getJson(url: string, signal: AbortSignal): Promise<unknown> {
-  const controller = new AbortController();
-  const cancel = () => controller.abort();
-  signal.addEventListener("abort", cancel, { once: true });
-  const timer = setTimeout(cancel, searchTuning().timeoutMs);
-  if (signal.aborted) cancel();
-  try {
-    const response = await fetch(url, { signal: controller.signal });
-    if (!response.ok) throw new Error(`Airport lookup failed (${response.status}). Try again.`);
-    return await response.json();
-  } finally { clearTimeout(timer); signal.removeEventListener("abort", cancel); }
+  signal.throwIfAborted();
+  const response = await fetch(url, { signal: AbortSignal.any([signal, AbortSignal.timeout(searchTuning().timeoutMs)]) });
+  if (!response.ok) throw new Error(`Airport lookup failed (${response.status}). Try again.`);
+  const value: unknown = await response.json();
+  signal.throwIfAborted();
+  return value;
 }
 
 /** On-demand, keyless browser lookup. No airport dataset is shipped with the app. */
 export async function searchAirports(rawCode: string, signal: AbortSignal): Promise<Airport[]> {
   const code = rawCode.trim().toUpperCase();
   if (!/^[A-Z0-9]{3,4}$/.test(code)) throw new Error("Enter a 3-letter IATA or 4-character ICAO airport code.");
-  signal.throwIfAborted();
-  const cached = cache.get(code);
-  if (cached && cached.expires > Date.now()) return cached.airports;
-  const key = code.length === 3 ? "iata" : "icao";
-  const query = `[out:json][timeout:15];nwr["aeroway"="aerodrome"]["${key}"="${code}"];out center tags;way(around:5000)["aeroway"="runway"];out geom;`;
-  const payload = await getJson(`https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`, signal) as { elements?: Element[]; remark?: string };
-  if (payload.remark || !Array.isArray(payload.elements)) throw new Error("Airport lookup is temporarily unavailable. Try again.");
-  const airports = parseAirports(payload.elements, code);
+  const lookup = await cachedLookup(lookupKey(code), signal, validLookup, async lookupSignal => {
+    const key = code.length === 3 ? "iata" : "icao";
+    const query = `[out:json][timeout:15];nwr["aeroway"="aerodrome"]["${key}"="${code}"];out center tags;way(around:5000)["aeroway"="runway"];out geom;`;
+    const payload = await getJson(`https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`, lookupSignal);
+    if (!record(payload) || payload.remark || !validElements(payload.elements)) throw new Error("Airport lookup is temporarily unavailable. Try again.");
+    const airports = parseAirports(payload.elements, code);
+    const aliases = airports.length === 1 ? payload.elements.filter(element => element.tags?.aeroway === "aerodrome"
+      && [element.tags.icao, element.tags.iata].some(value => value?.toUpperCase() === code))
+      .flatMap(element => [element.tags?.icao, element.tags?.iata])
+      .filter((alias): alias is string => typeof alias === "string" && /^[a-z0-9]{3,4}$/i.test(alias)).map(alias => alias.toUpperCase()) : [];
+    return { airports, aliases };
+  });
+  aliasLookup(lookupKey(code), lookup.aliases.map(lookupKey));
+  // Enrichment has its own cached answer: a transient elevation failure can retry
+  // without fetching runway geometry again or mutating the cached base airport.
+  const airports = structuredClone(lookup.airports);
   for (const airport of airports) {
     if (airport.elevationMeters !== undefined) continue;
     try {
-      const response = await getJson(`https://api.freeairportdb.com/v1/airports/${encodeURIComponent(airport.code)}`, signal) as { data?: { elevation?: number } };
-      const meters = response.data?.elevation;
-      if (typeof meters === "number" && Number.isFinite(meters)) {
+      const url = `https://api.freeairportdb.com/v1/airports/${encodeURIComponent(airport.code)}`;
+      const meters = await cachedLookup(url, signal, (value): value is number | null => value === null
+        || (typeof value === "number" && Number.isFinite(value)), async lookupSignal => {
+        const response = await getJson(url, lookupSignal);
+        if (!record(response) || !record(response.data)) throw new Error("Airport elevation is temporarily unavailable.");
+        const value = response.data.elevation;
+        if (value === undefined || value === null) return null;
+        if (typeof value !== "number" || !Number.isFinite(value)) throw new Error("Invalid airport elevation response.");
+        return value;
+      });
+      if (meters !== null) {
         airport.elevationMeters = meters;
         for (const runway of airport.runways) runway.elevationMeters ??= meters;
       }
     } catch { signal.throwIfAborted(); /* Unknown elevation stays unavailable; never assume sea level. */ }
   }
   signal.throwIfAborted();
-  if (airports.length) {
-    const { cacheEntries, cacheMs } = searchTuning();
-    while (cache.size >= cacheEntries) cache.delete(cache.keys().next().value!);
-    cache.set(code, { expires: Date.now() + cacheMs, airports });
-  }
   return airports;
 }

@@ -65,6 +65,20 @@ const COARSER = "coarser";
 const DEFAULT = "default";
 const MARKER_PREFIX = "marker:";
 
+/** Loaded detail moves the HUD cursor, but has no representation in this editor. */
+function samePanelState(a: DetailState | null | undefined, b: DetailState | null): boolean {
+  if (!a || !b) return a === b;
+  return a.key === b.key
+    && a.availability === b.availability && a.reason === b.reason
+    && JSON.stringify(a.policy) === JSON.stringify(b.policy)
+    && a.resolvedDefault === b.resolvedDefault && a.defaultLimitedByRange === b.defaultLimitedByRange
+    && a.sessionOverride === b.sessionOverride && a.requestedTarget === b.requestedTarget
+    && a.activeTarget === b.activeTarget && a.effectiveTarget === b.effectiveTarget
+    && a.pending === b.pending
+    && a.limits.length === b.limits.length && a.limits.every((limit, index) => limit === b.limits[index])
+    && a.markers.length === b.markers.length && a.markers.every((marker, index) => marker === b.markers[index]);
+}
+
 /**
  * The Detail group of the Map tab: the saved range the HUD rail spans, its
  * default, hosts' markers such as a flight's minimum, and the actions that
@@ -139,7 +153,10 @@ export function createMapDetailPanel(controller: MapDetailController, options: M
 
   const update = (): void => {
     const state = controller.getState();
-    if (state === shown && !editing) return;
+    if (!editing && (state === shown || samePanelState(shown, state))) {
+      shown = state;
+      return;
+    }
     shown = state;
     const ready = state?.availability === "ready";
     element.classList.toggle("is-unavailable", !ready);

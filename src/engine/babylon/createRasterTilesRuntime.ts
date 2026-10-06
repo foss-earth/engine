@@ -43,6 +43,8 @@ const UNAVAILABLE_DETAIL: RasterDetailFeedback = Object.freeze({
   reason: "Detail for 2D basemaps is not available yet.",
   pending: false,
   limits: [],
+  activeTarget: null,
+  loadedTarget: null,
   effectiveTarget: null,
 });
 
@@ -53,6 +55,10 @@ export interface RasterDetailFeedback {
   reason?: string;
   pending: boolean;
   limits: readonly DetailLimit[];
+  /** The current policy offset, including automatic adjustment, not achieved detail. */
+  activeTarget?: number | null;
+  /** Visible-area estimate of imagery actually bound to terrain, in detail offsets. */
+  loadedTarget?: number | null;
   /** The one delivered offset when every region meets the request, otherwise null. */
   effectiveTarget: number | null;
 }

@@ -23,7 +23,7 @@ export const MAP_AUTO_PARAMETERS: readonly ParameterSpec[] = [
     unit: "none",
     kind: "boolean",
     default: false,
-    defaultReason: "Off until the measured goal can be trusted: one short interval between frames sets it to a few milliseconds, which no frame meets, so every window coarsens terrain to the coarse end of its range.",
+    defaultReason: "Detail stays at the requested target unless you explicitly allow frame-time adjustment.",
     level: "main",
   }),
   auto({
@@ -33,7 +33,7 @@ export const MAP_AUTO_PARAMETERS: readonly ParameterSpec[] = [
     unit: "none",
     kind: "boolean",
     default: false,
-    defaultReason: "Off, for the same reason as terrain: a goal no frame meets drops imagery to the coarse end of its range.",
+    defaultReason: "Imagery stays at the requested target unless you explicitly allow frame-time adjustment.",
     level: "main",
   }),
   auto({
@@ -47,7 +47,7 @@ export const MAP_AUTO_PARAMETERS: readonly ParameterSpec[] = [
     step: 0.5,
     scale: "log2",
     default: "display",
-    defaultReason: "The display shows no more frames than it refreshes: the shortest interval between frames measured so far.",
+    defaultReason: "The fastest median frame interval from complete observation windows estimates the display rate without letting one short scheduling interval set the goal.",
     level: "main",
   }),
   auto({
@@ -65,14 +65,14 @@ export const MAP_AUTO_PARAMETERS: readonly ParameterSpec[] = [
   auto({
     id: "map.auto.refineBelow",
     label: "Refine below",
-    description: "A window whose frames average less than this multiple of the goal counts toward refining again. At 1 or above, frames held at the display's rate count; below, only spare time does.",
+    description: "A window whose frames average less than this multiple of the goal counts toward refining again. Above 1, frames held at the display's rate count; below 1, recovery requires frames faster than the goal.",
     unit: "ratio",
     kind: "number",
     bounds: () => ({ min: 0.5, max: 1.2 }),
     step: 0.01,
     scale: "linear",
-    default: 0.84,
-    defaultReason: `14 ms at 60 Hz, the threshold of ${REPLACED}: a display holding 60 Hz is not taken as spare time.`,
+    default: 1.05,
+    defaultReason: "A sustained return to the display rate permits a cautious refinement step, with 5% timing tolerance. Requiring faster-than-refresh frames would leave detail permanently coarsened.",
   }),
   auto({
     id: "map.auto.window",

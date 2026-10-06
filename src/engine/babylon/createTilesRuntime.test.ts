@@ -21,6 +21,7 @@ vi.mock("3d-tiles-renderer/babylonjs", () => ({
       target.distanceFromCamera = 999;
     }
     update() {}
+    async parseTile() {}
     dispose() {}
     addEventListener(type: string, listener: (event: unknown) => void) {
       if (!this.listeners.has(type)) this.listeners.set(type, new Set());
@@ -35,6 +36,59 @@ vi.mock("3d-tiles-renderer/core/plugins", () => ({
 }));
 
 import { createGoogleTilesRuntime } from "./createTilesRuntime";
+
+describe("Google drawable tile publication", () => {
+  const setup = () => {
+    const ready = [false, false];
+    const meshes = ready.map((_value, index) => ({ isDisposed: () => false, isReady: () => ready[index], subMeshes: [] }));
+    const model = { getChildMeshes: () => meshes, setEnabled: vi.fn() };
+    const tile = { engineData: { scene: model } };
+    const runtime = createGoogleTilesRuntime({ scene: {} as Scene, apiKey: "test" });
+    const renderer = runtime.tiles as unknown as {
+      parseTile(buffer: ArrayBuffer, parsedTile: typeof tile, extension: string, uri: string, signal: AbortSignal): Promise<void>;
+    };
+    return { runtime, renderer, tile, model, ready: (index: number) => { ready[index] = true; } };
+  };
+
+  it("keeps parsing pending until hidden tile meshes can draw, so traversal retains the previous LOD", async () => {
+    vi.useFakeTimers();
+    const fixture = setup();
+    try {
+      const done = vi.fn();
+      const parsing = fixture.renderer.parseTile(new ArrayBuffer(0), fixture.tile, "glb", "test.glb", new AbortController().signal).then(done);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(done).not.toHaveBeenCalled();
+      fixture.ready(0);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(done).not.toHaveBeenCalled();
+      fixture.ready(1);
+      await vi.advanceTimersByTimeAsync(300);
+      await parsing;
+      expect(done).toHaveBeenCalledOnce();
+      expect(fixture.model.setEnabled).not.toHaveBeenCalledWith(true);
+    } finally {
+      fixture.runtime.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["eviction", "runtime disposal"])("cancels a pending drawable wait on %s", async (cause) => {
+    vi.useFakeTimers();
+    const fixture = setup();
+    const abort = new AbortController();
+    try {
+      const parsing = fixture.renderer.parseTile(new ArrayBuffer(0), fixture.tile, "glb", "test.glb", abort.signal).catch(error => error);
+      await vi.advanceTimersByTimeAsync(0);
+      if (cause === "eviction") abort.abort();
+      else fixture.runtime.dispose();
+      expect(await parsing).toMatchObject({ name: "AbortError" });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      fixture.runtime.dispose();
+      vi.useRealTimers();
+    }
+  });
+});
 
 describe("Google loading budgets", () => {
   it("sizes the renderer's cache and queues from map.google.*, and follows changes", async () => {
@@ -89,6 +143,30 @@ describe("Google terrain detail anchors", () => {
     expect(target.inView).toBe(false);
     expect(target.distanceFromCamera).toBe(12);
     expect(target.error).toBe(100);
+  });
+
+  it("reports loaded camera detail independently of a focus anchor's requested refinement", () => {
+    const onDetailFeedback = vi.fn();
+    const scene = {
+      activeCamera: { getProjectionMatrix: () => Matrix.Identity() },
+      getEngine: () => ({ getHardwareScalingLevel: () => 1, getRenderWidth: () => 100, getRenderHeight: () => 100 }),
+    } as Scene;
+    const runtime = createGoogleTilesRuntime({ scene, apiKey: "test", onDetailFeedback, getTerrainDetailAnchor: () => new Vector3(12, 0, 0) });
+    const tile = { geometricError: 2, engineData: { boundingVolume: { distanceToPoint: () => 12 } } };
+    const renderer = runtime.tiles as unknown as {
+      calculateTileViewError(measuredTile: typeof tile, target: { inView: boolean; error: number; distanceFromCamera: number }): void;
+    };
+    runtime.tiles.visibleTiles.add(tile as never);
+    runtime.update();
+    const target = { inView: false, error: 0, distanceFromCamera: 0 };
+    renderer.calculateTileViewError(tile, target);
+    // The native measurement is camera-invisible in this mock. Anchor-only
+    // selection must not invent delivered camera coverage.
+    runtime.update();
+    expect(runtime.getTerrainDetailState().loadedErrorTarget).toBeNull();
+    expect(target.error).toBe(100);
+    expect(onDetailFeedback).not.toHaveBeenCalled();
+    runtime.dispose();
   });
 });
 

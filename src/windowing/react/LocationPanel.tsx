@@ -4,7 +4,9 @@ import type { Airport, AirportMode } from "../../airports/types";
 import { airportSpawn } from "../../airports/geometry";
 
 import { LocationSearchResults } from "./LocationSearchResults";
-import type { GeodeticLocation, LocationSearchResult, LocationSearchProvider } from "../../search/types";
+import { readLocationDraft, writeLocationDraft } from "./locationDraft";
+import { createLocationResults, restoreLocationResults, snapshotLocationResults, updateLocationResult, type LocationResultNode } from "./locationResults";
+import type { GeodeticLocation, LocationSearchProvider } from "../../search/types";
 export type { GeodeticLocation, LocationSearchResult, LocationSearchProvider } from "../../search/types";
 
 export interface LocationPanelProps {
@@ -28,20 +30,33 @@ export function LocationPanel({ initialLocation, getCurrentLocation, onApply, se
     return () => window.clearInterval(timer);
   }, []);
   const currentAltitude = currentLocation.altMeters ?? currentLocation.zoomMeters;
-  const [lat, setLat] = useState("");
-  const [lon, setLon] = useState("");
-  const [altitude, setAltitude] = useState("");
-  const [airport, setAirport] = useState<Airport | null>(null);
-  const [airportMode, setAirportMode] = useState<AirportMode>("departure");
-  const [runwayId, setRunwayId] = useState("");
+  const [saved] = useState(() => readLocationDraft(enableAirportPresets));
+  const [lat, setLat] = useState(saved.lat);
+  const [lon, setLon] = useState(saved.lon);
+  const [altitude, setAltitude] = useState(saved.altitude);
+  const [airport, setAirport] = useState<Airport | null>(saved.airport);
+  const [airportMode, setAirportMode] = useState<AirportMode>(saved.airportMode);
+  const [runwayId, setRunwayId] = useState(saved.runwayId);
   const runway = airport?.runways.find(item => item.id === runwayId);
   const [resolving, setResolving] = useState(false);
   const [searching, setSearching] = useState(false);
-  const [query, setQuery] = useState("");
-  const [results, setResults] = useState<readonly LocationSearchResult[]>([]);
+  const [query, setQuery] = useState(saved.query);
+  const [resultQuery, setResultQuery] = useState(saved.resultQuery ?? "");
+  const [results, setResults] = useState(() => restoreLocationResults(saved.results ?? [], saved.resultQuery ?? saved.query, searchProvider));
   const [message, setMessage] = useState("");
   const request = useRef<AbortController | null>(null);
   useEffect(() => () => request.current?.abort(), []);
+  useEffect(() => {
+    writeLocationDraft(enableAirportPresets, { query, lat, lon, altitude, airport, airportMode, runwayId,
+      resultQuery, results: snapshotLocationResults(results) });
+  }, [enableAirportPresets, query, lat, lon, altitude, airport, airportMode, runwayId, resultQuery, results]);
+
+  const cancelResolution = () => {
+    if (!resolving) return;
+    request.current?.abort();
+    setResolving(false);
+    setMessage("");
+  };
 
   const search = async () => {
     if (!searchProvider || !query.trim()) return;
@@ -49,14 +64,14 @@ export function LocationPanel({ initialLocation, getCurrentLocation, onApply, se
     const controller = new AbortController();
     request.current = controller;
     setResults([]);
-    setAirport(null);
+    setResultQuery(query.trim());
     setResolving(false);
     setSearching(true);
     setMessage("Searching…");
     try {
       const found = await searchProvider(query.trim(), controller.signal);
       if (controller.signal.aborted) return;
-      setResults(found);
+      setResults(createLocationResults(found));
       setMessage(found.length ? "Select a result, then apply." : "No places found.");
     } catch (error) {
       if (!controller.signal.aborted) setMessage(error instanceof Error ? error.message : "Search failed. You can still enter coordinates.");
@@ -65,27 +80,29 @@ export function LocationPanel({ initialLocation, getCurrentLocation, onApply, se
     }
   };
 
-  const selectResult = async (selection: LocationSearchResult) => {
+  const selectResult = async (node: LocationResultNode) => {
+    const selection = node.result;
     request.current?.abort();
     const controller = new AbortController();
     request.current = controller;
-    setAirport(null);
     setResolving(true);
     try {
-      if (selection.resolve && enableAirportPresets) setMessage("Loading runway details…");
-      const result = selection.resolve && enableAirportPresets ? await selection.resolve(controller.signal) : selection;
+      if (!node.resolved && selection.resolve && enableAirportPresets) setMessage("Loading runway details…");
+      const result = enableAirportPresets ? node.resolved ?? (selection.resolve ? await selection.resolve(controller.signal) : selection) : selection;
       if (controller.signal.aborted) return;
+      if (result !== selection) setResults(current => updateLocationResult(current, selection, { resolved: result }));
       if (result.airport && enableAirportPresets) {
         setAirport(result.airport);
-        setAirportMode(result.airportMode ?? "departure");
-        setRunwayId(result.airport.runways[0]?.id ?? "");
-        setLat(""); setLon(""); setAltitude("");
+        setAirportMode(result.airportMode ?? airportMode);
+        setRunwayId(airport?.code === result.airport.code && result.airport.runways.some(item => item.id === runwayId)
+          ? runwayId : result.airport.runways[0]?.id ?? "");
         setMessage(result.airport.runways.length ? "Choose departure or arrival and a runway, then Go." : "No usable runway data found. Enter coordinates manually instead.");
         return;
       }
       onApply({ latDeg: result.latDeg, lonDeg: result.lonDeg });
+      setAirport(null);
       setCurrentLocation((current) => ({ ...current, latDeg: result.latDeg, lonDeg: result.lonDeg }));
-      setLat(""); setLon("");
+      setLat(String(result.latDeg)); setLon(String(result.lonDeg));
       setMessage(`Moved to ${result.label}.`);
     } catch (error) {
       if (!controller.signal.aborted) setMessage(error instanceof Error ? error.message : "Unable to load location details.");
@@ -98,7 +115,7 @@ export function LocationPanel({ initialLocation, getCurrentLocation, onApply, se
     <form onSubmit={(event) => { event.preventDefault(); void search(); }}>
       <div className="foss-earth-location-search-row">
         <input aria-label="Location search" value={query} onChange={(event) => {
-          request.current?.abort(); setResolving(false); setSearching(false); setResults([]); setAirport(null); setMessage(""); setQuery(event.target.value);
+          request.current?.abort(); setResolving(false); setSearching(false); setResults([]); setResultQuery(""); setMessage(""); setQuery(event.target.value);
         }} placeholder="location search" disabled={!searchProvider} />
         <button type="submit" aria-label="Search" title="Search" disabled={!searchProvider || !query.trim() || searching}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
@@ -107,7 +124,8 @@ export function LocationPanel({ initialLocation, getCurrentLocation, onApply, se
         </button>
       </div>
       {!searchProvider && <p>Place search is unavailable. Enter coordinates below.</p>}
-      <LocationSearchResults results={results} onSelect={result => { void selectResult(result); }} />
+      <LocationSearchResults results={results} onSelect={result => { void selectResult(result); }}
+        onChange={(result, patch) => setResults(current => updateLocationResult(current, result, patch))} />
       {results.length > 0 && <p className="foss-earth-location-attribution">Search © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap contributors</a> · <a href="https://freeairportdb.com" target="_blank" rel="noreferrer">FreeAirportDB</a></p>}
     </form>
     <form className="foss-earth-location-coordinates" onSubmit={(event) => {
@@ -131,22 +149,21 @@ export function LocationPanel({ initialLocation, getCurrentLocation, onApply, se
         const location = { latDeg, lonDeg, ...(altitudeMeters === undefined ? {} : currentLocation.altMeters !== undefined ? { altMeters: altitudeMeters } : { zoomMeters: altitudeMeters }) };
         onApply(location);
         setCurrentLocation(location);
-        setLat(""); setLon(""); setAltitude("");
         setMessage("Location applied.");
       }
       catch (error) { setMessage(error instanceof Error ? error.message : "Unable to apply location."); }
     }}>
       {airport && <div className="foss-earth-airport-controls">
         <strong>{airport.code} · {airport.name}</strong>
-        <label>Position<select aria-label="Airport position" value={airportMode} onChange={event => setAirportMode(event.target.value as AirportMode)}>
+        <label>Position<select aria-label="Airport position" value={airportMode} onChange={event => { cancelResolution(); setAirportMode(event.target.value as AirportMode); }}>
           <option value="departure">Departure</option><option value="arrival">Arrival</option>
         </select></label>
-        <label>Runway<select aria-label="Runway" value={runwayId} onChange={event => setRunwayId(event.target.value)}>
+        <label>Runway<select aria-label="Runway" value={runwayId} onChange={event => { cancelResolution(); setRunwayId(event.target.value); }}>
           {airport.runways.map(item => <option key={item.id} value={item.id}>{item.label} · {Math.round(item.lengthMeters)} m</option>)}
         </select></label>
         <p>{airportMode === "departure" ? "On runway, paused. Resume when ready for takeoff." : "5 NM final · 3° approach."}</p>
         {runway && runway.elevationMeters === undefined && <p>Runway elevation unavailable.</p>}
-        <button type="button" onClick={() => { setAirport(null); setMessage(""); }}>Enter coordinates instead</button>
+        <button type="button" onClick={() => { cancelResolution(); setAirport(null); setMessage(""); }}>Enter coordinates instead</button>
         <p>Airport data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap contributors</a> · <a href="https://freeairportdb.com" target="_blank" rel="noreferrer">FreeAirportDB</a></p>
       </div>}
       <div className="foss-earth-location-fields" hidden={airport !== null}>

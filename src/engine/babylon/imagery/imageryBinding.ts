@@ -133,6 +133,80 @@ export interface PatchTable {
   emptyCells: number;
 }
 
+/** A visible region measured in render pixels per pixel of its reference page. */
+export interface LoadedImageryRegion {
+  tile: TileId;
+  referenceLevel: number;
+  footprintPx: number;
+  screenArea: number;
+}
+
+/** What a terrain material actually samples, including table-budget fallback. */
+export interface LoadedImageryBinding {
+  tile: TileId;
+  table: Pick<PatchTable, "cellsLog2" | "data"> | null;
+  directLevel: number | null;
+}
+
+/**
+ * Visible-area estimate in binary detail offsets: zero is one render pixel
+ * per imagery pixel. Average logarithmic sampling density, rather than tile
+ * counts or residency percentages. Within a selected region, table cells
+ * share its estimated screen area in proportion to their Mercator area.
+ * Missing bound coverage makes the estimate unavailable.
+ */
+export function measureLoadedImagery(regions: readonly LoadedImageryRegion[], bindings: readonly LoadedImageryBinding[], normalTargetPx = 1): number | null {
+  const patches = new Map(bindings.map(binding => [tileKey(binding.tile), binding]));
+  const ancestors = new Set<string>();
+  for (const binding of bindings) addAncestors(ancestors, binding.tile.z, binding.tile.x, binding.tile.y);
+  let weighted = 0, area = 0;
+  let missing = false;
+  for (const region of regions) {
+    if (!(region.screenArea > 0)) continue;
+    // A region crossing the near plane can have unbounded projected size.
+    // Its bound imagery is real but beyond the coarse end of the rail.
+    if (!(region.footprintPx > 0)) { missing = true; continue; }
+    const base = Math.log2(normalTargetPx / region.footprintPx) - region.referenceLevel;
+    const add = (level: number | null, fraction: number): void => {
+      if (level === null) { missing = true; return; }
+      const weight = region.screenArea * fraction;
+      weighted += weight * (base + level);
+      area += weight;
+    };
+    const sample = (binding: LoadedImageryBinding, intersection: TileId): void => {
+      const fraction = 4 ** (region.tile.z - intersection.z);
+      if (!binding.table) { add(binding.directLevel, fraction); return; }
+      const { cellsLog2, data } = binding.table;
+      const cellLevel = binding.tile.z + cellsLog2;
+      const count = 2 ** Math.max(0, cellLevel - intersection.z);
+      const scale = 2 ** (cellLevel - intersection.z);
+      const startX = Math.floor(intersection.x * scale) - binding.tile.x * 2 ** cellsLog2;
+      const startY = Math.floor(intersection.y * scale) - binding.tile.y * 2 ** cellsLog2;
+      for (let y = startY; y < startY + count; y++) for (let x = startX; x < startX + count; x++) {
+        const index = (y * IMAGERY_TABLE_BLOCK + x) * 4;
+        add(data[index + 3] === 255 ? data[index + 2] : null, fraction / (count * count));
+      }
+    };
+    let { z, x, y } = region.tile;
+    let covering: LoadedImageryBinding | undefined;
+    for (;;) {
+      covering = patches.get(`${z}/${x}/${y}`);
+      if (covering || z === 0) break;
+      z--; x >>= 1; y >>= 1;
+    }
+    if (covering) { sample(covering, region.tile); continue; }
+    const descend = (tile: TileId): void => {
+      const key = tileKey(tile);
+      const patch = patches.get(key);
+      if (patch) { sample(patch, tile); return; }
+      if (!ancestors.has(key)) { missing = true; return; }
+      for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) descend({ z: tile.z + 1, x: tile.x * 2 + dx, y: tile.y * 2 + dy });
+    };
+    descend(region.tile);
+  }
+  return !missing && area > 0 ? weighted / area : null;
+}
+
 /**
  * Fills one terrain patch's page-table block from the display, into `into`
  * when given so a patch reuses one buffer across publishes.

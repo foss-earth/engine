@@ -5,6 +5,7 @@ import {
   estimateFocusPages,
   imageKey,
   imageSourceKey,
+  measureImageryView,
   type ImageryFocus,
   type ImageryHysteresis,
   type ImageryPlan,
@@ -16,7 +17,7 @@ import { imagerySourceSupport, imageryTileUrl, type ImageryDescriptor } from "..
 import type { DetailLimit } from "../../../terrain/mapDetailPolicy";
 import { createImageryAtlas, planAtlasForBackend, readAtlasCapabilities, type AtlasCapabilities, type ImageryAtlas } from "./imageryAtlas";
 import { slotBytes, type ImageryAtlasLayout } from "./imageryAtlasLayout";
-import { buildImageryDisplay, buildPatchTable, type ImageryDisplay } from "./imageryBinding";
+import { buildImageryDisplay, buildPatchTable, measureLoadedImagery, type ImageryDisplay, type LoadedImageryBinding, type LoadedImageryRegion } from "./imageryBinding";
 import { createBrowserImageryLoader } from "./imageryLoader";
 import { ImageryAtlasMaterialPlugin } from "./imageryMaterialPlugin";
 import {
@@ -64,6 +65,10 @@ export interface ImageryFeedback {
   reason?: string;
   pending: boolean;
   limits: DetailLimit[];
+  /** The selector's current offset, independent of loading and spatial delivery. */
+  activeTarget: number | null;
+  /** Visible-area estimate of bound imagery detail; mixed regions are averaged in log space. */
+  loadedTarget?: number | null;
   effectiveTarget: number | null;
 }
 
@@ -162,6 +167,8 @@ interface PatchState {
   block: number | null;
   tableSignature: string | null;
   table: Uint8Array | null;
+  /** Retained across atlas/source handovers until the material actually changes. */
+  bound: LoadedImageryBinding | null;
 }
 
 interface SourceState {
@@ -268,10 +275,19 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
   let planChangedSincePublish = true;
   let patchesChanged = true;
   let display: ImageryDisplay | null = null;
+  let shownPlan: { plan: ImageryPlan; source: SourceState; focus: boolean } | null = null;
+  let latestView: ReturnType<typeof readImageryView> = null;
+  let measuredView: ReturnType<typeof readImageryView> = null;
+  let measuredPlan: ImageryPlan | null = null;
+  let measuredSurfaceRevision = -1;
+  let measuredAt = -Infinity;
+  let measuredPublish = -1;
+  let loadedRegions: LoadedImageryRegion[] = [];
+  let loadedTarget: number | null = null;
   let capped = 0;
   let emptyCells = 0;
   let fallbackPatches = 0;
-  let feedback: ImageryFeedback = { support: "unavailable", reason: unsupportedReason ?? undefined, pending: false, limits: [], effectiveTarget: null };
+  let feedback: ImageryFeedback = { support: "unavailable", reason: unsupportedReason ?? undefined, pending: false, limits: [], activeTarget: null, loadedTarget: null, effectiveTarget: null };
   const patches = new Map<string, PatchState>();
   const counters = { selections: 0, selectionCpuMs: 0, publishes: 0, tableWrites: 0, uploads: 0, uploadBytes: 0 };
 
@@ -405,6 +421,7 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
   function select(): void {
     if (!requested || !atlas) return;
     const view = readImageryView(options.scene, worldRoot);
+    latestView = view;
     if (!view) return;
     const surfaceRevision = options.surface.getRevision();
     const missingRevision = residency.getMissingRevision();
@@ -472,6 +489,7 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
         standardKey: tile => standardKey(source, tile),
         isMissing: residency.isMissing,
       });
+      shownPlan = { plan, source, focus: lastFocus !== null };
       if (!wasComplete) options.onCoverageChange?.();
     }
     lastPublishedResidency = residencyRevision;
@@ -482,6 +500,18 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
     capped = 0;
     emptyCells = 0;
     fallbackPatches = 0;
+    const tables: Array<{ patch: PatchState; table: ReturnType<typeof buildPatchTable> }> = [];
+    const bindSinglePage = (patch: PatchState): void => {
+      let page: { slot: number; z: number } | undefined;
+      let { z, x, y } = patch.tile;
+      for (;;) {
+        page = display!.pages.get(`${z}/${x}/${y}`);
+        if (page || z === 0) break;
+        z -= 1; x >>= 1; y >>= 1;
+      }
+      patch.plugin.setTable(null, page ? { slot: page.slot, level: page.z } : null);
+      patch.bound = { tile: patch.tile, table: null, directLevel: page?.z ?? null };
+    };
     for (const [, patch] of patches) {
       if (!patch.visible) {
         if (patch.block !== null) {
@@ -497,22 +527,29 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
         patch.plugin.setAtlas(atlas);
         patch.atlas = atlas;
       }
-      if (patch.block === null) patch.block = atlas.allocateBlock();
       patch.table ??= new Uint8Array(64 * 64 * 4);
       const table = buildPatchTable(display, patch.tile, patch.table);
       if (table.capped) capped += 1;
       emptyCells += table.emptyCells;
+      if (table.cellsLog2 === 0) {
+        // One page covers this whole patch exactly. It needs no table lookup
+        // or block, leaving the budget for patches with finer resident pages.
+        if (patch.block !== null) atlas.releaseBlock(patch.block);
+        patch.block = null;
+        patch.tableSignature = null;
+        bindSinglePage(patch);
+        continue;
+      }
+      tables.push({ patch, table });
+    }
+    // Release every obsolete block before allocating any replacement. A
+    // newly visible patch can precede the patch it replaces in cache order.
+    for (const { patch, table } of tables) {
+      if (patch.block === null) patch.block = atlas.allocateBlock();
       if (patch.block === null) {
         // No block left: show the one page that covers the whole patch.
         fallbackPatches += 1;
-        let page: { slot: number; z: number } | undefined;
-        let { z, x, y } = patch.tile;
-        for (;;) {
-          page = display.pages.get(`${z}/${x}/${y}`);
-          if (page || z === 0) break;
-          z -= 1; x >>= 1; y >>= 1;
-        }
-        patch.plugin.setTable(null, page ? { slot: page.slot, level: page.z } : null);
+        bindSinglePage(patch);
         continue;
       }
       const tableSignature = signature(table.data, table.cellsLog2);
@@ -523,6 +560,7 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
       }
       const origin = atlas.blockOrigin(patch.block);
       patch.plugin.setTable({ x: origin.x, y: origin.y, cellsLog2: table.cellsLog2 }, null);
+      patch.bound = { tile: patch.tile, table: { cellsLog2: table.cellsLog2, data: table.data }, directLevel: null };
     }
     residency.setPinned(display.slots);
     if (retiredAtlas) {
@@ -568,25 +606,62 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
     options.requestRender();
   }
 
+  function refreshLoadedDetail(): void {
+    if (!latestView || !shownPlan) return;
+    const surfaceRevision = options.surface.getRevision();
+    const moved = imageryViewChanged(measuredView, latestView) || surfaceRevision !== measuredSurfaceRevision;
+    const planChanged = measuredPlan !== shownPlan.plan;
+    const bindingsChanged = measuredPublish !== counters.publishes;
+    if (!moved && !planChanged && !bindingsChanged) return;
+    const measureNow = planChanged || now() - measuredAt >= tuning.reselectWhileMovingMs;
+    if ((moved || planChanged) && measureNow) {
+      const current = shownPlan.plan;
+      const source = shownPlan.source.capabilities;
+      // Ordinary view selection already measured these regions. Focus
+      // footprints describe loading around a point, so measure its leaves
+      // from the actual view without choosing or requesting more imagery.
+      const reusable = !shownPlan.focus && !imageryViewChanged(lastView, latestView) && surfaceRevision === lastSurfaceRevision && current === plan;
+      loadedRegions = reusable ? current.leaves.map(leaf => ({
+        tile: leaf.tile,
+        referenceLevel: leaf.tile.z + Math.log2((leaf.variant === null ? source.tileWidth : source.variants.find(variant => variant.id === leaf.variant)!.width) / 256),
+        footprintPx: leaf.footprintPx,
+        screenArea: leaf.screenArea,
+      })) : measureImageryView({ view: latestView, source, surface: options.surface }, current.leaves.map(leaf => leaf.tile), current.coverage).map(region => ({
+        ...region, referenceLevel: region.tile.z + Math.log2(source.tileWidth / 256),
+      }));
+      measuredPlan = current;
+      measuredView = latestView;
+      measuredSurfaceRevision = surfaceRevision;
+      measuredAt = now();
+    } else if (moved) {
+      scheduleWake(measuredAt + tuning.reselectWhileMovingMs);
+      if (!bindingsChanged) return;
+    }
+    loadedTarget = measureLoadedImagery(loadedRegions, [...patches.values()].filter(patch => patch.visible && patch.bound).map(patch => patch.bound!), shownPlan.plan.physicalTarget * 2 ** shownPlan.plan.offset);
+    measuredPublish = counters.publishes;
+  }
+
   function refreshFeedback(): void {
     let next: ImageryFeedback;
     if (!atlas || !requested) {
-      next = { support: "unavailable", reason: unsupportedReason ?? "Imagery is unavailable.", pending: false, limits: [], effectiveTarget: null };
+      next = { support: "unavailable", reason: unsupportedReason ?? "Imagery is unavailable.", pending: false, limits: [], activeTarget: null, loadedTarget: null, effectiveTarget: null };
     } else {
       const stats = residency.stats();
       const limitSet = new Set<DetailLimit>([...(plan?.limits ?? []), ...stats.limits]);
-      if (capped > 0 || backendLimited || (atlasCappedByBackend() && limitSet.has("memory"))) limitSet.add("backend");
-      const pending = selector.isRunning() || residency.isBusy() || (display?.fallbackLeaves ?? 0) > 0 || displayed !== requested || !plan;
+      if (capped > 0 || fallbackPatches > 0 || backendLimited || (atlasCappedByBackend() && limitSet.has("memory"))) limitSet.add("backend");
+      const pending = restartSelection || selector.isRunning() || residency.isBusy() || (display?.fallbackLeaves ?? 0) > 0 || displayed !== requested || !plan;
       if (pending) limitSet.add("loading");
       const limitsList = (["source", "backend", "memory", "loading"] as const).filter(limit => limitSet.has(limit));
       next = {
         support: "ready",
         pending,
         limits: limitsList,
+        activeTarget: offset,
+        loadedTarget,
         effectiveTarget: !pending && limitsList.length === 0 ? offset : null,
       };
     }
-    if (JSON.stringify(next) !== JSON.stringify(feedback)) {
+    if (!Object.is(next.loadedTarget, feedback.loadedTarget) || JSON.stringify(next) !== JSON.stringify(feedback)) {
       feedback = next;
       options.onFeedback?.();
     }
@@ -598,9 +673,12 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
     residency.reset();
     display = null;
     displayed = null;
+    shownPlan = null;
+    loadedTarget = null;
     for (const patch of patches.values()) {
       patch.block = null;
       patch.tableSignature = null;
+      patch.bound = null;
     }
     restartSelection = true;
     options.requestRender();
@@ -649,6 +727,7 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
       if (!Number.isFinite(next) || next === offset) return;
       offset = next;
       restartSelection = true;
+      refreshFeedback();
       options.requestRender();
     },
     attachPatch(key, tile, material) {
@@ -658,7 +737,7 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
       const plugin = new ImageryAtlasMaterialPlugin(material);
       plugin.setAtlas(atlas);
       plugin.setPatch(tile.z, tile.x, tile.y);
-      patches.set(key, { tile, plugin, atlas, visible: false, block: null, tableSignature: null, table: null });
+      patches.set(key, { tile, plugin, atlas, visible: false, block: null, tableSignature: null, table: null, bound: null });
       patchesChanged = true;
     },
     detachPatch(key) {
@@ -694,6 +773,7 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
         counters.uploadBytes += bytes;
       }
       publish();
+      refreshLoadedDetail();
       refreshFeedback();
       // Admitted work that is waiting only on this thread asks for another update.
       const stats = residency.stats();

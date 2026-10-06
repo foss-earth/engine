@@ -321,6 +321,24 @@ describe("raster runtime with atlas imagery", () => {
     engine.dispose();
   });
 
+  it("keeps USGS detail at its request during slow frames when automatic adjustment has not been enabled", async () => {
+    const settings = getAppSettings();
+    expect(settings.get("map.auto.terrainDetail")).toBe(false);
+    expect(settings.get("map.auto.imageryDetail")).toBe(false);
+    const onDetailAdjusted = vi.fn();
+    const sourceIndex = RASTER_BASE_MAP_SOURCES.findIndex(source => source.id === "usgs-topo");
+    expect(sourceIndex).toBeGreaterThanOrEqual(0);
+    const { runtime, engine } = await setup(sourceIndex, undefined, { onDetailAdjusted });
+    try {
+      const requested = runtime.getTerrainState().requestedTargetPx;
+      for (let now = 0; now < 120_000; now += 40) runtime.reportFrame(now, 40, false);
+      expect(runtime.getTerrainState().targetPx).toBe(requested);
+      expect(runtime.getAutoDetailState()).toMatchObject({ adjustment: 0, requestedOffset: 0, offset: 0 });
+      expect(runtime.getDetailFeedback().limits).not.toContain("frame-time");
+      expect(onDetailAdjusted).not.toHaveBeenCalled();
+    } finally { runtime.dispose(); engine.dispose(); }
+  });
+
   it("coarsens enabled detail toward its range when frames are slow, says why, and returns when they are fast", async () => {
     const settings = getAppSettings();
     settings.setMany({ "map.auto.terrainDetail": true, "map.auto.imageryDetail": true, "map.auto.frameTimeGoal": 16, "map.auto.coarsenWindows": 1, "map.auto.interval": 0, "map.auto.refineWindows": 2, "map.auto.step": 0.5 });
@@ -335,11 +353,13 @@ describe("raster runtime with atlas imagery", () => {
     expect(runtime.getTerrainState()).toMatchObject({ requestedTargetPx: 4, targetPx: 4 * Math.SQRT2 });
     expect(runtime.getAutoDetailState()).toMatchObject({ adjustment: 0.5, requestedOffset: 0, offset: -0.5 });
     expect(runtime.getDetailFeedback().limits).toContain("frame-time");
+    expect(runtime.getDetailFeedback()).toMatchObject({ activeTarget: -0.5, pending: true, effectiveTarget: null });
     expect(onDetailFeedback).toHaveBeenCalled();
     // Imagery may stay as asked while terrain alone gives way.
     settings.set("map.auto.imageryDetail", false);
     expect(runtime.getAutoDetailState().offset).toBe(0);
     expect(runtime.getDetailFeedback().limits).not.toContain("frame-time");
+    expect(runtime.getDetailFeedback().activeTarget).toBe(0);
     expect(runtime.getTerrainState().targetPx).toBeCloseTo(4 * Math.SQRT2);
     // Fast frames return it to the request, never past it.
     frames(1100, 3000, 10);

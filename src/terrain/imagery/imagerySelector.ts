@@ -316,7 +316,7 @@ function latLonAt(tile: TileId, u: number, v: number): { latDeg: number; lonDeg:
 }
 
 /** A surface sample at the adopted height, tilted by the local slope. */
-function surfaceSample(input: ImagerySelectionInput, tile: TileId, u: number, v: number, fallbackHeight: number): SurfaceSample {
+function surfaceSample(input: Pick<ImagerySelectionInput, "surface">, tile: TileId, u: number, v: number, fallbackHeight: number): SurfaceSample {
   const heightAt = (uu: number, vv: number): number | null => {
     const { latDeg, lonDeg } = latLonAt(tile, uu, vv);
     return input.surface.heightAt(latDeg, lonDeg);
@@ -421,7 +421,49 @@ function evaluate(job: Job, tile: TileId): Evaluated {
   return result;
 }
 
-function evaluateView(job: Job, tile: TileId): Evaluated {
+type ViewMeasurementContext = Pick<Job, "cartographic" | "camera" | "screenGround" | "nodes"> & {
+  input: Pick<ImagerySelectionInput, "view" | "source" | "surface">;
+};
+
+/**
+ * Measures existing regions from the view alone, independent of a loading
+ * focus. Optional coverage fills gaps outside the selected leaves, splitting
+ * roots only along existing leaf paths; it never traverses for more detail.
+ */
+export function measureImageryView(input: ViewMeasurementContext["input"], tiles: readonly TileId[], coverage: readonly TileId[] = []): Array<{ tile: TileId; footprintPx: number; screenArea: number }> {
+  const camera = cameraLonLat(input.view);
+  const ground = input.surface.heightAt(camera.latDeg, camera.lonDeg) ?? 0;
+  const lat = camera.latDeg * Math.PI / 180;
+  const radius = Math.hypot(6378137 * Math.cos(lat), 6356752.314245 * Math.sin(lat)) + ground;
+  const context: ViewMeasurementContext = {
+    input, camera, cartographic: input.source.kind === "cartographic",
+    screenGround: screenGroundPoints(input.view, radius), nodes: 0,
+  };
+  const regions: TileId[] = [];
+  if (coverage.length > 0) {
+    const ancestors = new Set<string>();
+    for (const tile of tiles) {
+      let { z, x, y } = tile;
+      while (z > 0) {
+        z--; x >>= 1; y >>= 1;
+        const key = `${z}/${x}/${y}`;
+        if (ancestors.has(key)) break;
+        ancestors.add(key);
+      }
+    }
+    const visit = (tile: TileId): void => {
+      if (!ancestors.has(tileKey(tile))) { regions.push(tile); return; }
+      for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) visit({ z: tile.z + 1, x: tile.x * 2 + dx, y: tile.y * 2 + dy });
+    };
+    for (const tile of coverage) visit(tile);
+  } else regions.push(...tiles);
+  return regions.map(tile => {
+    const measured = evaluateView(context, tile);
+    return { tile, footprintPx: measured.physicalFootprint, screenArea: measured.screenArea };
+  });
+}
+
+function evaluateView(job: ViewMeasurementContext, tile: TileId): Evaluated {
   const { input } = job;
   const { view, source } = input;
   job.nodes += 1;

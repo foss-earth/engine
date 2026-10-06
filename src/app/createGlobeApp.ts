@@ -1,4 +1,5 @@
 import { createMapSourceHud } from "../shell/mapSourceHud";
+import { connectMapDetailLog } from "../shell/mapDetailLog";
 import { attachRendererActivity } from "../shell/rendererActivity";
 import { createBrowserInputSource } from "@felipegalind0/gamepad-tools/browser";
 import { BindingRuntime, createProfileStore } from "@felipegalind0/gamepad-tools/core";
@@ -16,7 +17,7 @@ import {
 } from "../engine/babylon/resolveMapRuntimeConfig";
 import { TERRAIN_SOURCES, type TerrainSource } from "../terrain/terrainTiles";
 import { getAppSettings } from "../settings/appSettings";
-import { INPUT_SENSITIVITY_IDS, PERFORMANCE_HUD_METRICS, TOOLBAR_PRIORITIES, toolbarPriorityParameterId } from "../settings/catalogue";
+import { INPUT_SENSITIVITY_IDS, PERFORMANCE_HUD_METRICS, TOOLBAR_EDIT_PRIORITIES_ID, TOOLBAR_PRIORITIES, toolbarPriorityParameterId } from "../settings/catalogue";
 import { createParameterControl, type ParameterControlHandle } from "../shell/settings/controls";
 import { createParameterSection, type ParameterSectionHandle } from "../shell/settings/parameterSection";
 import { createThemeControl } from "../shell/settings/themeControl";
@@ -586,13 +587,15 @@ export async function createGlobeApp(
   };
   applyHudButtonVisibility();
   const fittingIds = new Set([
+    TOOLBAR_EDIT_PRIORITIES_ID,
     ...HUD_BUTTON_IDS.map(hudButtonParameterId),
     ...PERFORMANCE_HUD_METRICS.map(([metric]) => `interface.performanceHud.${metric}`),
     ...TOOLBAR_PRIORITIES.map(([item]) => toolbarPriorityParameterId(item)),
   ]);
   const hudFit = mapSourceSlot ? fitHudBar(hudBar.element, mapSourceSlot, () => {
-    const items = TOOLBAR_PRIORITIES.flatMap(([item]): HudBarFitItem[] => {
-      const priority = settings.get<number>(toolbarPriorityParameterId(item));
+    const customPriorities = settings.get(TOOLBAR_EDIT_PRIORITIES_ID) === true;
+    const items = TOOLBAR_PRIORITIES.flatMap(([item, , defaultPriority]): HudBarFitItem[] => {
+      const priority = customPriorities ? settings.get<number>(toolbarPriorityParameterId(item)) : defaultPriority;
       if (item === "north") return northBtnEl ? [{ element: northBtnEl, priority, keepVisible: true, reserveSpace: true, essential: true }] : [];
       const button = HUD_BUTTON_IDS.find(id => id === item);
       const element = button ? hudButtonElements[button]
@@ -601,8 +604,8 @@ export async function createGlobeApp(
       const { wanted, pinned } = readHudPreference(id);
       return element && wanted ? [{ element, priority, keepVisible: pinned }] : [];
     });
-    // Reserve the first two available controls after North (Help and FPS by
-    // default). Pinning one keeps the same core; edited priorities change it.
+    // Reserve the first two available controls after North (Help and Input by
+    // default). Pinning one keeps the same core; Custom priorities change it.
     const core = items.filter(item => !item.reserveSpace && !item.element.closest("[hidden]"))
       .sort((a, b) => a.priority - b.priority);
     for (const item of core.slice(0, 2)) item.reserveSpace = true;
@@ -618,13 +621,7 @@ export async function createGlobeApp(
   };
   const stopWatchingSettings = [
     // What automatic adjustment did, and why, goes in the log as it happens.
-    runtime.onDetailAdjusted(decision => {
-      const levels = Math.round(Math.abs(decision.to - decision.from) * 100) / 100;
-      const why = `frames averaged ${decision.meanFrameMs.toFixed(1)} ms against a ${decision.goalMs.toFixed(1)} ms goal`;
-      gameLog.print(decision.to > decision.from
-        ? { text: `Map detail coarsened ${levels} level${levels === 1 ? "" : "s"} to hold the frame time: ${why}.`, tone: "warning" }
-        : { text: `Map detail returned ${levels} level${levels === 1 ? "" : "s"} toward what you asked for: ${why}.`, tone: "info" });
-    }),
+    connectMapDetailLog(runtime, gameLog),
     settings.subscribe(changed => {
       if (![...changed].some(id => fittingIds.has(id))) return;
       // On pins the chip, Auto fits it by priority, and Off removes it.

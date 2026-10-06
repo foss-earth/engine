@@ -8,6 +8,7 @@ import {
   RASTER_DETAIL_STEP,
   type DetailLimit,
   type DetailState,
+  type DetailTrackMarker,
 } from "../terrain/mapDetailPolicy";
 import type { MapDetailController } from "./mapDetailController";
 
@@ -52,8 +53,8 @@ function rangePercent(position: number, finer: number, coarser: number): number 
  * A small rail beside the map's credit that sets a temporary detail target for
  * this session: finer to the left, coarser to the right. Both ends are
  * ordinary values; "Restore saved detail" in the Map tab returns to the saved
- * default. A tick marks that default. For Google 3D Tiles a blue marker shows
- * the renderer's target when an app holds it finer than the rail.
+ * default. A tick marks that default. An I-beam marks the detail actually drawn,
+ * independently of the request, and stays visible when it reaches the thumb.
  */
 export function createMapDetailSlider(options: MapDetailSliderOptions): MapDetailSliderHandle {
   const { controller } = options;
@@ -70,9 +71,9 @@ export function createMapDetailSlider(options: MapDetailSliderOptions): MapDetai
   const defaultTick = document.createElement("span");
   defaultTick.className = "map-detail-control__default-tick";
   defaultTick.setAttribute("aria-hidden", "true");
-  const activeMarker = document.createElement("span");
-  activeMarker.className = "map-detail-control__active-marker";
-  activeMarker.setAttribute("aria-hidden", "true");
+  const loadedMarker = document.createElement("span");
+  loadedMarker.className = "map-detail-control__loaded-marker";
+  loadedMarker.setAttribute("aria-hidden", "true");
   const slider = document.createElement("input");
   slider.className = "map-detail-control__slider";
   slider.type = "range";
@@ -80,10 +81,12 @@ export function createMapDetailSlider(options: MapDetailSliderOptions): MapDetai
   const markerTicks = document.createElement("span");
   markerTicks.className = "map-detail-control__markers";
   markerTicks.setAttribute("aria-hidden", "true");
-  rail.append(validRange, defaultTick, activeMarker, markerTicks, slider);
+  rail.append(validRange, defaultTick, loadedMarker, markerTicks, slider);
   element.append(rail);
 
   let shown: DetailState | null | undefined;
+  let markerLayout = "";
+  let shownMarkers: readonly DetailTrackMarker[] = [];
   let dragging = false;
   const update = (): void => {
     const state = controller.getState();
@@ -96,8 +99,9 @@ export function createMapDetailSlider(options: MapDetailSliderOptions): MapDetai
     if (!state) {
       slider.disabled = true;
       defaultTick.hidden = true;
-      activeMarker.hidden = true;
+      loadedMarker.hidden = true;
       markerTicks.replaceChildren();
+      shownMarkers = [];
       slider.removeAttribute("aria-valuetext");
       element.title = `${name} is not available for this map.`;
       slider.title = element.title;
@@ -115,32 +119,51 @@ export function createMapDetailSlider(options: MapDetailSliderOptions): MapDetai
     slider.disabled = !ready || Math.abs(coarser - finer) < 1e-9;
     const status = ready ? describeDetailStatus(state) : null;
     const valueText = describeDetailValue(kind, state.requestedTarget);
-    slider.setAttribute("aria-valuetext", status ? `${valueText}. ${status}` : valueText);
+    const active = state.activeTarget;
+    const activeText = ready && active !== null && active !== state.requestedTarget
+      ? `Current target: ${describeDetailValue(kind, active)}`
+      : null;
+    const loaded = state.loadedTarget;
+    const hasLoaded = ready && loaded !== null && !Number.isNaN(loaded);
+    const loadedText = hasLoaded
+      ? `Loaded detail: ${Number.isFinite(loaded)
+        ? kind === "google" ? formatDetailValue(kind, loaded) : describeDetailValue(kind, loaded)
+        : "beyond measurable range"}`
+      : null;
+    slider.setAttribute("aria-valuetext", [valueText, activeText, loadedText, status].filter(Boolean).join(". "));
 
     defaultTick.hidden = false;
     defaultTick.style.left = `${rangePercent(detailPosition(kind, state.resolvedDefault), finer, coarser)}%`;
 
-    // The marker is a policy target, shown only where one scalar exists and it
-    // differs from the thumb. It never claims the imagery has loaded.
-    const effective = state.effectiveTarget;
-    activeMarker.hidden = !ready || effective === null || effective === state.requestedTarget;
-    if (effective !== null) {
-      activeMarker.style.left = `${rangePercent(detailPosition(kind, effective), finer, coarser)}%`;
-      activeMarker.classList.toggle("is-beyond-range", detailPosition(kind, effective) < finer - 1e-9);
+    // Delivery may be coarser than the selectable range while tiles arrive.
+    // Clamp only its position; the tooltip preserves the measured value.
+    loadedMarker.hidden = !hasLoaded;
+    if (hasLoaded) {
+      const position = detailPosition(kind, loaded);
+      loadedMarker.style.left = `${rangePercent(position, finer, coarser)}%`;
+      loadedMarker.classList.toggle("is-beyond-range", position < finer - 1e-9 || position > coarser + 1e-9);
     }
 
     // Hosts' markers that explain the rail, such as a flight's minimum while it holds.
     const railMarkers = ready ? state.markers.filter(marker => marker.onRail) : [];
-    markerTicks.replaceChildren(...railMarkers.map(marker => {
-      const tick = document.createElement("span");
-      tick.className = "map-detail-control__marker";
-      const position = detailPosition(kind, marker.value);
-      tick.style.left = `${rangePercent(position, finer, coarser)}%`;
-      tick.style.setProperty("--marker-colour", marker.colour);
-      tick.classList.toggle("is-hollow", Boolean(marker.hollow));
-      tick.classList.toggle("is-beyond-range", position < finer - 1e-9 || position > coarser + 1e-9);
-      return tick;
-    }));
+    const layout = `${kind}:${finer}:${coarser}`;
+    // Loaded detail can change with each view update. Stable host ticks need no
+    // new nodes while the I-beam moves.
+    if (layout !== markerLayout || railMarkers.length !== shownMarkers.length
+      || railMarkers.some((marker, index) => marker !== shownMarkers[index])) {
+      markerLayout = layout;
+      shownMarkers = railMarkers;
+      markerTicks.replaceChildren(...railMarkers.map(marker => {
+        const tick = document.createElement("span");
+        tick.className = "map-detail-control__marker";
+        const position = detailPosition(kind, marker.value);
+        tick.style.left = `${rangePercent(position, finer, coarser)}%`;
+        tick.style.setProperty("--marker-colour", marker.colour);
+        tick.classList.toggle("is-hollow", Boolean(marker.hollow));
+        tick.classList.toggle("is-beyond-range", position < finer - 1e-9 || position > coarser + 1e-9);
+        return tick;
+      }));
+    }
 
     if (!ready) {
       element.title = state.availability === "initializing"
@@ -151,7 +174,9 @@ export function createMapDetailSlider(options: MapDetailSliderOptions): MapDetai
         `${name}: ${valueText}${state.sessionOverride === null ? " (saved default)" : " for this session"}.`,
         `Saved default: ${formatDetailValue(kind, state.resolvedDefault)}${state.defaultLimitedByRange ? ", limited by the range" : ""}.`,
       ];
-      if (!activeMarker.hidden && effective !== null) lines.push(`Blue marker: the renderer is held at ${formatDetailValue(kind, effective)}.`);
+      if (activeText) lines.push(`${activeText}.`);
+      if (loadedText) lines.push(`I-beam · ${loadedText} (${kind === "raster" ? "visible-area estimate" : "largest visible geometry error"}).`);
+      if (kind === "raster" && state.effectiveTarget === null) lines.push("Imagery is still loading or limited.");
       for (const marker of railMarkers) lines.push(`${marker.label}: ${formatDetailValue(kind, marker.value)}${marker.hollow ? ", waived" : ""}.`);
       if (status) lines.push(status);
       lines.push("Left is finer, right is coarser. The Map tab restores the saved detail.");

@@ -134,7 +134,7 @@ export interface ImageryResidency {
   isMissing(imageKey: string): boolean;
   /** Changes whenever residency or missing records change. */
   getRevision(): number;
-  /** Changes when a tile is newly recorded as missing, which can change selection. */
+  /** Changes when a missing record is added or expires, which can change selection. */
   getMissingRevision(): number;
   /** True while demanded work is queued, loading, staged or waiting for a retry. */
   isBusy(): boolean;
@@ -167,6 +167,7 @@ export function createImageryResidency(options: ImageryResidencyOptions): Imager
   let pinned: ReadonlySet<number> = new Set();
   let revision = 0;
   let missingRevision = 0;
+  let missingWakeAt = Infinity;
   let tick = 0;
   let overflow = 0;
   let memoryLimited = false;
@@ -178,11 +179,35 @@ export function createImageryResidency(options: ImageryResidencyOptions): Imager
     options.onChange?.();
   };
 
+  function recordMissing(key: string): void {
+    const until = now() + limits.missingRetryMs;
+    missing.set(key, until);
+    missingWakeAt = Math.min(missingWakeAt, until);
+    missingRevision += 1;
+  }
+
+  function expireMissing(): void {
+    const time = now();
+    if (time < missingWakeAt) return;
+    missingWakeAt = Infinity;
+    let expired = false;
+    for (const [key, until] of missing) {
+      if (time >= until) {
+        missing.delete(key);
+        expired = true;
+      } else missingWakeAt = Math.min(missingWakeAt, until);
+    }
+    if (expired) {
+      missingRevision += 1;
+      changed();
+    }
+  }
+
   const isMissing = (key: string): boolean => {
     const until = missing.get(key);
     if (until === undefined) return false;
     if (now() < until) return true;
-    missing.delete(key);
+    expireMissing();
     return false;
   };
 
@@ -224,8 +249,7 @@ export function createImageryResidency(options: ImageryResidencyOptions): Imager
       if (image.width !== request.width || image.height !== request.height) {
         // A variant that is not the size it was declared is not that variant.
         entries.delete(request.imageKey);
-        missing.set(request.imageKey, now() + limits.missingRetryMs);
-        missingRevision += 1;
+        recordMissing(request.imageKey);
         options.onError?.(new Error(`Map image was ${image.width}×${image.height}, expected ${request.width}×${request.height}.`), request.url);
         changed();
         return;
@@ -233,6 +257,10 @@ export function createImageryResidency(options: ImageryResidencyOptions): Imager
       if (!demand.has(request.imageKey)) {
         // Stale work is not kept outside the bounded cache.
         entries.delete(request.imageKey);
+        // Its concurrency/staging reservation may have been the only thing
+        // holding up the current view. Wake admission without invalidating
+        // the display, whose pages did not change.
+        if (overflow > 0 || [...entries.values()].some(candidate => candidate.state === "queued")) options.onChange?.();
         return;
       }
       entry.state = "staged";
@@ -248,8 +276,7 @@ export function createImageryResidency(options: ImageryResidencyOptions): Imager
       }
       if (error instanceof ImageryMissingError) {
         entries.delete(request.imageKey);
-        missing.set(request.imageKey, now() + limits.missingRetryMs);
-        missingRevision += 1;
+        recordMissing(request.imageKey);
         changed();
         return;
       }
@@ -366,6 +393,10 @@ export function createImageryResidency(options: ImageryResidencyOptions): Imager
     },
     pump() {
       if (disposed) return;
+      // Missing images disappear from demand when selection falls back to
+      // their parents. Expire those records too, so a still view can refine
+      // again without waiting for camera movement or a reload.
+      expireMissing();
       fillQueue();
       const loading = inFlight();
       let active = loading.length;
@@ -432,6 +463,7 @@ export function createImageryResidency(options: ImageryResidencyOptions): Imager
     nextWakeAt() {
       let earliest = Infinity;
       for (const [key, entry] of entries) if (entry.state === "failed" && demand.has(key)) earliest = Math.min(earliest, entry.retryAt);
+      earliest = Math.min(earliest, missingWakeAt);
       return earliest === Infinity ? null : earliest;
     },
     stats() {

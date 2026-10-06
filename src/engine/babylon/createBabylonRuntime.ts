@@ -214,8 +214,10 @@ export interface BabylonRuntime {
   configureOrbitTargetHeight(options: OrbitTargetHeightOptions | null): void;
   /** Return current base-map tile counts, or null when no tile runtime is active. */
   getTileMetrics(): BabylonTileMetrics | null;
-  /** Google renderer detail target, when Google 3D Tiles are active. */
+  /** Google requested and camera-visible loaded geometric detail, in pixels. */
   getGoogleTerrainDetailState(): GoogleTerrainDetailState | null;
+  /** Called when loaded Google detail changes after selection or a camera move. */
+  onGoogleDetailFeedback(listener: () => void): () => void;
   /**
    * Override the Google renderer's screen-space-error target for this session.
    * A larger number displays a coarser mesh. `null` restores the renderer's
@@ -405,6 +407,9 @@ function createFallbackExperience(scene: Scene, worldRoot: TransformNode | null)
     scene,
   );
   globeMesh.isPickable = false;
+  // Incoming tiles compile while the fallback is still visible. Its light
+  // must not enter their material variants, then disappear at the handoff.
+  light.includedOnlyMeshes = [globeMesh];
   if (worldRoot) {
     globeMesh.parent = worldRoot;
   }
@@ -634,6 +639,7 @@ export async function createBabylonRuntime(
     profiler.add("map/camera", started);
     started = profiler.clock();
     tilesRuntime?.update();
+    adoptGoogleCoverage();
     profiler.add("map/google tiles", started);
     started = profiler.clock();
     // Frames drawn while a lease holds navigation are not map frames.
@@ -641,9 +647,7 @@ export async function createBabylonRuntime(
     lastRasterFrameAt = frameNow;
     rasterTilesRuntime?.update();
     profiler.add("map/raster tiles", started);
-    if (status.mode === "raster-basemap" && (rasterTilesRuntime?.getMetrics().visibleTiles ?? 0) > 0) {
-      hideFallbackExperience();
-    }
+    adoptRasterCoverage();
     // beginFrame/endFrame are normally invoked by engine.runRenderLoop's
     // internal _processFrame. We bypass that loop, so we must bracket the
     // render ourselves — WebGPU only presents the swap chain inside
@@ -703,6 +707,7 @@ export async function createBabylonRuntime(
   // and the Map tab the elevation provider's.
   const statusListeners = new Set<(status: BabylonRuntimeStatus) => void>();
   const rasterDetailListeners = new Set<() => void>();
+  const googleDetailListeners = new Set<() => void>();
   let rasterDetailOffset = 0;
   const emitStatus = (): void => {
     options.onStatusChange?.({ ...status });
@@ -951,6 +956,35 @@ export async function createBabylonRuntime(
     recordMapDebugEvent("fallback-hide");
   }
 
+  function adoptGoogleCoverage(): void {
+    if (status.mode !== "google-tiles" || !tilesRuntime?.tiles.visibleTiles.size) return;
+    if (!startupHeld && !rasterTilesRuntime && !fallbackExperience?.globeMesh.isEnabled()) return;
+    // Selection publishes drawable Google content before loading finishes.
+    // Retire the previous surface in this same frame: retaining it until
+    // load-end draws overlapping ground throughout ongoing streaming.
+    hideFallbackExperience();
+    if (rasterTilesRuntime) {
+      recordMapDebugEvent("raster-runtime-dispose");
+      rasterTilesRuntime.dispose();
+      rasterTilesRuntime = null;
+    }
+    clearGoogleWatchdog();
+    releaseStartupHold();
+  }
+
+  function adoptRasterCoverage(): void {
+    if (status.mode !== "raster-basemap" || (rasterTilesRuntime?.getMetrics().visibleTiles ?? 0) === 0) return;
+    if (!tilesRuntime && !fallbackExperience?.globeMesh.isEnabled()) return;
+    hideFallbackExperience();
+    if (tilesRuntime) {
+      recordMapDebugEvent("google-runtime-dispose");
+      tilesRuntime.dispose();
+      tilesRuntime = null;
+      googleLight?.dispose();
+      googleLight = null;
+    }
+  }
+
   function enableFallbackMode(reason: string): void {
     recordMapDebugEvent("fallback-mode-select", { reason });
     releaseStartupHold();
@@ -1046,7 +1080,9 @@ export async function createBabylonRuntime(
         terrainSource: activeTerrainSource,
         detailOffset: rasterDetailOffset,
         onDetailAdjusted: decision => {
-          const text = `${decision.to > decision.from ? "Coarsened" : "Refined"} 2D map detail to ${formatLevels(decision.to)} below the request: frames averaged ${decision.meanFrameMs.toFixed(1)} ms against a ${decision.goalMs.toFixed(1)} ms goal.`;
+          const why = decision.reason === "settings" ? "automatic-adjustment settings changed"
+            : `frames averaged ${decision.meanFrameMs.toFixed(1)} ms against a ${decision.goalMs.toFixed(1)} ms goal`;
+          const text = `${decision.to > decision.from ? "Coarsened" : "Refined"} 2D map detail to ${formatLevels(decision.to)} below the request: ${why}.`;
           console.info("[map auto]", text);
           recordMapDebugEvent("detail-adjusted", { ...decision });
           for (const listener of detailAdjustedListeners) listener(decision);
@@ -1066,14 +1102,7 @@ export async function createBabylonRuntime(
           recordMapDebugEvent("raster-load-end", { visibleTiles, activeTiles });
           status.message = `${activeRasterBaseMap?.label ?? "Raster"} active (visible: ${visibleTiles}, active: ${activeTiles}).`;
           if (visibleTiles > 0) {
-            hideFallbackExperience();
-            if (tilesRuntime) {
-              recordMapDebugEvent("google-runtime-dispose");
-              tilesRuntime.dispose();
-              tilesRuntime = null;
-              googleLight?.dispose();
-              googleLight = null;
-            }
+            adoptRasterCoverage();
           }
           endStreaming();
           scheduler.requestRender();
@@ -1135,6 +1164,7 @@ export async function createBabylonRuntime(
 
       ensureGeospatialCamera();
       ensureFallbackExperience();
+      if (retainRasterCoverage) hideFallbackExperience();
       scene.clearColor = DEFAULT_GOOGLE_BACKGROUND;
 
       googleLight = new HemisphericLight("google-tiles-light", new Vector3(0, 1, 0), scene);
@@ -1150,6 +1180,9 @@ export async function createBabylonRuntime(
         onDownloadBytes: downloadMeter.addBytes,
         scene,
         apiKey: normalizedApiKey,
+        onDetailFeedback: () => {
+          if (status.mode === "google-tiles") for (const listener of [...googleDetailListeners]) listener();
+        },
         // Flight attaches the simulation world to a floating-origin parent.
         // Before that happens, terrain preparation owns the active camera and
         // its normal camera-based detail selection remains the safe behavior.
@@ -1197,14 +1230,7 @@ export async function createBabylonRuntime(
           emitStatus();
 
           if (visibleTiles > 0) {
-            hideFallbackExperience();
-            if (rasterTilesRuntime) {
-              recordMapDebugEvent("raster-runtime-dispose");
-              rasterTilesRuntime.dispose();
-              rasterTilesRuntime = null;
-            }
-            clearGoogleWatchdog();
-            releaseStartupHold();
+            adoptGoogleCoverage();
           }
         },
       });
@@ -1361,7 +1387,8 @@ export async function createBabylonRuntime(
   const raster = () => (status.mode === "raster-basemap" ? rasterTilesRuntime : null);
   const formatPx = (px: number): string => `${px >= 10 ? Math.round(px) : px.toFixed(1)} px`;
   const because = (decision: AutoDetailDecision | null): string => (decision
-    ? `, since frames averaged ${decision.meanFrameMs.toFixed(1)} ms against a ${decision.goalMs.toFixed(1)} ms goal`
+    ? decision.reason === "settings" ? ", since automatic-adjustment settings changed"
+      : `, since frames averaged ${decision.meanFrameMs.toFixed(1)} ms against a ${decision.goalMs.toFixed(1)} ms goal`
     : "");
   const readings: Array<[string, () => string | null]> = [
     ["map.imagery.gpuBudget", () => {
@@ -1886,6 +1913,10 @@ export async function createBabylonRuntime(
     getGoogleTerrainDetailState(): GoogleTerrainDetailState | null {
       return tilesRuntime?.getTerrainDetailState() ?? null;
     },
+    onGoogleDetailFeedback(listener): () => void {
+      googleDetailListeners.add(listener);
+      return () => { googleDetailListeners.delete(listener); };
+    },
     setGoogleTerrainDetailTarget(errorTarget: number | null): void {
       googleTerrainDetailTarget = errorTarget;
       tilesRuntime?.setTerrainDetailTarget(errorTarget);
@@ -2061,6 +2092,7 @@ export async function createBabylonRuntime(
       }
       statusListeners.clear();
       rasterDetailListeners.clear();
+      googleDetailListeners.clear();
       downloadMeter.destroy();
       // Before the scheduler stops: stopping goes idle, which would settle.
       stopSettling();

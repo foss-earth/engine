@@ -12,8 +12,9 @@ function memoryStorage(): MapDetailStorage {
 function fakeRuntime() {
   const statusListeners = new Set<(status: BabylonRuntimeStatus) => void>();
   const rasterListeners = new Set<() => void>();
+  const googleListeners = new Set<() => void>();
   const streamingListeners = new Set<(streaming: boolean) => void>();
-  let google: { defaultErrorTarget: number } | null = null;
+  let google: { defaultErrorTarget: number; loadedErrorTarget?: number | null } | null = null;
   let feedback: RasterDetailFeedback | null = null;
   const status = { mode: "raster-basemap", rasterBaseMap: { id: "usgs-imagery" } } as BabylonRuntimeStatus;
   const runtime = {
@@ -25,12 +26,17 @@ function fakeRuntime() {
     getRasterDetailFeedback: () => feedback,
     subscribeStatus: (listener: (status: BabylonRuntimeStatus) => void) => { statusListeners.add(listener); return () => statusListeners.delete(listener); },
     onRasterDetailFeedback: (listener: () => void) => { rasterListeners.add(listener); return () => rasterListeners.delete(listener); },
+    onGoogleDetailFeedback: (listener: () => void) => { googleListeners.add(listener); return () => googleListeners.delete(listener); },
     isStreamingTiles: () => false,
     onTilesStreamingChange: (listener: (streaming: boolean) => void) => { streamingListeners.add(listener); return () => streamingListeners.delete(listener); },
   } satisfies MapDetailRuntime;
   return {
     runtime,
     setFeedback(next: RasterDetailFeedback | null) { feedback = next; for (const listener of rasterListeners) listener(); },
+    setGoogleLoaded(value: number | null) {
+      if (google) google.loadedErrorTarget = value;
+      for (const listener of googleListeners) listener();
+    },
     showGoogle(defaultErrorTarget: number | null) {
       google = defaultErrorTarget === null ? null : { defaultErrorTarget };
       status.mode = "google-tiles";
@@ -41,7 +47,7 @@ function fakeRuntime() {
       status.rasterBaseMap = { id } as BabylonRuntimeStatus["rasterBaseMap"];
       for (const listener of statusListeners) listener(status);
     },
-    listeners: () => statusListeners.size + rasterListeners.size + streamingListeners.size,
+    listeners: () => statusListeners.size + rasterListeners.size + googleListeners.size + streamingListeners.size,
   };
 }
 
@@ -71,6 +77,88 @@ describe("connectMapDetailRuntime", () => {
     fake.setFeedback({ support: "unavailable", reason: "The imagery atlas needs a larger texture.", pending: false, limits: ["backend"], effectiveTarget: null });
     connectMapDetailRuntime(controller, fake.runtime);
     expect(controller.getState()).toMatchObject({ availability: "unavailable", reason: "The imagery atlas needs a larger texture." });
+  });
+
+  it("publishes the current raster target separately from mixed delivered detail", () => {
+    const controller = createMapDetailController({ storage: memoryStorage() });
+    const fake = fakeRuntime();
+    fake.setFeedback(READY);
+    connectMapDetailRuntime(controller, fake.runtime);
+    fake.runtime.setRasterDetailTarget.mockClear();
+
+    fake.setFeedback({ support: "ready", pending: true, limits: ["frame-time", "loading"], activeTarget: -0.25, effectiveTarget: null });
+    expect(controller.getState()).toMatchObject({ requestedTarget: 0, activeTarget: -0.25, effectiveTarget: null, pending: true });
+    fake.setFeedback({ support: "ready", pending: true, limits: ["frame-time", "loading"], activeTarget: -0.5, effectiveTarget: null });
+    expect(controller.getState()?.activeTarget).toBe(-0.5);
+    expect(fake.runtime.setRasterDetailTarget).not.toHaveBeenCalled();
+  });
+
+  it("retains synchronous feedback emitted while applying a source's saved request", () => {
+    const controller = createMapDetailController({ storage: memoryStorage() });
+    controller.setActiveSource({ key: "raster:usgs-topo", availability: "ready" });
+    controller.setSessionOverride(-1);
+    const fake = fakeRuntime();
+    fake.setFeedback({ ...READY, activeTarget: 0 });
+    fake.runtime.setRasterDetailTarget.mockImplementation(offset => {
+      fake.setFeedback({ support: "ready", pending: true, limits: ["loading"], activeTarget: offset, effectiveTarget: null });
+    });
+    connectMapDetailRuntime(controller, fake.runtime);
+
+    fake.showRaster("usgs-topo");
+    expect(controller.getState()).toMatchObject({ requestedTarget: -1, activeTarget: -1, effectiveTarget: null, pending: true });
+  });
+
+  it("follows loaded imagery independently of a fixed requested target", () => {
+    const controller = createMapDetailController({ storage: memoryStorage() });
+    const fake = fakeRuntime();
+    fake.setFeedback(READY);
+    const disconnect = connectMapDetailRuntime(controller, fake.runtime);
+    fake.runtime.setRasterDetailTarget.mockClear();
+
+    for (const loadedTarget of [-3, -1, 0]) {
+      fake.setFeedback({ ...READY, activeTarget: 0, loadedTarget, pending: loadedTarget !== 0 });
+      expect(controller.getState()).toMatchObject({ requestedTarget: 0, activeTarget: 0, loadedTarget });
+    }
+    expect(fake.runtime.setRasterDetailTarget).not.toHaveBeenCalled();
+    disconnect();
+    fake.setFeedback({ ...READY, loadedTarget: -3 });
+    expect(controller.getState()?.loadedTarget).toBe(0);
+  });
+
+  it("follows visible Google tile error without reapplying the requested target", () => {
+    const controller = createMapDetailController({ storage: memoryStorage() });
+    const fake = fakeRuntime();
+    fake.showGoogle(16);
+    const disconnect = connectMapDetailRuntime(controller, fake.runtime);
+    fake.runtime.setGoogleTerrainDetailTarget.mockClear();
+    expect(controller.getState()?.loadedTarget).toBeNull();
+
+    for (const loadedTarget of [4096, 256, 16]) {
+      fake.setGoogleLoaded(loadedTarget);
+      expect(controller.getState()).toMatchObject({ requestedTarget: 16, activeTarget: 16, loadedTarget });
+    }
+    expect(fake.runtime.setGoogleTerrainDetailTarget).not.toHaveBeenCalled();
+    disconnect();
+    fake.setGoogleLoaded(4096);
+    expect(controller.getState()?.loadedTarget).toBe(16);
+    expect(fake.listeners()).toBe(0);
+  });
+
+  it("reapplies an unchanged raster target after replacing its runtime", () => {
+    const controller = createMapDetailController({ storage: memoryStorage() });
+    const fake = fakeRuntime();
+    fake.setFeedback(READY);
+    connectMapDetailRuntime(controller, fake.runtime);
+    controller.setSessionOverride(-1);
+    fake.runtime.setRasterDetailTarget.mockClear();
+
+    fake.showGoogle(16);
+    fake.showRaster("usgs-imagery");
+    expect(fake.runtime.setRasterDetailTarget).toHaveBeenCalledExactlyOnceWith(-1);
+
+    fake.runtime.setRasterDetailTarget.mockClear();
+    fake.showRaster("usgs-topo");
+    expect(fake.runtime.setRasterDetailTarget).toHaveBeenCalledExactlyOnceWith(0);
   });
 
   it("keeps each source's target, and applies Google's once the renderer knows its default", () => {

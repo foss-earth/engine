@@ -94,6 +94,31 @@ describe("Map tab detail editor", () => {
     expect(status.textContent).toBe("Limited by the memory budget.");
   });
 
+  it("does not mutate a hidden settings panel when only the HUD's loaded-detail cursor moves", () => {
+    const { controller, panel } = mountRaster();
+    controller.setTrackMarker({ id: "reference", kind: "raster", value: 0, colour: "#f00", label: "Reference", ariaLabel: "Reference" });
+    panel.element.hidden = true;
+    const markerNote = panel.element.querySelector(".map-detail-panel__marker-note");
+    const observer = new MutationObserver(() => {});
+    observer.observe(panel.element, { subtree: true, attributes: true, childList: true, characterData: true });
+    try {
+      for (const loadedTarget of [-3, -2, -1, 0]) {
+        controller.reportDelivery("raster:usgs-imagery", { pending: false, limits: [], loadedTarget });
+      }
+      expect(controller.getState()?.loadedTarget).toBe(0);
+      expect(observer.takeRecords()).toEqual([]);
+      expect(panel.element.querySelector(".map-detail-panel__marker-note")).toBe(markerNote);
+      // Delivery limits are displayed here, so they must still refresh.
+      controller.reportDelivery("raster:usgs-imagery", { pending: false, limits: ["memory"], loadedTarget: -1 });
+      expect(observer.takeRecords().length).toBeGreaterThan(0);
+      expect(panel.element.querySelector(".map-detail-panel__status")?.textContent).toBe("Limited by the memory budget.");
+    } finally {
+      observer.disconnect();
+      panel.destroy();
+      controller.dispose();
+    }
+  });
+
   it("offers the recommended Google target and labels it when the range clamps it", () => {
     const controller = createMapDetailController({ storage: null, googleRecommendation: "device-hints" });
     controller.setRecommendationContext({ rendererDefaultErrorPx: 20, rendererMode: "webgl2" });

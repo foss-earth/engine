@@ -249,6 +249,102 @@ describe("createBabylonRuntime simulation mode", () => {
     runtime.destroy();
   });
 
+  it("keeps fallback illumination out of incoming Google materials before they compile", async () => {
+    vi.spyOn(window, "requestAnimationFrame").mockReturnValue(1);
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
+    mocks.createGoogleTilesRuntime.mockReturnValue({
+      tiles: { visibleTiles: new Set(), activeTiles: new Set(), group: {} },
+      update: vi.fn(), setSuspended: vi.fn(), dispose: vi.fn(),
+    });
+    const { createBabylonRuntime } = await import("./createBabylonRuntime");
+    const runtime = await createBabylonRuntime(document.createElement("canvas"), { googleApiKey: "test", simMode: true });
+    try {
+      const incoming = MeshBuilder.CreatePlane("incoming-google-ground", { size: 2 }, runtime.scene);
+      incoming.setEnabled(false);
+      const fallbackLight = runtime.scene.getLightByName("fallback-light")!;
+      const fallbackGlobe = runtime.scene.getMeshByName("fallback-globe")!;
+      expect(fallbackLight.canAffectMesh(fallbackGlobe)).toBe(true);
+      expect(fallbackLight.canAffectMesh(incoming)).toBe(false);
+      const incomingLights = [...incoming.lightSources];
+      fallbackLight.setEnabled(false);
+      expect(incoming.lightSources).toEqual(incomingLights);
+    } finally { runtime.destroy(); }
+  });
+
+  it.each([false, true])("removes the previous ground in the first Google frame while loading continues (raster: %s)", async (fromRaster) => {
+    let scheduledFrame: FrameRequestCallback | null = null;
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation(callback => {
+      scheduledFrame = callback;
+      return 1;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
+    const visibleTiles = new Set<string>();
+    const googleRuntime = {
+      tiles: { visibleTiles, activeTiles: visibleTiles, group: {} },
+      update: vi.fn(), setSuspended: vi.fn(), dispose: vi.fn(),
+    };
+    mocks.createGoogleTilesRuntime.mockReturnValue(googleRuntime);
+    const { createBabylonRuntime } = await import("./createBabylonRuntime");
+    const runtime = await createBabylonRuntime(document.createElement("canvas"), { googleApiKey: "test", simMode: true });
+    try {
+      let raster: { update: ReturnType<typeof vi.fn>; dispose: ReturnType<typeof vi.fn> } | null = null;
+      if (fromRaster) {
+        runtime.setMapSource({ id: "test-raster", label: "Test raster", provider: "test", urlTemplate: "https://example.test/{z}/{x}/{y}.png", attribution: "test" });
+        raster = mocks.createRasterTilesRuntime.mock.results.at(-1)!.value;
+        runtime.setMapSource("google");
+        expect(raster!.dispose).not.toHaveBeenCalled();
+      }
+      const callbacks = mocks.createGoogleTilesRuntime.mock.calls.at(-1)![0] as { onLoadStart(): void };
+      callbacks.onLoadStart();
+      // The tileset can keep streaming for the whole flight: load-end is not
+      // the moment its first replacement surface becomes drawable.
+      googleRuntime.update.mockImplementation(() => visibleTiles.add("ready-google-ground"));
+      raster?.update.mockClear();
+      const render = vi.spyOn(runtime.scene, "render").mockImplementation(() => {
+        expect(runtime.scene.getMeshByName("fallback-globe")?.isEnabled()).toBe(false);
+        if (raster) expect(raster.dispose).toHaveBeenCalledOnce();
+      });
+      (scheduledFrame as FrameRequestCallback | null)?.(performance.now());
+      expect(render).toHaveBeenCalledOnce();
+      expect(runtime.isStreamingTiles()).toBe(true);
+      // Retired raster coverage must also stop traversing and requesting work.
+      if (raster) expect(raster.update).not.toHaveBeenCalled();
+    } finally { runtime.destroy(); }
+  });
+
+  it("retires Google on the first raster frame without waiting for streaming to finish", async () => {
+    let scheduledFrame: FrameRequestCallback | null = null;
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation(callback => {
+      scheduledFrame = callback;
+      return 1;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
+    const googleRuntime = {
+      tiles: { visibleTiles: new Set(["ready-google-ground"]), activeTiles: new Set(["ready-google-ground"]), group: {} },
+      update: vi.fn(), setSuspended: vi.fn(), dispose: vi.fn(),
+    };
+    mocks.createGoogleTilesRuntime.mockReturnValue(googleRuntime);
+    const { createBabylonRuntime } = await import("./createBabylonRuntime");
+    const runtime = await createBabylonRuntime(document.createElement("canvas"), { googleApiKey: "test", simMode: true });
+    try {
+      runtime.setMapSource({ id: "test-raster", label: "Test raster", provider: "test", urlTemplate: "https://example.test/{z}/{x}/{y}.png", attribution: "test" });
+      expect(googleRuntime.dispose).not.toHaveBeenCalled();
+      const callbacks = mocks.createRasterTilesRuntime.mock.calls.at(-1)![0] as { onLoadStart(): void };
+      callbacks.onLoadStart();
+      const render = vi.spyOn(runtime.scene, "render").mockImplementation(() => {
+        expect(googleRuntime.dispose).toHaveBeenCalledOnce();
+        expect(runtime.scene.getMeshByName("fallback-globe")?.isEnabled()).toBe(false);
+      });
+      const now = performance.now();
+      (scheduledFrame as FrameRequestCallback | null)?.(now);
+      expect(render).toHaveBeenCalledOnce();
+      expect(runtime.isStreamingTiles()).toBe(true);
+      googleRuntime.update.mockClear();
+      (scheduledFrame as FrameRequestCallback | null)?.(now + 20);
+      expect(googleRuntime.update).not.toHaveBeenCalled();
+    } finally { runtime.destroy(); }
+  });
+
   it("exposes Google terrain detail controls and refines from the simulation origin once flight attaches it", async () => {
     const setTerrainDetailTarget = vi.fn();
     const detail = { defaultErrorTarget: 20, errorTarget: 20, overrideErrorTarget: null };
@@ -280,6 +376,34 @@ describe("createBabylonRuntime simulation mode", () => {
     expect(runtime.getGoogleTerrainDetailAnchor()).toBe("camera");
     expect(callbacks.getTerrainDetailAnchor()).toBeNull();
     runtime.destroy();
+  });
+
+  it("publishes loaded Google detail changes without render polling and unsubscribes on teardown", async () => {
+    vi.spyOn(window, "requestAnimationFrame").mockReturnValue(1);
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
+    const detail = { defaultErrorTarget: 20, errorTarget: 5, overrideErrorTarget: 5, loadedErrorTarget: 100 };
+    mocks.createGoogleTilesRuntime.mockReturnValue({
+      tiles: { visibleTiles: new Set(), activeTiles: new Set(), group: {} },
+      getTerrainDetailState: () => detail,
+      update: vi.fn(), setSuspended: vi.fn(), dispose: vi.fn(),
+    });
+    const { createBabylonRuntime } = await import("./createBabylonRuntime");
+    const runtime = await createBabylonRuntime(document.createElement("canvas"), { googleApiKey: "test", simMode: true });
+    const callbacks = mocks.createGoogleTilesRuntime.mock.calls[0][0] as { onDetailFeedback(): void };
+    const values: Array<number | null> = [];
+    const stop = runtime.onGoogleDetailFeedback(() => values.push(runtime.getGoogleTerrainDetailState()!.loadedErrorTarget));
+    detail.loadedErrorTarget = 10;
+    callbacks.onDetailFeedback();
+    expect(values).toEqual([10]);
+    expect(runtime.getGoogleTerrainDetailState()!.errorTarget).toBe(5);
+    stop();
+    callbacks.onDetailFeedback();
+    expect(values).toEqual([10]);
+    const afterDestroy = vi.fn();
+    runtime.onGoogleDetailFeedback(afterDestroy);
+    runtime.destroy();
+    callbacks.onDetailFeedback();
+    expect(afterDestroy).not.toHaveBeenCalled();
   });
 
   it("lists a host's focus points and hands the selected one's region to the map", async () => {

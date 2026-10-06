@@ -8,9 +8,54 @@ import {
   IMAGERY_TABLE_BLOCK,
   planAtlasLayout,
 } from "./imageryAtlasLayout";
-import { buildImageryDisplay, buildPatchTable, type DisplayLeaf } from "./imageryBinding";
+import { buildImageryDisplay, buildPatchTable, measureLoadedImagery, type DisplayLeaf, type LoadedImageryBinding, type LoadedImageryRegion } from "./imageryBinding";
 
 const MiB = 1024 * 1024;
+
+describe("loaded imagery detail", () => {
+  const region = (x = 0, screenArea = 100, footprintPx = 1, referenceLevel = 8): LoadedImageryRegion => ({ tile: { z: 8, x, y: 0 }, referenceLevel, footprintPx, screenArea });
+  const direct = (x: number, level: number | null): LoadedImageryBinding => ({ tile: { z: 8, x, y: 0 }, table: null, directLevel: level });
+
+  it("weights logarithmic delivered detail by visible area and the source's normal target", () => {
+    const regions = [region(0, 100), region(1, 300), region(2, 0)];
+    const bindings = [direct(0, 8), direct(1, 6)];
+    expect(measureLoadedImagery(regions, bindings)).toBe(-1.5);
+    expect(measureLoadedImagery(regions, bindings, 2)).toBe(-0.5);
+  });
+
+  it("measures the bound same-zoom variant rather than the requested variant", () => {
+    const highResolution = [region(0, 100, 0.5, 9)];
+    expect(measureLoadedImagery(highResolution, [direct(0, 8)])).toBe(0);
+    expect(measureLoadedImagery(highResolution, [direct(0, 9)])).toBe(1);
+  });
+
+  it("reads mixed page-table cells and the actual direct fallback when tables are exhausted", () => {
+    const data = new Uint8Array(IMAGERY_TABLE_BLOCK ** 2 * 4);
+    for (const [index, level] of [8, 8, 6, 6].entries()) {
+      const at = (Math.floor(index / 2) * IMAGERY_TABLE_BLOCK + index % 2) * 4;
+      data[at + 2] = level;
+      data[at + 3] = 255;
+    }
+    const bound: LoadedImageryBinding = { tile: region().tile, table: { cellsLog2: 1, data }, directLevel: null };
+    expect(measureLoadedImagery([region()], [bound])).toBe(-1);
+    expect(measureLoadedImagery([region()], [direct(0, 2)])).toBe(-6);
+    data[3] = 0;
+    expect(measureLoadedImagery([region()], [bound])).toBeNull();
+  });
+
+  it("covers a selected region with finer terrain patches and rejects missing bound coverage", () => {
+    const bindings = [0, 1, 2, 3].map(index => ({ tile: { z: 9, x: index % 2, y: Math.floor(index / 2) }, table: null, directLevel: index === 0 ? 4 : 8 }));
+    expect(measureLoadedImagery([region()], bindings)).toBe(-1);
+    expect(measureLoadedImagery([region()], bindings.slice(1))).toBeNull();
+    expect(measureLoadedImagery([region()], [direct(0, null)])).toBeNull();
+  });
+
+  it("keeps bound near-plane imagery measurable as beyond-coarse rather than hiding the marker", () => {
+    expect(measureLoadedImagery([region(0, 100, Infinity)], [direct(0, 8)])).toBe(-Infinity);
+    expect(measureLoadedImagery([region(0, 100, NaN)], [direct(0, 8)])).toBeNull();
+    expect(measureLoadedImagery([region(0, 100, 0)], [direct(0, 8)])).toBeNull();
+  });
+});
 
 describe("imagery atlas layout", () => {
   it("fits each resource profile inside its estimated byte budget", () => {

@@ -48,17 +48,17 @@ export const TOOLBAR_BUTTONS = [
   ["position", "Camera position", "the latitude, longitude, heading, pitch and zoom readout that opens Location"],
 ] as const;
 
-/** Toolbar ordering and automatic fitting share the same editable priorities. */
+/** The default toolbar ordering; Custom mode uses each item's saved priority. */
 export const TOOLBAR_PRIORITIES = [
   ["north", "North", 0],
   ["help", "Help (?)", 1],
-  ["fps", "FPS", 2],
-  ["renderer", "Renderer", 3],
-  ["inputMode", "Input method", 4],
-  ["theme", "Theme button", 5],
-  ["settings", "Settings (⚙)", 6],
-  ["fullscreen", "Fullscreen", 7],
-  ["position", "Camera position", 8],
+  ["inputMode", "Input method", 2],
+  ["fullscreen", "Fullscreen", 3],
+  ["fps", "FPS", 4],
+  ["renderer", "Renderer", 5],
+  ["position", "Camera position", 6],
+  ["theme", "Theme button", 7],
+  ["settings", "Settings (⚙)", 8],
   ["frame", "Frame time", 10],
   ["p95", "P95 frame time", 11],
   ["activeMeshes", "Active meshes (#⬟)", 12],
@@ -203,9 +203,10 @@ export const INTERFACE_PARAMETERS: readonly ParameterSpec[] = [
     description: "Light or dark panels and toolbar.",
     unit: "none",
     kind: "choice",
+    choiceControl: "two-position",
     choices: [
-      { id: "dark", label: "Dark" },
-      { id: "light", label: "Light" },
+      { id: "light", label: "Light", shortLabel: "☼" },
+      { id: "dark", label: "Dark", shortLabel: "☾" },
     ],
     default: "dark",
     defaultReason: "A dark frame keeps attention on the map.",
@@ -219,10 +220,13 @@ export const INTERFACE_PARAMETERS: readonly ParameterSpec[] = [
   )),
   ...PERFORMANCE_HUD_METRICS.map(([metric, label, visible, tooltip]) => toolbarVisibility(
     `interface.performanceHud.${metric}`, label, tooltip,
-    visible ? "auto" : "off", visible ? "Shown when it fits after north and help: it is the first reading to look at." : "Hidden by default: a debugging reading.", "src/app/createGlobeApp.ts",
+    visible ? "auto" : "off", visible ? "Shown when it fits after north, help, input method and fullscreen: it is the first performance reading to look at." : "Hidden by default: a debugging reading.", "src/app/createGlobeApp.ts",
   )),
-  toggle(TOOLBAR_EDIT_PRIORITIES_ID, "Edit priorities", "Shows the toolbar priority numbers so you can change their order and which automatic items fit first. Turning this off hides the editors and keeps your chosen priorities.",
-    false, "Priority numbers stay hidden until you choose to edit them.", { tab: INTERFACE_TAB, section: "toolbar" }, "src/shell/settings/parameterSection.ts"),
+  {
+    ...toggle(TOOLBAR_EDIT_PRIORITIES_ID, "Priorities", "Auto uses the default toolbar order. Custom shows priority numbers beside each toolbar control and uses them to decide the order and which automatic items fit first. Returning to Auto keeps your custom numbers for later.",
+      false, "Auto uses the default order with priority numbers hidden.", { tab: INTERFACE_TAB, section: "toolbar" }, "src/app/createGlobeApp.ts"),
+    booleanControl: "auto-custom",
+  },
   ...TOOLBAR_PRIORITIES.map(([item, label, priority]): ParameterSpec<number> => ({
     id: toolbarPriorityParameterId(item),
     label: `${label} priority`,
@@ -233,9 +237,12 @@ export const INTERFACE_PARAMETERS: readonly ParameterSpec[] = [
     step: 1,
     numberControl: "field",
     default: priority,
-    defaultReason: "North and help come first, followed by FPS, renderer, input method, theme, settings, fullscreen, position and additional performance readings.",
+    defaultReason: "North and help come first, followed by input method, fullscreen, FPS, renderer, position, theme, settings and additional performance readings.",
     home: { tab: INTERFACE_TAB, section: "toolbar", level: "main" },
     visibleWhen: { id: TOOLBAR_EDIT_PRIORITIES_ID, value: true },
+    inlineWith: item === "north" ? undefined
+      : TOOLBAR_BUTTONS.some(([button]) => button === item) ? `interface.toolbar.${item}`
+        : `interface.performanceHud.${item}`,
     appliesLive: true,
     source: "src/app/createGlobeApp.ts",
   })),
@@ -257,7 +264,7 @@ export const INTERFACE_PARAMETERS: readonly ParameterSpec[] = [
   {
     id: "search.cacheDuration",
     label: "Keep search answers for",
-    description: "How long a place or airport lookup's answer is kept in this page, so asking again reads it instead of asking the service. Kept in memory only; a reload forgets it.",
+    description: "How long place, nearby-airport, runway and elevation answers are kept on this device, including across reloads, before another lookup asks the service. Your Location form and selected runway are remembered separately.",
     unit: "h",
     kind: "number",
     bounds: () => ({ min: 0.01, max: 720 }),
@@ -272,7 +279,7 @@ export const INTERFACE_PARAMETERS: readonly ParameterSpec[] = [
   {
     id: "search.cacheEntries",
     label: "Search answers kept",
-    description: "How many answers each lookup, places and airports, keeps; the oldest goes first.",
+    description: "How many place, nearby-airport, runway and elevation answers are kept in total on this device; the least recently used goes first.",
     unit: "count",
     kind: "number",
     bounds: () => ({ min: 1, max: 4096 }),
