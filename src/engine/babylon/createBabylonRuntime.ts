@@ -395,11 +395,11 @@ interface FallbackExperience {
   light: HemisphericLight;
 }
 
-function createFallbackExperience(scene: Scene, worldRoot: TransformNode | null): FallbackExperience {
+function createFallbackExperience(scene: Scene, worldRoot: TransformNode | null, ambientFillMultiplier: number): FallbackExperience {
   scene.clearColor = DEFAULT_FALLBACK_BACKGROUND;
 
   const light = new HemisphericLight("fallback-light", new Vector3(0, 1, 0), scene);
-  light.intensity = 0.95;
+  light.intensity = 0.95 * ambientFillMultiplier;
 
   const globeMesh = MeshBuilder.CreateSphere(
     "fallback-globe",
@@ -471,6 +471,10 @@ export async function createBabylonRuntime(
     force: options.rendererForce ?? (backend === "webgpu" || backend === "webgl2" || backend === "webgl" ? backend : null),
     antialias: settings.get("renderer.antialias") !== false,
   });
+  // Relative display controls preserve the existing material-processing path.
+  // They neither change physical source emission nor introduce a postprocess.
+  scene.imageProcessingConfiguration.exposure = 2 ** settings.get<number>("renderer.exposureEV");
+  let ambientFillMultiplier = settings.get<number>("renderer.ambientFillMultiplier");
   // One profiler per runtime; off, it leaves nothing attached to the scene.
   const frameProfile = createFrameProfileSession({ scene, engine: renderer.engine });
   const presentationCandidates = createPresentationCandidates(scene, NAVIGATION_PRESENTATION_LAYER);
@@ -504,7 +508,7 @@ export async function createBabylonRuntime(
   if (simMode) {
     scene.clearColor = new Color4(0.45, 0.65, 0.92, 1);
     simLight = new HemisphericLight("sim-light", new Vector3(0, 1, 0), scene);
-    simLight.intensity = 1.1;
+    simLight.intensity = 1.1 * ambientFillMultiplier;
   }
 
   const downloadMeter = createMapDownloadMeter();
@@ -945,7 +949,7 @@ export async function createBabylonRuntime(
       return;
     }
 
-    fallbackExperience = createFallbackExperience(scene, worldRoot);
+    fallbackExperience = createFallbackExperience(scene, worldRoot, ambientFillMultiplier);
     fallbackExperienceCreated = true;
     recordMapDebugEvent("fallback-create");
   }
@@ -1168,7 +1172,7 @@ export async function createBabylonRuntime(
       scene.clearColor = DEFAULT_GOOGLE_BACKGROUND;
 
       googleLight = new HemisphericLight("google-tiles-light", new Vector3(0, 1, 0), scene);
-      googleLight.intensity = 1.0;
+      googleLight.intensity = ambientFillMultiplier;
 
       // Hold a continuous-render reference from startup until the first tiles
       // become visible. This ensures tiles.update() is called every frame so
@@ -1312,6 +1316,28 @@ export async function createBabylonRuntime(
   // The runtime follows its parameters wherever they change: the Map tab, Show
   // all parameters, an import, a preset or another tab.
   const stopWatchingSettings = [
+    settings.subscribe(changed => {
+      let visibleChange = false;
+      if (changed.has("renderer.exposureEV")) {
+        const exposure = 2 ** settings.get<number>("renderer.exposureEV");
+        if (scene.imageProcessingConfiguration.exposure !== exposure) {
+          scene.imageProcessingConfiguration.exposure = exposure;
+          visibleChange = true;
+        }
+      }
+      if (changed.has("renderer.ambientFillMultiplier")) {
+        ambientFillMultiplier = settings.get<number>("renderer.ambientFillMultiplier");
+        // These relative baselines retain the established lighting across map
+        // modes. Application-owned lights, including emitters, are untouched.
+        for (const [light, baseline] of [[simLight, 1.1], [googleLight, 1], [fallbackExperience?.light, 0.95]] as const) {
+          if (!light || light.intensity === baseline * ambientFillMultiplier) continue;
+          light.intensity = baseline * ambientFillMultiplier;
+          visibleChange ||= light.isEnabled();
+        }
+      }
+      // Imports/presets can change both controls together: draw that change once.
+      if (visibleChange) scheduler.requestRender();
+    }),
     settings.watch("map.source.basemap", value => {
       const id = String(value);
       if (id === "google") applyMapSource("google");

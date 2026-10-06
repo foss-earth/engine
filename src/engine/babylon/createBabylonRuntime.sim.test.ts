@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 
-import { FreeCamera, MeshBuilder, NullEngine, Scene, TransformNode, Vector3 } from "@babylonjs/core";
+import { FreeCamera, MeshBuilder, NullEngine, PointLight, Scene, TransformNode, Vector3 } from "@babylonjs/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { getAppSettings } from "../../settings/appSettings";
 
 const mocks = vi.hoisted(() => ({
   createInputController: vi.fn(),
@@ -58,6 +59,69 @@ beforeEach(() => {
 });
 
 describe("createBabylonRuntime simulation mode", () => {
+  it("applies explicit exposure and relative fill, including later lights, without changing local emitters or adding a postprocess", async () => {
+    let scheduledFrame: FrameRequestCallback | null = null;
+    const requestFrame = vi.spyOn(window, "requestAnimationFrame").mockImplementation(callback => {
+      scheduledFrame = callback;
+      return 1;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
+    const settings = getAppSettings();
+    settings.setMany({ "renderer.exposureEV": 2, "renderer.ambientFillMultiplier": 0.5 });
+    mocks.createGoogleTilesRuntime.mockReturnValue({
+      tiles: { visibleTiles: new Set(), activeTiles: new Set(), group: {} },
+      update: vi.fn(), setSuspended: vi.fn(), dispose: vi.fn(),
+    });
+    const { createBabylonRuntime } = await import("./createBabylonRuntime");
+    const runtime = await createBabylonRuntime(document.createElement("canvas"), {
+      googleApiKey: "test", preferGoogleTiles: false, simMode: true, settings,
+    });
+    const config = runtime.scene.imageProcessingConfiguration;
+    try {
+      const camera = new FreeCamera("flight-camera", new Vector3(0, 0, -10), runtime.scene);
+      runtime.scene.activeCamera = camera;
+      const localLight = new PointLight("local-emitter", Vector3.Zero(), runtime.scene);
+      localLight.intensity = 17;
+      expect(config.exposure).toBe(4);
+      expect(config.applyByPostProcess).toBe(false);
+      expect(config.toneMappingEnabled).toBe(false);
+      expect(runtime.scene.getLightByName("sim-light")!.intensity).toBeCloseTo(0.55);
+      const background = runtime.scene.clearColor.clone();
+      runtime.setSimRunning(false);
+      const flush = () => {
+        const callback = scheduledFrame;
+        scheduledFrame = null;
+        callback?.(performance.now());
+      };
+      flush();
+      await Promise.resolve();
+      flush();
+      expect(runtime.isRendering()).toBe(false);
+      requestFrame.mockClear();
+      settings.setMany({ "renderer.exposureEV": -1, "renderer.ambientFillMultiplier": 0 });
+      expect(config.exposure).toBe(0.5);
+      expect(runtime.scene.getLightByName("sim-light")!.intensity).toBe(0);
+      expect(localLight.intensity).toBe(17);
+      expect(runtime.scene.clearColor.equals(background)).toBe(true);
+      expect(requestFrame).toHaveBeenCalledOnce();
+      flush();
+      requestFrame.mockClear();
+      settings.setMany({ "renderer.exposureEV": -1, "renderer.ambientFillMultiplier": 0 });
+      expect(requestFrame).not.toHaveBeenCalled();
+      runtime.setMapSource("google");
+      expect(runtime.scene.getLightByName("google-tiles-light")!.intensity).toBe(0);
+      expect(runtime.scene.getLightByName("fallback-light")!.intensity).toBe(0);
+      settings.set("renderer.ambientFillMultiplier", 2);
+      expect(runtime.scene.getLightByName("sim-light")!.intensity).toBeCloseTo(2.2);
+      expect(runtime.scene.getLightByName("google-tiles-light")!.intensity).toBe(2);
+      expect(runtime.scene.getLightByName("fallback-light")!.intensity).toBeCloseTo(1.9);
+      expect(localLight.intensity).toBe(17);
+      expect(camera._postProcesses.filter(Boolean)).toHaveLength(0);
+    } finally { runtime.destroy(); }
+    settings.set("renderer.exposureEV", 3);
+    expect(config.exposure).toBe(0.5);
+  });
+
   it("publishes Google surface revisions to flight contact queries", async () => {
     vi.spyOn(window, "requestAnimationFrame").mockReturnValue(1);
     vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
