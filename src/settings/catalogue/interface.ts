@@ -39,7 +39,7 @@ function toolbarVisibility(id: string, label: string, description: string, fallb
 }
 
 /** How the position readout says which number is the latitude and which the longitude. */
-export type CoordinateLabels = "icons" | "words" | "none";
+export type CoordinateLabels = "none" | "words" | "icons";
 /** What the position readout's altitude is measured from: mean sea level, or the ground below. */
 export type AltitudeReference = "asl" | "agl";
 export type AltitudeUnit = "m" | "ft";
@@ -261,16 +261,16 @@ export const INTERFACE_PARAMETERS: readonly ParameterSpec[] = [
   {
     id: POSITION_COORDINATE_LABELS_ID,
     label: "Latitude and longitude",
-    description: "How the toolbar's position readout says which number is which. Icons draws a globe with only its parallels before the latitude and one with only its meridians before the longitude. Words writes lat and lon there. None leaves it to the N or S and E or W after each number.",
+    description: "How the toolbar's position readout says which number is which. None leaves it to the N or S and E or W after each number. Words writes lat and lon before them. Icons draws a globe with only its parallels before the latitude and one with only its meridians before the longitude.",
     unit: "none",
     kind: "choice",
     choices: [
-      { id: "icons", label: "Icons", description: "A globe of parallels before the latitude, a globe of meridians before the longitude." },
-      { id: "words", label: "Words", description: "lat before the latitude, lon before the longitude." },
       { id: "none", label: "None", description: "Only the N or S and E or W after each number." },
+      { id: "words", label: "Words", description: "lat before the latitude, lon before the longitude." },
+      { id: "icons", label: "Icons", description: "A globe of parallels before the latitude, a globe of meridians before the longitude." },
     ],
-    default: "icons",
-    defaultReason: "An icon is read at a glance and is narrower than the word it stands for.",
+    default: "none",
+    defaultReason: "N or S after the latitude and E or W after the longitude already say which is which, in the narrowest chip.",
     home: POSITION_READOUT,
     appliesLive: true,
     source: "src/hud/positionReadout.ts",
