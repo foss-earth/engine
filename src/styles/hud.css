@@ -161,6 +161,20 @@ body {
   background: rgba(30, 40, 56, 0.95);
 }
 
+/* The position readout: digits of one width, so a changing number does not
+   shift the readings after it, and an icon centred on the capitals of the
+   reading it marks. */
+.hud-position {
+  font-variant-numeric: tabular-nums;
+}
+
+.hud-position__icon {
+  width: 1.2em;
+  height: 1.2em;
+  margin-right: 0.25em;
+  vertical-align: -0.25em;
+}
+
 .hud-circle-button {
   width: 30px;
   padding: 0;

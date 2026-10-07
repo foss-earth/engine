@@ -40,7 +40,8 @@ import { getTheme, setTheme, onThemeChange, toggleTheme } from "../theme/theme";
 import { createPoiTracking } from "../layers/poiTracking";
 import { createLayerRegistry } from "../layers/layerRegistry";
 import { MAX_PITCH_DEG } from "../camera/cameraState";
-import { createStatusHud, type StatusHudHandle } from "../hud/statusHud";
+import { ecefToGeodetic, RAD_TO_DEG } from "../camera/cameraMath";
+import { createStatusHud, type CameraAltitude, type StatusHudHandle } from "../hud/statusHud";
 import { PERFORMANCE_METRIC_DEFINITIONS, renderPerformanceChips, type PerformanceMetricId } from "../hud/performanceChips";
 import { createNorthButton, type NorthButtonHandle } from "../hud/northButton";
 import { createHelpModal, type HelpModalHandle } from "../hud/helpModal";
@@ -295,7 +296,7 @@ export async function createGlobeApp(
       },
       { kind: "button", id: "settingsButton", title: "Settings", ariaLabel: "Settings", className: "settings-button", text: "⚙" },
       { kind: "button", id: "fullscreenButton", title: "Enter fullscreen", ariaLabel: "Enter fullscreen", text: "⛶" },
-      { kind: "button", id: "hudStatus", appearance: "chip", className: "hud-chip-button hud-status-text", ariaLive: "polite", ariaLabel: "Camera position", title: "Latitude, longitude, heading, pitch and zoom distance. Click to show or hide the Location tab." },
+      { kind: "button", id: "hudStatus", appearance: "chip", className: "hud-chip-button hud-status-text", ariaLive: "polite", ariaLabel: "Camera position", title: "Latitude and longitude of the point looked at, the camera's altitude, heading, pitch and zoom distance. Click to show or hide the Location tab." },
       { kind: "slot", id: "mapSourceSlot", className: "map-source-hud-slot" },
     ],
   });
@@ -473,7 +474,17 @@ export async function createGlobeApp(
   const poiExitBtnEl = rootElement.querySelector<HTMLButtonElement>("#poiExitBtn");
   const extraPanelsGridEl = rootElement.querySelector<HTMLElement>("#extraPanelsGrid");
 
-  const statusHud: StatusHudHandle | null = hudStatusEl ? createStatusHud(hudStatusEl) : null;
+  const statusHud: StatusHudHandle | null = hudStatusEl ? createStatusHud(hudStatusEl, settings) : null;
+  // The readout's altitude is the camera's own, not the height of what it looks at.
+  const cameraAltitude = (): CameraAltitude | null => {
+    const eye = runtime.geospatialCamera?.position;
+    if (!eye || !statusHud) return null;
+    const { latRad, lonRad, altMeters } = ecefToGeodetic(eye.x, eye.y, eye.z);
+    return {
+      altitudeMeters: altMeters,
+      groundHeightMeters: statusHud.needsGroundHeight() ? resolveSurfaceHeightMeters(latRad * RAD_TO_DEG, lonRad * RAD_TO_DEG) : null,
+    };
+  };
   const northButton: NorthButtonHandle | null = northBtnSvgEl ? createNorthButton(northBtnSvgEl) : null;
   const helpModal: HelpModalHandle | null = helpModalEl ? createHelpModal(helpModalEl) : null;
 
@@ -717,6 +728,7 @@ export async function createGlobeApp(
       covers: ["interface.theme"],
       footer: note("Hiding a button never hides its tab: every tab stays under +."),
     }), defaultOpen: false },
+    { id: "position", title: settings.getSectionTitle("interface", "position"), element: sectionOf("interface", "position"), defaultOpen: false },
     { id: "log", title: settings.getSectionTitle("interface", "log"), element: sectionOf("interface", "log"), defaultOpen: false },
     { id: "search", title: settings.getSectionTitle("interface", "search"), element: sectionOf("interface", "search"), defaultOpen: false },
   ];
@@ -833,7 +845,7 @@ export async function createGlobeApp(
     const state = runtime.getViewState();
     mapSourceHud?.update(runtime.status);
     if (state) {
-      statusHud?.update(state);
+      statusHud?.update(state, cameraAltitude());
       northButton?.update(state.headingDeg);
     }
     const camera = runtime.geospatialCamera;

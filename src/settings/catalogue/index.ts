@@ -10,8 +10,8 @@ import { RENDERER_EXPERIMENT_IDS, RENDERER_EXPERIMENT_PARAMETERS, RENDERER_PARAM
 import { PANORAMA_SETTINGS_TAB, PANORAMA_TAB, SCENE_PARAMETERS, SCENE_SECTION_TITLES, SCENES_TAB } from "./scenes";
 
 export { CONTROLS_TAB, INTERFACE_TAB, MAP_TAB, PANORAMA_SETTINGS_TAB, PANORAMA_TAB, RENDERER_TAB, SCENES_TAB, SETTINGS_TAB, PERFORMANCE_HUD_METRICS, TOOLBAR_BUTTONS };
-export { TOOLBAR_EDIT_PRIORITIES_ID, TOOLBAR_PRIORITIES, toolbarPriorityParameterId } from "./interface";
-export type { ToolbarItemId, ToolbarVisibility } from "./interface";
+export { POSITION_ALTITUDE_ID, POSITION_ALTITUDE_UNIT_ID, POSITION_COORDINATE_LABELS_ID, TOOLBAR_EDIT_PRIORITIES_ID, TOOLBAR_PRIORITIES, toolbarPriorityParameterId } from "./interface";
+export type { AltitudeReference, AltitudeUnit, CoordinateLabels, ToolbarItemId, ToolbarVisibility } from "./interface";
 export { INPUT_RATE_IDS, INPUT_SENSITIVITY_IDS } from "./controls";
 export { RENDERER_EXPERIMENT_IDS };
 export { atlasLimitMiB } from "./loading";
@@ -51,6 +51,7 @@ export const FOSS_EARTH_SECTION_TITLES: ReadonlyArray<readonly [string, string, 
   [CONTROLS_TAB, "controller", "Controller"],
   [RENDERER_TAB, "performance", "Performance debug"],
   [INTERFACE_TAB, "toolbar", "Toolbar"],
+  [INTERFACE_TAB, "position", "Position readout"],
   [INTERFACE_TAB, "log", "Log"],
   [INTERFACE_TAB, "search", "Search"],
   [SETTINGS_TAB, "app-files", "App files"],

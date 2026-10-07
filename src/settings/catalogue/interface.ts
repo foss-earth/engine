@@ -38,6 +38,17 @@ function toolbarVisibility(id: string, label: string, description: string, fallb
   };
 }
 
+/** How the position readout says which number is the latitude and which the longitude. */
+export type CoordinateLabels = "icons" | "words" | "none";
+/** What the position readout's altitude is measured from: mean sea level, or the ground below. */
+export type AltitudeReference = "asl" | "agl";
+export type AltitudeUnit = "m" | "ft";
+
+export const POSITION_COORDINATE_LABELS_ID = "interface.position.coordinateLabels";
+export const POSITION_ALTITUDE_ID = "interface.position.altitude";
+export const POSITION_ALTITUDE_UNIT_ID = "interface.position.altitudeUnit";
+const POSITION_READOUT = { tab: INTERFACE_TAB, section: "position", level: "main" } as const;
+
 export const TOOLBAR_BUTTONS = [
   ["help", "Help (?)", "the ? button that opens the controls help"],
   ["renderer", "Renderer", "the WebGPU or WebGL indicator that opens the Renderer tab"],
@@ -45,7 +56,7 @@ export const TOOLBAR_BUTTONS = [
   ["theme", "Theme button", "the light and dark theme button"],
   ["settings", "Settings (⚙)", "the ⚙ button that opens the Settings tab"],
   ["fullscreen", "Fullscreen", "the button that enters or leaves fullscreen"],
-  ["position", "Camera position", "the latitude, longitude, heading, pitch and zoom readout that opens Location"],
+  ["position", "Camera position", "the latitude, longitude, altitude, heading, pitch and zoom readout that opens Location"],
 ] as const;
 
 /** The default toolbar ordering; Custom mode uses each item's saved priority. */
@@ -246,6 +257,55 @@ export const INTERFACE_PARAMETERS: readonly ParameterSpec[] = [
     appliesLive: true,
     source: "src/app/createGlobeApp.ts",
   })),
+  {
+    id: POSITION_COORDINATE_LABELS_ID,
+    label: "Latitude and longitude",
+    description: "How the toolbar's position readout says which number is which. Icons draws a globe with only its parallels before the latitude and one with only its meridians before the longitude. Words writes lat and lon there. None leaves it to the N or S and E or W after each number.",
+    unit: "none",
+    kind: "choice",
+    choices: [
+      { id: "icons", label: "Icons", description: "A globe of parallels before the latitude, a globe of meridians before the longitude." },
+      { id: "words", label: "Words", description: "lat before the latitude, lon before the longitude." },
+      { id: "none", label: "None", description: "Only the N or S and E or W after each number." },
+    ],
+    default: "icons",
+    defaultReason: "An icon is read at a glance and is narrower than the word it stands for.",
+    home: POSITION_READOUT,
+    appliesLive: true,
+    source: "src/hud/positionReadout.ts",
+  },
+  {
+    id: POSITION_ALTITUDE_ID,
+    label: "Altitude",
+    description: "What the toolbar's altitude is measured from. Above sea level is the height over the globe's sea level, the WGS84 ellipsoid; terrain heights enter it without a geoid correction (docs/streamed-terrain.md), so it can differ from a chart's altitude by the geoid's height there, up to about 100 m. Above ground takes away the height of the drawn terrain directly below, so it reads zero on the ground and changes as the ground rises and falls; it shows a dash until terrain below has loaded, and asks for one ray pick against the terrain each drawn frame.",
+    unit: "none",
+    kind: "choice",
+    choices: [
+      { id: "asl", label: "Above sea level (ASL)", description: "Height over mean sea level." },
+      { id: "agl", label: "Above ground (AGL)", description: "Height over the terrain directly below." },
+    ],
+    default: "asl",
+    defaultReason: "It does not depend on which terrain has loaded, costs nothing to compute, and is the altitude an altimeter reads.",
+    home: POSITION_READOUT,
+    appliesLive: true,
+    source: "src/hud/positionReadout.ts",
+  },
+  {
+    id: POSITION_ALTITUDE_UNIT_ID,
+    label: "Altitude unit",
+    description: "The unit the toolbar's altitude is written in: metres or feet.",
+    unit: "none",
+    kind: "choice",
+    choices: [
+      { id: "m", label: "Metres (m)" },
+      { id: "ft", label: "Feet (ft)" },
+    ],
+    default: "m",
+    defaultReason: "The unit of the zoom distance beside it. An application that flies sets feet.",
+    home: POSITION_READOUT,
+    appliesLive: true,
+    source: "src/hud/positionReadout.ts",
+  },
   {
     id: "interface.log.lineDuration",
     label: "Log line time",
