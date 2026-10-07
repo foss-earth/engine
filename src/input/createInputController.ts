@@ -76,8 +76,9 @@ export function createInputController(
 
   // ── Document-level prevention ────────────────────────────────────
   // Prevent the page from scrolling or zooming while the user interacts
-  // with the globe canvas. Scope to events targeting the canvas so wheel
-  // gestures over HTML overlays (menus, panels) continue to scroll normally.
+  // with the globe canvas. Events over the panels and the HUD are the
+  // runtime's pass to the world (passToWorld.ts): a panel keeps what it
+  // scrolls with, and the canvas gets a copy of the rest.
   const isCanvasEvent = (e: Event): boolean => {
     const t = e.target as Node | null;
     return t === canvas || (t != null && canvas.contains(t));

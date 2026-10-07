@@ -1,5 +1,16 @@
 @import "../log/gameLog.css";
 
+/*
+ * The page itself never scrolls past its ends: a sideways swipe that reached
+ * the browser went Back a page in Chrome, and a pull down reloaded it on a
+ * phone. Swipes nothing on the page uses go to the world instead
+ * (src/input/passToWorld.ts).
+ */
+html,
+body {
+  overscroll-behavior: none;
+}
+
 /* ─── HUD Bar ─────────────────────────────────────────────────────── */
 /*
  * Screen-edge offsets for fixed HUD clusters.
@@ -729,6 +740,201 @@
 
 @media (prefers-reduced-motion: reduce) {
   .foss-earth-panel-section__title::before {
+    transition: none;
+  }
+}
+
+/* ─── About: which version runs, and what it is built from ────────── */
+/* src/shell/aboutPanel.ts. Each part's line is a paragraph grid; its parts hang under it. */
+.foss-earth-about {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  font-size: 13px;
+  line-height: 1.45;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.foss-earth-about__app {
+  display: grid;
+  gap: 4px;
+}
+
+.foss-earth-about__title {
+  margin: 0 0 2px;
+  font-size: 16px;
+}
+
+.foss-earth-about__line,
+.foss-earth-about__note,
+.foss-earth-about__label {
+  margin: 0;
+}
+
+.foss-earth-about__note,
+.foss-earth-about__label {
+  font-size: 12px;
+  opacity: 0.72;
+}
+
+.foss-earth-about__heading {
+  margin: 6px 0 0;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.72;
+}
+
+.foss-earth-about__tree,
+.foss-earth-about__parts,
+.foss-earth-about__history {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.foss-earth-about__parts {
+  display: grid;
+  gap: 4px;
+  padding-left: 12px;
+  border-left: 1px solid rgba(148, 163, 184, 0.28);
+}
+
+.foss-earth-about__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+}
+
+summary.foss-earth-about__row {
+  list-style: none;
+  cursor: pointer;
+}
+
+summary.foss-earth-about__row::-webkit-details-marker {
+  display: none;
+}
+
+summary.foss-earth-about__row::before {
+  content: "\25B8";
+  color: var(--globe-accent, #60a5fa);
+  transition: transform 120ms ease;
+}
+
+.foss-earth-about__details[open] > summary.foss-earth-about__row::before {
+  transform: rotate(90deg);
+}
+
+summary.foss-earth-about__row:focus-visible {
+  outline: 2px solid var(--globe-accent, #60a5fa);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.foss-earth-about__name {
+  font-weight: 700;
+}
+
+.foss-earth-about__version {
+  opacity: 0.8;
+}
+
+.foss-earth-about__commit {
+  padding: 0 4px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  font: 12px/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+.foss-earth-about__flag {
+  padding: 0 6px;
+  border: 1px solid rgba(251, 191, 36, 0.6);
+  border-radius: 999px;
+  color: #fbbf24;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.foss-earth-about__body {
+  display: grid;
+  gap: 6px;
+  padding: 4px 0 6px 14px;
+}
+
+.foss-earth-about__links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin: 0;
+}
+
+.foss-earth-about__link {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: rgba(147, 197, 253, 0.95);
+  text-decoration: none;
+}
+
+.foss-earth-about__link:hover {
+  text-decoration: underline;
+}
+
+.foss-earth-about__history {
+  display: grid;
+  gap: 2px;
+  font-size: 12px;
+}
+
+.foss-earth-about__history li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 8px;
+}
+
+.foss-earth-about__when {
+  white-space: nowrap;
+  opacity: 0.7;
+}
+
+.foss-earth-about__above {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: rgba(147, 197, 253, 0.95);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.foss-earth-about__above:hover {
+  text-decoration: underline;
+}
+
+:root[data-theme="light"] .foss-earth-about__commit {
+  background: rgba(15, 23, 42, 0.07);
+}
+
+:root[data-theme="light"] .foss-earth-about__flag {
+  border-color: rgba(180, 83, 9, 0.55);
+  color: #b45309;
+}
+
+:root[data-theme="light"] .foss-earth-about__link,
+:root[data-theme="light"] .foss-earth-about__above {
+  color: #1d4ed8;
+}
+
+:root[data-theme="light"] .foss-earth-about__parts {
+  border-left-color: rgba(71, 85, 105, 0.25);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  summary.foss-earth-about__row::before {
     transition: none;
   }
 }

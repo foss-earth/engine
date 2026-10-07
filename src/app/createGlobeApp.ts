@@ -28,7 +28,8 @@ import { createDiagnosticsSection } from "../shell/diagnosticsSection";
 import { stepKind } from "../diagnostics/sessionTrail";
 import { startAppDiagnostics, type AppDiagnostics } from "./appDiagnostics";
 import { keepAppFiles } from "./appFiles";
-import { fossEarthSource, type AppIdentity } from "./appIdentity";
+import { getAppIdentity } from "./appIdentity";
+import { createAboutPanel } from "../shell/aboutPanel";
 import { describePublishedVersion, watchPublishedVersion, type PublishedVersionWatch } from "./publishedVersion";
 import type {
   GlobeHandle,
@@ -111,8 +112,10 @@ export interface GlobeAppHandle extends GlobeHandle {
   controlsSections: readonly PanelSection[];
   /** The toolbar and theme, for the host's Interface tab. */
   interfaceSections: readonly PanelSection[];
-  /** Saved settings and About, for the host's Settings tab. */
+  /** Presets, saved settings, the app's files and diagnostics, for the host's Settings tab. */
   settingsSections: readonly PanelSection[];
+  /** Which version runs and what it is built from, for the host's About tab. */
+  aboutTab: HTMLElement;
   /** The basemap and elevation choice, for the host's Map tab. */
   mapTab: HTMLElement;
   /** The GPU renderer choice, for the host's Renderer tab. */
@@ -155,57 +158,10 @@ export interface GlobeAppOptions {
 
 /** Pixel offset from the projected sphere centre to the top-right exit button. */
 const POI_EXIT_BTN_OFFSET_PX = 22;
-const BUILD_TIME = __BUILD_TIME__;
-const SOURCE_VERSION = __SOURCE_VERSION__;
+/** The site's GitHub repository, whose latest deploy About names. */
 const REPOSITORY_SLUG = __REPOSITORY_SLUG__;
 
-/** What identifies the app that runs, for Settings → About and the diagnostics report. */
-export const getAppIdentity = (): AppIdentity => ({ build: BUILD_TIME, source: SOURCE_VERSION, fossEarth: fossEarthSource(), bundle: getLoadedBundleName() });
-
-/** The page's built script, whatever the app's entry is called: "index-1a2B3c4D.js", or "dev" for one not built. */
-export function getLoadedBundleName(): string {
-  const scripts = Array.from(document.querySelectorAll<HTMLScriptElement>("script[src]"));
-  const bundle = scripts
-    .map((script) => script.src)
-    .map((src) => new URL(src, window.location.href).pathname.split("/").pop() ?? "")
-    // A build names each file with its content's hash.
-    .find((name) => /^[\w.]+-[\w-]{8}\.js$/.test(name));
-
-  return bundle ?? "dev";
-}
-
-/** About's last line. It was "Deploy", which an iPhone running a page four releases old showed with the newest deploy. */
-const SITE_DEPLOY_LABEL = "Site's latest deploy";
-
-async function getCurrentDeploySha(): Promise<string | null> {
-  if (!REPOSITORY_SLUG) {
-    return null;
-  }
-
-  try {
-    const response = await fetch(`https://api.github.com/repos/${REPOSITORY_SLUG}/git/ref/heads/gh-pages`, {
-      cache: "no-store",
-    });
-    if (!response.ok) {
-      return null;
-    }
-    const payload = await response.json() as { object?: { sha?: unknown } };
-    return typeof payload.object?.sha === "string" ? payload.object.sha : null;
-  } catch {
-    return null;
-  }
-}
-
-function hydrateDeployShaLine(line: HTMLElement | null): void {
-  if (!line) {
-    return;
-  }
-
-  void getCurrentDeploySha().then((sha) => {
-    // The site's, asked of GitHub now: a page a browser kept from before it shows this deploy too, so it says nothing of what runs.
-    line.textContent = `${SITE_DEPLOY_LABEL}: ${sha ? sha.slice(0, 12) : "unavailable"}`;
-  });
-}
+export { getAppIdentity, getLoadedBundleName } from "./appIdentity";
 
 function readVisiblePerformanceMetrics(): Set<PerformanceMetricId> {
   return new Set(PERFORMANCE_METRIC_DEFINITIONS
@@ -292,14 +248,6 @@ export async function createGlobeApp(
       <div id="settingsSectionsHolder" hidden>
         <div id="controlsInputMethodSection" class="settings-section-content"></div>
         <div id="controlsControllerSection" class="settings-section-content"></div>
-
-        <div id="settingsAboutSection" class="settings-section-content">
-          <p id="settingsBuildLine" class="settings-line">Build: ${BUILD_TIME}</p>
-          <p id="settingsSourceLine" class="settings-line">Source: ${SOURCE_VERSION}</p>
-          ${fossEarthSource() ? `<p id="settingsFossEarthLine" class="settings-line">FOSS Earth: ${fossEarthSource()}</p>` : ""}
-          <p id="settingsBundleLine" class="settings-line">Bundle: ${getLoadedBundleName()}</p>
-          <p id="settingsDeployLine" class="settings-line">${SITE_DEPLOY_LABEL}: loading</p>
-        </div>
       </div>
 
       <button id="poiExitBtn" class="poi-exit-btn" hidden
@@ -359,8 +307,6 @@ export async function createGlobeApp(
 
   const rendererModePill = rootElement.querySelector<HTMLButtonElement>("#rendererModePill");
   const perfMetricsPill = rootElement.querySelector<HTMLElement>("#perfMetricsPill");
-  const settingsDeployLine = rootElement.querySelector<HTMLElement>("#settingsDeployLine");
-  hydrateDeployShaLine(settingsDeployLine);
 
   // One registry for the page: the map source, renderer and every other
   // parameter below are read from it and follow it.
@@ -750,7 +696,8 @@ export async function createGlobeApp(
   const inputMethodElement = inputMethodSectionEl
     ? sectionOf("controls", "input-method", { main: inputMethodSectionEl, covers: ["input.mode", ...INPUT_SENSITIVITY_IDS] })
     : null;
-  const aboutElement = rootElement.querySelector<HTMLElement>("#settingsAboutSection");
+  // Its own tab, under +, where someone looking for which version runs looks for it.
+  const about = createAboutPanel({ publishedVersion, site: REPOSITORY_SLUG || undefined });
   // The input-method button lands here, so its section starts open.
   const controlsSections: PanelSection[] = [
     ...(inputMethodElement ? [{ id: "input-method", title: "Input method", element: inputMethodElement, defaultOpen: true }] : []),
@@ -778,7 +725,6 @@ export async function createGlobeApp(
     { id: "saved-settings", title: "Saved settings", element: savedSettings.element, defaultOpen: false },
     { id: "app-files", title: settings.getSectionTitle("settings", "app-files"), element: sectionOf("settings", "app-files", { footer: appFilesSection.element }), defaultOpen: false },
     { id: "diagnostics", title: settings.getSectionTitle("settings", "diagnostics"), element: sectionOf("settings", "diagnostics", { footer: diagnosticsSection.element }), defaultOpen: false },
-    ...(aboutElement ? [{ id: "about", title: "About", element: aboutElement, defaultOpen: false }] : []),
   ];
   // Performance debug is about what the renderer does, so it is the Renderer tab's.
   const rendererPanel = createRendererPanel({
@@ -958,6 +904,7 @@ export async function createGlobeApp(
     controlsSections,
     interfaceSections,
     settingsSections,
+    aboutTab: about.element,
     mapTab: mapPanel.element,
     rendererTab: rendererPanel.element,
     scenesTab: scenesPanel.element,
@@ -996,6 +943,7 @@ export async function createGlobeApp(
       savedSettings.destroy();
       appFilesSection.destroy();
       diagnosticsSection.destroy();
+      about.dispose();
       offSceneTrail();
       diagnostics.destroy();
       publishedVersion.dispose();

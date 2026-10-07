@@ -63,6 +63,7 @@ import { geodeticToEcef, ecefToGeodetic, DEG_TO_RAD, RAD_TO_DEG } from "../../ca
 import { orbitCenterOnSight, orbitGlideRates, withinTilt, type GlideVec3 } from "../../camera/cameraGlide";
 import { CameraController, DEFAULT_CAMERA_LIMITS, type CameraLimits, type GroundFollow, type OrbitTargetHeightOptions } from "../../camera/cameraState";
 import { createInputController, type InputController, type InputHandback } from "../../input/createInputController";
+import { passUnusedInputToWorld } from "../../input/passToWorld";
 import { createInertialCameraController, DEFAULT_INERTIA_DECAY_PER_FRAME, MAX_ZOOM_LOG_DELTA_PER_FRAME, type InertialCameraController } from "../../input/inertialCameraController";
 import type { CameraHandling } from "../../camera/cameraLimits";
 import type { GlobeNavigationIntentFrame } from "../../input/globeNavigation";
@@ -503,6 +504,11 @@ export async function createBabylonRuntime(
   const terrainCapture = options.terrainPerformanceCapture ?? (captureFromUrl ? createTerrainPerformanceCapture() : undefined);
   const previousCapture = window.fossTerrainPerformance;
   if (captureFromUrl) window.fossTerrainPerformance = terrainCapture;
+
+  // A swipe or pinch over a panel or the HUD that none of them uses moves
+  // whichever camera has the canvas, the globe's or the application's, and
+  // never reaches the browser as Back or a page zoom.
+  const stopPassingInput = passUnusedInputToWorld(canvas);
 
   let simLight: HemisphericLight | null = null;
   if (simMode) {
@@ -2134,6 +2140,7 @@ export async function createBabylonRuntime(
 
       inputController?.destroy();
       inputController = null;
+      stopPassingInput();
 
       inertialCameraController?.cancel();
       inertialCameraController = null;
