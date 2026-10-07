@@ -1,0 +1,78 @@
+{
+  "model": "EGM2008, NGA: the geoid's height above the WGS84 ellipsoid (tide free)",
+  "licence": "Public domain: a work of the United States government (NGA).",
+  "source": {
+    "file": "egm2008-5.pgm",
+    "sha256": "96d55e88db186ddae892b00c5f8cc42a37cdac8ddb69b6de00af8c75dffb34a3",
+    "header": [
+      "# Geoid file in PGM format for the GeographicLib::Geoid class",
+      "# Description WGS84 EGM2008, 5-minute grid",
+      "# URL http://earth-info.nga.mil/GandG/wgs84/gravitymod/egm2008",
+      "# DateTime 2009-08-29 18:45:00",
+      "# MaxBilinearError 0.478",
+      "# RMSBilinearError 0.012",
+      "# MaxCubicError 0.294",
+      "# RMSCubicError 0.005",
+      "# Offset -108",
+      "# Scale 0.003",
+      "# Origin 90N 0E",
+      "# AREA_OR_POINT Point",
+      "# Vertical_Datum WGS84"
+    ],
+    "archive": {
+      "url": "https://sourceforge.net/projects/geographiclib/files/geoids-distrib/egm2008-5.tar.bz2/download",
+      "sha256": "9a57c14330ac609132d324906822a9da9de265ad9b9087779793eb7080852970"
+    }
+  },
+  "generator": "scripts/geoid/build-geoid-grids.mjs",
+  "format": "gzip of: \"FEGD\", then width, height and spacing in arc minutes as little-endian uint16 and a reserved uint16; then width × height little-endian int16 centimetres, rows from 90°N to 90°S, each from 0°E eastward, each value less the one before it, a row's first less the first of the row above.",
+  "interpolation": "Bicubic (Catmull-Rom) through the grid's points: src/terrain/geoid.ts.",
+  "evaluation": "Against every point of the 5′ source grid; rms and the share of the globe off by more than 0.5 m are weighted by area.",
+  "grids": [
+    {
+      "file": "egm2008-60.bin",
+      "spacingMinutes": 60,
+      "width": 360,
+      "height": 181,
+      "bytes": 88729,
+      "sha256": "fe9b73a63c00f09b6543dcc1b85b59688b1b1df45ae19bd6e0ac829ca16ce7ff",
+      "maxErrorMeters": 12.59,
+      "maxErrorAt": [
+        19.5,
+        -155.5
+      ],
+      "rmsErrorMeters": 0.463,
+      "areaOverHalfMeter": 0.11669
+    },
+    {
+      "file": "egm2008-30.bin",
+      "spacingMinutes": 30,
+      "width": 720,
+      "height": 361,
+      "bytes": 308915,
+      "sha256": "194f1dfde8ac27b0298100a511e475f74a221338680296be0f2dbac6c06b47b4",
+      "maxErrorMeters": 4.12,
+      "maxErrorAt": [
+        10.75,
+        -73.667
+      ],
+      "rmsErrorMeters": 0.172,
+      "areaOverHalfMeter": 0.02415
+    },
+    {
+      "file": "egm2008-15.bin",
+      "spacingMinutes": 15,
+      "width": 1440,
+      "height": 721,
+      "bytes": 1032678,
+      "sha256": "b269e989d2511117747f52a1ed8b3a0de3cbf269c479a035506248c671346dc8",
+      "maxErrorMeters": 1.59,
+      "maxErrorAt": [
+        2.75,
+        -75.083
+      ],
+      "rmsErrorMeters": 0.055,
+      "areaOverHalfMeter": 0.00066
+    }
+  ]
+}

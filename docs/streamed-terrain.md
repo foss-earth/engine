@@ -33,6 +33,11 @@ The old Gaussian elevation approximation no longer shapes raster geometry.
 Terrain values currently enter the globe's geodetic height coordinate directly.
 There is no geoid/datum correction. Therefore `SurfaceHit.heightMeters` describes
 the displayed mesh's WGS84-coordinate height, not a survey-certified elevation.
+Over raster terrain that height is the source's height above its own sea level;
+over Google 3D Tiles, which are true ellipsoid heights, it is not. Whatever
+shows a height above sea level asks `surfaceHeightDatum` which it is, and over
+the ellipsoid takes away the EGM2008 geoid's height from `src/terrain/geoid.ts`,
+as the toolbar's position readout does.
 Mixed-resolution LOD boundaries and source quality still warrant visual review.
 
 ## Public API

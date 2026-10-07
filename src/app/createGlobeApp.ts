@@ -42,6 +42,7 @@ import { createLayerRegistry } from "../layers/layerRegistry";
 import { MAX_PITCH_DEG } from "../camera/cameraState";
 import { ecefToGeodetic, RAD_TO_DEG } from "../camera/cameraMath";
 import { createStatusHud, type CameraAltitude, type StatusHudHandle } from "../hud/statusHud";
+import { surfaceHeightDatum } from "../terrain/geoid";
 import { PERFORMANCE_METRIC_DEFINITIONS, renderPerformanceChips, type PerformanceMetricId } from "../hud/performanceChips";
 import { createNorthButton, type NorthButtonHandle } from "../hud/northButton";
 import { createHelpModal, type HelpModalHandle } from "../hud/helpModal";
@@ -483,6 +484,7 @@ export async function createGlobeApp(
     return {
       altitudeMeters: altMeters,
       groundHeightMeters: statusHud.needsGroundHeight() ? resolveSurfaceHeightMeters(latRad * RAD_TO_DEG, lonRad * RAD_TO_DEG) : null,
+      heightDatum: surfaceHeightDatum(runtime.status.mode),
     };
   };
   const northButton: NorthButtonHandle | null = northBtnSvgEl ? createNorthButton(northBtnSvgEl) : null;

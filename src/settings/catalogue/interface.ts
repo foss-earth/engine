@@ -47,6 +47,7 @@ export type AltitudeUnit = "m" | "ft";
 export const POSITION_COORDINATE_LABELS_ID = "interface.position.coordinateLabels";
 export const POSITION_ALTITUDE_ID = "interface.position.altitude";
 export const POSITION_ALTITUDE_UNIT_ID = "interface.position.altitudeUnit";
+export const POSITION_SEA_LEVEL_GRID_ID = "interface.position.seaLevelGrid";
 const POSITION_READOUT = { tab: INTERFACE_TAB, section: "position", level: "main" } as const;
 
 export const TOOLBAR_BUTTONS = [
@@ -277,7 +278,7 @@ export const INTERFACE_PARAMETERS: readonly ParameterSpec[] = [
   {
     id: POSITION_ALTITUDE_ID,
     label: "Altitude",
-    description: "What the toolbar's altitude is measured from. Above sea level is the height over the globe's sea level, the WGS84 ellipsoid; terrain heights enter it without a geoid correction (docs/streamed-terrain.md), so it can differ from a chart's altitude by the geoid's height there, up to about 100 m. Above ground takes away the height of the drawn terrain directly below, so it reads zero on the ground and changes as the ground rises and falls; it shows a dash until terrain below has loaded, and asks for one ray pick against the terrain each drawn frame.",
+    description: "What the toolbar's altitude is measured from. Above sea level is the height over mean sea level, the EGM2008 geoid. Raster terrain's heights are already above its source's sea level; Google 3D Tiles are drawn at their heights above the WGS84 ellipsoid, so over them the geoid's height there, from the sea level grid below, is taken away. Above ground takes away the height of the drawn terrain directly below, so it reads zero on the ground and changes as the ground rises and falls; it needs the terrain below sampled each time it is drawn, and shows a dash until terrain there has loaded.",
     unit: "none",
     kind: "choice",
     choices: [
@@ -285,10 +286,28 @@ export const INTERFACE_PARAMETERS: readonly ParameterSpec[] = [
       { id: "agl", label: "Above ground (AGL)", description: "Height over the terrain directly below." },
     ],
     default: "asl",
-    defaultReason: "It does not depend on which terrain has loaded, costs nothing to compute, and is the altitude an altimeter reads.",
+    defaultReason: "It does not depend on which terrain has loaded, and is the altitude an altimeter and a chart give.",
     home: POSITION_READOUT,
     appliesLive: true,
     source: "src/hud/positionReadout.ts",
+  },
+  {
+    id: POSITION_SEA_LEVEL_GRID_ID,
+    label: "Sea level grid",
+    description: "The grid of NGA's EGM2008 geoid, mean sea level, that the altitude above sea level is measured from over Google 3D Tiles, which are drawn at their heights above the WGS84 ellipsoid. A finer grid is closer to the model and a larger download, made once a page when the altitude above sea level is first shown over Google 3D Tiles, and kept with the app's files. Raster terrain's heights are already above sea level and need no grid. Each grid's error is measured against every point of EGM2008's 5′ grid: src/terrain/geoidGrids/provenance.json.",
+    unit: "none",
+    kind: "choice",
+    choices: [
+      { id: "60", label: "1° (87 KiB)", description: "Within 12.6 m of EGM2008, 46 cm rms; more than 0.5 m off over 11.7% of the globe." },
+      { id: "30", label: "30′ (302 KiB)", description: "Within 4.1 m of EGM2008, 17 cm rms; more than 0.5 m off over 2.4% of the globe." },
+      { id: "15", label: "15′ (1008 KiB)", description: "Within 1.6 m of EGM2008, 5.5 cm rms; more than 0.5 m off over 0.07% of the globe." },
+    ],
+    default: "15",
+    defaultReason: "It is within half a metre of EGM2008 over all but 0.07% of the globe, less than the readout's metre step, and is downloaded only beside Google 3D Tiles, whose own downloads are far larger.",
+    home: POSITION_READOUT,
+    visibleWhen: { id: POSITION_ALTITUDE_ID, value: "asl" },
+    appliesLive: true,
+    source: "src/terrain/geoid.ts",
   },
   {
     id: POSITION_ALTITUDE_UNIT_ID,
