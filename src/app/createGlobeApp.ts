@@ -25,8 +25,11 @@ import { createPresetsSection } from "../shell/settings/presetsSection";
 import { createSavedSettingsSection } from "../shell/settings/savedSettings";
 import { createAppFilesSection, describeAppFiles } from "../shell/appFilesSection";
 import { createDiagnosticsSection } from "../shell/diagnosticsSection";
+import { createBugReportPanel } from "../shell/bugReportPanel";
 import { stepKind } from "../diagnostics/sessionTrail";
-import { startAppDiagnostics, type AppDiagnostics } from "./appDiagnostics";
+import { reportSecrets, startAppDiagnostics, type AppDiagnostics } from "./appDiagnostics";
+import { issueReporterFromBuild } from "./issueReporting";
+import type { IssueReporterConfig } from "../diagnostics/issueReport";
 import { keepAppFiles } from "./appFiles";
 import { getAppIdentity } from "./appIdentity";
 import { createAboutPanel } from "../shell/aboutPanel";
@@ -118,6 +121,9 @@ export interface GlobeAppHandle extends GlobeHandle {
   settingsSections: readonly PanelSection[];
   /** Which version runs and what it is built from, for the host's About tab. */
   aboutTab: HTMLElement;
+  /** The report form's one home, prepared when this tab is first shown. */
+  bugReportTab: HTMLElement;
+  onBugReportShow(): void;
   /** The basemap and elevation choice, for the host's Map tab. */
   mapTab: HTMLElement;
   /** The GPU renderer choice, for the host's Renderer tab. */
@@ -131,6 +137,8 @@ export interface GlobeAppHandle extends GlobeHandle {
 }
 
 export interface GlobeAppOptions {
+  /** Download full diagnostics and open an issue draft in this GitHub repository. */
+  issueReporter?: IssueReporterConfig;
   googleApiKey?: string | null;
   baseMap?: string | RasterBaseMapSource | null;
   preferGoogleTiles?: boolean;
@@ -296,6 +304,7 @@ export async function createGlobeApp(
         },
       },
       { kind: "button", id: "settingsButton", title: "Settings", ariaLabel: "Settings", className: "settings-button", text: "⚙" },
+      { kind: "button", id: "bugReportButton", title: "Show or close the Bug report tab", ariaLabel: "Bug report", text: "🐞" },
       { kind: "button", id: "fullscreenButton", title: "Enter fullscreen", ariaLabel: "Enter fullscreen", text: "⛶" },
       { kind: "button", id: "hudStatus", appearance: "chip", className: "hud-chip-button hud-status-text", ariaLive: "polite", ariaLabel: "Camera position", title: "Latitude and longitude of the point looked at, the camera's altitude, heading, pitch and zoom distance. Click to show or hide the Location tab." },
       { kind: "slot", id: "mapSourceSlot", className: "map-source-hud-slot" },
@@ -468,6 +477,7 @@ export async function createGlobeApp(
   const helpBtnEl = rootElement.querySelector<HTMLButtonElement>("#helpButton");
   const helpModalEl = rootElement.querySelector<HTMLElement>("#helpModal");
   const settingsBtnEl = rootElement.querySelector<HTMLButtonElement>("#settingsButton");
+  const bugReportBtnEl = rootElement.querySelector<HTMLButtonElement>("#bugReportButton");
   const themeBtnEl = rootElement.querySelector<HTMLButtonElement>("#themeButton");
   const fullscreenBtnEl = rootElement.querySelector<HTMLButtonElement>("#fullscreenButton");
   const detachFullscreen = fullscreenBtnEl ? attachFullscreenButton(fullscreenBtnEl) : null;
@@ -523,8 +533,10 @@ export async function createGlobeApp(
 
   const onRendererPillClick = (): void => toggleTab("renderer");
   const onStatusClick = (): void => toggleTab("location");
+  const onBugReportClick = (): void => toggleTab("bug-report");
   rendererModePill?.addEventListener("click", onRendererPillClick);
   hudStatusEl?.addEventListener("click", onStatusClick);
+  bugReportBtnEl?.addEventListener("click", onBugReportClick);
 
   // The app follows its parameters wherever they are changed: their sections,
   // Show all parameters, an import or another tab.
@@ -532,6 +544,7 @@ export async function createGlobeApp(
     help: helpBtnEl,
     renderer: rendererModePill,
     settings: settingsBtnEl,
+    bugReport: bugReportBtnEl,
     theme: themeBtnEl,
     inputMode: rootElement.querySelector<HTMLElement>(".input-mode-control"),
     position: hudStatusEl,
@@ -705,7 +718,13 @@ export async function createGlobeApp(
   const appFiles = keepAppFiles(settings);
   const appFilesSection = createAppFilesSection(appFiles, publishedVersion);
   diagnostics.addState(async () => `App files: ${describeAppFiles(await appFiles.status())}`);
-  const diagnosticsSection = createDiagnosticsSection(diagnostics);
+  const diagnosticsSource = {
+    report: () => diagnostics.report({ allSettings: true }),
+    previous: () => diagnostics.previous(),
+    reportSecrets: () => reportSecrets(settings),
+  };
+  const diagnosticsSection = createDiagnosticsSection(diagnosticsSource);
+  const bugReportPanel = createBugReportPanel(diagnosticsSource, { issueReporter: options.issueReporter ?? issueReporterFromBuild() });
   const inputMethodElement = inputMethodSectionEl
     ? sectionOf("controls", "input-method", { main: inputMethodSectionEl, covers: ["input.mode", ...INPUT_SENSITIVITY_IDS] })
     : null;
@@ -919,6 +938,8 @@ export async function createGlobeApp(
     interfaceSections,
     settingsSections,
     aboutTab: about.element,
+    bugReportTab: bugReportPanel.element,
+    onBugReportShow: () => bugReportPanel.show(),
     mapTab: mapPanel.element,
     rendererTab: rendererPanel.element,
     scenesTab: scenesPanel.element,
@@ -949,6 +970,7 @@ export async function createGlobeApp(
       detachFullscreen?.();
       helpModal?.destroy();
       settingsBtnEl?.removeEventListener("click", onSettingsButtonClick);
+      bugReportBtnEl?.removeEventListener("click", onBugReportClick);
       for (const stop of stopWatchingSettings) stop();
       for (const section of parameterSections) section.destroy();
       for (const control of parameterControls) control.destroy();
@@ -957,6 +979,7 @@ export async function createGlobeApp(
       savedSettings.destroy();
       appFilesSection.destroy();
       diagnosticsSection.destroy();
+      bugReportPanel.destroy();
       about.dispose();
       offSceneTrail();
       diagnostics.destroy();

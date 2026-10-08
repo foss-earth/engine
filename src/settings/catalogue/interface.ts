@@ -56,6 +56,7 @@ export const TOOLBAR_BUTTONS = [
   ["inputMode", "Input method", "the input method button, which opens the Controls tab"],
   ["theme", "Theme button", "the light and dark theme button"],
   ["settings", "Settings (⚙)", "the ⚙ button that opens the Settings tab"],
+  ["bugReport", "Bug report (🐞)", "the 🐞 button that shows or closes the Bug report tab"],
   ["fullscreen", "Fullscreen", "the button that enters or leaves fullscreen"],
   ["position", "Camera position", "the latitude, longitude, altitude, heading, pitch and zoom readout that opens Location"],
 ] as const;
@@ -71,6 +72,7 @@ export const TOOLBAR_PRIORITIES = [
   ["position", "Camera position", 6],
   ["theme", "Theme button", 7],
   ["settings", "Settings (⚙)", 8],
+  ["bugReport", "Bug report (🐞)", 9],
   ["frame", "Frame time", 10],
   ["p95", "P95 frame time", 11],
   ["activeMeshes", "Active meshes (#⬟)", 12],
@@ -249,7 +251,7 @@ export const INTERFACE_PARAMETERS: readonly ParameterSpec[] = [
     step: 1,
     numberControl: "field",
     default: priority,
-    defaultReason: "North and help come first, followed by input method, fullscreen, FPS, renderer, position, theme, settings and additional performance readings.",
+    defaultReason: "North and help come first, followed by input method, fullscreen, FPS, renderer, position, theme, settings, bug report and additional performance readings.",
     home: { tab: INTERFACE_TAB, section: "toolbar", level: "main" },
     visibleWhen: { id: TOOLBAR_EDIT_PRIORITIES_ID, value: true },
     inlineWith: item === "north" ? undefined

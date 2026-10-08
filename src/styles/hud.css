@@ -1763,6 +1763,25 @@ summary.foss-earth-about__row:focus-visible {
   -webkit-user-select: text;
 }
 
+.foss-earth-bug-report__field {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  font-size: 12px;
+}
+
+.foss-earth-bug-report__field input {
+  width: 24ch;
+  max-width: 100%;
+}
+
+.foss-earth-bug-report__field textarea {
+  width: 30ch;
+  max-width: 100%;
+}
+
 .foss-earth-settings-transfer__panel {
   display: grid;
   flex-basis: 100%;
