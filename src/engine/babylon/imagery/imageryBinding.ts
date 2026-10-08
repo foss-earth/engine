@@ -11,7 +11,7 @@
  * imagery boundaries need not match terrain triangles.
  */
 
-import { tileKey, type TileId } from "../../../terrain/imagery/imageryGeometry";
+import { tileContains, tileKey, type TileId } from "../../../terrain/imagery/imageryGeometry";
 import { encodeTableEntry, IMAGERY_TABLE_BLOCK, IMAGERY_TABLE_MAX_CELLS_LOG2 } from "./imageryAtlasLayout";
 
 export interface DisplayLeaf {
@@ -19,6 +19,8 @@ export interface DisplayLeaf {
   imageKey: string;
   /** Pages per side of the chosen image: 1 for a standard tile, 2 for a 512-pixel variant. */
   pagesPerSide: number;
+  /** Not requested, since the source lacks an ancestor's image: its stand-in is not loading. */
+  presumedMissing?: boolean;
 }
 
 export interface ImageryDisplayInput {
@@ -79,7 +81,7 @@ export function buildImageryDisplay(input: ImageryDisplayInput): ImageryDisplay 
       showImage(leaf.tile, own, leaf.pagesPerSide);
       continue;
     }
-    if (!input.isMissing?.(leaf.imageKey)) display.fallbackLeaves += 1;
+    if (!leaf.presumedMissing && !input.isMissing?.(leaf.imageKey)) display.fallbackLeaves += 1;
     let { z, x, y } = leaf.tile;
     while (z > 0) {
       z -= 1; x >>= 1; y >>= 1;
@@ -205,6 +207,43 @@ export function measureLoadedImagery(regions: readonly LoadedImageryRegion[], bi
     descend(region.tile);
   }
   return !missing && area > 0 ? weighted / area : null;
+}
+
+/**
+ * The page level materials sample for a region, read from the published
+ * bindings rather than the display, so table exhaustion and depth caps
+ * count: at the region's centre in the bound patch containing it, or else the
+ * coarsest level in the bound patches it contains. Null where no bound patch
+ * covers it or a covering cell has no page.
+ */
+export function createBoundLevels(bindings: readonly LoadedImageryBinding[]): (tile: TileId) => number | null {
+  const patches = new Map(bindings.map(binding => [tileKey(binding.tile), binding]));
+  const levelAt = (binding: LoadedImageryBinding, tile: TileId): number | null => {
+    if (!binding.table) return binding.directLevel;
+    const { cellsLog2, data } = binding.table;
+    const scale = 2 ** (binding.tile.z + cellsLog2 - tile.z);
+    const x = Math.floor((tile.x + 0.5) * scale) - binding.tile.x * 2 ** cellsLog2;
+    const y = Math.floor((tile.y + 0.5) * scale) - binding.tile.y * 2 ** cellsLog2;
+    const index = (y * IMAGERY_TABLE_BLOCK + x) * 4;
+    return data[index + 3] === 255 ? data[index + 2] : null;
+  };
+  return tile => {
+    let { z, x, y } = tile;
+    for (;;) {
+      const binding = patches.get(`${z}/${x}/${y}`);
+      if (binding) return levelAt(binding, tile);
+      if (z === 0) break;
+      z -= 1; x >>= 1; y >>= 1;
+    }
+    let coarsest: number | null = null;
+    for (const binding of bindings) {
+      if (!tileContains(tile, binding.tile)) continue;
+      const level = levelAt(binding, binding.tile);
+      if (level === null) return null;
+      coarsest = coarsest === null ? level : Math.min(coarsest, level);
+    }
+    return coarsest;
+  };
 }
 
 /**

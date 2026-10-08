@@ -8,6 +8,8 @@
  * units never mix: a state carries the kind of its policy.
  */
 
+import type { ImageryConstraint } from "./imagery/imageryConstraints";
+
 export type DetailKind = "raster" | "google";
 
 export interface RasterDetailPolicy {
@@ -105,6 +107,8 @@ export interface DetailState {
   effectiveTarget: number | null;
   pending: boolean;
   limits: readonly DetailLimit[];
+  /** Raster only: what limits visible imagery, with its values; empty when nothing does or for Google. */
+  constraints: readonly ImageryConstraint[];
   /** Hosts' markers on this source's track. */
   markers: readonly DetailTrackMarker[];
 }

@@ -19,6 +19,7 @@ import {
   type RasterDetailPolicy,
 } from "../terrain/mapDetailPolicy";
 import { getAppSettings } from "../settings/appSettings";
+import type { ImageryConstraint } from "../terrain/imagery/imageryConstraints";
 import { FOSS_EARTH_MIGRATIONS } from "../settings/catalogue";
 import { MAP_DETAIL_PARAMETERS } from "../settings/catalogue/map";
 import { createSettingsRegistry, type SettingsRegistry, type SettingsStorage } from "../settings/registry";
@@ -56,6 +57,8 @@ export interface MapDetailDelivery {
   loadedTarget?: number | null;
   /** Raster only: the one delivered offset when every region agrees, otherwise null. */
   effectiveTarget?: number | null;
+  /** Raster only: what limits visible imagery, with its values. */
+  constraints?: readonly ImageryConstraint[];
 }
 
 /**
@@ -298,6 +301,7 @@ export function createMapDetailController(options: MapDetailControllerOptions = 
       effectiveTarget,
       pending: availability === "ready" && (delivery?.pending ?? false),
       limits: availability === "ready" ? composeLimits(active.key, requirementApplied) : [],
+      constraints: availability === "ready" ? delivery?.constraints ?? [] : [],
       markers: [...markers.values()].filter(marker => marker.kind === kind),
     };
   }
@@ -317,6 +321,7 @@ export function createMapDetailController(options: MapDetailControllerOptions = 
       && a.effectiveTarget === b.effectiveTarget
       && a.pending === b.pending
       && sameLimits(a.limits, b.limits)
+      && JSON.stringify(a.constraints) === JSON.stringify(b.constraints)
       && a.markers.length === b.markers.length
       && a.markers.every((marker, index) => marker === b.markers[index]);
   }
@@ -476,7 +481,7 @@ export function createMapDetailController(options: MapDetailControllerOptions = 
     reportDelivery(key, delivery) {
       if (delivery) {
         deliveries.set(key, { pending: delivery.pending, limits: [...delivery.limits], activeTarget: delivery.activeTarget,
-          loadedTarget: delivery.loadedTarget, effectiveTarget: delivery.effectiveTarget ?? null });
+          loadedTarget: delivery.loadedTarget, effectiveTarget: delivery.effectiveTarget ?? null, constraints: [...delivery.constraints ?? []] });
       } else {
         deliveries.delete(key);
       }

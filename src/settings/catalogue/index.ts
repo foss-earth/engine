@@ -8,8 +8,10 @@ import { MAP_LOADING_PARAMETERS, MAP_SELECTION_PARAMETERS, MAP_TERRAIN_SELECTION
 import { MAP_DETAIL_PARAMETERS, MAP_SOURCE_PARAMETERS, MAP_TAB } from "./map";
 import { RENDERER_EXPERIMENT_IDS, RENDERER_EXPERIMENT_PARAMETERS, RENDERER_PARAMETERS, RENDERER_TAB } from "./renderer";
 import { PANORAMA_SETTINGS_TAB, PANORAMA_TAB, SCENE_PARAMETERS, SCENE_SECTION_TITLES, SCENES_TAB } from "./scenes";
+import { SKY_PARAMETERS, SKY_SECTION_TITLES, SKY_TAB, TIME_TAB } from "./sky";
 
-export { CONTROLS_TAB, INTERFACE_TAB, MAP_TAB, PANORAMA_SETTINGS_TAB, PANORAMA_TAB, RENDERER_TAB, SCENES_TAB, SETTINGS_TAB, PERFORMANCE_HUD_METRICS, TOOLBAR_BUTTONS };
+export { CONTROLS_TAB, INTERFACE_TAB, MAP_TAB, PANORAMA_SETTINGS_TAB, PANORAMA_TAB, RENDERER_TAB, SCENES_TAB, SETTINGS_TAB, SKY_TAB, TIME_TAB, PERFORMANCE_HUD_METRICS, TOOLBAR_BUTTONS };
+export { SKY_MODELS, VIEWPOINT_SURFACE_LIGHTING_CHOICE, type SkyModel } from "./sky";
 export { POSITION_ALTITUDE_ID, POSITION_ALTITUDE_UNIT_ID, POSITION_COORDINATE_LABELS_ID, POSITION_SEA_LEVEL_GRID_ID, TOOLBAR_EDIT_PRIORITIES_ID, TOOLBAR_PRIORITIES, toolbarPriorityParameterId } from "./interface";
 export type { AltitudeReference, AltitudeUnit, CoordinateLabels, ToolbarItemId, ToolbarVisibility } from "./interface";
 export { INPUT_RATE_IDS, INPUT_SENSITIVITY_IDS } from "./controls";
@@ -26,6 +28,7 @@ export const FOSS_EARTH_PARAMETERS: readonly ParameterSpec[] = [
   ...MAP_TERRAIN_SELECTION_PARAMETERS,
   ...RENDERER_PARAMETERS,
   ...RENDERER_EXPERIMENT_PARAMETERS,
+  ...SKY_PARAMETERS,
   ...CONTROLS_PARAMETERS,
   ...INTERFACE_PARAMETERS,
   ...SCENE_PARAMETERS,
@@ -40,7 +43,6 @@ export const FOSS_EARTH_SECTION_TITLES: ReadonlyArray<readonly [string, string, 
   [MAP_TAB, "terrain-selection", "Terrain selection"],
   [RENDERER_TAB, "backend", "Renderer"],
   [RENDERER_TAB, "frame", "Resolution and frame rate"],
-  [RENDERER_TAB, "lighting", "Lighting and exposure"],
   [RENDERER_TAB, "clipping", "Depth range"],
   [RENDERER_TAB, "experiments", "Work-saving experiments"],
   [CONTROLS_TAB, "input-method", "Input method"],
@@ -57,6 +59,7 @@ export const FOSS_EARTH_SECTION_TITLES: ReadonlyArray<readonly [string, string, 
   [SETTINGS_TAB, "app-files", "App files"],
   [SETTINGS_TAB, "diagnostics", "Diagnostics"],
   ...SCENE_SECTION_TITLES,
+  ...SKY_SECTION_TITLES,
 ];
 
 function parseJson(raw: string): unknown {

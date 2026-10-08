@@ -4,6 +4,8 @@ import type { ImagerySourceCapabilities, ImagerySourceKind } from "./imagerySele
 /** The parts of a raster basemap descriptor imagery selection reads. */
 export interface ImageryDescriptor {
   id: string;
+  /** The name people see, such as in explanations; the id when absent. */
+  label?: string;
   urlTemplate: string;
   kind?: ImagerySourceKind;
   version?: string;

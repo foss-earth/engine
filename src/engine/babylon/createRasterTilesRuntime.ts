@@ -23,9 +23,11 @@ import { retryDelayMs, type RetryDelay } from "../../terrain/retryDelay";
 import { meshPositions, patchesForGeometryCommit, stitchTerrainEdges, updateTerrainPositions } from "../../terrain/meshRefinement";
 import type { GlobeViewState } from "../types";
 import type { DetailLimit } from "../../terrain/mapDetailPolicy";
+import type { ImageryConstraint } from "../../terrain/imagery/imageryConstraints";
 import { lonLatToTileXY } from "../../terrain/imagery/imageryGeometry";
 import { createImageryRuntime, type ImageryDiagnostics, type ImageryFocusRequest, type ImageryRuntime } from "./imagery/createImageryRuntime";
 import { IMAGERY_TABLE_MAX_CELLS_LOG2 } from "./imagery/imageryAtlasLayout";
+import { TerrainLightMaterialPlugin } from "./imagery/terrainLightPlugin";
 import type { ImageryLoader } from "./imagery/imageryResidency";
 import type { RasterBaseMapSource } from "./rasterBaseMaps";
 import { getAppSettings } from "../../settings/appSettings";
@@ -61,6 +63,10 @@ export interface RasterDetailFeedback {
   loadedTarget?: number | null;
   /** The one delivered offset when every region meets the request, otherwise null. */
   effectiveTarget: number | null;
+  /** The source delivery is for, while imagery is supported. */
+  source?: { id: string; version: string; label: string } | null;
+  /** What limits visible imagery, from the decisions that applied each limit. Automatic adjustment is not among them. */
+  constraints?: readonly ImageryConstraint[];
 }
 
 export interface RasterTerrainState {
@@ -326,6 +332,8 @@ function createTileRecord(
   const key = tileKey(tile);
   const mesh = createTerrainMesh(options, tile, options.getSurfaceHeightMeters ? undefined : GLOBAL_TERRAIN);
   const material = new StandardMaterial(`raster-basemap-material-${source.id}-${key}`, scene);
+  // Shows the tile's imagery under the scene's terrain light, when a sky model sets one.
+  new TerrainLightMaterialPlugin(material);
   const record: RasterTileRecord = {
     key,
     tile,
@@ -593,6 +601,8 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
   let visibleTileKeys = new Set<string>();
   let tick = 0;
   let lastDesired: DesiredEntry[] = [];
+  // The tiles the last selection chose and the parents above them it keeps loaded.
+  let neededKeys = new Set<string>();
   let loadingCount = 0;
   let loadCycleActive = false;
   let disposed = false;
@@ -922,8 +932,13 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
     const childKeys = children.flatMap((child) => child.keys);
     if (children.every((child) => child.covered)) {
       const quality = cache.get(key)?.mesh.metadata.terrainZoom ?? -1;
-      // Never replace a known parent with less accurate startup geometry.
-      if (!loaded || childKeys.every(child => cache.get(child)!.mesh.metadata.terrainZoom >= quality)) {
+      // Never replace a known parent with less accurate startup geometry. Nor
+      // patches already shown with a parent whose elevation arrived before
+      // theirs: its page table reaches fewer imagery levels, so the imagery
+      // they show would coarsen with nothing moved. They keep their place and
+      // take their own elevation as it arrives.
+      if (!loaded || childKeys.every(child => cache.get(child)!.mesh.metadata.terrainZoom >= quality)
+        || childKeys.some(child => visibleTileKeys.has(child))) {
         return { covered: true, keys: childKeys };
       }
     }
@@ -969,10 +984,13 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
   function evictIfNeeded(): void {
     const maxCachedTiles = Math.round(setting("map.terrain.cachedTiles"));
     if (cache.size <= maxCachedTiles) return;
-    const desiredKeys = new Set(lastDesired.map((e) => e.key));
     const candidates: Array<{ key: string; tick: number }> = [];
     for (const [key, record] of cache) {
-      if (desiredKeys.has(key)) continue; // never evict the current desired set
+      // Never evict what the current selection needs: its tiles and their
+      // parents. The budget is for tiles that have left it. A parent evicted
+      // here would be created and loaded again by the next selection, and that
+      // one caused by its arrival, without end while the view stays still.
+      if (neededKeys.has(key)) continue;
       if (visibleTileKeys.has(key)) continue;
       if (!record.settled) continue;       // don't evict in-flight loads
       candidates.push({ key, tick: lastUsedTick.get(key) ?? 0 });
@@ -1113,6 +1131,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
       touchAncestors(entry.tile, baseZoom);
     }
     for (const tile of [...parents.values()].sort((a, b) => a.z - b.z)) ensureCached(tile);
+    neededKeys = new Set([...lastDesired.map(entry => entry.key), ...parents.keys()]);
 
     visibilityDirty = true;
   }
@@ -1299,6 +1318,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
       dirtyGeometryKeys.clear();
       meshRebuildQueue.clear();
       lastDesired = [];
+      neededKeys = new Set();
       loadingCount = 0;
       loadCycleActive = false;
     },

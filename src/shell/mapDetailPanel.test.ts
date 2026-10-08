@@ -5,7 +5,11 @@ import type { RasterDetailFeedback } from "../engine/babylon/createRasterTilesRu
 import { RASTER_BASE_MAP_SOURCES } from "../engine/babylon/rasterBaseMaps";
 import { connectMapDetailRuntime, type MapDetailRuntime } from "./connectMapDetailRuntime";
 import { createMapDetailController } from "./mapDetailController";
+import { describeImageryConstraint } from "./mapDetailExplanations";
 import { createMapDetailPanel } from "./mapDetailPanel";
+import type { ImageryConstraint } from "../terrain/imagery/imageryConstraints";
+
+const MISSING: ImageryConstraint = { cause: "source", missingRegions: 3, finestLevelRegions: 0, finestLevel: 16, outsideRegions: 0, scaleRegions: 0 };
 
 afterEach(() => document.body.replaceChildren());
 
@@ -92,6 +96,17 @@ describe("Map tab detail editor", () => {
     controller.reportDelivery("raster:usgs-imagery", { pending: false, limits: ["memory"] });
     expect(status.hidden).toBe(false);
     expect(status.textContent).toBe("Limited by the memory budget.");
+  });
+
+  it("explains each limit the renderer reports with its values, and the rest in general words", () => {
+    const { controller, panel } = mountRaster();
+    const status = panel.element.querySelector<HTMLElement>(".map-detail-panel__status")!;
+    controller.reportDelivery("raster:usgs-imagery", { pending: true, limits: ["source", "loading"], constraints: [MISSING] });
+    expect(status.textContent).toBe(`Still loading. ${describeImageryConstraint(MISSING)}`);
+    controller.reportDelivery("raster:usgs-imagery", { pending: false, limits: ["source", "frame-time"], constraints: [MISSING] });
+    expect(status.textContent).toBe(`Coarsened to hold the frame time. ${describeImageryConstraint(MISSING)}`);
+    controller.reportDelivery("raster:usgs-imagery", { pending: false, limits: [], constraints: [] });
+    expect(status.hidden).toBe(true);
   });
 
   it("does not mutate a hidden settings panel when only the HUD's loaded-detail cursor moves", () => {
@@ -188,7 +203,7 @@ describe("detail runtime binding", () => {
     const status = { mode, rasterBaseMap: mode === "raster-basemap" ? RASTER_BASE_MAP_SOURCES[0] : null } as BabylonRuntimeStatus;
     let feedback: RasterDetailFeedback | null = { support: "ready", pending: false, limits: [], effectiveTarget: null };
     let google: { defaultErrorTarget: number } | null = mode === "google-tiles" ? { defaultErrorTarget: 20 } : null;
-    const runtime: MapDetailRuntime & { emit(): void; setMode(next: BabylonRuntimeStatus["mode"]): void } = {
+    const runtime: MapDetailRuntime & { emit(): void; setMode(next: BabylonRuntimeStatus["mode"]): void; report(next: RasterDetailFeedback): void } = {
       status,
       renderer: { mode: "webgpu" },
       getGoogleTerrainDetailState: () => google,
@@ -207,9 +222,24 @@ describe("detail runtime binding", () => {
         feedback = { support: "ready", pending: false, limits: [], effectiveTarget: null };
         runtime.emit();
       },
+      report(next) {
+        feedback = next;
+        runtime.emit();
+      },
     };
     return runtime;
   }
+
+  it("carries the renderer's explanations into the detail state, and none for another source", () => {
+    const runtime = fakeRuntime("raster-basemap");
+    const controller = createMapDetailController({ storage: null });
+    const disconnect = connectMapDetailRuntime(controller, runtime);
+    runtime.report({ support: "ready", pending: false, limits: ["source"], effectiveTarget: null, constraints: [MISSING] });
+    expect(controller.getState()?.constraints).toEqual([MISSING]);
+    runtime.setMode("google-tiles");
+    expect(controller.getState()?.constraints).toEqual([]);
+    disconnect();
+  });
 
   it("applies the Google target, with consumer requirements composed in", () => {
     const runtime = fakeRuntime("google-tiles");

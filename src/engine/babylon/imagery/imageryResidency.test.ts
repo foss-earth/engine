@@ -62,7 +62,9 @@ describe("imagery residency", () => {
     const { residency } = harness({ queuedRequests: 3, concurrentRequests: 1 });
     residency.setDemand(Array.from({ length: 10 }, (_, index) => request(`t${index}`, index)));
     expect(residency.stats()).toMatchObject({ queued: 3, overflow: 7 });
-    expect(residency.stats().limits).toContain("memory");
+    // What the queue left out waits its turn: loading, not a lack of GPU memory.
+    expect(residency.stats().limits).toContain("loading");
+    expect(residency.stats().limits).not.toContain("memory");
   });
 
   it("queues demand left out earlier as soon as the queue has room", async () => {
@@ -132,7 +134,7 @@ describe("imagery residency", () => {
     pending[3].resolve(image());
     await flush();
     expect(residency.upload(Infinity)).toBe(0);
-    expect(residency.stats()).toMatchObject({ staged: 1 });
+    expect(residency.stats()).toMatchObject({ staged: 1, unplaced: 1, pinnedPages: 2 });
     expect(residency.stats().limits).toContain("memory");
   });
 

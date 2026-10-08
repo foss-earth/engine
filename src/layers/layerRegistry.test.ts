@@ -12,6 +12,7 @@ function createPoiTrackingMock(): PoiTrackingHandle {
     exitTracking: vi.fn(),
     isTracking: vi.fn(() => false),
     getOrbitTarget: vi.fn(() => null),
+    setSuspended: vi.fn(),
     destroy: vi.fn(),
   };
 }
@@ -33,6 +34,7 @@ function createAnchorHeightsMock(): AnchorHeightResolver {
     getCachedHeight: vi.fn(() => null),
     clear: vi.fn(),
     setHeightOffset: vi.fn(),
+    setTuning: vi.fn(),
   };
 }
 

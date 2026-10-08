@@ -13,11 +13,12 @@ import {
   type ImagerySourceCapabilities,
   type ImagerySurface,
 } from "../../../terrain/imagery/imagerySelector";
+import type { ImageryConstraint, ImageryReloadConstraint } from "../../../terrain/imagery/imageryConstraints";
 import { imagerySourceSupport, imageryTileUrl, type ImageryDescriptor } from "../../../terrain/imagery/imagerySources";
 import type { DetailLimit } from "../../../terrain/mapDetailPolicy";
 import { createImageryAtlas, planAtlasForBackend, readAtlasCapabilities, type AtlasCapabilities, type ImageryAtlas } from "./imageryAtlas";
-import { slotBytes, type ImageryAtlasLayout } from "./imageryAtlasLayout";
-import { buildImageryDisplay, buildPatchTable, measureLoadedImagery, type ImageryDisplay, type LoadedImageryBinding, type LoadedImageryRegion } from "./imageryBinding";
+import { IMAGERY_TABLE_MAX_CELLS_LOG2, slotBytes, type ImageryAtlasLayout } from "./imageryAtlasLayout";
+import { buildImageryDisplay, buildPatchTable, createBoundLevels, measureLoadedImagery, type ImageryDisplay, type LoadedImageryBinding, type LoadedImageryRegion } from "./imageryBinding";
 import { createBrowserImageryLoader } from "./imageryLoader";
 import { ImageryAtlasMaterialPlugin } from "./imageryMaterialPlugin";
 import {
@@ -70,6 +71,10 @@ export interface ImageryFeedback {
   /** Visible-area estimate of bound imagery detail; mixed regions are averaged in log space. */
   loadedTarget?: number | null;
   effectiveTarget: number | null;
+  /** The source the plan is for, which a switch can leave drawing the old one meanwhile. */
+  source: { id: string; version: string; label: string } | null;
+  /** What limits visible imagery, as the decisions applying each limit established it. */
+  constraints: ImageryConstraint[];
 }
 
 export interface ImageryDiagnostics {
@@ -87,8 +92,13 @@ export interface ImageryDiagnostics {
     cpuMs: number;
     /** Leaves by projected footprint in physical px per image px: <=0.5, <=1, <=2, <=4, >4. */
     footprints: [number, number, number, number, number];
-    /** Per region: requested level and variant, delivered page level, footprint and limit. */
+    /**
+     * Per region: requested level and variant, footprint and limit, and the
+     * page level visible patches' materials sample there: null where none binds it.
+     */
     regions: Array<{ key: string; variant: string | null; delivered: number | null; footprintPx: number; screenArea: number; limit: DetailLimit | null }>;
+    /** Images the source does not have that selection refined past toward resident imagery: not a limit. */
+    refinedPastMissing: number;
   } | null;
   residency: ImageryResidencyStats;
   atlas: { capacity: number; freeSlots: number; estimatedGpuBytes: number; width: number; height: number; tableBlocks: number } | null;
@@ -99,8 +109,11 @@ export interface ImageryDiagnostics {
    * last plan, and about how many the current radius needs from this view.
    */
   focus: { pages: number; estimatedPages: number } | null;
-  binding: { patches: number; blocks: number; fallbackPatches: number; fallbackLeaves: number; capped: number; emptyCells: number };
+  /** Visible patches needing a table are `tablesNeeded`; `fallbackPatches` of them got none. */
+  binding: { patches: number; blocks: number; tablesNeeded: number; fallbackPatches: number; fallbackLeaves: number; capped: number; emptyCells: number };
   counters: { selections: number; selectionCpuMs: number; publishes: number; tableWrites: number; uploads: number; uploadBytes: number };
+  /** The feedback's constraints. */
+  constraints: ImageryConstraint[];
 }
 
 export interface ImageryRuntimeOptions {
@@ -287,7 +300,12 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
   let capped = 0;
   let emptyCells = 0;
   let fallbackPatches = 0;
-  let feedback: ImageryFeedback = { support: "unavailable", reason: unsupportedReason ?? undefined, pending: false, limits: [], activeTarget: null, loadedTarget: null, effectiveTarget: null };
+  let tablesNeeded = 0;
+  /** Shown imagery discarded by an atlas replacement or a lost context, until it is back. */
+  let reload: ImageryReloadConstraint | null = null;
+  /** Regions a budget coarsened after showing them finer, since that budget began to limit. */
+  let reduced = { pages: 0, nodes: 0 };
+  let feedback: ImageryFeedback = { support: "unavailable", reason: unsupportedReason ?? undefined, pending: false, limits: [], activeTarget: null, loadedTarget: null, effectiveTarget: null, source: null, constraints: [] };
   const patches = new Map<string, PatchState>();
   const counters = { selections: 0, selectionCpuMs: 0, publishes: 0, tableWrites: 0, uploads: 0, uploadBytes: 0 };
 
@@ -359,7 +377,7 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
       source: source.capabilities,
       offset,
       surface: options.surface,
-      availability: { isResident: residency.isResident, isMissing: residency.isMissing },
+      availability: { isResident: residency.isResident, isMissing: residency.isMissing, getRevision: residency.getRevision },
       maxLevelFor: options.surface.maxLevelFor,
       maxPages: pageBudget(),
       maxNodes: tuning.maxNodes,
@@ -390,7 +408,7 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
     const target = current.physicalTarget;
     const exceed = (footprint: number) => Math.max(0, footprint / target - 1);
     for (const leaf of current.leaves) {
-      if (residency.isMissing(leaf.imageKey)) continue;
+      if (leaf.presumedMissing || residency.isMissing(leaf.imageKey)) continue;
       const pages = leaf.pages;
       const pageLevel = leaf.tile.z + Math.log2(Math.sqrt(pages));
       // Improvement over what the display shows there now, per byte to decode and upload.
@@ -465,6 +483,11 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
     plan = step.plan;
     planChangedSincePublish = true;
     if (plan) {
+      const { regions, reduced: now } = plan.shortfall;
+      reduced = {
+        pages: regions.pages > 0 ? reduced.pages + now.pages : 0,
+        nodes: regions.nodes > 0 ? reduced.nodes + now.nodes : 0,
+      };
       demand(requested, plan);
       scheduleWake(plan.wakeAt);
     }
@@ -483,7 +506,7 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
       const source = displayed;
       const wasComplete = display !== null;
       display = buildImageryDisplay({
-        leaves: plan.leaves.map(leaf => ({ tile: leaf.tile, imageKey: leaf.imageKey, pagesPerSide: Math.round(Math.sqrt(leaf.pages)) })),
+        leaves: plan.leaves.map(leaf => ({ tile: leaf.tile, imageKey: leaf.imageKey, pagesPerSide: Math.round(Math.sqrt(leaf.pages)), presumedMissing: leaf.presumedMissing })),
         coverage: plan.coverage,
         slotsFor: residency.slotsFor,
         standardKey: tile => standardKey(source, tile),
@@ -542,6 +565,7 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
       }
       tables.push({ patch, table });
     }
+    tablesNeeded = tables.length;
     // Release every obsolete block before allocating any replacement. A
     // newly visible patch can precede the patch it replaces in cache order.
     for (const { patch, table } of tables) {
@@ -580,7 +604,7 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
    * moves over as its table is written. If the new atlas cannot be created,
    * the old one stays and the diagnostics say why.
    */
-  function reallocate(): void {
+  function reallocate(reason: "gpu-budget" | "page-tables"): void {
     if (!atlas) return;
     const next = allocate();
     if ("error" in next) {
@@ -589,6 +613,9 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
       return;
     }
     allocationError = null;
+    reload = reason === "gpu-budget"
+      ? { cause: "reload", reason, parameter: "map.imagery.gpuBudget", value: limits.gpuBytes / MiB }
+      : { cause: "reload", reason, parameter: "map.imagery.pageTablePatches", value: tuning.tablePatches };
     residency.dispose();
     // A second change before the first finished: the atlas in between was never drawn.
     if (retiredAtlas) atlas.dispose(); else retiredAtlas = atlas;
@@ -641,17 +668,71 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
     measuredPublish = counters.publishes;
   }
 
+  /**
+   * Each limit on visible imagery, from the decision that applied it: the
+   * plan's shortfall, residency's placement and the last publication.
+   */
+  function currentConstraints(source: SourceState, stats: ImageryResidencyStats): ImageryConstraint[] {
+    const constraints: ImageryConstraint[] = [];
+    if (!atlas || !layout) return constraints;
+    const configuredMiB = limits.gpuBytes / MiB;
+    if (plan) {
+      const { regions, morePages, bindingLevels } = plan.shortfall;
+      if (regions.missing + regions.ceiling + regions.outside + regions.density > 0) {
+        constraints.push({
+          cause: "source", missingRegions: regions.missing, finestLevelRegions: regions.ceiling,
+          finestLevel: source.capabilities.maxLevel, outsideRegions: regions.outside, scaleRegions: regions.density,
+        });
+      }
+      if (regions.pages > 0) {
+        constraints.push({
+          cause: "gpu-budget", parameter: "map.imagery.gpuBudget", configuredMiB,
+          atlasMiB: layout.estimatedBytes / MiB, atlasPages: atlas.capacity, rendererCapped: atlasCappedByBackend(),
+          selectablePages: pageBudget(), selectedPages: plan.leaves.reduce((sum, leaf) => sum + leaf.pages, 0),
+          morePagesAtLeast: morePages, regions: regions.pages, reducedRegions: reduced.pages,
+        });
+      }
+      if (regions.nodes > 0) {
+        constraints.push({
+          cause: "node-cap", parameter: "map.imagery.maxNodes", configured: tuning.maxNodes,
+          examined: plan.nodesEvaluated, regions: regions.nodes, reducedRegions: reduced.nodes,
+        });
+      }
+      if (regions.binding > 0 || capped > 0) {
+        constraints.push({ cause: "binding-depth", tableDepth: IMAGERY_TABLE_MAX_CELLS_LOG2, levels: bindingLevels, regions: regions.binding, cappedPatches: capped });
+      }
+    }
+    if (stats.unplaced > 0) {
+      constraints.push({
+        cause: "atlas-full", parameter: "map.imagery.gpuBudget", configuredMiB, atlasPages: atlas.capacity,
+        pinnedPages: stats.pinnedPages, waitingImages: stats.unplaced,
+      });
+    }
+    if (fallbackPatches > 0) {
+      constraints.push({
+        cause: "page-tables", parameter: "map.imagery.pageTablePatches", configured: tuning.tablePatches,
+        effective: layout.tableBlocks, needed: tablesNeeded, patches: fallbackPatches,
+      });
+    }
+    if (backendLimited) constraints.push({ cause: "renderer", reason: "no-explicit-gradients" });
+    if (reload) constraints.push(reload);
+    return constraints;
+  }
+
   function refreshFeedback(): void {
     let next: ImageryFeedback;
     if (!atlas || !requested) {
-      next = { support: "unavailable", reason: unsupportedReason ?? "Imagery is unavailable.", pending: false, limits: [], activeTarget: null, loadedTarget: null, effectiveTarget: null };
+      next = { support: "unavailable", reason: unsupportedReason ?? "Imagery is unavailable.", pending: false, limits: [], activeTarget: null, loadedTarget: null, effectiveTarget: null, source: null, constraints: [] };
     } else {
       const stats = residency.stats();
       const limitSet = new Set<DetailLimit>([...(plan?.limits ?? []), ...stats.limits]);
       if (capped > 0 || fallbackPatches > 0 || backendLimited || (atlasCappedByBackend() && limitSet.has("memory"))) limitSet.add("backend");
       const pending = restartSelection || selector.isRunning() || residency.isBusy() || (display?.fallbackLeaves ?? 0) > 0 || displayed !== requested || !plan;
       if (pending) limitSet.add("loading");
+      // A reload is over once the view has everything it asks for again.
+      if (!pending) reload = null;
       const limitsList = (["source", "backend", "memory", "loading"] as const).filter(limit => limitSet.has(limit));
+      const { id, version } = requested.capabilities;
       next = {
         support: "ready",
         pending,
@@ -659,6 +740,8 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
         activeTarget: offset,
         loadedTarget,
         effectiveTarget: !pending && limitsList.length === 0 ? offset : null,
+        source: { id, version, label: requested.descriptor.label ?? id },
+        constraints: currentConstraints(requested, stats),
       };
     }
     if (!Object.is(next.loadedTarget, feedback.loadedTarget) || JSON.stringify(next) !== JSON.stringify(feedback)) {
@@ -669,6 +752,7 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
 
   const onContextRestored = (): void => {
     // Raw textures come back empty: drop residency and tables and load again.
+    reload = { cause: "reload", reason: "context-restored", parameter: null, value: null };
     atlas?.clear();
     residency.reset();
     display = null;
@@ -691,7 +775,7 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
     setLimits(next) {
       const reallocating = next.gpuBytes !== limits.gpuBytes;
       limits = { ...next };
-      if (reallocating) reallocate();
+      if (reallocating) reallocate("gpu-budget");
       else residency.setLimits(limits);
       restartSelection = true;
       options.requestRender();
@@ -704,7 +788,7 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
         atlas?.setAnisotropy(tuning.anisotropy);
         retiredAtlas?.setAnisotropy(tuning.anisotropy);
       }
-      if (reallocating) reallocate();
+      if (reallocating) reallocate("page-tables");
       restartSelection = true;
       options.requestRender();
     },
@@ -720,6 +804,7 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
       requested = next;
       selector.reset();
       plan = null;
+      reduced = { pages: 0, nodes: 0 };
       restartSelection = true;
       options.requestRender();
     },
@@ -791,6 +876,7 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
       }
       let blocks = 0;
       for (const patch of patches.values()) if (patch.block !== null) blocks += 1;
+      const boundLevel = createBoundLevels([...patches.values()].filter(patch => patch.visible && patch.bound).map(patch => patch.bound!));
       return {
         requestedSource: requested?.descriptor.id ?? options.source.id,
         displayedSource: displayed?.descriptor.id ?? null,
@@ -805,19 +891,11 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
           truncated: plan.truncated,
           cpuMs: plan.cpuMs,
           footprints,
-          regions: plan.leaves.map(leaf => {
-            let delivered: number | null = null;
-            let { z, x, y } = leaf.tile;
-            for (;;) {
-              const page = display?.pages.get(`${z}/${x}/${y}`);
-              if (page) { delivered = page.z; break; }
-              if (z === 0) break;
-              z -= 1; x >>= 1; y >>= 1;
-            }
-            // A variant's pages sit one level below its tile.
-            if (delivered === null && leaf.pages > 1) delivered = display?.pages.has(`${leaf.tile.z + 1}/${leaf.tile.x * 2}/${leaf.tile.y * 2}`) ? leaf.tile.z + 1 : null;
-            return { key: leaf.key, variant: leaf.variant, delivered, footprintPx: leaf.footprintPx, screenArea: Math.round(leaf.screenArea), limit: leaf.limit };
-          }),
+          regions: plan.leaves.map(leaf => ({
+            key: leaf.key, variant: leaf.variant, delivered: boundLevel(leaf.tile),
+            footprintPx: leaf.footprintPx, screenArea: Math.round(leaf.screenArea), limit: leaf.limit,
+          })),
+          refinedPastMissing: plan.shortfall.refinedPastMissing,
         },
         focus: focusDiagnostics(),
         residency: residency.stats(),
@@ -830,8 +908,9 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
           tableBlocks: layout.tableBlocks,
         },
         allocationError,
-        binding: { patches: patches.size, blocks, fallbackPatches, fallbackLeaves: display?.fallbackLeaves ?? 0, capped, emptyCells },
+        binding: { patches: patches.size, blocks, tablesNeeded, fallbackPatches, fallbackLeaves: display?.fallbackLeaves ?? 0, capped, emptyCells },
         counters: { ...counters },
+        constraints: feedback.constraints,
       };
     },
     dispose() {

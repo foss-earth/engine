@@ -76,6 +76,7 @@ function samePanelState(a: DetailState | null | undefined, b: DetailState | null
     && a.activeTarget === b.activeTarget && a.effectiveTarget === b.effectiveTarget
     && a.pending === b.pending
     && a.limits.length === b.limits.length && a.limits.every((limit, index) => limit === b.limits[index])
+    && JSON.stringify(a.constraints) === JSON.stringify(b.constraints)
     && a.markers.length === b.markers.length && a.markers.every((marker, index) => marker === b.markers[index]);
 }
 

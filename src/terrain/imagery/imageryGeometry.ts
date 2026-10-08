@@ -294,12 +294,15 @@ export function invertMatrix(m: ArrayLike<number>): number[] | null {
   return inv.map(value => value / det);
 }
 
+/** The screen rays `screenGroundPoints` casts by default: five columns of three, each standing for its share of the view. */
+export const SCREEN_GROUND_RAYS = 15;
+
 /**
  * Where a grid of screen rays meets a sphere of the given radius: ground
  * points spread over the view, in geographic degrees. Rays that miss are left
  * out.
  */
-export function screenGroundPoints(view: ImageryView, radius: number, columns = 5, rows = 3): Array<{ latDeg: number; lonDeg: number }> {
+export function screenGroundPoints(view: ImageryView, radius: number, columns = 5, rows = SCREEN_GROUND_RAYS / 5): Array<{ latDeg: number; lonDeg: number }> {
   const inverse = invertMatrix(view.ecefToClip);
   if (!inverse) return [];
   const unproject = (x: number, y: number, z: number): Vec3 | null => {

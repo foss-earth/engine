@@ -30,6 +30,7 @@ function providerForUrl(url: string): string | null {
     if (hostname === "tile.openstreetmap.org") return "OpenStreetMap";
     if (hostname === "basemaps.cartocdn.com") return "CARTO";
     if (hostname === "tile.opentopomap.org") return "OpenTopoMap";
+    if (hostname === "gibs.earthdata.nasa.gov") return "NASA GIBS night lights";
   } catch { /* Unsupported URLs use ordinary fetch. */ }
   return null;
 }

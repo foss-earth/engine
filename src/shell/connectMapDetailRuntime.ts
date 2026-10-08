@@ -75,6 +75,7 @@ export function connectMapDetailRuntime(controller: MapDetailController, runtime
         activeTarget: feedback.activeTarget,
         loadedTarget: feedback.loadedTarget,
         effectiveTarget: feedback.effectiveTarget,
+        constraints: feedback.constraints,
       });
       return;
     }

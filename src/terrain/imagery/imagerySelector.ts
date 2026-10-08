@@ -19,6 +19,7 @@ import {
   lonLatToTileXY,
   outcode,
   projectedPixelFootprint,
+  SCREEN_GROUND_RAYS,
   screenGroundPoints,
   sagittaMeters,
   sampleTileSurface,
@@ -72,6 +73,11 @@ export interface ImageryAvailability {
   isResident(imageKey: string): boolean;
   /** True when the source is known not to have this image right now. */
   isMissing(imageKey: string): boolean;
+  /**
+   * Changes whenever residency changes. When given, a traversal looks again
+   * for resident imagery it stopped short of only after it changed.
+   */
+  getRevision?(): number;
 }
 
 export interface ImagerySelectionInput {
@@ -146,8 +152,45 @@ export interface ImageryPlanLeaf {
   /** Estimated visible screen area in physical pixels, for ranking loads. */
   screenArea: number;
   limit: DetailLimit | null;
+  /** What `limit` stands for, as the log and the Map tab name it. */
+  shortfall: ImageryShortfallCause | null;
   /** Within the focus region, so kept whatever the view. */
   inFocus: boolean;
+  /**
+   * The source does not have an ancestor's image, and nothing resident shows
+   * it has this one: a resident ancestor stands in, and it is not requested.
+   */
+  presumedMissing: boolean;
+}
+
+/**
+ * What keeps a region coarser than its target. The source's: its finest
+ * level, no denser variant for a map's scale, an image it does not have
+ * (or an ancestor's, below which nothing resident shows it has more), or its
+ * coverage. The terrain binding's finest level, the node cap and the page
+ * budget are this device's.
+ */
+export type ImageryShortfallCause = "ceiling" | "density" | "missing" | "outside" | "binding" | "nodes" | "pages";
+
+/** The plan's limits in detail: what one traversal established, nothing more. */
+export interface ImageryShortfall {
+  /** On-screen regions coarser than the target, by cause. */
+  regions: Record<ImageryShortfallCause, number>;
+  /**
+   * Pages one more level of each page-limited region would add: the least
+   * the view needs beyond the budget. Finer levels could need more.
+   */
+  morePages: number;
+  /** The finest levels the terrain binding allowed where it stopped refinement. */
+  bindingLevels: { min: number; max: number } | null;
+  /**
+   * On-screen regions the page budget or node cap stops above resident
+   * imagery the last plan showed: detail they took away, rather than a
+   * request they do not meet.
+   */
+  reduced: { pages: number; nodes: number };
+  /** Images the source does not have that selection refined past, on the way to resident imagery. Not a limit. */
+  refinedPastMissing: number;
 }
 
 export interface ImageryPlan {
@@ -163,6 +206,7 @@ export interface ImageryPlan {
   /** Split nodes ready to merge once their own image is resident: load these. */
   mergeCandidates: TileId[];
   limits: DetailLimit[];
+  shortfall: ImageryShortfall;
   nodesEvaluated: number;
   /** True when the node cap ended the traversal before every region met its target. */
   truncated: boolean;
@@ -203,8 +247,38 @@ interface Evaluated {
   screenArea: number;
   outsideCoverage: boolean;
   limit: DetailLimit | null;
+  shortfall: ImageryShortfallCause | null;
+  /** Pages one more level would have added, when the page budget refused it. */
+  extraPages: number;
+  /** The finest level the terrain binding allows here, when it stopped refinement. */
+  bindingLevel: number | null;
   /** Inside the focus region: loaded whatever the view. */
   inFocus: boolean;
+  /**
+   * Below an image the source does not have, reached only on the way to
+   * resident imagery: refined further only on that way, or once an image of
+   * its own is resident.
+   */
+  unproven: boolean;
+  /** Refined past an image the source does not have, or past four missing children: its children are unproven. */
+  pastMissing: boolean;
+  presumedMissing: boolean;
+  /** A budget stopped it although resident imagery the last plan showed lies below it. */
+  reduced: boolean;
+}
+
+/**
+ * Resident imagery the last complete plan showed: each leaf's own image, or
+ * else its finest resident ancestor, the page standing in for it. Its paths
+ * prove the source has imagery below an image it reports missing, so a
+ * missing ancestor never discards it. Only current residency counts: a split
+ * that loaded nothing, a request in flight or an evicted page proves nothing.
+ */
+interface Evidence {
+  /** Strict ancestors, "z/x/y", of that resident imagery. */
+  leadsTo: Set<string>;
+  /** `availability.getRevision()` when gathered. */
+  revision: number | null;
 }
 
 interface Job {
@@ -231,6 +305,11 @@ interface Job {
   wakeAt: number | null;
   truncated: boolean;
   cpuMs: number;
+  /** Gathered when the traversal first meets a missing image; null until then. */
+  evidence: Evidence | null;
+  /** Leaves stopped at a missing image for want of resident imagery below: taken up again if some arrives. */
+  barred: Evaluated[];
+  refinedPastMissing: number;
 }
 
 export function imageSourceKey(source: Pick<ImagerySourceCapabilities, "id" | "version">): string {
@@ -398,6 +477,14 @@ export function estimateFocusPages(focus: Pick<ImageryFocus, "position" | "radiu
   return radius <= distance ? perRing * (radius / distance) ** 2 : perRing * (1 + 2 * Math.log(radius / distance));
 }
 
+function unmeasured(tile: TileId, outside: boolean): Evaluated {
+  return {
+    tile, key: tileKey(tile), visible: false, footprint: 0, physicalFootprint: 0, screenArea: 0, outsideCoverage: outside,
+    limit: null, shortfall: null, extraPages: 0, bindingLevel: null, inFocus: false,
+    unproven: false, pastMissing: false, presumedMissing: false, reduced: false,
+  };
+}
+
 function evaluate(job: Job, tile: TileId): Evaluated {
   if (!job.focus) return evaluateView(job, tile);
   if (job.focus.mode === "around") {
@@ -405,9 +492,8 @@ function evaluate(job: Job, tile: TileId): Evaluated {
     job.nodes += 1;
     const focus = measureFocus(job, tile);
     return {
-      tile, key: tileKey(tile), visible: focus.within, footprint: focus.within ? focus.footprint : 0,
-      physicalFootprint: focus.within ? focus.physicalFootprint : 0, screenArea: 0,
-      outsideCoverage: outsideCoverage(job.input.source, tile), limit: null, inFocus: focus.within,
+      ...unmeasured(tile, outsideCoverage(job.input.source, tile)), visible: focus.within,
+      footprint: focus.within ? focus.footprint : 0, physicalFootprint: focus.within ? focus.physicalFootprint : 0, inFocus: focus.within,
     };
   }
   const result = evaluateView(job, tile);
@@ -467,10 +553,7 @@ function evaluateView(job: ViewMeasurementContext, tile: TileId): Evaluated {
   const { input } = job;
   const { view, source } = input;
   job.nodes += 1;
-  const result: Evaluated = {
-    tile, key: tileKey(tile), visible: false, footprint: 0, physicalFootprint: 0, screenArea: 0,
-    outsideCoverage: outsideCoverage(source, tile), limit: null, inFocus: false,
-  };
+  const result = unmeasured(tile, outsideCoverage(source, tile));
   const bounds = input.surface.boundsFor(tile);
   const span = tileAngularSpan(tile);
   const nearest = nearestLocal(tile, job.camera);
@@ -511,6 +594,12 @@ function evaluateView(job: ViewMeasurementContext, tile: TileId): Evaluated {
     return { ...point, surface, clip, inside: outcode(view, clip) === 0 };
   });
   const measure: SurfaceSample[] = measured.filter(sample => sample.inside).map(sample => sample.surface);
+  /** The screen rays that meet the ground inside this tile. */
+  const raysWithin = (): Array<{ latDeg: number; lonDeg: number }> => {
+    const west = tileLonDeg(tile.z, tile.x), east = tileLonDeg(tile.z, tile.x + 1);
+    const north = tileLatDeg(tile.z, tile.y), south = tileLatDeg(tile.z, tile.y + 1);
+    return job.screenGround.filter(point => point.lonDeg >= west && point.lonDeg <= east && point.latDeg >= south && point.latDeg <= north);
+  };
   // Bisect from an inside sample toward outside ones to measure where the
   // surface meets the view's edge or the near plane.
   const from = measured.find(sample => sample.inside);
@@ -550,10 +639,7 @@ function evaluateView(job: ViewMeasurementContext, tile: TileId): Evaluated {
     }
     // A tile around the view is measured where screen rays meet it; one just
     // past the view's edge measures like its visible neighbours.
-    const west = tileLonDeg(tile.z, tile.x), east = tileLonDeg(tile.z, tile.x + 1);
-    const north = tileLatDeg(tile.z, tile.y), south = tileLatDeg(tile.z, tile.y + 1);
-    for (const point of job.screenGround) {
-      if (point.lonDeg < west || point.lonDeg > east || point.latDeg < south || point.latDeg > north) continue;
+    for (const point of raysWithin()) {
       const at = lonLatToTileXY(point.lonDeg, point.latDeg, tile.z);
       measure.push(surfaceSample(input, tile, at.x - tile.x, at.y - tile.y, bounds.max));
     }
@@ -584,15 +670,26 @@ function evaluateView(job: ViewMeasurementContext, tile: TileId): Evaluated {
   const screen = measured.slice(0, 9).map(sample => toScreen(view, sample.clip, view.renderWidth, view.renderHeight));
   const clampX = (value: number) => Math.max(0, Math.min(view.renderWidth, value));
   const clampY = (value: number) => Math.max(0, Math.min(view.renderHeight, value));
+  let behind = false;
   for (const quad of QUADS) {
     const points = quad.map(index => screen[index]);
-    if (points.some(point => point === null)) continue;
+    if (points.some(point => point === null)) {
+      behind = true;
+      continue;
+    }
     let twice = 0;
     for (let i = 0; i < 4; i++) {
       const p = points[i]!, q = points[(i + 1) % 4]!;
       twice += clampX(p.x) * clampY(q.y) - clampX(q.x) * clampY(p.y);
     }
     result.screenArea += Math.abs(twice) / 2;
+  }
+  if (behind) {
+    // A quad with a corner behind the near plane has no polygon to measure,
+    // as when the tile lies around the camera. The screen rays that land in
+    // the tile say how much of the view it fills.
+    const share = raysWithin().length / SCREEN_GROUND_RAYS;
+    result.screenArea = Math.max(result.screenArea, share * view.renderWidth * view.renderHeight);
   }
   return result;
 }
@@ -620,6 +717,63 @@ export interface ImagerySelector {
   reset(): void;
 }
 
+/** An image of this tile is resident, standard or a variant: the source has imagery here. */
+function hasResidentImage(input: ImagerySelectionInput, tile: TileId): boolean {
+  const { availability, source } = input;
+  return availability.isResident(imageKey(source, tile, null))
+    || source.variants.some(variant => availability.isResident(imageKey(source, tile, variant.id)));
+}
+
+/**
+ * What the last plan showed that is resident now: each leaf's own image or,
+ * while that loads, its finest resident ancestor, as the display binds them.
+ * Leaves × depth at worst; siblings share ancestors, so each is walked about
+ * once. A plan from another source or version proves nothing.
+ */
+function gatherEvidence(input: ImagerySelectionInput, sourceKey: string, previous: ImageryPlan | null): Evidence {
+  const leadsTo = new Set<string>();
+  const evidence: Evidence = { leadsTo, revision: input.availability.getRevision?.() ?? null };
+  if (!previous || previous.sourceKey !== sourceKey) return evidence;
+  const { availability, source } = input;
+  const addPath = (tile: TileId): void => {
+    let { z, x, y } = tile;
+    while (z > 0) {
+      z -= 1; x >>= 1; y >>= 1;
+      const key = `${z}/${x}/${y}`;
+      if (leadsTo.has(key)) return;
+      leadsTo.add(key);
+    }
+  };
+  // The finest resident ancestor of each node walked, or null for none.
+  const standIn = new Map<string, TileId | null>();
+  for (const leaf of previous.leaves) {
+    if (availability.isResident(leaf.imageKey)) {
+      addPath(leaf.tile);
+      continue;
+    }
+    const walked: string[] = [];
+    let found: TileId | null = null;
+    let { z, x, y } = leaf.tile;
+    while (z > 0) {
+      z -= 1; x >>= 1; y >>= 1;
+      const key = `${z}/${x}/${y}`;
+      const known = standIn.get(key);
+      if (known !== undefined) {
+        found = known;
+        break;
+      }
+      walked.push(key);
+      if (availability.isResident(imageKey(source, { z, x, y }, null))) {
+        found = { z, x, y };
+        break;
+      }
+    }
+    for (const key of walked) standIn.set(key, found);
+    if (found) addPath(found);
+  }
+  return evidence;
+}
+
 export function createImagerySelector(): ImagerySelector {
   let memory = new Map<string, NodeMemory>();
   let job: Job | null = null;
@@ -645,6 +799,7 @@ export function createImagerySelector(): ImagerySelector {
       focusViewer: { x: focusPosition.x * (1 + lift), y: focusPosition.y * (1 + lift), z: focusPosition.z * (1 + lift) },
       heap: [], leaves: [], coverage: [], mergeCandidates: [], leafCount: 0, nodes: 0, limits: new Set(),
       nextMemory: new Map(), wakeAt: null, truncated: false, cpuMs: 0,
+      evidence: null, barred: [], refinedPastMissing: 0,
     };
     {
       // The ground under the camera sets the sphere the screen rays meet.
@@ -667,9 +822,32 @@ export function createImagerySelector(): ImagerySelector {
     return next;
   }
 
+  /** Resident imagery the last plan showed lies below this node. */
+  function leadsToResident(current: Job, node: Evaluated): boolean {
+    current.evidence ??= gatherEvidence(current.input, current.sourceKey, plan);
+    return current.evidence.leadsTo.has(node.key);
+  }
+
+  /** A missing image ends refinement here: a resident ancestor stands in for the whole node. */
+  function bar(current: Job, node: Evaluated, presumed: boolean): { split: boolean; coarsenSince: number | null } {
+    node.limit = "source";
+    node.shortfall = "missing";
+    node.presumedMissing = presumed;
+    current.barred.push(node);
+    return { split: false, coarsenSince: null };
+  }
+
   /** Split or keep one node, applying hysteresis, pinning and source limits. */
   function decide(current: Job, node: Evaluated): { split: boolean; coarsenSince: number | null } {
     const { input } = current;
+    node.pastMissing = false;
+    // Below an image the source does not have, go on only toward imagery
+    // already resident, or under an image of this node's own. Nothing else
+    // there is requested.
+    if (node.unproven) {
+      if (hasResidentImage(input, node.tile)) node.unproven = false;
+      else if (!leadsToResident(current, node)) return bar(current, node, true);
+    }
     const previous = memory.get(node.key);
     const now = input.now;
     // An existing leaf refines only past 1.2x its target; a new node at 1x.
@@ -701,21 +879,28 @@ export function createImagerySelector(): ImagerySelector {
     const maxLevel = Math.min(input.source.maxLevel, input.maxLevelFor?.(node.tile) ?? Infinity);
     if (node.outsideCoverage) {
       node.limit = "source";
+      node.shortfall = "outside";
       return { split: false, coarsenSince: null };
     }
     // The source has no image here: its area shows the nearest ancestor, and
-    // nothing below it is worth asking for.
+    // nothing below it is worth asking for, unless imagery already resident
+    // below shows otherwise. Then refinement goes on toward that imagery;
+    // the image itself stays missing.
     if (input.availability.isMissing(imageKey(input.source, node.tile, null))) {
-      node.limit = "source";
-      return { split: false, coarsenSince: null };
+      if (!leadsToResident(current, node)) return bar(current, node, false);
+      node.pastMissing = true;
     }
     if (node.tile.z >= maxLevel) {
-      node.limit = node.tile.z >= input.source.maxLevel ? "source" : "backend";
+      const source = node.tile.z >= input.source.maxLevel;
+      node.limit = source ? "source" : "backend";
+      node.shortfall = source ? "ceiling" : "binding";
+      node.bindingLevel = source ? null : maxLevel;
       return { split: false, coarsenSince: null };
     }
+    // Four missing children make the same inference one level up.
     if (childTiles(node.tile).every(child => input.availability.isMissing(imageKey(input.source, child, null)))) {
-      node.limit = "source";
-      return { split: false, coarsenSince: null };
+      if (!leadsToResident(current, node)) return bar(current, node, false);
+      node.pastMissing = true;
     }
     return { split, coarsenSince };
   }
@@ -730,56 +915,97 @@ export function createImagerySelector(): ImagerySelector {
     });
   }
 
+  /**
+   * A traversal can span several updates, and imagery arriving meanwhile is
+   * shown under the previous plan. Before finishing, take up again each
+   * region stopped at a missing image that resident imagery now shows the way
+   * into, so the new plan never drops what was just shown. Evidence only
+   * grows from the previous plan's bounded leaves, so this ends.
+   */
+  function reopenBarred(current: Job): boolean {
+    const { input } = current;
+    if (!current.evidence || current.barred.length === 0) return false;
+    const revision = input.availability.getRevision?.() ?? null;
+    if (revision !== null && revision === current.evidence.revision) return false;
+    const evidence = gatherEvidence(input, current.sourceKey, plan);
+    current.evidence = evidence;
+    const reopened = new Set(current.barred.filter(node => evidence.leadsTo.has(node.key) || (node.unproven && hasResidentImage(input, node.tile))));
+    if (reopened.size === 0) return false;
+    current.barred = current.barred.filter(node => !reopened.has(node));
+    current.leaves = current.leaves.filter(node => !reopened.has(node));
+    for (const node of reopened) {
+      node.limit = null;
+      node.shortfall = null;
+      node.presumedMissing = false;
+      // Still counted in leafCount: it is decided again like any open node.
+      heapPush(current.heap, node);
+    }
+    return true;
+  }
+
   function advance(current: Job, deadline: number, clock: () => number): boolean {
     const { input } = current;
     const started = clock();
     const maxNodes = input.maxNodes;
     let iterations = 0;
-    while (current.heap.length > 0) {
-      // Check the clock every few nodes; each evaluation costs microseconds.
-      if (++iterations % 8 === 0 && clock() >= deadline) {
-        current.cpuMs += clock() - started;
-        return false;
-      }
-      const node = heapPop(current.heap)!;
-      const decision = decide(current, node);
-      const { coarsenSince } = decision;
-      let { split } = decision;
-      let children: Evaluated[] = [];
-      if (split && current.nodes + 4 > maxNodes) {
-        split = false;
-        current.truncated = true;
-        node.limit = "backend";
-      }
-      if (split) {
-        children = childTiles(node.tile).map(child => evaluate(current, child));
-        const visible = children.filter(child => child.visible).length;
-        if (visible === 0) {
-          // The hull was conservative and no child is actually in view: keep
-          // the node, so a finer target never drops coverage it had, but it
-          // has nothing on screen to measure or rank.
+    do {
+      while (current.heap.length > 0) {
+        // Check the clock every few nodes; each evaluation costs microseconds.
+        if (++iterations % 8 === 0 && clock() >= deadline) {
+          current.cpuMs += clock() - started;
+          return false;
+        }
+        const node = heapPop(current.heap)!;
+        const decision = decide(current, node);
+        const { coarsenSince } = decision;
+        let { split } = decision;
+        let children: Evaluated[] = [];
+        if (split && current.nodes + 4 > maxNodes) {
           split = false;
-          node.footprint = 0;
-          node.physicalFootprint = 0;
-          node.screenArea = 0;
-        } else if (current.leafCount - 1 + visible > input.maxPages) {
-          split = false;
-          node.limit = "memory";
+          current.truncated = true;
+          node.limit = "backend";
+          node.shortfall = "nodes";
+          node.reduced = leadsToResident(current, node);
+        }
+        if (split) {
+          children = childTiles(node.tile).map(child => evaluate(current, child));
+          const visible = children.filter(child => child.visible).length;
+          if (visible === 0) {
+            // The hull was conservative and no child is actually in view: keep
+            // the node, so a finer target never drops coverage it had, but it
+            // has nothing on screen to measure or rank.
+            split = false;
+            node.footprint = 0;
+            node.physicalFootprint = 0;
+            node.screenArea = 0;
+          } else if (current.leafCount - 1 + visible > input.maxPages) {
+            split = false;
+            node.limit = "memory";
+            node.shortfall = "pages";
+            node.extraPages = visible - 1;
+            node.reduced = leadsToResident(current, node);
+          }
+        }
+        remember(current, node, split, coarsenSince);
+        if (!split) {
+          current.leaves.push(node);
+          continue;
+        }
+        node.limit = null;
+        node.shortfall = null;
+        node.reduced = false;
+        if (node.pastMissing) current.refinedPastMissing += 1;
+        current.leafCount -= 1;
+        // Past a missing image, children have to prove themselves too.
+        const unproven = node.unproven || node.pastMissing;
+        for (const child of children) {
+          if (!child.visible) continue;
+          child.unproven = unproven;
+          current.leafCount += 1;
+          heapPush(current.heap, child);
         }
       }
-      remember(current, node, split, coarsenSince);
-      if (!split) {
-        current.leaves.push(node);
-        continue;
-      }
-      node.limit = null;
-      current.leafCount -= 1;
-      for (const child of children) {
-        if (!child.visible) continue;
-        current.leafCount += 1;
-        heapPush(current.heap, child);
-      }
-    }
+    } while (reopenBarred(current));
     current.cpuMs += clock() - started;
     return true;
   }
@@ -787,10 +1013,16 @@ export function createImagerySelector(): ImagerySelector {
   function finish(current: Job): ImageryPlan {
     const { input } = current;
     const leaves: ImageryPlanLeaf[] = [];
+    const regions: Record<ImageryShortfallCause, number> = { ceiling: 0, density: 0, missing: 0, outside: 0, binding: 0, nodes: 0, pages: 0 };
+    const reduced = { pages: 0, nodes: 0 };
+    let morePages = 0;
+    let finestBinding = Infinity, coarsestBinding = -Infinity;
     let pages = current.leaves.length;
     // Leaves come out in footprint order, so variant pages go where they help most.
     for (const node of current.leaves) {
       let limit = node.limit;
+      let shortfall = node.shortfall;
+      let extraPages = node.extraPages;
       let variant: string | null = null;
       let footprintPx = node.physicalFootprint;
       let imagePages = 1;
@@ -800,14 +1032,19 @@ export function createImagerySelector(): ImagerySelector {
       // same-zoom variants; photographic ones only where no finer level exists.
       // Nothing on screen gains from a denser image; it only costs pages.
       // The focus region counts as seen: its images must not depend on the view.
+      // Below a missing ancestor, nothing unproven is asked for at all.
       const onScreen = node.screenArea > 0 || node.inFocus;
-      const mayUseVariant = (current.cartographic || atCeiling) && onScreen && Number.isFinite(node.physicalFootprint);
+      const mayUseVariant = !node.presumedMissing && (current.cartographic || atCeiling) && onScreen && Number.isFinite(node.physicalFootprint);
       if (mayUseVariant && (footprintPx > current.physicalTarget || standardMissing)) {
         for (const candidate of input.source.variants) {
           if (input.availability.isMissing(imageKey(input.source, node.tile, candidate.id))) continue;
           const candidatePages = pagesForImage(candidate.width, candidate.height);
           if (pages - imagePages + candidatePages > input.maxPages) {
-            if (limit === null) limit = "memory";
+            if (limit === null) {
+              limit = "memory";
+              shortfall = "pages";
+              extraPages = candidatePages - imagePages;
+            }
             break;
           }
           pages += candidatePages - imagePages;
@@ -817,14 +1054,31 @@ export function createImagerySelector(): ImagerySelector {
           if (footprintPx <= current.physicalTarget) break;
         }
       }
-      if (variant === null && standardMissing) limit = "source";
+      // A missing image is the source's limit, unless this device's budget
+      // or binding is what stops refinement toward imagery below it.
+      if (variant === null && standardMissing && (limit === null || limit === "source")) {
+        limit = "source";
+        shortfall = "missing";
+      }
       if (limit === null && footprintPx > current.physicalTarget && Number.isFinite(footprintPx)) {
         // A cartographic level is chosen for readable scale, so sampling
         // density it cannot reach at that level is the source's limit.
-        if (current.cartographic || atCeiling) limit = "source";
+        if (current.cartographic || atCeiling) {
+          limit = "source";
+          shortfall = atCeiling ? "ceiling" : "density";
+        }
       }
       // Only what is on screen limits what the user sees.
-      if (limit && onScreen) current.limits.add(limit);
+      if (limit && onScreen) {
+        current.limits.add(limit);
+        if (shortfall) regions[shortfall] += 1;
+        if (shortfall === "pages") morePages += extraPages;
+        if (node.reduced && (shortfall === "pages" || shortfall === "nodes")) reduced[shortfall] += 1;
+        if (shortfall === "binding" && node.bindingLevel !== null) {
+          finestBinding = Math.min(finestBinding, node.bindingLevel);
+          coarsestBinding = Math.max(coarsestBinding, node.bindingLevel);
+        }
+      }
       leaves.push({
         tile: node.tile,
         key: node.key,
@@ -835,7 +1089,9 @@ export function createImagerySelector(): ImagerySelector {
         selectionFootprint: node.footprint,
         screenArea: node.screenArea,
         limit,
+        shortfall,
         inFocus: node.inFocus,
+        presumedMissing: node.presumedMissing,
       });
     }
     memory = current.nextMemory;
@@ -848,6 +1104,10 @@ export function createImagerySelector(): ImagerySelector {
       coverage: current.coverage,
       mergeCandidates: current.mergeCandidates,
       limits: [...current.limits].sort(),
+      shortfall: {
+        regions, morePages, reduced, refinedPastMissing: current.refinedPastMissing,
+        bindingLevels: finestBinding <= coarsestBinding ? { min: finestBinding, max: coarsestBinding } : null,
+      },
       nodesEvaluated: current.nodes,
       truncated: current.truncated,
       wakeAt: current.wakeAt,

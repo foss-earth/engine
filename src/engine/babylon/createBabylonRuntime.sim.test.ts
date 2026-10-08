@@ -122,6 +122,85 @@ describe("createBabylonRuntime simulation mode", () => {
     expect(config.exposure).toBe(0.5);
   });
 
+  it("lights a flight with the Sun and the sky in place of the fill lights while a sky model is on, and gives them back when it is off", async () => {
+    let scheduledFrame: FrameRequestCallback | null = null;
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation(callback => {
+      scheduledFrame = callback;
+      return 1;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
+    const flush = () => {
+      const callback = scheduledFrame;
+      scheduledFrame = null;
+      callback?.(performance.now());
+    };
+    const settings = getAppSettings();
+    settings.setMany({ "sky.model": "dome", "sky.time.mode": "fixed", "sky.time.date": "2026-10-07", "sky.time.utcHours": 19, "sky.dome.zenithSamples": 12, "sky.dome.azimuthSamples": 8 });
+    mocks.createGoogleTilesRuntime.mockReturnValue({
+      tiles: { visibleTiles: new Set(), activeTiles: new Set(), group: {} },
+      update: vi.fn(), setSuspended: vi.fn(), dispose: vi.fn(),
+    });
+    const { createBabylonRuntime } = await import("./createBabylonRuntime");
+    const runtime = await createBabylonRuntime(document.createElement("canvas"), {
+      googleApiKey: "test", preferGoogleTiles: false, simMode: true, settings,
+    });
+    try {
+      const camera = new FreeCamera("flight-camera", new Vector3(0, 0, -10), runtime.scene);
+      runtime.scene.activeCamera = camera;
+      runtime.setSimRunning(false);
+      // Before the flight places the world, the scene is nowhere on Earth: the fill light stays.
+      flush();
+      expect(runtime.sky.getEnvironment()).toBeNull();
+      expect(runtime.scene.getLightByName("sim-light")!.isEnabled()).toBe(true);
+      expect(settings.getReading("sky.model")).toBe("Waiting for a viewpoint on the Earth.");
+      // The flight's floating origin: the scene's origin at a point 3 km over Minneapolis.
+      const origin = { x: -272_000, y: -4_512_000, z: 4_488_000 };
+      const shift = new TransformNode("world-shift", runtime.scene);
+      shift.position.set(-origin.x, -origin.y, -origin.z);
+      runtime.getWorldRoot()!.parent = shift;
+      camera.getViewMatrix(true);
+      runtime.requestRender();
+      flush();
+      const sky = runtime.sky.getEnvironment()!;
+      expect(sky.model).toBe("dome");
+      expect(sky.illumination.observer.latDeg).toBeGreaterThan(44);
+      expect(sky.illumination.observer.latDeg).toBeLessThan(46);
+      expect(sky.illumination.sunElevationDeg).toBeGreaterThan(30);
+      expect(runtime.scene.getLightByName("sim-light")!.isEnabled()).toBe(false);
+      expect(runtime.scene.getLightByName("sky-sun")!.intensity).toBeGreaterThan(0);
+      expect(runtime.scene.getMeshByName("sky-dome")).not.toBeNull();
+      // Every other light made meanwhile for a map is a fill light too, and stays off.
+      runtime.setMapSource("google");
+      expect(runtime.scene.getLightByName("google-tiles-light")!.isEnabled()).toBe(false);
+      expect(runtime.scene.getLightByName("fallback-light")!.isEnabled()).toBe(false);
+      // What the parameters show beside them.
+      expect(settings.getReading("sky.time.mode")).toMatch(/^2026-10-07 19:00:00 UTC at 4\d\.\d\d°N 9\d\.\d\d°W, [\d,]+ m: the Sun is \d\d\.\d° above the horizon, bearing \d+°$/);
+      expect(settings.getReading("sky.exposure.mode")).toMatch(/^EV 1\d\.\d at ISO 100: white is [\d,]+ cd\/m², for [\d,]+ lx at the viewpoint(; the meter reads EV 1\d\.\d, adapted to EV 1\d\.\d)?$/);
+      expect(settings.getReading("sky.model")).toMatch(/lx from the Sun(, [\d.,]+ lx from the Moon)? and [\d,]+ lx from the sky\. The dome's [\d,]+ samples took/);
+      expect(settings.inspect("sky.exposure.mode").note).toBeNull();
+      // A compensation saved before there was a sky is still applied, and the control says what it does now.
+      expect(settings.inspect("renderer.exposureEV").note).toBeNull();
+      settings.set("renderer.exposureEV", 8.8);
+      expect(settings.inspect("renderer.exposureEV").note).toBe("On top of the sky's exposure: everything is shown 446× brighter than it sets.");
+      expect(runtime.scene.imageProcessingConfiguration.exposure).toBeCloseTo(2 ** 8.8, 6);
+      settings.set("renderer.exposureEV", 0);
+      // Off: the scene is lit as it was before there was a sky.
+      settings.set("sky.model", "off");
+      flush();
+      expect(runtime.sky.getEnvironment()).toBeNull();
+      expect(runtime.scene.getLightByName("sky-sun")).toBeNull();
+      expect(runtime.scene.getMeshByName("sky-dome")).toBeNull();
+      expect(runtime.scene.getLightByName("sim-light")!.isEnabled()).toBe(true);
+      expect(runtime.scene.getLightByName("sim-light")!.intensity).toBeCloseTo(1.1);
+      expect(runtime.scene.getLightByName("google-tiles-light")!.isEnabled()).toBe(true);
+      expect(settings.inspect("sky.exposure.mode").note).toContain("No effect while the sky model is off");
+      expect(settings.getReading("sky.model")).toBeNull();
+    } finally {
+      runtime.destroy();
+      settings.resetAll({ tab: "sky" });
+    }
+  });
+
   it("publishes Google surface revisions to flight contact queries", async () => {
     vi.spyOn(window, "requestAnimationFrame").mockReturnValue(1);
     vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
@@ -942,6 +1021,60 @@ describe("createBabylonRuntime renderer parameters", () => {
       expect(clipping()).toBe(1);
     } finally {
       for (const id of ["renderer.resolutionScale", "renderer.clipping", "renderer.clipping.fixed"]) settings.reset(id);
+      runtime.destroy();
+    }
+  });
+});
+
+describe("createBabylonRuntime imagery limit readings", () => {
+  it("reads each limit the imagery runtime reports beside the parameter that controls it", async () => {
+    const constraints: unknown[] = [];
+    const binding = { patches: 20, blocks: 16, tablesNeeded: 20, fallbackPatches: 0, fallbackLeaves: 0, capped: 0, emptyCells: 0 };
+    const atlas = {
+      atlas: { capacity: 1600, freeSlots: 200, estimatedGpuBytes: 250 * 2 ** 20, width: 8192, height: 8192, tableBlocks: 64 },
+      plan: { nodesEvaluated: 12_000, truncated: false, cpuMs: 1, limits: [] },
+      residency: { stagedBytes: 0, inFlightReservedBytes: 0, inFlight: 0, queued: 0, overflow: 0 },
+      counters: { uploadBytes: 0 },
+      focus: null,
+      binding,
+      constraints,
+    };
+    const base = mocks.createRasterTilesRuntime.getMockImplementation()!;
+    mocks.createRasterTilesRuntime.mockImplementation((options: { source: { id: string } }) => ({
+      ...base(options), getImageryDiagnostics: () => ({ mode: "atlas", atlas }),
+    }));
+    const { createBabylonRuntime } = await import("./createBabylonRuntime");
+    const { resolveRasterBaseMapSource } = await import("./rasterBaseMaps");
+    const settings = getAppSettings();
+    settings.set("map.imagery.pageTablePatches", 20);
+    const runtime = await createBabylonRuntime(document.createElement("canvas"), {
+      googleApiKey: "test", preferGoogleTiles: false, rasterBaseMap: resolveRasterBaseMapSource("usgs-topo"), simMode: true,
+    });
+    try {
+      expect(runtime.status.mode).toBe("raster-basemap");
+      // Nothing limits the view: each reading is the usage it bounds, with the layout's rounding.
+      expect(settings.getReading("map.imagery.gpuBudget")).toBe("250 MiB allocated, 1400 of 1600 pages in use");
+      expect(settings.getReading("map.imagery.pageTablePatches")).toBe("64 available (the atlas layout rounds 20), 20 needed by visible patches");
+      expect(settings.getReading("map.imagery.maxNodes")).toBe("12000 examined");
+      expect(settings.getReading("map.imagery.pageTableDepth")).toBeNull();
+
+      atlas.plan.truncated = true;
+      binding.fallbackPatches = 4;
+      atlas.atlas.tableBlocks = 16;
+      constraints.push(
+        { cause: "gpu-budget", parameter: "map.imagery.gpuBudget", configuredMiB: 256, atlasMiB: 250, atlasPages: 1600, rendererCapped: true, selectablePages: 1344, selectedPages: 1344, morePagesAtLeast: 40, regions: 12, reducedRegions: 0 },
+        { cause: "atlas-full", parameter: "map.imagery.gpuBudget", configuredMiB: 256, atlasPages: 1600, pinnedPages: 1590, waitingImages: 3 },
+        { cause: "node-cap", parameter: "map.imagery.maxNodes", configured: 12_000, examined: 12_000, regions: 30, reducedRegions: 0 },
+        { cause: "binding-depth", tableDepth: 6, levels: { min: 15, max: 16 }, regions: 7, cappedPatches: 1 },
+      );
+      expect(settings.getReading("map.imagery.gpuBudget")).toBe(
+        "250 MiB allocated, 1400 of 1600 pages in use; selection uses 1344 of the 1344 pages it may use; 12 visible regions need at least 40 more; "
+        + "the renderer's texture size holds the atlas below this budget; 3 downloaded images wait for a slot, 1590 pages shown");
+      expect(settings.getReading("map.imagery.pageTablePatches")).toBe("16 available (the atlas layout rounds 20), 20 needed by visible patches; 4 patches draw one coarser page instead");
+      expect(settings.getReading("map.imagery.maxNodes")).toBe("12000 examined, limit reached; 30 visible regions keep coarser imagery");
+      expect(settings.getReading("map.imagery.pageTableDepth")).toBe("7 visible regions stop here at levels 15 to 16; 1 patch shows coarser pages than it holds");
+    } finally {
+      settings.reset("map.imagery.pageTablePatches");
       runtime.destroy();
     }
   });

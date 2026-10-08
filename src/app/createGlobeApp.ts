@@ -56,6 +56,8 @@ import { createMapSourcePanel } from "../shell/mapSourcePanel";
 import { createMapDetailController, type MapDetailController } from "../shell/mapDetailController";
 import { connectMapDetailRuntime } from "../shell/connectMapDetailRuntime";
 import { createRendererPanel, getRendererLabel } from "../shell/rendererPanel";
+import { createSkyPanel } from "../shell/skyPanel";
+import { createDateTimePanel } from "../shell/dateTimePanel";
 import { createFrameBudgetPanel } from "../shell/frameBudgetPanel";
 import { bindFrameProfileSettings } from "../perf/frameProfileSession";
 import { FRAME_PROFILING_IDS, frameProfilingParameters } from "../settings/catalogue/profiling";
@@ -128,6 +130,10 @@ export interface GlobeAppHandle extends GlobeHandle {
   mapTab: HTMLElement;
   /** The GPU renderer choice, for the host's Renderer tab. */
   rendererTab: HTMLElement;
+  /** Where the Sun is, the atmosphere, the ground under it and exposure, for the host's Sky tab. */
+  skyTab: HTMLElement;
+  /** The dials that set the time the Sun is placed for, for the host's Date and time tab. */
+  timeTab: HTMLElement;
   /** Scenes to load and their panoramas, for the host's Scenes tab. */
   scenesTab: HTMLElement;
   /** The panorama's own tab and 360 image settings, for the window overlay's `panoramaTabs`. */
@@ -773,6 +779,10 @@ export async function createGlobeApp(
       }),
     }],
   });
+  // The sky is seen from the camera once its model is on; until then the Sun and its times of day are the view's place's.
+  const skyPlace = () => runtime.sky.getEnvironment()?.illumination.observer ?? runtime.getViewState();
+  const skyPanel = createSkyPanel({ settings, getPlace: skyPlace, openDateTime: () => options.overlayApiRef?.current?.openOrSelectTab("time") });
+  const timePanel = createDateTimePanel({ settings, getPlace: skyPlace });
   // Scenes: one mounted at a time; `?scene=<id>` loads one the app offers, else the host's initial scene.
   const appBaseUrl = new URL(import.meta.env.BASE_URL ?? "/", window.location.href).href;
   const params = new URLSearchParams(window.location.search);
@@ -942,6 +952,8 @@ export async function createGlobeApp(
     onBugReportShow: () => bugReportPanel.show(),
     mapTab: mapPanel.element,
     rendererTab: rendererPanel.element,
+    skyTab: skyPanel.element,
+    timeTab: timePanel.element,
     scenesTab: scenesPanel.element,
     panoramaTabs,
     scenes,
@@ -1011,6 +1023,8 @@ export async function createGlobeApp(
       disconnectMapDetail();
       if (!options.mapDetail) mapDetail.dispose();
       rendererPanel.destroy();
+      skyPanel.destroy();
+      timePanel.destroy();
       frameBudget.destroy();
       unbindFrameProfile();
       themeBtnEl?.removeEventListener("click", onThemeButtonClick);

@@ -9,6 +9,7 @@ import { getAppSettings } from "../../settings/appSettings";
 import type { SettingsRegistry } from "../../settings/registry";
 import type { NumberRange } from "../../settings/types";
 import { isSphereBelowHorizon } from "../../terrain/imagery/imageryGeometry";
+import { followTerrainLight } from "./imagery/terrainLightPlugin";
 import { whenMeshesReady } from "./sceneUpdates";
 
 const GOOGLE_3D_TILES_ROOT_URL = "https://tile.googleapis.com/v1/3dtiles/root.json";
@@ -392,6 +393,8 @@ export function createGoogleTilesRuntime(options: GoogleTilesRuntimeOptions): Go
   const handleLoadModel = (event: { scene: TransformNode; tile: Tile }): void => {
     for (const mesh of event.scene.getChildMeshes()) {
       mesh.metadata = { ...mesh.metadata, googleGeometricErrorMeters: event.tile.geometricError };
+      // A tile whose material comes unlit is shown under the sky's light on the ground, as 2D imagery is.
+      if (mesh.material) followTerrainLight(mesh.material);
     }
   };
 

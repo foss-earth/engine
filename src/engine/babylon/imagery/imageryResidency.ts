@@ -82,8 +82,15 @@ export interface ImageryResidencyStats {
   inFlightReservedBytes: number;
   queued: number;
   demanded: number;
-  /** Demanded images left out of the bounded queue. */
+  /** Demanded images left out of the bounded queue; they are queued as it drains. */
   overflow: number;
+  /**
+   * Downloaded images the last upload found no slot for: every slot was
+   * pinned by the display or held more important imagery.
+   */
+  unplaced: number;
+  /** Slots the published display pins. */
+  pinnedPages: number;
   failed: number;
   missing: number;
   uploads: number;
@@ -170,7 +177,7 @@ export function createImageryResidency(options: ImageryResidencyOptions): Imager
   let missingWakeAt = Infinity;
   let tick = 0;
   let overflow = 0;
-  let memoryLimited = false;
+  let unplaced = 0;
   let disposed = false;
   const counters = { uploads: 0, uploadBytes: 0, evictions: 0, aborted: 0, compressedBytes: 0 };
 
@@ -421,7 +428,7 @@ export function createImageryResidency(options: ImageryResidencyOptions): Imager
     },
     upload(deadline, clock = now) {
       if (disposed) return 0;
-      memoryLimited = false;
+      unplaced = 0;
       let bytes = 0;
       const staged = [...entries.values()]
         .filter(entry => entry.state === "staged" && entry.prepared)
@@ -432,7 +439,7 @@ export function createImageryResidency(options: ImageryResidencyOptions): Imager
         if (bytes > 0 && (bytes + cost > limits.uploadBytesPerUpdate || clock() >= deadline)) break;
         const slots = allocate(image.pages.length, entry.request.coverage ? Infinity : entry.request.priority);
         if (!slots) {
-          memoryLimited = true;
+          unplaced += 1;
           continue;
         }
         image.pages.forEach((levels, index) => options.store.upload(slots[index], levels));
@@ -471,8 +478,10 @@ export function createImageryResidency(options: ImageryResidencyOptions): Imager
       const count = (state: EntryState) => values.filter(entry => entry.state === state).length;
       const loadingDemanded = values.some(entry => entry.state !== "resident" && demand.has(entry.request.imageKey));
       const limits: DetailLimit[] = [];
-      if (memoryLimited || overflow > 0) limits.push("memory");
-      if (loadingDemanded) limits.push("loading");
+      // Only a full atlas is a memory limit. A long queue is loading: what
+      // it left out is queued as it drains.
+      if (unplaced > 0) limits.push("memory");
+      if (loadingDemanded || overflow > 0) limits.push("loading");
       return {
         resident: count("resident"),
         residentPages: values.reduce((sum, entry) => sum + (entry.slots?.length ?? 0), 0),
@@ -483,6 +492,8 @@ export function createImageryResidency(options: ImageryResidencyOptions): Imager
         queued: count("queued"),
         demanded: demand.size,
         overflow,
+        unplaced,
+        pinnedPages: pinned.size,
         failed: count("failed"),
         missing: [...missing.keys()].filter(isMissing).length,
         ...counters,

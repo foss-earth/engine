@@ -1362,6 +1362,183 @@ summary.foss-earth-about__row:focus-visible {
   box-shadow: inset 0 0 0 1px var(--marker-colour, #ef4444);
 }
 
+/* ─── Dials: a quantity that comes round again ──────────────────────── */
+/* Date and time: two dials in a paragraph grid, side by side where the tab is wide enough and one under the other where not. */
+.foss-earth-sky-tab,
+.foss-earth-date-time-tab {
+  display: grid;
+  gap: 12px;
+}
+
+.foss-earth-date-time {
+  display: grid;
+  gap: 8px;
+}
+
+.foss-earth-dial {
+  position: relative;
+  flex: 0 0 auto;
+  width: 140px;
+  height: 140px;
+}
+
+.foss-earth-dial__face {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.foss-earth-dial__edge {
+  stroke: currentColor;
+  opacity: 0.32;
+}
+
+.foss-earth-dial__tick {
+  stroke: currentColor;
+  stroke-width: 1;
+  opacity: 0.45;
+}
+
+.foss-earth-dial__tick.is-major {
+  stroke-width: 1.5;
+  opacity: 0.8;
+}
+
+.foss-earth-dial__mark {
+  cursor: pointer;
+  outline: none;
+}
+
+.foss-earth-dial__mark-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-linecap: round;
+  pointer-events: stroke;
+}
+
+.foss-earth-dial__mark-tick {
+  stroke: currentColor;
+  stroke-width: 1.5;
+  opacity: 0.8;
+}
+
+.foss-earth-dial__label {
+  fill: currentColor;
+  font-size: 9.5px;
+  font-weight: 600;
+  pointer-events: none;
+}
+
+.foss-earth-dial__mark:hover .foss-earth-dial__label,
+.foss-earth-dial__mark:focus-visible .foss-earth-dial__label {
+  fill: var(--globe-accent, #60a5fa);
+}
+
+.foss-earth-dial__mark:focus-visible .foss-earth-dial__mark-hit {
+  stroke: rgba(96, 165, 250, 0.22);
+}
+
+.foss-earth-dial__mark[aria-disabled="true"] {
+  cursor: default;
+}
+
+/* Where the clock is while another time is set: a hollow ring on the track, seen on night and day alike. */
+.foss-earth-dial__ring {
+  fill: none;
+  stroke: #f8fafc;
+  stroke-width: 1.75;
+  filter: drop-shadow(0 0 1px rgba(2, 6, 23, 0.95));
+  pointer-events: none;
+}
+
+/* The knob is the Sun on its circle. */
+.foss-earth-dial__knob {
+  fill: #fde68a;
+  stroke: rgba(15, 23, 42, 0.85);
+  stroke-width: 1.5;
+  cursor: grab;
+  outline: none;
+}
+
+.foss-earth-dial__knob:focus-visible {
+  stroke: var(--globe-accent, #60a5fa);
+  stroke-width: 3;
+}
+
+.foss-earth-dial.is-disabled {
+  opacity: 0.55;
+}
+
+.foss-earth-dial.is-disabled .foss-earth-dial__knob,
+.foss-earth-dial.is-disabled .foss-earth-dial__mark {
+  cursor: default;
+}
+
+/* The middle passes presses through to the track; only its own readout and buttons take them. */
+.foss-earth-dial__centre {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.foss-earth-dial__readout {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  pointer-events: auto;
+}
+
+.foss-earth-dial__field {
+  box-sizing: border-box;
+  padding: 1px 2px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.foss-earth-dial__field:hover {
+  border-color: rgba(148, 163, 184, 0.32);
+}
+
+.foss-earth-dial__field:focus {
+  border-color: var(--globe-accent, #60a5fa);
+  outline: none;
+}
+
+.foss-earth-dial__field--time {
+  width: 3.3em;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.foss-earth-dial__field--date {
+  width: 6.2em;
+  font-size: 11px;
+}
+
+.foss-earth-dial__button {
+  min-height: 22px;
+  padding: 2px 9px;
+}
+
+.foss-earth-dial__button[aria-pressed="true"] {
+  border-color: var(--globe-accent, #60a5fa);
+  background: rgba(96, 165, 250, 0.12);
+  font-weight: 600;
+}
+
 /* ─── Parameter sections ─────────────────────────────────────────────── */
 /* A tab whose content is an element draws its sections itself: no second padding. */
 .foss-earth-panel-sections--inline {
@@ -1584,6 +1761,12 @@ summary.foss-earth-about__row:focus-visible {
 .foss-earth-parameter__icon-action > svg {
   width: 16px;
   height: 16px;
+}
+
+.foss-earth-help-tooltip {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
 }
 
 .foss-earth-parameter__help {

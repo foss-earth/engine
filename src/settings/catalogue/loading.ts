@@ -161,7 +161,7 @@ export const MAP_LOADING_PARAMETERS: readonly ParameterSpec[] = [
   }),
   quantity({
     id: "map.terrain.cachedTiles", label: "Terrain tiles kept", unit: "count", min: 32, max: 4096, fallback: 160, scale: "log2", step: 0.05, level: "main",
-    description: "Terrain tiles kept after they leave the view, so returning does not load them again.",
+    description: "Terrain tiles kept loaded, so returning to a place does not load it again. The tiles the view needs, those it shows and the coarser ones above them, are kept even beyond this.",
     reason: "What was kept by default before this became a setting.", source: RASTER_RUNTIME,
   }),
   quantity({
@@ -264,7 +264,7 @@ export const MAP_SELECTION_PARAMETERS: readonly ParameterSpec[] = [
   }),
   quantity({
     id: "map.imagery.maxNodes", label: "Selection limit", unit: "count", min: 1000, max: 200_000, fallback: 12_000, scale: "log2", step: 0.05, section: "selection",
-    description: "The most regions one choice of imagery may examine. Where it runs out, the rest keep coarser imagery and the Detail section says the renderer limited it.",
+    description: "The most regions one choice of imagery may examine. Where it runs out, the rest keep coarser imagery, and the Detail section and the log say this limit stopped them.",
     reason: STARTING_VALUE, source: SELECTOR,
   }),
   {

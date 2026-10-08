@@ -5,7 +5,8 @@ import { CameraController } from "../../camera/cameraState";
 import * as refinement from "../../terrain/meshRefinement";
 import type { TerrainGrid, TerrainTile } from "../../terrain/terrainTiles";
 import { createRasterTilesRuntime, type RasterTilesRuntimeOptions } from "./createRasterTilesRuntime";
-import type { ImageryLoader, PreparedImage } from "./imagery/imageryResidency";
+import { ImageryMissingError, type ImageryLoader, type PreparedImage } from "./imagery/imageryResidency";
+import { lonLatToTileXY, tileContains, type TileId } from "../../terrain/imagery/imageryGeometry";
 import { getAppSettings } from "../../settings/appSettings";
 import { RASTER_BASE_MAP_SOURCES } from "./rasterBaseMaps";
 
@@ -34,7 +35,7 @@ beforeEach(() => {
   pending.heights = tile => [100 + tile.z, 100, 100, 100];
   pending.legacyImagery = 0;
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 
 const flush = async () => { for (let i = 0; i < 8; i++) await Promise.resolve(); };
 
@@ -398,5 +399,210 @@ describe("raster runtime with atlas imagery", () => {
     expect(covered).toBeGreaterThan(0);
     runtime.dispose();
     engine.dispose();
+  });
+
+  describe("imagery detail at fixed ground points", () => {
+    // Open ocean: the startup surface and every elevation tile below are sea
+    // level here, so the surface never moves under a point while terrain loads.
+    const OCEAN = { latDeg: 30, lonDeg: -150 };
+    /** A point as a level-20 tile, fine enough to lie inside any selected region. */
+    const tileAt = ({ latDeg, lonDeg }: { latDeg: number; lonDeg: number }): TileId => {
+      const at = lonLatToTileXY(lonDeg, latDeg, 20);
+      return { z: 20, x: Math.floor(at.x), y: Math.floor(at.y) };
+    };
+
+    /** A view over the ocean and what it shows at points `offsets` degrees north and east of its centre. */
+    async function watch(offsets: Array<[number, number]>, start: { zoomMeters?: number } = {}, loader?: ImageryLoader, extra: Partial<RasterTilesRuntimeOptions> = {}) {
+      vi.useFakeTimers({ toFake: ["performance", "setTimeout", "clearTimeout"] });
+      pending.heights = () => [0, 0, 0, 0];
+      const test = await setup(0, loader, extra);
+      const { runtime, scene, controller, view } = test;
+      Object.assign(view, OCEAN, start);
+      controller.applyViewState(view);
+      const POINTS = offsets.map(([north, east]) => ({ latDeg: OCEAN.latDeg + north, lonDeg: OCEAN.lonDeg + east }));
+      const tiles = POINTS.map(tileAt);
+      /** The page level visible terrain materials draw at each point, from the published bindings. */
+      const imagery = (): Array<number | null> => {
+        const regions = runtime.getImageryDiagnostics().atlas!.plan?.regions ?? [];
+        return tiles.map(tile => regions.find(region => {
+          const [z, x, y] = region.key.split("/").map(Number);
+          return tileContains({ z, x, y }, tile);
+        })?.delivered ?? null);
+      };
+      /** The elevation level of the patch drawn at each point. */
+      const elevation = (): Array<number | null> => POINTS.map(({ latDeg, lonDeg }) => runtime.sample(latDeg, lonDeg)?.quality ?? null);
+      /** The tile level of the patch drawn at each point. */
+      const patchLevels = (): Array<number | null> => POINTS.map(({ latDeg, lonDeg }) => {
+        const hit = runtime.sample(latDeg, lonDeg);
+        return hit ? Number(hit.meshId.split("-").at(-1)!.split("/")[0]) : null;
+      });
+      const history: Array<{ step: string; imagery: Array<number | null>; elevation: Array<number | null>; patches: Array<number | null> }> = [];
+      /**
+       * One frame, 50 ms after the last: elevation tiles `arrives` allows are
+       * answered first, then the runtime updates and draws.
+       */
+      const frame = async (step: string, arrives: (tile: TerrainTile) => boolean = () => false): Promise<number> => {
+        const ready = pending.terrain.filter(item => arrives(item.tile));
+        pending.terrain = pending.terrain.filter(item => !arrives(item.tile));
+        for (const item of ready) item.resolve({ ...item.tile, size: 2, heights: new Float32Array(pending.heights(item.tile)) });
+        await flush();
+        await vi.advanceTimersByTimeAsync(50);
+        runtime.update();
+        scene.render();
+        await flush();
+        history.push({ step, imagery: imagery(), elevation: elevation(), patches: patchLevels() });
+        return ready.length;
+      };
+      /**
+       * Frames until nothing has been answered, uploaded, published or shown
+       * differently for 600 ms, which is past imagery's hysteresis delay. A
+       * map still busy after 6 s fails.
+       */
+      const settle = async (step: string, arrives?: (tile: TerrainTile) => boolean) => {
+        let quiet = 0;
+        let last = "";
+        for (let count = 0; count < 120 && quiet < 12; count++) {
+          const answered = await frame(step, arrives);
+          const { counters, residency } = runtime.getImageryDiagnostics().atlas!;
+          const now = JSON.stringify([history.at(-1), counters.uploads, counters.publishes, counters.tableWrites, residency.inFlight, residency.queued]);
+          quiet = answered === 0 && now === last ? quiet + 1 : 0;
+          last = now;
+        }
+        expect(quiet, `the map settles during "${step}"`).toBe(12);
+      };
+      /**
+       * Elevation tiles `among` allows, answered a level at a time, coarsest
+       * first, settling after each level: a parent's always before its children's.
+       */
+      const stages = async (step: string, among: (tile: TerrainTile) => boolean = () => true) => {
+        for (;;) {
+          const levels = pending.terrain.filter(item => among(item.tile)).map(item => item.tile.z);
+          if (levels.length === 0) return;
+          const level = Math.min(...levels);
+          await settle(`${step} to level ${level}`, tile => among(tile) && tile.z <= level);
+        }
+      };
+      /** Each time a point showed coarser imagery, or stood on coarser elevation, than the frame before. */
+      const drops = (from = 0) => history.slice(from + 1).flatMap((now, index) => {
+        const before = history[from + index];
+        return POINTS.flatMap((_, point) => [
+          ...((now.imagery[point] ?? -1) < (before.imagery[point] ?? -1) ? [`${now.step}: imagery at point ${point} went from level ${before.imagery[point]} to ${now.imagery[point]}`] : []),
+          ...((now.elevation[point] ?? -1) < (before.elevation[point] ?? -1) ? [`${now.step}: elevation at point ${point} went from level ${before.elevation[point]} to ${now.elevation[point]}`] : []),
+        ]);
+      });
+      /** Terrain patches on screen as `[tile level, elevation level]`. */
+      const patches = (): Array<[number, number]> => scene.meshes
+        .filter(mesh => mesh.isEnabled() && mesh.metadata?.mapSurface)
+        .map(mesh => [Number(mesh.name.split("-").at(-1)!.split("/")[0]), mesh.metadata.terrainZoom as number]);
+      return { ...test, history, frame, settle, stages, drops, patches, imagery, elevation };
+    }
+
+    it("keeps what each point shows while elevation arrives in stages, parents before children", async () => {
+      const { runtime, engine, history, frame, settle, stages, drops, patches, imagery } = await watch([[0, 0], [0.04, 0], [0, 0.04], [-0.03, -0.03], [0.08, 0.02]]);
+      try {
+        // Imagery first, as when the elevation server is the slower one: full
+        // detail on the startup surface before any elevation tile is answered.
+        await settle("imagery alone");
+        const first = history.length - 1;
+        const full = imagery();
+        // Finer than a root terrain patch could ever show, so the check below has something to lose.
+        for (const level of full) expect(level).toBeGreaterThan(2 + 6);
+        // Then elevation a level at a time.
+        await stages("elevation");
+        for (let count = 0; count < 60; count++) await frame("hold", () => true);
+        expect(pending.terrain).toEqual([]);
+        // Nothing moved and nothing was asked to change: no point may show less than it did.
+        expect(drops(first)).toEqual([]);
+        expect(imagery()).toEqual(full);
+        // And every patch on screen now stands on its own elevation.
+        expect(patches().length).toBeGreaterThan(16);
+        for (const [tileLevel, elevationLevel] of patches()) expect(elevationLevel).toBe(tileLevel);
+        expect(runtime.getDetailFeedback()).toMatchObject({ pending: false, source: { id: "usgs-imagery" } });
+        expect(runtime.getDetailFeedback().constraints!.map(constraint => constraint.cause)).not.toContain("binding-depth");
+      } finally { runtime.dispose(); engine.dispose(); }
+    });
+
+    it("holds full detail through late answers after a zoom from the whole globe", async () => {
+      // The stand-in the centre's finest images ask for ahead of themselves:
+      // its answer comes last, and says the source has no such image.
+      const centre = tileAt(OCEAN);
+      const standIn = { z: 13, x: centre.x >> 7, y: centre.y >> 7 };
+      let held: { reject(error: Error): void } | null = null;
+      const prompt = imageryLoader().loader;
+      const loader: ImageryLoader = {
+        load(url, expected, signal) {
+          const [z, y, x] = url.split("/").slice(-3).map(Number);
+          if (z !== standIn.z || x !== standIn.x || y !== standIn.y) return prompt.load(url, expected, signal);
+          return new Promise((_resolve, reject) => { held = { reject }; });
+        },
+      };
+      const requestRender = vi.fn();
+      /** Elevation for a tile the view's centre lies in: every terrain patch above the ones drawn there. */
+      const overCentre = (tile: TerrainTile) => tileContains(tile, centre);
+      const { runtime, engine, controller, view, history, frame, settle, stages, drops, imagery } = await watch(
+        [[0, 0], [0.003, 0], [0, 0.003], [-0.002, -0.002]], { zoomMeters: 20_000_000 }, loader, { requestRender });
+      const atlas = () => runtime.getImageryDiagnostics().atlas!;
+      const causes = () => runtime.getDetailFeedback().constraints!.map(constraint => constraint.cause);
+      try {
+        await settle("whole globe", () => true);
+        // A fast zoom to 2 km: no elevation tile is answered on the way, so
+        // levels at the points rise only as far as the patches drawn there let them.
+        for (const zoomMeters of [5_000_000, 1_200_000, 300_000, 80_000, 20_000, 6000, 2000]) {
+          Object.assign(view, { zoomMeters });
+          controller.applyViewState(view);
+          await frame(`zoom to ${zoomMeters} m`);
+          await frame(`zoom to ${zoomMeters} m`);
+        }
+        await settle("hold, elevation in flight");
+        // Root patches still stand under the view, and that ceiling is reported.
+        expect(causes()).toContain("binding-depth");
+        // The first, coarse elevation of every new patch, then the elevation of the coarsest tiles away from the centre.
+        await frame("first elevation", () => true);
+        await settle("coarse elevation elsewhere", tile => tile.z <= 5 && !overCentre(tile));
+        const first = history.length - 1;
+        const full = imagery();
+        // Full useful detail: the source's finest level at every point, limited by nothing else.
+        expect(full).toEqual(full.map(() => RASTER_BASE_MAP_SOURCES[0].maxZoom));
+        expect(causes()).not.toContain("binding-depth");
+        expect(held, "the centre's finest images asked for their stand-in").not.toBeNull();
+        // Late answers while the view holds still: the elevation over the centre, parents first ...
+        await stages("elevation over the centre", overCentre);
+        // ... the stand-in, which the source turns out not to have ...
+        held!.reject(new ImageryMissingError("no such image"));
+        await settle("stand-in missing");
+        // The finer imagery resident below it stays.
+        expect(drops(first)).toEqual([]);
+        expect(atlas().residency.missing).toBe(1);
+        expect(atlas().plan!.refinedPastMissing).toBeGreaterThan(0);
+        // ... and the rest of the elevation.
+        await stages("elevation");
+        expect(pending.terrain).toEqual([]);
+        expect(drops(first)).toEqual([]);
+        expect(imagery()).toEqual(full);
+        // Then nothing more is asked for, uploaded or drawn.
+        const before = { requests: pending.terrainRequests, renders: requestRender.mock.calls.length, counters: atlas().counters };
+        for (let count = 0; count < 60; count++) await frame("hold");
+        expect(pending.terrainRequests).toBe(before.requests);
+        expect(requestRender).toHaveBeenCalledTimes(before.renders);
+        expect(atlas().counters).toEqual(before.counters);
+      } finally { runtime.dispose(); engine.dispose(); }
+    });
+
+    it("loads and draws nothing more while a still view needs more terrain tiles than are kept", async () => {
+      const requestRender = vi.fn();
+      // At 2 km the view's tiles and the parents above them outnumber the 160 tiles kept by default.
+      const { runtime, engine, frame, settle } = await watch([[0, 0]], { zoomMeters: 2000 }, undefined, { requestRender });
+      try {
+        await settle("load", () => true);
+        expect(runtime.getMetrics().activeTiles).toBeGreaterThan(getAppSettings().get<number>("map.terrain.cachedTiles"));
+        // A parent evicted for the budget would be loaded again by the next
+        // selection, and that one caused by its arrival, for as long as the view stays.
+        const before = { requests: pending.terrainRequests, renders: requestRender.mock.calls.length, revision: runtime.getRevision() };
+        for (let count = 0; count < 100; count++) await frame("still", () => true);
+        expect(pending.terrainRequests).toBe(before.requests);
+        expect(requestRender).toHaveBeenCalledTimes(before.renders);
+        expect(runtime.getRevision()).toBe(before.revision);
+      } finally { runtime.dispose(); engine.dispose(); }
+    });
   });
 });

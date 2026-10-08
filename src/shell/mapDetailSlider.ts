@@ -11,6 +11,7 @@ import {
   type DetailTrackMarker,
 } from "../terrain/mapDetailPolicy";
 import type { MapDetailController } from "./mapDetailController";
+import { CONSTRAINT_LIMIT, describeImageryConstraint } from "./mapDetailExplanations";
 
 export interface MapDetailSliderOptions {
   /** The app's detail controller; the Map tab's editor observes the same one. */
@@ -35,13 +36,21 @@ const LIMIT_TEXT: Record<DetailLimit, string> = {
   "frame-time": "coarsened to hold the frame time",
 };
 
-/** A sentence about what limits the request, or null when nothing does. */
+/**
+ * What limits the request, or null when nothing does: a sentence for each
+ * limit the renderer explained with its values, and the general wording for
+ * the rest, such as loading.
+ */
 export function describeDetailStatus(state: DetailState): string | null {
-  const parts = state.limits.map(limit => LIMIT_TEXT[limit]);
+  const explained = new Set(state.constraints.map(constraint => CONSTRAINT_LIMIT[constraint.cause]));
+  const parts = state.limits.filter(limit => limit === "loading" || !explained.has(limit)).map(limit => LIMIT_TEXT[limit]);
   if (state.pending && !state.limits.includes("loading")) parts.unshift("loading");
-  if (parts.length === 0) return null;
-  const text = parts.join(", ");
-  return text.charAt(0).toUpperCase() + text.slice(1) + ".";
+  const sentences = state.constraints.map(constraint => describeImageryConstraint(constraint));
+  if (parts.length > 0) {
+    const text = parts.join(", ");
+    sentences.unshift(text.charAt(0).toUpperCase() + text.slice(1) + ".");
+  }
+  return sentences.length > 0 ? sentences.join(" ") : null;
 }
 
 function rangePercent(position: number, finer: number, coarser: number): number {

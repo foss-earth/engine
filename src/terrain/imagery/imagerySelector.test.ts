@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { tileContains, type TileId } from "./imageryGeometry";
+import { childTiles, tileContains, tileKey, type TileId } from "./imageryGeometry";
 import {
   createImagerySelector,
   estimateFocusPages,
   imageKey,
   measureImageryView,
   type ImageryPlan,
+  type ImageryPlanLeaf,
   type ImagerySelectionInput,
   type ImagerySourceCapabilities,
 } from "./imagerySelector";
@@ -217,6 +218,268 @@ describe("projected imagery selection", () => {
     expect(plan.limits).toContain("source");
   });
 
+  it.each([1, 3])("keeps resident detail when an optional ancestor %i levels above arrives missing", (gap) => {
+    const selector = createImagerySelector();
+    const resident = new Set<string>();
+    const missing = new Set<string>();
+    const availability = {
+      isResident: (key: string) => resident.has(key),
+      isMissing: (key: string) => missing.has(key),
+    };
+    const initial = selector.step(input(OVERHEAD, { availability }), Infinity).plan!;
+    for (const leaf of initial.leaves) resident.add(leaf.imageKey);
+    for (const root of initial.coverage) resident.add(imageKey(PHOTO, root, null));
+
+    // A fallback request may finish after every selected fine image has
+    // loaded. No camera, surface, target or budget changed in the meantime.
+    const detailed = initial.leaves.reduce((best, leaf) => leaf.screenArea > best.screenArea ? leaf : best);
+    const ancestor = { z: detailed.tile.z - gap, x: detailed.tile.x >> gap, y: detailed.tile.y >> gap };
+    const ancestorKey = imageKey(PHOTO, ancestor, null);
+    expect(ancestor.z).toBeGreaterThan(2);
+    expect(resident.has(ancestorKey)).toBe(false);
+    missing.add(ancestorKey);
+
+    const after = selector.step(input(OVERHEAD, { availability, now: 2000 }), Infinity).plan!;
+    expectRefinementOf(initial, after);
+    expect(after.limits).toEqual(initial.limits);
+  });
+
+  it("stops speculative refinement below a missing ancestor when no selected descendant has loaded", () => {
+    const selector = createImagerySelector();
+    const initial = selector.step(input(OVERHEAD, { availability: { isResident: () => false, isMissing: () => false } }), Infinity).plan!;
+    const detailed = initial.leaves.reduce((best, leaf) => leaf.screenArea > best.screenArea ? leaf : best);
+    const ancestor = { z: detailed.tile.z - 3, x: detailed.tile.x >> 3, y: detailed.tile.y >> 3 };
+    const ancestorKey = imageKey(PHOTO, ancestor, null);
+    const after = selector.step(input(OVERHEAD, {
+      availability: { isResident: () => false, isMissing: key => key === ancestorKey },
+      now: 2000,
+    }), Infinity).plan!;
+    expect(after.leaves.find(leaf => leaf.imageKey === ancestorKey)?.limit).toBe("source");
+    expect(after.leaves.some(leaf => leaf.tile.z > ancestor.z && tileContains(ancestor, leaf.tile))).toBe(false);
+  });
+
+  describe("below an image the source does not have", () => {
+    /** A selector that has shown the overhead view, with the residency the test sets. */
+    function shown(source = PHOTO) {
+      const selector = createImagerySelector();
+      const resident = new Set<string>();
+      const missing = new Set<string>();
+      let revision = 0;
+      const availability = {
+        isResident: (key: string) => resident.has(key),
+        isMissing: (key: string) => missing.has(key),
+        getRevision: () => revision,
+      };
+      const initial = selector.step(input(OVERHEAD, { source, availability }), Infinity).plan!;
+      for (const root of initial.coverage) resident.add(imageKey(source, root, null));
+      const detailed = initial.leaves.reduce((best, leaf) => leaf.screenArea > best.screenArea ? leaf : best);
+      const above = (gap: number): TileId => ({ z: detailed.tile.z - gap, x: detailed.tile.x >> gap, y: detailed.tile.y >> gap });
+      const under = (plan: ImageryPlan, tile: TileId) => plan.leaves.filter(leaf => tileContains(tile, leaf.tile));
+      return {
+        selector, resident, missing, availability, initial, above, under,
+        changed: () => { revision += 1; },
+        reselect: (overrides: Partial<ImagerySelectionInput> = {}) => selector.step(input(OVERHEAD, { source, availability, now: 2000, ...overrides }), Infinity).plan!,
+      };
+    }
+    const keys = (leaves: ImageryPlanLeaf[]) => leaves.map(leaf => leaf.imageKey).sort();
+
+    it("keeps resident leaves and the stand-ins shown for loading ones, and stops where nothing has loaded", () => {
+      const test = shown();
+      const ancestor = test.above(2);
+      const [loaded, standingIn, ...empty] = childTiles(ancestor).filter(child => test.under(test.initial, child).length > 0);
+      expect(empty.length).toBeGreaterThan(0);
+      // One quadrant has loaded; another shows its own stand-in while its leaves load.
+      for (const leaf of test.under(test.initial, loaded)) test.resident.add(leaf.imageKey);
+      test.resident.add(imageKey(PHOTO, standingIn, null));
+      test.missing.add(imageKey(PHOTO, ancestor, null));
+
+      const after = test.reselect();
+      expect(keys(test.under(after, loaded))).toEqual(keys(test.under(test.initial, loaded)));
+      // Below a resident stand-in selection is as usual: its leaves are still asked for.
+      expect(keys(test.under(after, standingIn))).toEqual(keys(test.under(test.initial, standingIn)));
+      expect(test.under(after, standingIn).every(leaf => !leaf.presumedMissing && leaf.limit === null)).toBe(true);
+      // Nothing resident shows the source has the rest: as before, it is not asked for,
+      // and its region shows the nearest resident ancestor.
+      for (const quadrant of empty) {
+        expect(test.under(after, quadrant)).toEqual([expect.objectContaining({ key: tileKey(quadrant), limit: "source", shortfall: "missing", presumedMissing: true })]);
+      }
+      expect(after.leaves.some(leaf => leaf.key === tileKey(ancestor))).toBe(false);
+      expect(after.shortfall.refinedPastMissing).toBe(1);
+      expect(after.shortfall.regions.missing).toBe(empty.length);
+    });
+
+    it("refines past four missing children only toward resident grandchildren", () => {
+      const test = shown();
+      const parent = test.above(2);
+      const children = childTiles(parent);
+      for (const child of children) test.missing.add(imageKey(PHOTO, child, null));
+      const [loaded, ...others] = children.filter(child => test.under(test.initial, child).length > 0);
+      for (const leaf of test.under(test.initial, loaded)) test.resident.add(leaf.imageKey);
+
+      const after = test.reselect();
+      expect(keys(test.under(after, loaded))).toEqual(keys(test.under(test.initial, loaded)));
+      for (const child of others) {
+        // No unsupported expansion: each sibling stays one missing leaf.
+        expect(test.under(after, child)).toEqual([expect.objectContaining({ key: tileKey(child), limit: "source", presumedMissing: true })]);
+      }
+      // With nothing resident below, the shortcut keeps the parent as before.
+      test.resident.clear();
+      for (const root of test.initial.coverage) test.resident.add(imageKey(PHOTO, root, null));
+      test.changed();
+      const bare = test.reselect({ now: 4000 });
+      expect(test.under(bare, parent)).toEqual([expect.objectContaining({ key: tileKey(parent), limit: "source", shortfall: "missing" })]);
+    });
+
+    it("takes no evidence from another source version or from evicted imagery", () => {
+      const nothingBelow = (test: ReturnType<typeof shown>, plan: ImageryPlan, ancestor: TileId) =>
+        expect(test.under(plan, ancestor).map(leaf => leaf.key)).toEqual([tileKey(ancestor)]);
+      // A new version of the source: the old version's images, still resident, are not its own.
+      const switched = shown();
+      for (const leaf of switched.initial.leaves) switched.resident.add(leaf.imageKey);
+      const next = { ...PHOTO, version: "2" };
+      switched.missing.add(imageKey(next, switched.above(3), null));
+      nothingBelow(switched, switched.reselect({ source: next }), switched.above(3));
+      // Evicted: what the plan showed is no longer resident.
+      const evicted = shown();
+      for (const leaf of evicted.initial.leaves) evicted.resident.add(leaf.imageKey);
+      const ancestor = evicted.above(3);
+      evicted.missing.add(imageKey(PHOTO, ancestor, null));
+      expectRefinementOf(evicted.initial, evicted.reselect());
+      for (const leaf of evicted.under(evicted.initial, ancestor)) evicted.resident.delete(leaf.imageKey);
+      evicted.changed();
+      nothingBelow(evicted, evicted.reselect({ now: 4000 }), ancestor);
+    });
+
+    it("keeps a resident variant below a missing standard image, and the standard image when a variant is missing", () => {
+      const retina = { ...OVERHEAD, renderWidth: 2560, renderHeight: 1440, logicalWidth: 1280, logicalHeight: 720 };
+      const selector = createImagerySelector();
+      const resident = new Set<string>();
+      const missing = new Set<string>();
+      const availability = { isResident: (key: string) => resident.has(key), isMissing: (key: string) => missing.has(key) };
+      const step = (now: number) => selector.step(input(retina, { source: CARTO, availability, now }), Infinity).plan!;
+      const initial = step(0);
+      const dense = initial.leaves.filter(leaf => leaf.variant === "2x" && leaf.tile.z > 4);
+      expect(dense.length).toBeGreaterThan(0);
+      for (const leaf of initial.leaves) resident.add(leaf.imageKey);
+      for (const root of initial.coverage) resident.add(imageKey(CARTO, root, null));
+      const leaf = dense.reduce((best, candidate) => candidate.screenArea > best.screenArea ? candidate : best);
+      const parent = { z: leaf.tile.z - 1, x: leaf.tile.x >> 1, y: leaf.tile.y >> 1 };
+      missing.add(imageKey(CARTO, parent, null));
+      missing.add(imageKey(CARTO, leaf.tile, null));
+      const after = step(2000);
+      expectRefinementOf(initial, after);
+      expect(after.leaves.find(candidate => candidate.key === leaf.key)).toMatchObject({ variant: "2x", limit: leaf.limit, presumedMissing: false });
+      // A missing variant leaves the standard image to stand.
+      missing.clear();
+      missing.add(imageKey(CARTO, leaf.tile, "2x"));
+      resident.add(imageKey(CARTO, leaf.tile, null));
+      const standard = step(4000);
+      expect(standard.leaves.find(candidate => candidate.key === leaf.key)).toMatchObject({ variant: null, imageKey: imageKey(CARTO, leaf.tile, null) });
+    });
+
+    it("does not discard imagery that arrives while a sliced traversal runs, and finishes while downloads continue", () => {
+      const test = shown();
+      const ancestor = test.above(2);
+      const ancestorKey = imageKey(PHOTO, ancestor, null);
+      test.missing.add(ancestorKey);
+      const arriving = test.under(test.initial, ancestor).map(leaf => leaf.imageKey);
+      // The ancestor's own decision asks whether it is missing; so does its
+      // parent's four-children check, but only when it is the first child.
+      const parent = { z: ancestor.z - 1, x: ancestor.x >> 1, y: ancestor.y >> 1 };
+      const asksBeforeDecision = tileKey(childTiles(parent)[0]) === tileKey(ancestor) ? 1 : 0;
+      let asked = 0;
+      const availability = { ...test.availability, isMissing: (key: string) => {
+        if (key === ancestorKey) asked += 1;
+        return test.missing.has(key);
+      } };
+      // Each update's deadline has passed by its first clock check, so every
+      // slice decides only a few nodes.
+      let time = 0;
+      const clock = () => (time += 0.01);
+      let step = test.selector.step(input(OVERHEAD, { availability, now: 2000 }), time, clock);
+      let steps = 1;
+      let arrivedAfterDecision = 0;
+      // Once the missing ancestor was decided with nothing resident below it,
+      // its leaves arrive one per update, each shown meanwhile under the
+      // previous plan; every update also changes residency elsewhere.
+      while (!step.completed && steps < 10_000) {
+        expect(step.plan).toBe(test.initial);
+        if (asked > asksBeforeDecision && arriving.length > 0) {
+          test.resident.add(arriving.shift()!);
+          arrivedAfterDecision += 1;
+        }
+        test.changed();
+        step = test.selector.step(input(OVERHEAD, { availability, now: 2000 }), time, clock);
+        steps += 1;
+      }
+      expect(step.completed).toBe(true);
+      expect(arrivedAfterDecision).toBeGreaterThan(0);
+      const after = step.plan!;
+      // Whatever arrived before the traversal finished is kept.
+      for (const leaf of test.under(test.initial, ancestor)) {
+        if (!test.resident.has(leaf.imageKey)) continue;
+        expect(after.leaves.find(candidate => candidate.key === leaf.key), leaf.key).toMatchObject({ limit: null, presumedMissing: false });
+      }
+      expect(test.under(test.initial, ancestor).some(leaf => test.resident.has(leaf.imageKey))).toBe(true);
+    });
+
+    it("still coarsens when asked, merging only into imagery it can show", () => {
+      const test = shown();
+      for (const leaf of test.initial.leaves) test.resident.add(leaf.imageKey);
+      const ancestor = test.above(2);
+      test.missing.add(imageKey(PHOTO, ancestor, null));
+      expectRefinementOf(test.initial, test.reselect());
+      const finest = (plan: ImageryPlan) => Math.max(...test.under(plan, ancestor).map(leaf => leaf.tile.z));
+      let plan = test.initial;
+      for (let now = 2000; now <= 20_000; now += 500) {
+        plan = test.reselect({ offset: -2, now });
+        // Each merge needs its parent's image: those the source has load, as the runtime asks.
+        for (const tile of plan.mergeCandidates) {
+          const key = imageKey(PHOTO, tile, null);
+          if (!test.missing.has(key)) test.resident.add(key);
+        }
+        test.changed();
+      }
+      expect(finest(plan)).toBeLessThan(finest(test.initial));
+      // The missing image itself can never be shown, so its children stay.
+      expect(test.under(plan, ancestor).every(leaf => leaf.tile.z > ancestor.z && !leaf.presumedMissing)).toBe(true);
+      expect(Math.max(...plan.leaves.map(leaf => leaf.tile.z))).toBeLessThan(Math.max(...test.initial.leaves.map(leaf => leaf.tile.z)));
+    });
+
+    it("explains a page budget it reaches with at least the pages the view needs beyond it", () => {
+      const test = shown();
+      for (const leaf of test.initial.leaves) test.resident.add(leaf.imageKey);
+      test.missing.add(imageKey(PHOTO, test.above(2), null));
+      const tight = test.reselect({ maxPages: 24 });
+      expect(tight.leaves.reduce((sum, leaf) => sum + leaf.pages, 0)).toBeLessThanOrEqual(24);
+      expect(tight.limits).toContain("memory");
+      expect(tight.shortfall.regions.pages).toBeGreaterThan(0);
+      expect(tight.shortfall.morePages).toBeGreaterThanOrEqual(tight.shortfall.regions.pages);
+    });
+
+    it("tells detail a budget took away from detail it never reached", () => {
+      // A view first selected under a tight budget has lost nothing.
+      const never = select(input(OVERHEAD, { maxPages: 24 }));
+      expect(never.shortfall.regions.pages).toBeGreaterThan(0);
+      expect(never.shortfall.reduced).toEqual({ pages: 0, nodes: 0 });
+      // The same budget after the whole view was shown merges regions that had finer imagery.
+      const test = shown();
+      for (const leaf of test.initial.leaves) test.resident.add(leaf.imageKey);
+      const tight = test.reselect({ maxPages: 24 });
+      expect(tight.shortfall.reduced.pages).toBeGreaterThan(0);
+      expect(tight.shortfall.reduced.pages).toBeLessThanOrEqual(tight.shortfall.regions.pages);
+      // Each merge is counted once: staying under the budget takes nothing more.
+      expect(test.reselect({ maxPages: 24, now: 3000 }).shortfall.reduced).toEqual({ pages: 0, nodes: 0 });
+      // The node cap is counted the same way, as its own cause.
+      const capped = shown();
+      for (const leaf of capped.initial.leaves) capped.resident.add(leaf.imageKey);
+      const cut = capped.reselect({ maxNodes: 60 });
+      expect(cut.truncated).toBe(true);
+      expect(cut.shortfall.reduced.nodes).toBeGreaterThan(0);
+      expect(cut.shortfall.reduced.pages).toBe(0);
+    });
+  });
+
   it("does not refine outside the source's coverage", () => {
     const plan = select(input({ latDeg: -40, lonDeg: 150, altitudeMeters: 3000 }, {
       source: { ...PHOTO, coverage: { west: -180, south: -14, east: 180, north: 72 } },
@@ -230,6 +493,20 @@ describe("projected imagery selection", () => {
     const plan = select(input(OVERHEAD, { maxLevelFor: () => 10 }));
     expect(Math.max(...plan.leaves.map(leaf => leaf.tile.z))).toBe(10);
     expect(plan.limits).toContain("backend");
+  });
+
+  it("counts a region that lies around the camera as on screen, so its limit is reported", () => {
+    // Terrain patches so coarse that one image, 130 km wide, holds the whole view from 1500 m.
+    const plan = select(input(OBLIQUE, { maxLevelFor: () => 8 }));
+    const under = plan.leaves.filter(leaf => leaf.limit === "backend" && leaf.screenArea > 0);
+    expect(under.length).toBeGreaterThan(0);
+    for (const leaf of under) expect(leaf.tile.z).toBe(8);
+    // The view is 1280 x 720 pixels and every part of it shows one of these regions.
+    expect(under.reduce((sum, leaf) => sum + leaf.screenArea, 0)).toBeGreaterThan(0.5 * 1280 * 720);
+    expect(Math.max(...under.map(leaf => leaf.screenArea))).toBeLessThanOrEqual(1280 * 720);
+    expect(plan.limits).toEqual(["backend"]);
+    expect(plan.shortfall.regions.binding).toBe(under.length);
+    expect(plan.shortfall.bindingLevels).toEqual({ min: 8, max: 8 });
   });
 });
 
