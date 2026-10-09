@@ -93,7 +93,11 @@
     "CODE_OF_CONDUCT.md",
     "CONTRIBUTING.md",
     "SECURITY.md",
-    "AGENTS.md"
+    "AGENTS.md",
+    ".attribution.json",
+    ".attribution-release.json",
+    ".github/workflows/attribution-check.yml",
+    "deps/foss-earth-ci-1db73d1ddb342e348a2c9e8387f7bbc7ebb3225e.tgz"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
@@ -155,7 +159,7 @@
     "@foss-earth/sky": "0.1.0",
     "@foss-earth/ui": "0.1.0",
     "@foss-earth/renderer": "0.1.0",
-    "@foss-earth/ci": "0.1.0",
+    "@foss-earth/ci": "file:deps/foss-earth-ci-1db73d1ddb342e348a2c9e8387f7bbc7ebb3225e.tgz",
     "@felipegalind0/gamepad-tools": "0.1.0"
   },
   "dependencies": {
