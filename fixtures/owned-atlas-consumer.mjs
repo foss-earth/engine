@@ -6,6 +6,8 @@ import { createImageSessionBroker, ResourceCapacityError } from '@foss-earth/ima
 import { createTextureDevicePorts, createTextureTransferTracker } from '@foss-earth/renderer/babylon';
 import { createImageryAtlas } from '@foss-earth/engine/babylon';
 import { createImageryResidency, planAtlasLayout, pageUploadBytes, preparePages } from '@foss-earth/engine/imagery';
+// A complete minimum24page Atlas is24 *441936 bytes plus transactional tables.
+const FIXTURE_ATLAS_GPU_BYTES=12*2**20;
 const broker=createImageSessionBroker({requests:1,decodes:1,pools:{sourceGpu:64*2**20,overlap:32*2**20,encoded:1000,decoded:16*2**20,uploadOutstanding:8*2**20}});
 let complete, calls=0, surfaces=0;
 const native={isWebGPU:true,getCaps:()=>({maxTextureSize:8192}),_device:{queue:{onSubmittedWorkDone:()=>new Promise(resolve=>{complete=resolve;})}},updateTextureData(){calls++;}};
@@ -18,13 +20,14 @@ const resources={generation:()=>broker.generation(),reserveGpu:(bytes,label,opti
   reserveCopy(bytes,label){const result=broker.pools.reserve('decoded',bytes,label);if(!result.ok)throw new ResourceCapacityError(result.pool,result.reason);return result.reservation;},
   canUpload:(bytes,extra=0)=>broker.pools.fits('uploadOutstanding',bytes)&&broker.pools.fits('decoded',bytes+extra),subscribeAvailable:listener=>broker.pools.subscribeAvailable(listener),
   capacityKey:()=>JSON.stringify(Object.entries(broker.pools.stats()).map(([key,row])=>[key,row.limit,row.reserved]))};
-const layout=planAtlasLayout({maxBytes:8*2**20,maxTextureSize:8192,powerOfTwo:false,maxPatches:2});
+const layout=planAtlasLayout({maxBytes:FIXTURE_ATLAS_GPU_BYTES,maxTextureSize:8192,powerOfTwo:false,maxPatches:2});
+assert(layout, 'Fixture budget must fit the complete minimum Atlas.');
 const atlas=createImageryAtlas(scene,layout,1,device,{...resources,overlap:false,requestRender(){},onError(error){throw error;}});
 const prepared=grant('decoded',pageUploadBytes(),'consumer prepared pages');let closing=false;
 const image={width:256,height:256,compressedBytes:1,pages:preparePages(new Uint8Array(256*256*4).fill(27),256,256),isCurrent:()=>!closing,
   close(){if(closing)return;closing=true;prepared.release();},retain(){assert.equal(closing,false);return prepared.retain();}};
 const residency=createImageryResidency({store:atlas,loader:{load:async()=>image},now:()=>0,createAbortController:()=>new AbortController(),
-  limits:{gpuBytes:8*2**20,stagingBytes:16*2**20,concurrentRequests:1,queuedRequests:1,uploadBytesPerUpdate:8*2**20,cpuMsPerUpdate:2,missingRetryMs:1000,retryDelayMs:{min:2000,max:30000}}});
+  limits:{gpuBytes:FIXTURE_ATLAS_GPU_BYTES,stagingBytes:16*2**20,concurrentRequests:1,queuedRequests:1,uploadBytesPerUpdate:8*2**20,cpuMsPerUpdate:2,missingRetryMs:1000,retryDelayMs:{min:2000,max:30000}}});
 try{
   residency.setDemand([{imageKey:'page',sourceKey:'source@1',url:'https://fixture.invalid/page',width:256,height:256,priority:8,coverage:true}]);residency.pump();for(let i=0;i<12;i++)await Promise.resolve();
   assert.equal(residency.upload(Infinity),441936);assert.equal(calls,5);assert.equal(residency.stats().resident,0);assert.equal(residency.stats().uploading,1);

@@ -2855,7 +2855,7 @@
     },
     {
       "path": "fixtures/owned-atlas-consumer.mjs",
-      "sha256": "92f7233063252f195b8afa091028b23ad369d9c43bcbd2f4270389b701ead7ee",
+      "sha256": "a8cb337c1da069535cae82a7cd90283eadeb8d533d75ed5164fce3b9305e3289",
       "purpose": "Managed Atlas ownership/transactional host contract or actual-public Renderer/common causal/installed consumer fixture; source only, UNRUN."
     },
     {
@@ -4366,7 +4366,7 @@
     "release": "EXPLICIT SOURCE-ONLY RELEASE: Engine/main sole-writer lease returned to primary. No further Engine writes/checks without reassignment."
   },
   "primarySourceSnapshot": {
-    "createdAtUtc": "2026-10-09T20-07-43Z",
+    "createdAtUtc": "2026-10-09T20-09-07Z",
     "status": "source-only; no qualification or artifact seal",
     "authoredFiles": [
       {
@@ -4605,8 +4605,8 @@
       },
       {
         "path": "fixtures/owned-atlas-consumer.mjs",
-        "sha256": "92f7233063252f195b8afa091028b23ad369d9c43bcbd2f4270389b701ead7ee",
-        "bytes": 4372,
+        "sha256": "a8cb337c1da069535cae82a7cd90283eadeb8d533d75ed5164fce3b9305e3289",
+        "bytes": 4595,
         "status": "authored source/scaffold/adapter/fixture; UNRUN"
       },
       {
