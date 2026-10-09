@@ -1,8 +1,8 @@
-import type { GlobeLayer, GlobeLayerContext, GlobeLayerState } from "../engine/types";
-import type { BabylonLayerState, PoiDescriptor } from "./types";
-import type { PoiTrackingHandle } from "./poiTracking";
-import type { CullablePrimitive, HemisphereCullingHandle } from "../perf/culling";
-import type { AnchorHeightResolver, AnchorHeightSample } from "../terrain/anchorHeight";
+import type { GlobeLayer, GlobeLayerContext, GlobeLayerState } from "./contracts.js";
+import type { BabylonLayerState, PoiDescriptor } from "./types.js";
+import type { PoiTrackingHandle } from "./poiTracking.js";
+import type { CullablePrimitive, HemisphereCullingHandle } from "../perf/culling.js";
+import type { AnchorHeightResolver, AnchorHeightSample } from "../babylon/anchorHeight.js";
 
 export interface LayerRegistryHandle {
   addLayer(layer: GlobeLayer): void;

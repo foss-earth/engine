@@ -1,5 +1,6 @@
-import { DynamicTexture, type Scene } from "@babylonjs/core";
-import { DEFAULT_DOT_TEXTURE_SIZE, type MarkerStyle, rgbToCss } from "./types";
+import type { DynamicTexture } from "@babylonjs/core";
+import type { CanvasTextureDevicePorts } from "@foss-earth/renderer/babylon";
+import { DEFAULT_DOT_TEXTURE_SIZE, type MarkerStyle, rgbToCss } from "./types.js";
 
 export function drawCircleAtlasCell(
   ctx: CanvasRenderingContext2D,
@@ -28,19 +29,21 @@ export function drawCircleAtlasCell(
  * `sprite.cellIndex` to use when rendering that marker.
  */
 export function makeCircularMarkerAtlas(
-  scene: Scene,
+  device: CanvasTextureDevicePorts,
   name: string,
   styles: MarkerStyle[],
   cellSize: number = DEFAULT_DOT_TEXTURE_SIZE,
 ): DynamicTexture {
   const width = cellSize * Math.max(1, styles.length);
-  const tex = new DynamicTexture(name, { width, height: cellSize }, scene, false);
+  const tex = device.createTexture({ name, width, height: cellSize, mipmaps: false });
+  try {
   const ctx = tex.getContext() as CanvasRenderingContext2D;
   ctx.clearRect(0, 0, width, cellSize);
   styles.forEach((style, idx) => {
     drawCircleAtlasCell(ctx, style, idx * cellSize, 0, cellSize);
   });
   tex.hasAlpha = true;
-  tex.update(false);
+  device.updateTexture(tex, false);
   return tex;
+  } catch (error) { tex.dispose(); throw error; }
 }

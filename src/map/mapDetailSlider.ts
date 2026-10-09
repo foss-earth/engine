@@ -1,0 +1,228 @@
+import {
+  describeDetailValue,
+  detailPosition,
+  detailRange,
+  detailValueAtPosition,
+  formatDetailValue,
+  GOOGLE_DETAIL_STEP,
+  RASTER_DETAIL_STEP,
+  type DetailLimit,
+  type DetailState,
+  type DetailTrackMarker,
+} from "../terrain/mapDetailPolicy.js";
+import type { MapDetailController } from "./mapDetailController.js";
+import { CONSTRAINT_LIMIT, describeImageryConstraint } from "./mapDetailExplanations.js";
+
+export interface MapDetailSliderOptions {
+  document: Document;
+  /** The app's detail controller; the Map tab's editor observes the same one. */
+  controller: MapDetailController;
+  /** What the host calls its detail setting, for the rail's label. Defaults to "Map detail". */
+  name?: string;
+}
+
+export interface MapDetailSliderHandle {
+  element: HTMLElement;
+  /** Re-reads the controller. Cheap; unchanged state touches nothing. */
+  update(): void;
+  destroy(): void;
+}
+
+const LIMIT_TEXT: Record<DetailLimit, string> = {
+  consumer: "held finer by the app",
+  source: "limited by the map source",
+  backend: "limited by this renderer",
+  memory: "limited by the memory budget",
+  loading: "still loading",
+  "frame-time": "coarsened to hold the frame time",
+};
+
+/**
+ * What limits the request, or null when nothing does: a sentence for each
+ * limit the renderer explained with its values, and the general wording for
+ * the rest, such as loading.
+ */
+export function describeDetailStatus(state: DetailState): string | null {
+  const explained = new Set(state.constraints.map(constraint => CONSTRAINT_LIMIT[constraint.cause]));
+  const parts = state.limits.filter(limit => limit === "loading" || !explained.has(limit)).map(limit => LIMIT_TEXT[limit]);
+  if (state.pending && !state.limits.includes("loading")) parts.unshift("loading");
+  const sentences = state.constraints.map(constraint => describeImageryConstraint(constraint));
+  if (parts.length > 0) {
+    const text = parts.join(", ");
+    sentences.unshift(text.charAt(0).toUpperCase() + text.slice(1) + ".");
+  }
+  return sentences.length > 0 ? sentences.join(" ") : null;
+}
+
+function rangePercent(position: number, finer: number, coarser: number): number {
+  if (Math.abs(coarser - finer) < 1e-9) return 50;
+  return Math.max(0, Math.min(100, ((position - finer) / (coarser - finer)) * 100));
+}
+
+/**
+ * A small rail beside the map's credit that sets a temporary detail target for
+ * this session: finer to the left, coarser to the right. Both ends are
+ * ordinary values; "Restore saved detail" in the Map tab returns to the saved
+ * default. A tick marks that default. An I-beam marks the detail actually drawn,
+ * independently of the request, and stays visible when it reaches the thumb.
+ */
+export function createMapDetailSlider(options: MapDetailSliderOptions): MapDetailSliderHandle {
+  const { controller, document } = options;
+  const name = options.name ?? "Map detail";
+  const element = document.createElement("span");
+  element.className = "map-detail-control";
+  element.setAttribute("role", "group");
+  element.setAttribute("aria-label", name);
+  const rail = document.createElement("span");
+  rail.className = "map-detail-control__rail";
+  const validRange = document.createElement("span");
+  validRange.className = "map-detail-control__valid-range";
+  validRange.setAttribute("aria-hidden", "true");
+  const defaultTick = document.createElement("span");
+  defaultTick.className = "map-detail-control__default-tick";
+  defaultTick.setAttribute("aria-hidden", "true");
+  const loadedMarker = document.createElement("span");
+  loadedMarker.className = "map-detail-control__loaded-marker";
+  loadedMarker.setAttribute("aria-hidden", "true");
+  const slider = document.createElement("input");
+  slider.className = "map-detail-control__slider";
+  slider.type = "range";
+  slider.setAttribute("aria-label", `${name} for this session`);
+  const markerTicks = document.createElement("span");
+  markerTicks.className = "map-detail-control__markers";
+  markerTicks.setAttribute("aria-hidden", "true");
+  rail.append(validRange, defaultTick, loadedMarker, markerTicks, slider);
+  element.append(rail);
+
+  let shown: DetailState | null | undefined;
+  let markerLayout = "";
+  let shownMarkers: readonly DetailTrackMarker[] = [];
+  let dragging = false;
+  const update = (): void => {
+    const state = controller.getState();
+    if (state === shown) return;
+    shown = state;
+    const ready = state?.availability === "ready";
+    element.classList.toggle("is-unavailable", !ready);
+    element.classList.toggle("is-pending", Boolean(ready && state?.pending));
+    element.classList.toggle("is-limited", Boolean(ready && state && state.limits.some(limit => limit !== "loading")));
+    if (!state) {
+      slider.disabled = true;
+      defaultTick.hidden = true;
+      loadedMarker.hidden = true;
+      markerTicks.replaceChildren();
+      shownMarkers = [];
+      slider.removeAttribute("aria-valuetext");
+      element.title = `${name} is not available for this map.`;
+      slider.title = element.title;
+      return;
+    }
+    const kind = state.policy.kind;
+    const range = detailRange(state.policy);
+    const finer = detailPosition(kind, range.finer);
+    const coarser = detailPosition(kind, range.coarser);
+    slider.min = String(finer);
+    slider.max = String(coarser);
+    slider.step = String(kind === "raster" ? RASTER_DETAIL_STEP : GOOGLE_DETAIL_STEP);
+    if (!dragging) slider.value = String(detailPosition(kind, state.requestedTarget));
+    // Equal ends leave nothing to choose, but the value stays readable.
+    slider.disabled = !ready || Math.abs(coarser - finer) < 1e-9;
+    const status = ready ? describeDetailStatus(state) : null;
+    const valueText = describeDetailValue(kind, state.requestedTarget);
+    const active = state.activeTarget;
+    const activeText = ready && active !== null && active !== state.requestedTarget
+      ? `Current target: ${describeDetailValue(kind, active)}`
+      : null;
+    const loaded = state.loadedTarget;
+    const hasLoaded = ready && loaded !== null && !Number.isNaN(loaded);
+    const loadedText = hasLoaded
+      ? `Loaded detail: ${Number.isFinite(loaded)
+        ? kind === "google" ? formatDetailValue(kind, loaded) : describeDetailValue(kind, loaded)
+        : "beyond measurable range"}`
+      : null;
+    slider.setAttribute("aria-valuetext", [valueText, activeText, loadedText, status].filter(Boolean).join(". "));
+
+    defaultTick.hidden = false;
+    defaultTick.style.left = `${rangePercent(detailPosition(kind, state.resolvedDefault), finer, coarser)}%`;
+
+    // Delivery may be coarser than the selectable range while tiles arrive.
+    // Clamp only its position; the tooltip preserves the measured value.
+    loadedMarker.hidden = !hasLoaded;
+    if (hasLoaded) {
+      const position = detailPosition(kind, loaded);
+      loadedMarker.style.left = `${rangePercent(position, finer, coarser)}%`;
+      loadedMarker.classList.toggle("is-beyond-range", position < finer - 1e-9 || position > coarser + 1e-9);
+    }
+
+    // Hosts' markers that explain the rail, such as a flight's minimum while it holds.
+    const railMarkers = ready ? state.markers.filter(marker => marker.onRail) : [];
+    const layout = `${kind}:${finer}:${coarser}`;
+    // Loaded detail can change with each view update. Stable host ticks need no
+    // new nodes while the I-beam moves.
+    if (layout !== markerLayout || railMarkers.length !== shownMarkers.length
+      || railMarkers.some((marker, index) => marker !== shownMarkers[index])) {
+      markerLayout = layout;
+      shownMarkers = railMarkers;
+      markerTicks.replaceChildren(...railMarkers.map(marker => {
+        const tick = document.createElement("span");
+        tick.className = "map-detail-control__marker";
+        const position = detailPosition(kind, marker.value);
+        tick.style.left = `${rangePercent(position, finer, coarser)}%`;
+        tick.style.setProperty("--marker-colour", marker.colour);
+        tick.classList.toggle("is-hollow", Boolean(marker.hollow));
+        tick.classList.toggle("is-beyond-range", position < finer - 1e-9 || position > coarser + 1e-9);
+        return tick;
+      }));
+    }
+
+    if (!ready) {
+      element.title = state.availability === "initializing"
+        ? `${name} is starting.`
+        : state.reason ?? `${name} is not available for this map yet.`;
+    } else {
+      const lines = [
+        `${name}: ${valueText}${state.sessionOverride === null ? " (saved default)" : " for this session"}.`,
+        `Saved default: ${formatDetailValue(kind, state.resolvedDefault)}${state.defaultLimitedByRange ? ", limited by the range" : ""}.`,
+      ];
+      if (activeText) lines.push(`${activeText}.`);
+      if (loadedText) lines.push(`I-beam · ${loadedText} (${kind === "raster" ? "visible-area estimate" : "largest visible geometry error"}).`);
+      if (kind === "raster" && state.effectiveTarget === null) lines.push("Imagery is still loading or limited.");
+      for (const marker of railMarkers) lines.push(`${marker.label}: ${formatDetailValue(kind, marker.value)}${marker.hollow ? ", waived" : ""}.`);
+      if (status) lines.push(status);
+      lines.push("Left is finer, right is coarser. The Map tab restores the saved detail.");
+      element.title = lines.join("\n");
+    }
+    slider.title = element.title;
+  };
+
+  const onInput = (): void => {
+    const state = controller.getState();
+    if (!state || state.availability !== "ready") return;
+    controller.setSessionOverride(detailValueAtPosition(state.policy.kind, Number(slider.value)));
+  };
+  const onPointerDown = (): void => { dragging = true; };
+  const onPointerUp = (): void => {
+    dragging = false;
+    shown = undefined;
+    update();
+  };
+  slider.addEventListener("input", onInput);
+  slider.addEventListener("pointerdown", onPointerDown);
+  slider.addEventListener("pointerup", onPointerUp);
+  slider.addEventListener("pointercancel", onPointerUp);
+  const unsubscribe = controller.subscribe(() => update());
+  update();
+
+  return {
+    element,
+    update,
+    destroy(): void {
+      unsubscribe();
+      slider.removeEventListener("input", onInput);
+      slider.removeEventListener("pointerdown", onPointerDown);
+      slider.removeEventListener("pointerup", onPointerUp);
+      slider.removeEventListener("pointercancel", onPointerUp);
+      element.remove();
+    },
+  };
+}

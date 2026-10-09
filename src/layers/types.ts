@@ -1,7 +1,7 @@
 import type { AbstractMesh, Engine, Scene, Vector3, WebGPUEngine } from "@babylonjs/core";
-import type { CullablePrimitive } from "../perf/culling";
-import type { AnchorHeightSample } from "../terrain/anchorHeight";
-import type { GlobeLayer, GlobeLayerContext, GlobeLayerState } from "../engine/types";
+import type { CullablePrimitive } from "../perf/culling.js";
+import type { AnchorHeightSample } from "../babylon/anchorHeight.js";
+import type { GlobeLayer, GlobeLayerContext, GlobeLayerState } from "./contracts.js";
 
 // ─── Babylon-typed context ────────────────────────────────────────────────────
 

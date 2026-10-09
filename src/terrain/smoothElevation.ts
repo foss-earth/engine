@@ -1,5 +1,5 @@
-import { DEG_TO_RAD, geodeticToEcef, type EcefCoord } from "../camera/cameraMath";
-import { SMOOTH_ELEVATION_FEATURES } from "./smoothElevationCoefficients";
+import { DEG_TO_RAD, geodeticToEcef, type EcefCoord } from "../camera/cameraMath.js";
+import { SMOOTH_ELEVATION_FEATURES } from "./smoothElevationCoefficients.js";
 
 export interface SmoothElevationOptions {
   clampMinMeters?: number;

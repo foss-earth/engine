@@ -1,7 +1,6 @@
 import {
   Axis,
   Color3,
-  DynamicTexture,
   Mesh,
   MeshBuilder,
   StandardMaterial,
@@ -9,19 +8,11 @@ import {
 } from "@babylonjs/core";
 import type { LinesMesh, Scene } from "@babylonjs/core";
 
-export interface OrbitCompassScaleParams {
-  radiusScale: number;
-  minRadius: number;
-  maxRadius: number;
-  labelSizeScale: number;
-}
+import { DEFAULT_ORBIT_COMPASS_SCALE_PARAMS, DEFAULT_COMPASS_LABEL_TEXTURE_SIZE, type OrbitCompassScaleParams } from "./defaults.js";
+import type { CanvasTextureDevicePorts } from "@foss-earth/renderer/babylon";
+export { DEFAULT_ORBIT_COMPASS_SCALE_PARAMS, DEFAULT_COMPASS_LABEL_TEXTURE_SIZE, type OrbitCompassScaleParams } from "./defaults.js";
 
-export const DEFAULT_ORBIT_COMPASS_SCALE_PARAMS: OrbitCompassScaleParams = {
-  radiusScale: 0.035,
-  minRadius: 750,
-  maxRadius: 240_000,
-  labelSizeScale: 0.16,
-};
+export interface OrbitCompassPorts { device: CanvasTextureDevicePorts; labelTextureSize?: number; requestRender?(): void }
 
 const LABEL_RADIUS_SCALE = 1.28;
 const SURFACE_LIFT_SCALE = 0.08;
@@ -69,12 +60,16 @@ function createLine(name: string, color: Color3, scene: Scene, width = 1): Lines
   return line;
 }
 
-function createLabel(text: string, color: string, scene: Scene): Mesh {
-  const texture = new DynamicTexture(`orbit-compass-label-${text}-texture`, { width: 128, height: 128 }, scene, true);
+function createLabel(text: string, color: string, scene: Scene, ports: OrbitCompassPorts): Mesh {
+  const size = ports.labelTextureSize ?? DEFAULT_COMPASS_LABEL_TEXTURE_SIZE;
+  const texture = ports.device.createTexture({ name: `orbit-compass-label-${text}-texture`, width: size, height: size, mipmaps: true });
+  let material: StandardMaterial | null = null;
+  try {
   texture.hasAlpha = true;
-  texture.drawText(text, null, null, "bold 72px system-ui", color, "transparent", true, true);
+  texture.drawText(text, null, null, `bold ${size * 72 / 128}px system-ui`, color, "transparent", true, false);
+  ports.device.updateTexture(texture, true);
 
-  const material = new StandardMaterial(`orbit-compass-label-${text}-material`, scene);
+  material = new StandardMaterial(`orbit-compass-label-${text}-material`, scene);
   material.diffuseTexture = texture;
   material.opacityTexture = texture;
   material.emissiveColor = Color3.White();
@@ -89,6 +84,7 @@ function createLabel(text: string, color: string, scene: Scene): Mesh {
   label.isPickable = false;
   label.setEnabled(false);
   return label;
+  } catch (error) { material?.dispose(); texture.dispose(); throw error; }
 }
 
 function getAnchorBasis(anchor: Vector3): { east: Vector3; north: Vector3; up: Vector3 } {
@@ -118,15 +114,16 @@ function setLine(line: LinesMesh, start: Vector3, end: Vector3, scene: Scene): v
   MeshBuilder.CreateLines(line.name, { points: [start, end], instance: line }, scene);
 }
 
-export function createOrbitCompass(scene: Scene): OrbitCompassHandle {
-  const eastWestAxis = createLine("orbit-compass-east-west-axis", Color3.White(), scene);
-  const northSouthAxis = createLine("orbit-compass-north-south-axis", Color3.White(), scene);
-  const northNeedle = createLine("orbit-compass-north-needle", Color3.FromHexString("#ef4444"), scene, 3);
-  const northLabel = createLabel("N", "#ef4444", scene);
-  const eastLabel = createLabel("E", "rgba(255,255,255,0.78)", scene);
-  const southLabel = createLabel("S", "rgba(255,255,255,0.64)", scene);
-  const westLabel = createLabel("W", "rgba(255,255,255,0.78)", scene);
-  const meshes = [eastWestAxis, northSouthAxis, northNeedle, northLabel, eastLabel, southLabel, westLabel];
+export function createOrbitCompass(scene: Scene, ports: OrbitCompassPorts): OrbitCompassHandle {
+  const meshes: Mesh[] = []; let disposed = false, visible = false, lastFade = -1;
+  function own<T extends Mesh>(create: () => T): T { try { const mesh = create(); meshes.push(mesh); return mesh; } catch (error) { for (const mesh of meshes) mesh.dispose(false, true); throw error; } }
+  const eastWestAxis = own(() => createLine("orbit-compass-east-west-axis", Color3.White(), scene));
+  const northSouthAxis = own(() => createLine("orbit-compass-north-south-axis", Color3.White(), scene));
+  const northNeedle = own(() => createLine("orbit-compass-north-needle", Color3.FromHexString("#ef4444"), scene, 3));
+  const northLabel = own(() => createLabel("N", "#ef4444", scene, ports));
+  const eastLabel = own(() => createLabel("E", "rgba(255,255,255,0.78)", scene, ports));
+  const southLabel = own(() => createLabel("S", "rgba(255,255,255,0.64)", scene, ports));
+  const westLabel = own(() => createLabel("W", "rgba(255,255,255,0.78)", scene, ports));
   const meshSet = new Set<Mesh>(meshes);
   let scaleParams = DEFAULT_ORBIT_COMPASS_SCALE_PARAMS;
   let lastAnchor: Vector3 | null = null;
@@ -176,10 +173,12 @@ export function createOrbitCompass(scene: Scene): OrbitCompassHandle {
 
   return {
     update(anchor: Vector3 | null, zoomDistance: number): void {
+      if (disposed) return;
       if (!anchor) {
         lastAnchor = null;
         lastRadiusMeters = -1;
         hide();
+        if (visible) ports.requestRender?.(); visible = false; lastFade = -1;
         return;
       }
 
@@ -204,6 +203,7 @@ export function createOrbitCompass(scene: Scene): OrbitCompassHandle {
       northSouthAxis.alpha = WHITE_LINE_ALPHA_FACTOR * COMPASS_OPACITY * fadeFactor;
       northNeedle.alpha = RED_LINE_ALPHA_FACTOR * COMPASS_OPACITY * fadeFactor;
 
+      const changed = anchorChanged || radiusChanged || !visible || lastFade !== fadeFactor; visible = true; lastFade = fadeFactor;
       for (const mesh of meshes) {
         if (mesh === eastWestAxis || mesh === northSouthAxis || mesh === northNeedle) {
           mesh.setEnabled(linesVisible);
@@ -211,11 +211,14 @@ export function createOrbitCompass(scene: Scene): OrbitCompassHandle {
           mesh.setEnabled(true);
         }
       }
+      if (changed) ports.requestRender?.();
     },
 
     setScaleParams(params: OrbitCompassScaleParams): void {
-      scaleParams = normalizeScaleParams(params);
-      lastRadiusMeters = -1;
+      if (disposed) return;
+      const next = normalizeScaleParams(params);
+      if (Object.keys(next).every(key => next[key as keyof OrbitCompassScaleParams] === scaleParams[key as keyof OrbitCompassScaleParams])) return;
+      scaleParams = next; lastRadiusMeters = -1; if (visible) ports.requestRender?.();
     },
 
     isMesh(mesh: Mesh | null | undefined): boolean {
@@ -223,9 +226,11 @@ export function createOrbitCompass(scene: Scene): OrbitCompassHandle {
     },
 
     destroy(): void {
+      if (disposed) return; disposed = true;
       for (const mesh of meshes) {
-        mesh.dispose();
+        mesh.dispose(false, true);
       }
+      if (visible) ports.requestRender?.(); visible = false;
     },
   };
 }

@@ -1,6 +1,6 @@
-import { getAppSettings } from "../settings/appSettings";
-import { DEFAULT_ORBIT_COMPASS_SCALE_PARAMS } from "../visualization/orbitCompass";
-import type { OrbitCompassScaleParams } from "../visualization/orbitCompass";
+import type { VisualizationTunerPorts, VisualizationTunerSettings } from "./tunerPorts.js";
+import { DEFAULT_ORBIT_COMPASS_SCALE_PARAMS } from "../visualization/defaults.js";
+import type { OrbitCompassScaleParams } from "../visualization/defaults.js";
 
 const COMPASS_SCALE_PARAM_KEYS = ["radiusScale", "minRadius", "maxRadius", "labelSizeScale"] as const;
 type CompassScaleParamKey = typeof COMPASS_SCALE_PARAM_KEYS[number];
@@ -20,15 +20,14 @@ function normalizeCompassScaleParams(value: unknown): OrbitCompassScaleParams | 
 }
 
 /** The `visualization.compass.*` parameters, or null while every one is at its default. */
-function loadSavedCompassScaleDefaults(): OrbitCompassScaleParams | null {
-  const settings = getAppSettings();
+export function loadSavedCompassScaleDefaults(settings: VisualizationTunerSettings): OrbitCompassScaleParams | null {
   const ids = COMPASS_SCALE_PARAM_KEYS.map(key => `visualization.compass.${key}`);
   if (ids.every(id => settings.inspect(id).provenance === "default")) return null;
   return normalizeCompassScaleParams(Object.fromEntries(COMPASS_SCALE_PARAM_KEYS.map(key => [key, settings.get(`visualization.compass.${key}`)])));
 }
 
-function saveCompassScaleDefaults(params: OrbitCompassScaleParams): void {
-  getAppSettings().setMany(Object.fromEntries(COMPASS_SCALE_PARAM_KEYS.map(key => [`visualization.compass.${key}`, params[key]])));
+export function saveCompassScaleDefaults(settings: VisualizationTunerSettings, params: OrbitCompassScaleParams): boolean {
+  return settings.setMany(Object.fromEntries(COMPASS_SCALE_PARAM_KEYS.map(key => [`visualization.compass.${key}`, params[key]]))).ok;
 }
 
 function paramsToCommitted(params: OrbitCompassScaleParams): Record<CompassScaleParamKey, string> {
@@ -53,8 +52,10 @@ export interface CompassScaleTunerHandle {
 export function createCompassScaleTuner(
   container: HTMLElement,
   onApply: (params: OrbitCompassScaleParams) => void,
+  ports: VisualizationTunerPorts,
 ): CompassScaleTunerHandle {
-  const savedDefaultParams = loadSavedCompassScaleDefaults();
+  const { document, settings } = ports; let disposed = false;
+  const savedDefaultParams = loadSavedCompassScaleDefaults(settings);
   let defaultParams = savedDefaultParams ?? DEFAULT_ORBIT_COMPASS_SCALE_PARAMS;
   let appliedParams = defaultParams;
 
@@ -118,6 +119,7 @@ export function createCompassScaleTuner(
   }
 
   function onApplyClick(): void {
+    if (disposed) return;
     const vals = readInputParams();
     if (!vals) return;
 
@@ -130,9 +132,8 @@ export function createCompassScaleTuner(
   }
 
   function onSaveDefaultsClick(): void {
-    if (isDirty()) return;
+    if (disposed || isDirty() || !saveCompassScaleDefaults(settings, appliedParams)) return;
     defaultParams = appliedParams;
-    saveCompassScaleDefaults(defaultParams);
     updateApplyVisibility();
   }
 
@@ -142,9 +143,10 @@ export function createCompassScaleTuner(
   if (savedDefaultParams) onApply(savedDefaultParams);
 
   return {
-    show(): void { panel.hidden = false; },
-    hide(): void { panel.hidden = true; },
+    show(): void { if (!disposed) panel.hidden = false; },
+    hide(): void { if (!disposed) panel.hidden = true; },
     destroy(): void {
+      if (disposed) return; disposed = true;
       inputs.forEach((input) => input.removeEventListener("input", updateApplyVisibility));
       applyBtn?.removeEventListener("click", onApplyClick);
       saveDefaultsBtn?.removeEventListener("click", onSaveDefaultsClick);

@@ -1,5 +1,5 @@
-import type { ParameterSpec } from "../types";
-import { MAP_TAB } from "./map";
+import type { ParameterSpec } from "@foss-earth/ui/settings";
+import { MAP_TAB } from "./map.js";
 
 const CONTROLLER = "src/terrain/autoDetail.ts";
 const REPLACED = "the quality profiles' automatic mode this replaces";

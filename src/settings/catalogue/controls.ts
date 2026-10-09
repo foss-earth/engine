@@ -1,8 +1,9 @@
-import { DEFAULT_CAMERA_LIMITS, DEFAULT_GROUND_FOLLOW } from "../../camera/cameraLimits";
-import { DEFAULT_INERTIA_DECAY_PER_FRAME } from "../../input/inertialCameraController";
-import { DEFAULT_INPUT_RATES, type InputRates } from "../../input/inputRates";
-import { DEFAULT_GLOBE_STICK_DEADZONE } from "../../input/globeNavigation";
-import type { ParameterSpec, ParameterUnit } from "../types";
+import { DEFAULT_CAMERA_LIMITS, DEFAULT_GROUND_FOLLOW } from "../../camera/cameraLimits.js";
+import { DEFAULT_INERTIA_DECAY_PER_FRAME } from "../../input/inertialCameraController.js";
+import { DEFAULT_INPUT_RATES, type InputRates } from "../../input/inputRates.js";
+import { DEFAULT_GLOBE_INTENT_RATES } from "../../input/globeIntentMotion.js";
+import { DEFAULT_GLOBE_STICK_DEADZONE } from "../../input/gamepadDefaults.js";
+import type { ParameterSpec, ParameterUnit } from "@foss-earth/ui/settings";
 
 export const CONTROLS_TAB = "controls";
 
@@ -36,7 +37,7 @@ const SENSITIVITY_PARAMETERS: ParameterSpec[] = DEVICES.flatMap(([device, device
   source: "src/input/inputSettings.ts",
 })));
 
-const CAMERA_STATE = "src/camera/cameraState.ts";
+const CAMERA_STATE = "src/babylon/cameraState.ts";
 const TUNED = "The rate the controller was tuned at before this became a parameter.";
 
 /** A device's rate at sensitivity 1, homed in its device's section. */
@@ -65,7 +66,7 @@ export const CAMERA_PARAMETERS: readonly ParameterSpec[] = [
     defaultReason: "Babylon's 0.8 rad, which the globe camera had before this became a parameter.",
     home: { tab: CONTROLS_TAB, section: "camera", level: "main" },
     appliesLive: true,
-    source: "src/engine/babylon/createBabylonRuntime.ts",
+    source: "src/settings/cameraSettings.ts",
   },
   {
     id: "camera.pitchLimits",
@@ -190,9 +191,9 @@ export const INPUT_RATE_IDS: Readonly<Record<keyof InputRates, string>> = Object
 
 export const INPUT_RATE_PARAMETERS: readonly ParameterSpec[] = [
   rate("input.mouse.orbitRate", "Mouse orbit", "Degrees the view turns per pixel of right-button drag.",
-    "deg/px", DEFAULT_INPUT_RATES.mouseOrbitDegPerPx, { min: 0.001, max: 1 }, "mouse", "src/input/mouseController.ts"),
+    "deg/px", DEFAULT_INPUT_RATES.mouseOrbitDegPerPx, { min: 0.001, max: 1 }, "mouse", "src/browser/mouseController.ts"),
   rate("input.mouse.panRate", "Mouse pan", "How far the view pans per pixel of left-button drag when Grab the globe is off, as a multiple of the drag.",
-    "ratio", DEFAULT_INPUT_RATES.mousePanRate, { min: 0.01, max: 2 }, "mouse", "src/input/mouseController.ts"),
+    "ratio", DEFAULT_INPUT_RATES.mousePanRate, { min: 0.01, max: 2 }, "mouse", "src/browser/mouseController.ts"),
   {
     id: "input.mouse.dragThreshold",
     label: "Drag threshold",
@@ -206,26 +207,26 @@ export const INPUT_RATE_PARAMETERS: readonly ParameterSpec[] = [
     defaultReason: "Enough to keep a click a click on an unsteady hand, before this became a parameter.",
     home: { tab: CONTROLS_TAB, section: "mouse", level: "main" },
     appliesLive: true,
-    source: "src/input/mouseController.ts",
+    source: "src/browser/mouseController.ts",
   },
   rate("input.wheel.zoomRate", "Wheel zoom", "The share of the distance one wheel notch zooms by.",
-    "fraction", DEFAULT_INPUT_RATES.wheelZoomPerNotch, { min: 0.0001, max: 0.5 }, "mouse", "src/input/wheelController.ts"),
+    "fraction", DEFAULT_INPUT_RATES.wheelZoomPerNotch, { min: 0.0001, max: 0.5 }, "mouse", "src/browser/wheelController.ts"),
   rate("input.wheel.orbitRate", "Scroll orbit", "Degrees the view turns per pixel of shift-scroll, or of a swipe while orbiting a point.",
-    "deg/px", DEFAULT_INPUT_RATES.wheelOrbitDegPerPx, { min: 0.001, max: 1 }, "mouse", "src/input/wheelController.ts"),
+    "deg/px", DEFAULT_INPUT_RATES.wheelOrbitDegPerPx, { min: 0.001, max: 1 }, "mouse", "src/browser/wheelController.ts"),
   rate("input.trackpad.pinchZoomRate", "Trackpad pinch zoom", "The share of the distance each pixel of a trackpad pinch zooms by.",
-    "per-px", DEFAULT_INPUT_RATES.trackpadPinchZoomPerPx, { min: 0.00001, max: 0.05 }, "mouse", "src/input/wheelController.ts"),
+    "per-px", DEFAULT_INPUT_RATES.trackpadPinchZoomPerPx, { min: 0.00001, max: 0.05 }, "mouse", "src/browser/wheelController.ts"),
   rate("input.trackpad.panRate", "Trackpad pan", "How far the view pans per pixel of two-finger swipe, as a multiple of the swipe.",
-    "ratio", DEFAULT_INPUT_RATES.trackpadPanRate, { min: 0.01, max: 2 }, "mouse", "src/input/wheelController.ts"),
+    "ratio", DEFAULT_INPUT_RATES.trackpadPanRate, { min: 0.01, max: 2 }, "mouse", "src/browser/wheelController.ts"),
   rate("input.trackpad.rotateRate", "Trackpad rotate", "Degrees the heading turns per degree of a two-finger rotate, in Safari.",
-    "ratio", DEFAULT_INPUT_RATES.trackpadRotateRate, { min: 0.01, max: 2 }, "mouse", "src/input/safariGestures.ts"),
+    "ratio", DEFAULT_INPUT_RATES.trackpadRotateRate, { min: 0.01, max: 2 }, "mouse", "src/browser/safariGestures.ts"),
   rate("input.trackpad.gestureZoomExponent", "Trackpad pinch zoom (Safari)", "How strongly a pinch zooms in Safari: the pinch's change is raised to this power.",
-    "none", DEFAULT_INPUT_RATES.trackpadGestureZoomExponent, { min: 0.01, max: 2 }, "mouse", "src/input/safariGestures.ts"),
+    "none", DEFAULT_INPUT_RATES.trackpadGestureZoomExponent, { min: 0.01, max: 2 }, "mouse", "src/browser/safariGestures.ts"),
   rate("input.touch.orbitRate", "Two-finger orbit", "Degrees the view turns per pixel of two-finger drag.",
-    "deg/px", DEFAULT_INPUT_RATES.touchOrbitDegPerPx, { min: 0.005, max: 2 }, "touch", "src/input/touchController.ts"),
+    "deg/px", DEFAULT_INPUT_RATES.touchOrbitDegPerPx, { min: 0.005, max: 2 }, "touch", "src/browser/touchController.ts"),
   rate("input.touch.panRate", "One-finger pan", "How far the view pans per pixel of one-finger drag, as a multiple of the drag.",
-    "ratio", DEFAULT_INPUT_RATES.touchPanRate, { min: 0.05, max: 5 }, "touch", "src/input/touchController.ts"),
+    "ratio", DEFAULT_INPUT_RATES.touchPanRate, { min: 0.05, max: 5 }, "touch", "src/browser/touchController.ts"),
   rate("input.touch.zoomExponent", "Pinch zoom", "How strongly a pinch zooms: the pinch's ratio is raised to this power.",
-    "none", DEFAULT_INPUT_RATES.touchZoomExponent, { min: 0.02, max: 4 }, "touch", "src/input/touchController.ts"),
+    "none", DEFAULT_INPUT_RATES.touchZoomExponent, { min: 0.02, max: 4 }, "touch", "src/browser/touchController.ts"),
   {
     id: "input.gamepad.deadzone",
     label: "Stick deadzone",
@@ -239,11 +240,23 @@ export const INPUT_RATE_PARAMETERS: readonly ParameterSpec[] = [
     defaultReason: "Enough for the drift of a typical used controller, before this became a parameter.",
     home: { tab: CONTROLS_TAB, section: "controller", level: "main" },
     appliesLive: true,
-    source: "src/input/globeNavigation.ts",
+    source: "src/gamepad/index.ts",
   },
 ];
 
+export const GLOBE_INTENT_PARAMETERS: readonly ParameterSpec[] = [
+  rate("input.gamepad.panRate", "Controller pan", "Pixels per second of globe pan at full controller input.",
+    { id: "px-per-s", text: "px/s" }, DEFAULT_GLOBE_INTENT_RATES.panPxPerSecond, { min: 1, max: 10_000 }, "controller", "src/input/globeIntentMotion.ts"),
+  rate("input.gamepad.headingRate", "Controller heading", "Degrees per second of heading turn at full controller input.",
+    "deg/s", DEFAULT_GLOBE_INTENT_RATES.headingDegPerSecond, { min: 1, max: 720 }, "controller", "src/input/globeIntentMotion.ts"),
+  rate("input.gamepad.pitchRate", "Controller tilt", "Degrees per second of tilt at full controller input.",
+    "deg/s", DEFAULT_GLOBE_INTENT_RATES.pitchDegPerSecond, { min: 1, max: 720 }, "controller", "src/input/globeIntentMotion.ts"),
+  rate("input.gamepad.zoomRate", "Controller zoom", "Natural logarithm of the distance change per second at full controller input.",
+    "per-s", DEFAULT_GLOBE_INTENT_RATES.zoomLogPerSecond, { min: 0.01, max: 10 }, "controller", "src/input/globeIntentMotion.ts"),
+].map(spec => ({ ...spec, defaultReason: "Retained committed globe runtime value; not measured or qualified across devices." }));
+
 export const CONTROLS_PARAMETERS: readonly ParameterSpec[] = [
+  ...GLOBE_INTENT_PARAMETERS,
   ...CAMERA_PARAMETERS,
   ...INPUT_RATE_PARAMETERS,
   {

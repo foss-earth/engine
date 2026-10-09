@@ -10,8 +10,8 @@
  * bounded when the camera or the slider jitters around a threshold.
  */
 
-import { ecefToGeodetic } from "../../camera/cameraMath";
-import type { DetailLimit } from "../mapDetailPolicy";
+import { ecefToGeodetic } from "../../camera/cameraMath.js";
+import type { DetailLimit } from "../mapDetailPolicy.js";
 import {
   childTiles,
   isBelowHorizon,
@@ -33,7 +33,7 @@ import {
   type SurfaceSample,
   type TileId,
   type Vec3,
-} from "./imageryGeometry";
+} from "./imageryGeometry.js";
 
 export type ImagerySourceKind = "photographic" | "cartographic";
 
@@ -774,7 +774,7 @@ function gatherEvidence(input: ImagerySelectionInput, sourceKey: string, previou
   return evidence;
 }
 
-export function createImagerySelector(): ImagerySelector {
+export function createImagerySelector(clockPort: () => number): ImagerySelector {
   let memory = new Map<string, NodeMemory>();
   let job: Job | null = null;
   let plan: ImageryPlan | null = null;
@@ -1116,7 +1116,7 @@ export function createImagerySelector(): ImagerySelector {
   }
 
   return {
-    step(input, deadline, clock = () => performance.now(), restart = false) {
+    step(input, deadline, clock = clockPort, restart = false) {
       if (restart) job = null;
       if (!job) {
         const started = clock();

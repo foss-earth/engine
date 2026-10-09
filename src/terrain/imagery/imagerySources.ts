@@ -1,5 +1,5 @@
-import type { TileId } from "./imageryGeometry";
-import type { ImagerySourceCapabilities, ImagerySourceKind } from "./imagerySelector";
+import type { TileId } from "./imageryGeometry.js";
+import type { ImagerySourceCapabilities, ImagerySourceKind } from "./imagerySelector.js";
 
 /** The parts of a raster basemap descriptor imagery selection reads. */
 export interface ImageryDescriptor {

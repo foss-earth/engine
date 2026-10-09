@@ -1,0 +1,277 @@
+/* Engine-owned selectors extracted from committed source. Shared shell styles come from UI/toolbar. */
+.map-detail-control {
+  --map-detail-loaded-colour: var(--globe-accent-bright, #38bdf8);
+  --map-detail-loaded-outline: #061422;
+  flex: 0 0 41px;
+  width: 41px;
+  margin: 0 4px;
+}
+
+:root[data-theme="light"] .map-detail-control {
+  --map-detail-loaded-colour: var(--globe-accent-hover, #0369a1);
+  --map-detail-loaded-outline: #fff;
+}
+
+.map-detail-control__rail {
+  position: relative;
+  display: block;
+  height: 28px;
+}
+
+.map-detail-control__valid-range {
+  position: absolute;
+  z-index: 1;
+  top: 12px;
+  right: 0;
+  left: 0;
+  height: 4px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #46db8f 0%, #f6d365 55%, #ff6b6b 100%);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.14), 0 0 8px rgba(246, 211, 101, 0.28);
+}
+
+.map-detail-control__loaded-marker {
+  position: absolute;
+  z-index: 5;
+  top: 5px;
+  width: 2px;
+  height: 18px;
+  background: var(--map-detail-loaded-colour);
+  box-shadow: 0 0 0 1px var(--map-detail-loaded-outline);
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
+.map-detail-control__loaded-marker::before,
+.map-detail-control__loaded-marker::after {
+  position: absolute;
+  left: 50%;
+  width: 8px;
+  height: 2px;
+  background: var(--map-detail-loaded-colour);
+  box-shadow: 0 0 0 1px var(--map-detail-loaded-outline);
+  pointer-events: none;
+  transform: translateX(-50%);
+  content: "";
+}
+
+.map-detail-control__loaded-marker::before {
+  top: 0;
+}
+
+.map-detail-control__loaded-marker::after {
+  bottom: 0;
+}
+
+.map-detail-control__slider {
+  position: absolute;
+  z-index: 4;
+  top: 4px;
+  /* Native range travel excludes half the thumb at each end. Expand its box
+     so thumb centres, default ticks and loaded-detail percentages coincide. */
+  left: -6px;
+  width: calc(100% + 12px);
+  height: 20px;
+  margin: 0;
+  padding: 0;
+  appearance: none;
+  background: transparent;
+  cursor: ew-resize;
+}
+
+.map-detail-control__slider::-webkit-slider-runnable-track {
+  height: 4px;
+  background: transparent;
+}
+
+.map-detail-control__slider::-webkit-slider-thumb {
+  width: 12px;
+  height: 12px;
+  margin-top: -4px;
+  border: 2px solid #f7fafc;
+  border-radius: 50%;
+  appearance: none;
+  background: #111820;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
+}
+
+.map-detail-control__slider::-moz-range-track {
+  height: 4px;
+  background: transparent;
+}
+
+.map-detail-control__slider::-moz-range-thumb {
+  width: 8px;
+  height: 8px;
+  border: 2px solid #f7fafc;
+  border-radius: 50%;
+  background: #111820;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
+}
+
+.map-detail-control__slider:focus-visible {
+  outline: 2px solid rgba(78, 185, 255, 0.92);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+.map-detail-control.is-unavailable {
+  opacity: 0.35;
+}
+
+.map-detail-control__default-tick {
+  position: absolute;
+  z-index: 2;
+  top: 17px;
+  width: 2px;
+  height: 6px;
+  border-radius: 1px;
+  background: rgba(247, 250, 252, 0.85);
+  box-shadow: 0 0 0 1px rgba(6, 20, 34, 0.6);
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
+.map-detail-control__default-tick[hidden],
+.map-detail-control__loaded-marker[hidden] {
+  display: none;
+}
+
+.map-detail-control__markers {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.map-detail-control__marker {
+  position: absolute;
+  z-index: 3;
+  top: 3px;
+  width: 3px;
+  height: 18px;
+  border-radius: 2px;
+  background: var(--marker-colour, #ef4444);
+  box-shadow: 0 0 0 1px rgba(6, 20, 34, 0.82);
+  transform: translateX(-50%);
+}
+
+.map-detail-control__marker.is-hollow {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--marker-colour, #ef4444);
+}
+
+.map-detail-control__marker.is-beyond-range {
+  opacity: 0.85;
+}
+
+.map-detail-control.is-limited .map-detail-control__valid-range {
+  box-shadow: 0 0 0 1px rgba(246, 173, 85, 0.95), 0 0 8px rgba(246, 173, 85, 0.45);
+}
+
+.map-detail-control.is-pending .map-detail-control__valid-range {
+  animation: map-detail-pending 1.2s ease-in-out infinite alternate;
+}
+
+@keyframes map-detail-pending {
+  from { opacity: 1; }
+  to { opacity: 0.5; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+.map-detail-control.is-pending .map-detail-control__valid-range {
+    animation: none;
+  }
+}
+
+.input-mode-control[hidden] {
+  display: none;
+}
+
+.map-detail-panel__range {
+  display: grid;
+  flex-basis: 100%;
+  gap: 2px;
+  font-size: 12px;
+}
+
+.map-detail-panel__range[hidden],
+.map-detail-panel__status[hidden],
+.map-detail-panel__storage[hidden],
+.map-detail-panel .foss-earth-choice[hidden] {
+  display: none;
+}
+
+.map-detail-panel__readouts,
+.map-detail-panel__scale {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 2px 12px;
+}
+
+.map-detail-panel__readout {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.map-detail-panel__scale {
+  font-size: 11px;
+  opacity: 0.6;
+}
+
+.map-detail-panel__value {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.8;
+}
+
+.map-detail-panel__subheading {
+  margin-top: 4px;
+}
+
+.map-detail-panel__action {
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+}
+
+.map-detail-panel__action:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.map-detail-panel__action:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.map-detail-panel.is-unavailable .map-detail-panel__range,
+.map-detail-panel.is-unavailable .foss-earth-choice {
+  opacity: 0.5;
+}
+
+.map-detail-panel__markers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  font-size: 11px;
+}
+
+.map-detail-panel__markers[hidden] {
+  display: none;
+}
+
+.map-detail-panel__marker-note::before {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 5px;
+  border-radius: 2px;
+  background: var(--marker-colour, #ef4444);
+  content: "";
+}
+
+.map-detail-panel__marker-note.is-hollow::before {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--marker-colour, #ef4444);
+}

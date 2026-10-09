@@ -1,4 +1,4 @@
-import { ecefToGeodetic } from "../camera/cameraMath";
+import { ecefToGeodetic } from "../camera/cameraMath.js";
 import {
   WEB_MERCATOR_MAX_LAT_DEG,
   isBelowHorizon,
@@ -14,7 +14,7 @@ import {
   type ImageryView,
   type TileId,
   type Vec3,
-} from "./imagery/imageryGeometry";
+} from "./imagery/imageryGeometry.js";
 
 const WGS84_A = 6378137;
 const GRID = [0, 0.5, 1];

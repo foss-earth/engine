@@ -1,4 +1,4 @@
-import { WGS84_A } from "../camera/cameraMath";
+import { WGS84_A } from "../camera/cameraMath.js";
 
 export interface CullingVector3 {
   x: number;
@@ -37,7 +37,8 @@ export interface HemisphereCullingHandle {
   destroy(): void;
 }
 
-const HORIZON_MARGIN = 0.03;
+export const DEFAULT_HORIZON_MARGIN = 0.03;
+export interface HemisphereCullingPolicy { horizonMargin(): number }
 const DEFAULT_STATS: CullingStats = { total: 0, visible: 0, hidden: 0 };
 
 function magnitude(value: CullingVector3): number {
@@ -72,6 +73,7 @@ function isVisibleFromCamera(
 
 export function createHemisphereCulling(
   getCameraPosition: () => CullingVector3 | null,
+  policy: HemisphereCullingPolicy = { horizonMargin: () => DEFAULT_HORIZON_MARGIN },
 ): HemisphereCullingHandle {
   let cullables: readonly CullablePrimitive[] = [];
   let stats: CullingStats = DEFAULT_STATS;
@@ -96,7 +98,7 @@ export function createHemisphereCulling(
     }
 
     const cameraDistance = magnitude(cameraPosition);
-    const threshold = WGS84_A / cameraDistance - HORIZON_MARGIN;
+    const threshold = WGS84_A / cameraDistance - policy.horizonMargin();
     let visible = 0;
 
     for (const cullable of cullables) {

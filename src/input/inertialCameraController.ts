@@ -1,7 +1,7 @@
-export interface AnchorPanPick {
+export interface AnchorPanPick<TCanvas = unknown> {
   clientX: number;
   clientY: number;
-  canvas: HTMLCanvasElement;
+  canvas: TCanvas;
 }
 
 export interface AnchorPanScreenError {
@@ -12,20 +12,20 @@ export interface AnchorPanScreenError {
   lengthPx: number;
 }
 
-export interface CameraInputTarget {
+export interface CameraInputTarget<TCanvas = unknown> {
   panBy(screenDxPx: number, screenDyPx: number, canvasHeight: number): void;
   orbitBy(pitchDeltaDeg: number, headingDeltaDeg: number): void;
   zoomBy(factor: number): void;
   /** Stop inertial velocity without ending an active anchor-pan grab. */
   cancelInertial?(): void;
   cancel?(): void;
-  beginAnchorPan?(pick: AnchorPanPick): boolean;
-  panAnchorTo?(pick: AnchorPanPick, sensitivity?: number): boolean;
-  getAnchorPanScreenError?(pick: AnchorPanPick): AnchorPanScreenError | null;
+  beginAnchorPan?(pick: AnchorPanPick<TCanvas>): boolean;
+  panAnchorTo?(pick: AnchorPanPick<TCanvas>, sensitivity?: number): boolean;
+  getAnchorPanScreenError?(pick: AnchorPanPick<TCanvas>): AnchorPanScreenError | null;
   endAnchorPan?(): void;
 }
 
-export interface InertialCameraController extends CameraInputTarget {
+export interface InertialCameraController<TCanvas = unknown> extends CameraInputTarget<TCanvas> {
   update(nowMs?: number): void;
   cancel(): void;
   /** True while any velocity component is above its stop epsilon. */
@@ -48,11 +48,13 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 export interface InertialCameraOptions {
+  /** Host monotonic milliseconds; the same clock used by input and navigation handover. */
+  nowMs(): number;
   /** The share of velocity a 60 Hz frame keeps, read each update: `camera.inertiaDecay`. */
   decayPerFrame?: () => number;
 }
 
-export function createInertialCameraController(target: CameraInputTarget, options: InertialCameraOptions = {}): InertialCameraController {
+export function createInertialCameraController<TCanvas = unknown>(target: CameraInputTarget<TCanvas>, options: InertialCameraOptions): InertialCameraController<TCanvas> {
   const decayForDeltaTime = (deltaMs: number): number => {
     const decay = options.decayPerFrame?.() ?? DEFAULT_INERTIA_DECAY_PER_FRAME;
     return Math.pow(clamp(Number.isFinite(decay) ? decay : DEFAULT_INERTIA_DECAY_PER_FRAME, 0, 0.999), deltaMs / FRAME_MS);
@@ -103,7 +105,7 @@ export function createInertialCameraController(target: CameraInputTarget, option
     );
   }
 
-  function update(nowMs = performance.now()): void {
+  function update(nowMs = options.nowMs()): void {
     const deltaMs = lastUpdateMs === null ? FRAME_MS : Math.max(0, Math.min(100, nowMs - lastUpdateMs));
     lastUpdateMs = nowMs;
 

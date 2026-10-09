@@ -1,7 +1,7 @@
 import { PointerEventTypes } from "@babylonjs/core";
 import type { AbstractMesh, GeospatialCamera, Scene, Vector3 } from "@babylonjs/core";
-import { DEFAULT_INPUT_RATES } from "../input/inputRates";
-import type { PoiDescriptor } from "./types";
+import { DEFAULT_INPUT_RATES } from "../input/inputRates.js";
+import type { PoiDescriptor } from "./types.js";
 
 export interface PoiTrackingHandle {
   /**
@@ -40,6 +40,8 @@ export interface PoiTrackingOptions {
    * so a press the map took as a drag never also selects a point.
    */
   dragThresholdPx?: () => number;
+  requestRender?(): void;
+  log?(message: string): void;
 }
 
 /**
@@ -62,12 +64,14 @@ export function createPoiTracking(
   const meshToPoiMap = new Map<AbstractMesh, PoiDescriptor>();
   let currentPoi: PoiDescriptor | null = null;
   let suspended = false;
+  let disposed = false;
   let pointerDownX = 0;
   let pointerDownY = 0;
 
   // ── Core tracking actions ─────────────────────────────────────────────────
 
   function enterTracking(poi: PoiDescriptor): void {
+    if (disposed || suspended) return;
     if (currentPoi === poi) return;
     currentPoi?.onTrackingExit?.();
     currentPoi = poi;
@@ -78,15 +82,16 @@ export function createPoiTracking(
     if (camera && pos) {
       camera.center = pos;
     }
-    console.info(`[poi-tracking] entered tracking poi=${poi.mesh.name}`);
+    options.requestRender?.(); options.log?.(`[poi-tracking] entered tracking poi=${poi.mesh.name}`);
   }
 
   function exitTracking(): void {
+    if (disposed) return;
     if (!currentPoi) return;
     const name = currentPoi.mesh.name;
     currentPoi.onTrackingExit?.();
     currentPoi = null;
-    console.info(`[poi-tracking] exited tracking poi=${name}`);
+    options.requestRender?.(); options.log?.(`[poi-tracking] exited tracking poi=${name}`);
   }
 
   function isTracking(): boolean {
@@ -100,7 +105,7 @@ export function createPoiTracking(
   // ── Before-render: keep orbit center locked to the tracked POI ────────────
 
   const renderObserver = scene.onBeforeRenderObservable.add(() => {
-    if (!currentPoi || suspended) return;
+    if (!currentPoi || suspended || disposed) return;
     const camera = getCamera();
     const pos = currentPoi.getPosition();
     if (camera && pos) {
@@ -113,7 +118,7 @@ export function createPoiTracking(
   const pointerObserver = scene.onPointerObservable.add((info) => {
     const event = info.event as PointerEvent;
     // Only react to primary mouse button — touch is handled by touchController
-    if (event.pointerType !== "mouse" || suspended) return;
+    if (event.pointerType !== "mouse" || suspended || disposed) return;
 
     if (info.type === PointerEventTypes.POINTERDOWN) {
       if (event.button !== 0) return;
@@ -154,6 +159,7 @@ export function createPoiTracking(
   // ── Public API ────────────────────────────────────────────────────────────
 
   function setPois(pois: PoiDescriptor[]): void {
+    if (disposed) return;
     meshToPoiMap.clear();
     for (const poi of pois) {
       meshToPoiMap.set(poi.mesh, poi);
@@ -165,6 +171,7 @@ export function createPoiTracking(
   }
 
   function destroy(): void {
+    if (disposed) return; exitTracking(); disposed = true;
     scene.onBeforeRenderObservable.remove(renderObserver);
     scene.onPointerObservable.remove(pointerObserver);
     meshToPoiMap.clear();
@@ -172,6 +179,7 @@ export function createPoiTracking(
   }
 
   function setSuspended(next: boolean): void {
+    if (disposed) return;
     suspended = next;
   }
 

@@ -8,7 +8,7 @@
  * units never mix: a state carries the kind of its policy.
  */
 
-import type { ImageryConstraint } from "./imagery/imageryConstraints";
+import type { ImageryConstraint } from "./imagery/imageryConstraints.js";
 
 export type DetailKind = "raster" | "google";
 
@@ -242,11 +242,10 @@ export interface DeviceHints {
   deviceMemory?: number;
 }
 
-export function readDeviceHints(): DeviceHints {
-  if (typeof navigator === "undefined") return {};
+export function readDeviceHints(hints: DeviceHints): DeviceHints {
   return {
-    hardwareConcurrency: navigator.hardwareConcurrency,
-    deviceMemory: (navigator as Navigator & { deviceMemory?: number }).deviceMemory,
+    hardwareConcurrency: hints.hardwareConcurrency,
+    deviceMemory: hints.deviceMemory,
   };
 }
 

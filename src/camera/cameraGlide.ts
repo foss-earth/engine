@@ -5,7 +5,7 @@
  * velocity and the look's turn on, so its glide slows them as it slows a
  * flick. ECEF metres and unit vectors, float64.
  */
-import { DEG_TO_RAD, RAD_TO_DEG, ecefToGeodetic, geodeticToEcef } from "./cameraMath";
+import { DEG_TO_RAD, RAD_TO_DEG, ecefToGeodetic, geodeticToEcef } from "./cameraMath.js";
 
 export type GlideVec3 = readonly [number, number, number];
 

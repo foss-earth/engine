@@ -4,8 +4,8 @@
  * row-vector matrix layout and WebGL depth range.
  */
 
-import { DEG_TO_RAD, geodeticToEcef } from "../../camera/cameraMath";
-import { multiplyMatrices as multiply, type ImageryView, type Vec3 } from "./imageryGeometry";
+import { DEG_TO_RAD, geodeticToEcef } from "../../camera/cameraMath.js";
+import { multiplyMatrices as multiply, type ImageryView, type Vec3 } from "./imageryGeometry.js";
 
 export interface TestViewOptions {
   latDeg: number;

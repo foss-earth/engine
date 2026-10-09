@@ -1,4 +1,4 @@
-import type { TerrainGrid } from "./terrainTiles";
+import type { TerrainGrid } from "./terrainGrid.js";
 
 // Mapterhorn z0/0/0, accessed 2026-09-07; averaged 8x8 source pixels.
 // 64x64 signed big-endian meter samples. Attribution: https://mapterhorn.com/attribution/

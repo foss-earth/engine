@@ -1,0 +1,160 @@
+{
+  "name": "@foss-earth/engine",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Host-composed globe math, navigation, camera/input, terrain/maps and Map/Location/Controls panels",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./core": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./browser": {
+      "types": "./dist/browser.d.ts",
+      "import": "./dist/browser.js"
+    },
+    "./babylon": {
+      "types": "./dist/babylon/index.d.ts",
+      "import": "./dist/babylon/index.js"
+    },
+    "./package.json": "./package.json",
+    "./settings": {
+      "types": "./dist/settings/index.d.ts",
+      "import": "./dist/settings/index.js"
+    },
+    "./gamepad": {
+      "types": "./dist/gamepad/index.d.ts",
+      "import": "./dist/gamepad/index.js"
+    },
+    "./imagery": {
+      "types": "./dist/terrain/imagery/index.d.ts",
+      "import": "./dist/terrain/imagery/index.js"
+    },
+    "./panels": {
+      "types": "./dist/panels.d.ts",
+      "import": "./dist/panels.js"
+    },
+    "./input-mode.css": "./styles/input-mode.css",
+    "./map.css": "./styles/map.css",
+    "./react": {
+      "types": "./dist/react.d.ts",
+      "import": "./dist/react.js"
+    },
+    "./layers": {
+      "types": "./dist/layers/index.d.ts",
+      "import": "./dist/layers/index.js"
+    },
+    "./sprites": {
+      "types": "./dist/sprites/index.d.ts",
+      "import": "./dist/sprites/index.js"
+    },
+    "./compass": {
+      "types": "./dist/visualization/orbitCompass.d.ts",
+      "import": "./dist/visualization/orbitCompass.js"
+    },
+    "./visualization": {
+      "types": "./dist/visualization/index.d.ts",
+      "import": "./dist/visualization/index.js"
+    },
+    "./visualization-tuners": {
+      "types": "./dist/hud/visualizationTuners.d.ts",
+      "import": "./dist/hud/visualizationTuners.js"
+    },
+    "./visualization-tuners.css": "./styles/visualization-tuners.css",
+    "./location-provider": {
+      "types": "./dist/location-provider.d.ts",
+      "import": "./dist/location-provider.js"
+    },
+    "./map-cache.css": "./styles/map-cache.css"
+  },
+  "files": [
+    "dist",
+    "src",
+    "tests",
+    "fixtures",
+    "scripts",
+    "docs",
+    "README.md",
+    "LICENSE",
+    "NOTICE",
+    "extraction-provenance.json",
+    "tsconfig*.json",
+    "eslint.config.mjs",
+    "vitest.config.ts",
+    "assets",
+    "styles",
+    "SOURCE_LINEAGE.json",
+    "SOURCE_RECEIPT.json"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --incremental --tsBuildInfoFile node_modules/.tmp/typecheck.tsbuildinfo",
+    "lint": "eslint . --cache --cache-strategy content --cache-location node_modules/.cache/eslint/",
+    "test": "vitest run --maxWorkers=50%",
+    "test:consumer": "node fixtures/consumer.mjs && tsc -p fixtures/tsconfig.json",
+    "check:implementation": "npm run typecheck && npm run lint && npm run test && npm run build && npm run test:consumer",
+    "test:installed-consumer": "node scripts/check-installed-consumer.mjs",
+    "check:conformance": "node node_modules/@foss-earth/ci/bin/conformance.mjs --consumer . --trusted-release .attribution-release.json --output-root build/common-conformance",
+    "check:attribution": "node node_modules/@foss-earth/ci/bin/attribution.mjs --repo . --refs-file build/repository-split/intended-publication-refs.json",
+    "ci": "npm run check:conformance && npm run check:implementation"
+  },
+  "peerDependencies": {
+    "@babylonjs/core": "8.56.2",
+    "@foss-earth/renderer": "0.1.0",
+    "@foss-earth/ui": "0.1.0",
+    "@felipegalind0/gamepad-tools": "0.1.0",
+    "3d-tiles-renderer": "0.4.24",
+    "react": "19.2.6",
+    "@foss-earth/sky": "0.1.0"
+  },
+  "peerDependenciesMeta": {
+    "@babylonjs/core": {
+      "optional": true
+    },
+    "@foss-earth/renderer": {
+      "optional": true
+    },
+    "@foss-earth/ui": {
+      "optional": true
+    },
+    "@felipegalind0/gamepad-tools": {
+      "optional": true
+    },
+    "3d-tiles-renderer": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    },
+    "@foss-earth/sky": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@babylonjs/core": "8.56.2",
+    "@types/node": "24.12.4",
+    "eslint": "9.39.4",
+    "jsdom": "29.1.1",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.59.3",
+    "vitest": "4.1.6",
+    "3d-tiles-renderer": "0.4.24",
+    "react": "19.2.6",
+    "react-dom": "19.2.6",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "@foss-earth/sky": "0.1.0",
+    "@foss-earth/ui": "0.1.0",
+    "@foss-earth/renderer": "0.1.0",
+    "@foss-earth/ci": "0.1.0",
+    "@felipegalind0/gamepad-tools": "0.1.0"
+  },
+  "dependencies": {
+    "@foss-earth/images": "0.1.0"
+  }
+}

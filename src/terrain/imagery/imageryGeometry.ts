@@ -4,7 +4,7 @@
  * without a renderer.
  */
 
-import { ecefToGeodetic, WGS84_A, WGS84_B, WGS84_E2 } from "../../camera/cameraMath";
+import { ecefToGeodetic, WGS84_A, WGS84_B, WGS84_E2 } from "../../camera/cameraMath.js";
 
 export const WEB_MERCATOR_MAX_LAT_DEG = 85.05112878;
 const DEG = Math.PI / 180;

@@ -1,6 +1,6 @@
-import { DEFAULT_RETRY_DELAY_MS } from "../../terrain/retryDelay";
-import type { DeviceContext, ParameterBounds, ParameterSpec } from "../types";
-import { MAP_TAB } from "./map";
+import { DEFAULT_RETRY_DELAY_MS } from "../../terrain/retryDelay.js";
+import type { DeviceContext, ParameterBounds, ParameterSpec } from "@foss-earth/ui/settings";
+import { MAP_TAB } from "./map.js";
 
 const MiB = 1024 * 1024;
 /** One atlas page slot: 288 px square with its gutter, RGBA, with mips. */
@@ -75,10 +75,10 @@ function quantity(spec: Quantity): ParameterSpec {
   };
 }
 
-const IMAGERY_RUNTIME = "src/engine/babylon/imagery/createImageryRuntime.ts";
-const RASTER_RUNTIME = "src/engine/babylon/createRasterTilesRuntime.ts";
-const GOOGLE_RUNTIME = "src/engine/babylon/createTilesRuntime.ts";
-const MAP_CACHE = "src/terrain/mapCache.ts";
+const IMAGERY_RUNTIME = "src/babylon/imagery/createImageryRuntime.ts";
+const RASTER_RUNTIME = "src/babylon/createRasterTilesRuntime.ts";
+const GOOGLE_RUNTIME = "src/babylon/createTilesRuntime.ts";
+const MAP_CACHE = "src/browser/mapCache.ts";
 const SELECTOR = "src/terrain/imagery/imagerySelector.ts";
 const TERRAIN_SELECTOR = "src/terrain/terrainSelector.ts";
 const STARTING_VALUE = "The starting calibration of the projected-imagery work; not yet measured across devices.";
@@ -87,14 +87,14 @@ export const MAP_LOADING_PARAMETERS: readonly ParameterSpec[] = [
   {
     id: "map.imagery.gpuBudget",
     label: "2D imagery GPU memory",
-    description: "How much GPU memory the atlas of 2D imagery may use. More keeps more imagery at full detail while the view moves; changing it reloads the imagery.",
+    description: "How much GPU memory the complete 2D imagery atlas mip chain and full transactional page-table texture may use. More keeps more imagery at full detail while the view moves; changing it reloads the imagery.",
     unit: "MiB",
     kind: "number",
     bounds: gpuBudgetBounds,
     scale: "log2",
     step: 0.05,
     default: gpuBudgetDefault,
-    defaultReason: "A share of the device's memory, bounded by the renderer's texture limit.",
+    defaultReason: "A share of the device's memory, bounded by the renderer's texture limit. Includes both physical table versions used for managed transactional publication.",
     home: { tab: MAP_TAB, section: "loading", level: "main" },
     appliesLive: true,
     source: IMAGERY_RUNTIME,
@@ -102,17 +102,17 @@ export const MAP_LOADING_PARAMETERS: readonly ParameterSpec[] = [
   quantity({
     id: "map.imagery.stagingBudget", label: "2D imagery waiting for upload", unit: "MiB", min: 1, max: 512, fallback: 16, scale: "log2",
     description: "Decoded imagery that may wait to go to the GPU, requests in flight included. More lets downloads run further ahead of uploads.",
-    reason: STARTING_VALUE, source: "src/engine/babylon/imagery/imageryResidency.ts",
+    reason: STARTING_VALUE, source: "src/terrain/imagery/imageryResidency.ts",
   }),
   quantity({
     id: "map.imagery.concurrentRequests", label: "2D imagery requests at once", unit: "count", min: 1, max: 32, fallback: 6,
     description: "Imagery requests in flight at the same time. A source's own policy may allow fewer.",
-    reason: "Six, the number of connections a browser opens to one host over HTTP/1.1.", source: "src/engine/babylon/imagery/imageryResidency.ts",
+    reason: "Six, the number of connections a browser opens to one host over HTTP/1.1.", source: "src/terrain/imagery/imageryResidency.ts",
   }),
   quantity({
     id: "map.imagery.queuedRequests", label: "2D imagery requests queued", unit: "count", min: 8, max: 4096, fallback: 128, scale: "log2",
     description: "Imagery the view wants that may wait for a request. Beyond it, the least useful is left out until the view settles.",
-    reason: STARTING_VALUE, source: "src/engine/babylon/imagery/imageryResidency.ts",
+    reason: STARTING_VALUE, source: "src/terrain/imagery/imageryResidency.ts",
   }),
   quantity({
     id: "map.imagery.uploadPerFrame", label: "2D imagery upload per frame", unit: "MiB", min: 0.25, max: 64, fallback: 2, scale: "log2",
@@ -127,7 +127,7 @@ export const MAP_LOADING_PARAMETERS: readonly ParameterSpec[] = [
   quantity({
     id: "map.imagery.missingRetryAfter", label: "Ask again for missing imagery after", unit: "s", min: 10, max: 86_400, fallback: 600, scale: "log2", step: 0.05,
     description: "How long an image the server says it does not have is remembered before it is asked for again. Meanwhile a coarser level stands in.",
-    reason: "What the atlas remembered a missing image for before this became a parameter.", source: "src/engine/babylon/imagery/imageryResidency.ts",
+    reason: "What the atlas remembered a missing image for before this became a parameter.", source: "src/terrain/imagery/imageryResidency.ts",
   }),
   {
     id: "map.retryDelay",
@@ -152,12 +152,12 @@ export const MAP_LOADING_PARAMETERS: readonly ParameterSpec[] = [
   quantity({
     id: "map.imagery.anisotropy", label: "2D imagery anisotropic filtering", unit: "samples", min: 1, max: 16, fallback: 4, scale: "log2", step: 1,
     description: "Texture samples along a steep view of the ground: sharper imagery near the horizon, more GPU work per pixel.",
-    reason: "What every map texture used before this became a setting.", source: "src/engine/babylon/imagery/imageryAtlas.ts",
+    reason: "What every map texture used before this became a setting.", source: "src/babylon/imagery/imageryAtlas.ts",
   }),
   quantity({
     id: "map.imagery.pageTablePatches", label: "2D imagery page tables", unit: "count", min: 16, max: 4096, fallback: 256, scale: "log2", step: 1,
-    description: "Terrain patches that can each have their own table of imagery pages. A patch without one shows one page across it. Changing it reloads the imagery.",
-    reason: "The page tables the atlas was built with before this became a setting.", source: IMAGERY_RUNTIME,
+    description: "Maximum visible terrain patches with detailed imagery page tables. Managed transactional updates reserve two physical blocks per patch inside the imagery GPU budget, so outgoing tables remain visible until incoming writes complete. A patch without one shows one page across it. Changing it reloads the imagery.",
+    reason: "The page tables the atlas was built with before this became a setting. This counts logical patches; managed publication needs two physical versions per patch, fully charged to the same imagery GPU budget.", source: IMAGERY_RUNTIME,
   }),
   quantity({
     id: "map.terrain.cachedTiles", label: "Terrain tiles kept", unit: "count", min: 32, max: 4096, fallback: 160, scale: "log2", step: 0.05, level: "main",
@@ -278,12 +278,17 @@ export const MAP_SELECTION_PARAMETERS: readonly ParameterSpec[] = [
     defaultReason: "A 64 × 64 table per patch, the block the shader reads.",
     home: { tab: MAP_TAB, section: "selection", level: "all" },
     appliesLive: true,
-    source: "src/engine/babylon/imagery/imageryAtlasLayout.ts",
+    source: "src/terrain/imagery/imageryAtlasLayout.ts",
     readOnly: "Fixed by the shader's page-table layout.",
   },
 ];
 
 export const MAP_TERRAIN_SELECTION_PARAMETERS: readonly ParameterSpec[] = [
+  quantity({
+    id: "map.terrain.meshRebuildTimePerFrame", label: "Terrain mesh rebuild time per frame", unit: "ms", min: 0.25, max: 16, fallback: 2, scale: "log2", section: "terrain-selection",
+    description: "Processor time a frame may spend rebuilding terrain meshes after a segment change before continuing in the next frame.",
+    reason: "The existing raster runtime yielded after 2 ms; this exposes that budget to the person using the globe.", source: RASTER_RUNTIME,
+  }),
   quantity({
     id: "map.terrain.errorPerSpacing", label: "Error per vertex spacing", unit: "ratio", min: 0.05, max: 1, fallback: 0.25, step: 0.05, section: "terrain-selection",
     description: "How far the ground between a terrain tile's vertices is taken to stray from its mesh, as a share of their spacing. It turns a tile's size into the error the detail target is measured against.",

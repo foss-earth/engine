@@ -1,12 +1,12 @@
-import { DEFAULT_RASTER_BASE_MAP_ID, RASTER_BASE_MAP_SOURCES } from "../../engine/babylon/rasterBaseMaps";
-import { TERRAIN_SOURCES } from "../../terrain/terrainTiles";
+import { DEFAULT_RASTER_BASE_MAP_ID, RASTER_BASE_MAP_SOURCES } from "../../map/rasterBaseMaps.js";
+import { TERRAIN_SOURCES } from "../../terrain/terrainGrid.js";
 import {
   GOOGLE_DETAIL_STEP,
   GOOGLE_ERROR_TARGET_BOUNDS,
   RASTER_DETAIL_ENVELOPE,
   RASTER_DETAIL_STEP,
-} from "../../terrain/mapDetailPolicy";
-import type { ParameterSpec } from "../types";
+} from "../../terrain/mapDetailPolicy.js";
+import type { ParameterSpec } from "@foss-earth/ui/settings";
 
 /** The Map tab's sections, in order. */
 export const MAP_TAB = "map";
@@ -26,7 +26,7 @@ export const MAP_SOURCE_PARAMETERS: readonly ParameterSpec[] = [
     defaultReason: "USGS imagery with labels needs no key; an app with a Google key makes Google 3D Tiles the default.",
     home: { tab: MAP_TAB, section: "source", level: "main" },
     appliesLive: true,
-    source: "src/engine/babylon/resolveMapRuntimeConfig.ts",
+    source: "src/settings/mapRuntimeConfig.ts",
   },
   {
     id: "map.source.elevation",
@@ -51,7 +51,7 @@ export const MAP_SOURCE_PARAMETERS: readonly ParameterSpec[] = [
     defaultReason: "No key is built in; `?key=` saves one on this device and leaves the address bar.",
     home: { tab: MAP_TAB, section: "source", level: "main" },
     appliesLive: false,
-    source: "src/engine/babylon/createTilesRuntime.ts",
+    source: "src/babylon/createTilesRuntime.ts",
     sensitive: true,
   },
   {
@@ -64,7 +64,7 @@ export const MAP_SOURCE_PARAMETERS: readonly ParameterSpec[] = [
     defaultReason: "No key is built in. Without one, CARTO answers with an \"API key required\" tile.",
     home: { tab: MAP_TAB, section: "source", level: "main" },
     appliesLive: true,
-    source: "src/engine/babylon/rasterBaseMaps.ts",
+    source: "src/map/rasterBaseMaps.ts",
     sensitive: true,
   },
 ];
@@ -160,7 +160,7 @@ export const MAP_DETAIL_PARAMETERS: readonly ParameterSpec[] = [
     defaultReason: "From 2 px, Cesium's default for terrain, to 16 px, where relief visibly flattens.",
     home: { tab: MAP_TAB, section: "detail", level: "main" },
     appliesLive: true,
-    source: "src/engine/babylon/createRasterTilesRuntime.ts",
+    source: "src/babylon/createRasterTilesRuntime.ts",
   },
   {
     id: "map.detail.terrain.default",
@@ -176,7 +176,7 @@ export const MAP_DETAIL_PARAMETERS: readonly ParameterSpec[] = [
     defaultReason: "About the error terrain showed under the camera before this became a setting.",
     home: { tab: MAP_TAB, section: "detail", level: "main" },
     appliesLive: true,
-    source: "src/engine/babylon/createRasterTilesRuntime.ts",
+    source: "src/babylon/createRasterTilesRuntime.ts",
   },
   {
     id: "map.detail.linkTerrainToImagery",
@@ -188,7 +188,7 @@ export const MAP_DETAIL_PARAMETERS: readonly ParameterSpec[] = [
     defaultReason: "Finer imagery on coarse relief looks wrong, and coarser imagery rarely needs fine relief.",
     home: { tab: MAP_TAB, section: "detail", level: "main" },
     appliesLive: true,
-    source: "src/engine/babylon/createRasterTilesRuntime.ts",
+    source: "src/babylon/createRasterTilesRuntime.ts",
   },
   {
     id: "map.detail.imageryPath",
@@ -204,7 +204,7 @@ export const MAP_DETAIL_PARAMETERS: readonly ParameterSpec[] = [
     defaultReason: "Released with the evidence in validation/evidence/map-detail/; per-tile imagery is the rollback.",
     home: { tab: MAP_TAB, section: "detail", level: "all" },
     appliesLive: false,
-    source: "src/engine/babylon/createRasterTilesRuntime.ts",
+    source: "src/babylon/createRasterTilesRuntime.ts",
   },
   {
     id: "map.focus.mode",
@@ -235,7 +235,7 @@ export const MAP_DETAIL_PARAMETERS: readonly ParameterSpec[] = [
     defaultReason: "The point the camera turns around.",
     home: { tab: MAP_TAB, section: "detail", level: "main" },
     appliesLive: true,
-    source: "src/engine/babylon/createBabylonRuntime.ts",
+    source: "src/settings/cameraSettings.ts",
   },
   {
     id: "map.focus.radius",
@@ -279,7 +279,7 @@ export const MAP_DETAIL_PARAMETERS: readonly ParameterSpec[] = [
     defaultReason: "The region asks for what the Detail setting asks for.",
     home: { tab: MAP_TAB, section: "detail", level: "all" },
     appliesLive: true,
-    source: "src/engine/babylon/imagery/createImageryRuntime.ts",
+    source: "src/babylon/imagery/createImageryRuntime.ts",
   },
   {
     id: "map.focus.detailBelow.google",
@@ -296,7 +296,7 @@ export const MAP_DETAIL_PARAMETERS: readonly ParameterSpec[] = [
     defaultReason: "The region asks for what the Detail setting asks for.",
     home: { tab: MAP_TAB, section: "detail", level: "all" },
     appliesLive: true,
-    source: "src/engine/babylon/createTilesRuntime.ts",
+    source: "src/babylon/createTilesRuntime.ts",
   },
   {
     id: "map.focus.refineFrom",
@@ -312,6 +312,6 @@ export const MAP_DETAIL_PARAMETERS: readonly ParameterSpec[] = [
     defaultReason: "The camera is where the mesh is seen from.",
     home: { tab: MAP_TAB, section: "detail", level: "main" },
     appliesLive: true,
-    source: "src/engine/babylon/createTilesRuntime.ts",
+    source: "src/babylon/createTilesRuntime.ts",
   },
 ];

@@ -1,0 +1,51 @@
+import type { ParameterSpec } from "@foss-earth/ui/settings";
+import { SEARCH_DEFAULTS } from "../../location/provider/searchDefaults.js";
+const INTERFACE_TAB = "interface";
+/** Existing Location lookup controls retain Interface → search. No Search tab. */
+export const LOCATION_LOOKUP_PARAMETERS: readonly ParameterSpec[] = [
+  {
+    id: "search.cacheDuration",
+    label: "Keep search answers for",
+    description: "How long place, nearby-airport, runway and elevation answers are kept on this device, including across reloads, before another lookup asks the service. Your Location form and selected runway are remembered separately.",
+    unit: "h",
+    kind: "number",
+    bounds: () => ({ min: 0.01, max: 720 }),
+    step: 0.05,
+    scale: "log2",
+    default: SEARCH_DEFAULTS.cacheHours,
+    defaultReason: "A day, as the geocoder's usage policy asks answers to be cached.",
+    home: { tab: INTERFACE_TAB, section: "search", level: "main" },
+    appliesLive: true,
+    source: "src/search/searchTuning.ts",
+  },
+  {
+    id: "search.cacheEntries",
+    label: "Search answers kept",
+    description: "How many place, nearby-airport, runway and elevation answers are kept in total on this device; the least recently used goes first.",
+    unit: "count",
+    kind: "number",
+    bounds: () => ({ min: 1, max: 4096 }),
+    step: 0.05,
+    scale: "log2",
+    default: SEARCH_DEFAULTS.cacheEntries,
+    defaultReason: "What the place lookup kept before this became a parameter; the airport lookup kept 32.",
+    home: { tab: INTERFACE_TAB, section: "search", level: "main" },
+    appliesLive: true,
+    source: "src/search/searchTuning.ts",
+  },
+  {
+    id: "search.timeout",
+    label: "Search timeout",
+    description: "How long a place or airport lookup may take before it gives up and says so.",
+    unit: "s",
+    kind: "number",
+    bounds: () => ({ min: 1, max: 300 }),
+    step: 0.05,
+    scale: "log2",
+    default: SEARCH_DEFAULTS.timeoutSeconds,
+    defaultReason: "What both lookups waited before this became a parameter.",
+    home: { tab: INTERFACE_TAB, section: "search", level: "main" },
+    appliesLive: true,
+    source: "src/search/searchTuning.ts",
+  },
+];

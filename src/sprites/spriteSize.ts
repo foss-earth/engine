@@ -1,5 +1,6 @@
 import type { Scene } from "@babylonjs/core";
-import { EARTH_RADIUS_METERS } from "./types";
+import { EARTH_RADIUS_METERS } from "./types.js";
+import { spriteSizeForDistance } from "./core.js";
 
 /**
  * Returns the size sprites should have at the current zoom level. Uses the
@@ -26,7 +27,5 @@ export function currentSpriteSize(
     if (!cam) return maxSize;
     distanceMeters = Math.max(0, cam.position.length() - earthRadiusMeters);
   }
-  const range = maxRefZoomMeters - minRefZoomMeters;
-  const t = range > 0 ? Math.min(1, Math.max(0, (distanceMeters - minRefZoomMeters) / range)) : 1;
-  return minSize + t * (maxSize - minSize);
+  return spriteSizeForDistance(distanceMeters, maxSize, minSize, minRefZoomMeters, maxRefZoomMeters);
 }

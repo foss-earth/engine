@@ -1,17 +1,6 @@
-import { getAppSettings } from "../settings/appSettings";
-export interface PoiSpriteSizeParams {
-  maxSize: number;
-  minSize: number;
-  minRefZoom: number;
-  maxRefZoom: number;
-}
-
-export const DEFAULT_POI_SPRITE_SIZE_PARAMS: PoiSpriteSizeParams = {
-  maxSize: 40_000,
-  minSize: 200,
-  minRefZoom: 100,
-  maxRefZoom: 1_000_000,
-};
+import type { VisualizationTunerPorts, VisualizationTunerSettings } from "./tunerPorts.js";
+import { DEFAULT_POI_SPRITE_SIZE_PARAMS, type PoiSpriteSizeParams } from "../visualization/defaults.js";
+export { DEFAULT_POI_SPRITE_SIZE_PARAMS, type PoiSpriteSizeParams } from "../visualization/defaults.js";
 
 const POI_SPRITE_SIZE_PARAM_KEYS = ["maxSize", "minSize", "minRefZoom", "maxRefZoom"] as const;
 type PoiSpriteSizeParamKey = typeof POI_SPRITE_SIZE_PARAM_KEYS[number];
@@ -30,16 +19,15 @@ function normalizePoiSpriteSizeParams(value: unknown): PoiSpriteSizeParams | nul
 }
 
 /** The `visualization.poiSprite.*` parameters, or null while every one is at its default. */
-function loadSavedPoiSpriteSizeDefaults(): PoiSpriteSizeParams | null {
-  const settings = getAppSettings();
+export function loadSavedPoiSpriteSizeDefaults(settings: VisualizationTunerSettings): PoiSpriteSizeParams | null {
   const ids = POI_SPRITE_SIZE_PARAM_KEYS.map(key => `visualization.poiSprite.${key}`);
   if (ids.every(id => settings.inspect(id).provenance === "default")) return null;
   return normalizePoiSpriteSizeParams(Object.fromEntries(POI_SPRITE_SIZE_PARAM_KEYS.map(key => [key, settings.get(`visualization.poiSprite.${key}`)])));
 }
 
 /** Refused, never repaired, when a value is outside its bounds; the panel keeps its values. */
-function savePoiSpriteSizeDefaults(params: PoiSpriteSizeParams): boolean {
-  return getAppSettings().setMany(Object.fromEntries(POI_SPRITE_SIZE_PARAM_KEYS.map(key => [`visualization.poiSprite.${key}`, params[key]]))).ok;
+export function savePoiSpriteSizeDefaults(settings: VisualizationTunerSettings, params: PoiSpriteSizeParams): boolean {
+  return settings.setMany(Object.fromEntries(POI_SPRITE_SIZE_PARAM_KEYS.map(key => [`visualization.poiSprite.${key}`, params[key]]))).ok;
 }
 
 function paramsToCommitted(params: PoiSpriteSizeParams): Record<PoiSpriteSizeParamKey, string> {
@@ -64,8 +52,10 @@ export interface PoiSpriteSizeTunerHandle {
 export function createPoiSpriteSizeTuner(
   container: HTMLElement,
   onApply: (params: PoiSpriteSizeParams) => void,
+  ports: VisualizationTunerPorts,
 ): PoiSpriteSizeTunerHandle {
-  const savedDefaultParams = loadSavedPoiSpriteSizeDefaults();
+  const { document, settings } = ports; let disposed = false;
+  const savedDefaultParams = loadSavedPoiSpriteSizeDefaults(settings);
   let defaultParams = savedDefaultParams ?? DEFAULT_POI_SPRITE_SIZE_PARAMS;
   let appliedParams = defaultParams;
 
@@ -129,6 +119,7 @@ export function createPoiSpriteSizeTuner(
   }
 
   function onApplyClick(): void {
+    if (disposed) return;
     const vals = readInputParams();
     if (!vals) return;
 
@@ -141,9 +132,8 @@ export function createPoiSpriteSizeTuner(
   }
 
   function onSaveDefaultsClick(): void {
-    if (isDirty()) return;
+    if (disposed || isDirty() || !savePoiSpriteSizeDefaults(settings, appliedParams)) return;
     defaultParams = appliedParams;
-    savePoiSpriteSizeDefaults(defaultParams);
     updateApplyVisibility();
   }
 
@@ -153,9 +143,10 @@ export function createPoiSpriteSizeTuner(
   if (savedDefaultParams) onApply(savedDefaultParams);
 
   return {
-    show(): void { panel.hidden = false; },
-    hide(): void { panel.hidden = true; },
+    show(): void { if (!disposed) panel.hidden = false; },
+    hide(): void { if (!disposed) panel.hidden = true; },
     destroy(): void {
+      if (disposed) return; disposed = true;
       inputs.forEach((input) => input.removeEventListener("input", updateApplyVisibility));
       applyBtn?.removeEventListener("click", onApplyClick);
       saveDefaultsBtn?.removeEventListener("click", onSaveDefaultsClick);

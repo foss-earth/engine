@@ -1,0 +1,2661 @@
+{
+  "schemaVersion": 1,
+  "owner": "foss-earth/engine",
+  "package": "@foss-earth/engine",
+  "sourceRepository": "https://github.com/foss-earth/foss-earth.github.io.git",
+  "sourceRevision": "90e23b3ee96f53ec5900afc5991a21fffa58649d",
+  "sourceTree": "c68d1fabd9fce19e255ea89c65502666d0f74a27",
+  "status": "Full immutable selection plus native DEM and optional worker seams represented by injected owner contracts; source only UNRUN. No original source history imported or mutated.",
+  "originalPathCount": 192,
+  "selected": [
+    {
+      "sourcePath": "LICENSE",
+      "sourceBlob": "be3f7b28e564e7dd05eaf59d64adba1a4065ac0e",
+      "sourceSha256": "0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0",
+      "bytes": 34523,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/LICENSE",
+      "destinations": [
+        "LICENSE"
+      ],
+      "transformations": [
+        "Original committed licence/notice, verbatim."
+      ]
+    },
+    {
+      "sourcePath": "NOTICE",
+      "sourceBlob": "cd6a1d92cce505eaeea37e9726a2f98a0a61a12d",
+      "sourceSha256": "323da85db96d02ed0cf48db889efa184037f538f002e868aeeff396ebb44a993",
+      "bytes": 359,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/NOTICE",
+      "destinations": [
+        "NOTICE"
+      ],
+      "transformations": [
+        "Original committed licence/notice, verbatim."
+      ]
+    },
+    {
+      "sourcePath": "docs/airport-locations.md",
+      "sourceBlob": "0ed251e34bd372137fa09a28d96c91e21749ce40",
+      "sourceSha256": "26adfdedfbe047a80e347661fb1d6c2a4b3b1dbca5affba69669593303ab0469",
+      "bytes": 6829,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/docs/airport-locations.md",
+      "destinations": [
+        "docs/airport-locations.md"
+      ],
+      "transformations": [
+        "Immutable owner specification/proposal prose retained byte-for-byte; historical references and links preserved, not an implementation or test claim."
+      ]
+    },
+    {
+      "sourcePath": "docs/compass-height-model.md",
+      "sourceBlob": "0937ce96def0b8cc01aacbd261559a7f49ccf385",
+      "sourceSha256": "b47e5b8595eb5c3fb71f51311acbbad18303861f55822a00204f7eb751b99e8b",
+      "bytes": 1221,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/docs/compass-height-model.md",
+      "destinations": [
+        "docs/compass-height-model.md"
+      ],
+      "transformations": [
+        "Immutable owner specification/proposal prose retained byte-for-byte; historical references and links preserved, not an implementation or test claim."
+      ]
+    },
+    {
+      "sourcePath": "docs/imagery-detail-drop-prompt.md",
+      "sourceBlob": "02aaece0fd691e5d706b9b64be58a62e403ac234",
+      "sourceSha256": "84f4662b286a930371a1ae5ce146ac71f2698180e5e02f066ea2904a4bb13495",
+      "bytes": 6700,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/docs/imagery-detail-drop-prompt.md",
+      "destinations": [
+        "docs/imagery-detail-drop-prompt.md"
+      ],
+      "transformations": [
+        "Immutable owner specification/proposal prose retained byte-for-byte; historical references and links preserved, not an implementation or test claim."
+      ]
+    },
+    {
+      "sourcePath": "docs/proposals/imagery-detail-continuity.md",
+      "sourceBlob": "db92ef8a935bf41b2de34dfd795cf7161cdecc4f",
+      "sourceSha256": "25d33c45c744f701e69f490b97a22201dcbdc523995f99e6dc62cd70ba73f6b9",
+      "bytes": 25692,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/docs/proposals/imagery-detail-continuity.md",
+      "destinations": [
+        "docs/proposals/imagery-detail-continuity.md"
+      ],
+      "transformations": [
+        "Immutable owner specification/proposal prose retained byte-for-byte; historical references and links preserved, not an implementation or test claim."
+      ]
+    },
+    {
+      "sourcePath": "docs/proposals/map-detail-control.md",
+      "sourceBlob": "4f672e5e86d904b14631c1a0b53230f87efe0df5",
+      "sourceSha256": "63357a147421bf5fa0417a080ebaeaa5a05df8d3309d28368b53b9c921dcc909",
+      "bytes": 42993,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/docs/proposals/map-detail-control.md",
+      "destinations": [
+        "docs/proposals/map-detail-control.md"
+      ],
+      "transformations": [
+        "Immutable owner specification/proposal prose retained byte-for-byte; historical references and links preserved, not an implementation or test claim."
+      ]
+    },
+    {
+      "sourcePath": "docs/proposals/raster-provider-detail.md",
+      "sourceBlob": "c1e0d41b6278705ef9c2f88a4bac73fc871f089a",
+      "sourceSha256": "48a93784d11d4f62101ed401ac12f6461ee181dff7d9b7c5115ca0a1fe0a8e8b",
+      "bytes": 22993,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/docs/proposals/raster-provider-detail.md",
+      "destinations": [
+        "docs/proposals/raster-provider-detail.md"
+      ],
+      "transformations": [
+        "Immutable owner specification/proposal prose retained byte-for-byte; historical references and links preserved, not an implementation or test claim."
+      ]
+    },
+    {
+      "sourcePath": "docs/proposals/smooth-elevation-height-model.md",
+      "sourceBlob": "8de6171a63ce3c48f000deccf64ef70c28238e33",
+      "sourceSha256": "73193ff4e5c719fdf5999d24f9f16a9151b5734edf9576e626a9346e30199b91",
+      "bytes": 11605,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/docs/proposals/smooth-elevation-height-model.md",
+      "destinations": [
+        "docs/proposals/smooth-elevation-height-model.md"
+      ],
+      "transformations": [
+        "Immutable owner specification/proposal prose retained byte-for-byte; historical references and links preserved, not an implementation or test claim."
+      ]
+    },
+    {
+      "sourcePath": "docs/streamed-terrain.md",
+      "sourceBlob": "9ade9f247a0dcb541ba58da4d8b9e07711dfeeca",
+      "sourceSha256": "b27a6e8cdfe3ae6bc9f224930ea9203da6043aa4a060cd9d1e8a43086eed52be",
+      "bytes": 6811,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/docs/streamed-terrain.md",
+      "destinations": [
+        "docs/streamed-terrain.md"
+      ],
+      "transformations": [
+        "Immutable owner specification/proposal prose retained byte-for-byte; historical references and links preserved, not an implementation or test claim."
+      ]
+    },
+    {
+      "sourcePath": "docs/tile-loading-prompt.md",
+      "sourceBlob": "e580cc20304d302823afe8278701e5fd897ee00c",
+      "sourceSha256": "42ef11434b8b956fcb812ac973b921a7e324f4ed1edc2f7eb40d42c53d1ebff9",
+      "bytes": 4795,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/docs/tile-loading-prompt.md",
+      "destinations": [
+        "docs/tile-loading-prompt.md"
+      ],
+      "transformations": [
+        "Immutable owner specification/proposal prose retained byte-for-byte; historical references and links preserved, not an implementation or test claim."
+      ]
+    },
+    {
+      "sourcePath": "src/airports/airports.test.ts",
+      "sourceBlob": "d7f86711b7aa91222a7d8e8c2deca302d9b98c91",
+      "sourceSha256": "d2657a60d7d07ea3f56c486f56d22e889e235966990dfba94621456b12b663ce",
+      "bytes": 3505,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/airports/airports.test.ts",
+      "destinations": [
+        "fixtures/composition/LegacyAirportSourceAssertions.ts",
+        "tests/location/airports.test.ts"
+      ],
+      "transformations": [
+        "Four original globe-only cases retained in active owner source; all five original assertions retained behind explicit legacy host registration, including Flight-owned departure/arrival placement. Fetch mock type annotation only.",
+        "Reported primary typecheck causal repair: public owner signatures/defaults and fixture type adaptation, every assertion retained, repaired source UNRUN."
+      ]
+    },
+    {
+      "sourcePath": "src/airports/geometry.ts",
+      "sourceBlob": "8a2f7ac6d2aa1b5ce9d89659ecff3d20dacc12d0",
+      "sourceSha256": "f8b5a4d10845e1556754ea0a377c851bd1b176eabae877771441fdda0665144a",
+      "bytes": 2252,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/airports/geometry.ts",
+      "destinations": [
+        "src/location/provider/airportGeometry.ts"
+      ],
+      "transformations": [
+        "Retain only source bearing/distance/radius constants; exclude destination/airportSpawn and aircraft clearance/arrival/FlightPreset calculations."
+      ]
+    },
+    {
+      "sourcePath": "src/airports/searchAirports.ts",
+      "sourceBlob": "7612a3c9c7403b76b54378de0cc4b1fb78e2e421",
+      "sourceSha256": "b97af1cbbdbb5dbb44c1f6742a8e60d957c2136def047d2a9b1ae3fad6824064",
+      "bytes": 8874,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/airports/searchAirports.ts",
+      "destinations": [
+        "src/location/provider/searchAirports.ts",
+        "src/location/provider/transport.ts"
+      ],
+      "transformations": [
+        "Faithful OSM runway parsing/aliases/optional copied elevation enrichment, supplied shared cache/transport/deep-copy. Request timeout acquisition extracted into the shared supplied transport."
+      ]
+    },
+    {
+      "sourcePath": "src/airports/types.ts",
+      "sourceBlob": "93b8587d7ba11905b4cbdb3ce4ce2a24219161ad",
+      "sourceSha256": "30f521daee4f76a793a8522950335f70c653c20089311ebb91ac027e2205a998",
+      "bytes": 670,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/airports/types.ts",
+      "destinations": [
+        "src/location/provider/airportTypes.ts"
+      ],
+      "transformations": [
+        "Extract AirportPoint/AirportRunway/Airport only; exclude AirportMode/AirportFlightPreset host policy."
+      ]
+    },
+    {
+      "sourcePath": "src/airports/validateAirport.ts",
+      "sourceBlob": "468d089d695bca9480cbea71484387a9c8bf131e",
+      "sourceSha256": "c6457215ff5ea900254f34b9ff7644d9c9ef8907c1a5c4104660757991f8fb11",
+      "bytes": 1264,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/airports/validateAirport.ts",
+      "destinations": [
+        "src/location/provider/validateAirport.ts"
+      ],
+      "transformations": [
+        "Faithful persisted airport/runway geometry validation with ESM imports."
+      ]
+    },
+    {
+      "sourcePath": "src/app/createGlobeApp.ts",
+      "sourceBlob": "4c9fae1427f933bda01ea52d50ddebecc1fe9bf6",
+      "sourceSha256": "76792b18412b06dd3eefd2c66272dd1934b7c4f66a61b2da36acc31aecae6b23",
+      "bytes": 52699,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/app/createGlobeApp.ts",
+      "destinations": [
+        "src/panels/controlsPanel.ts"
+      ],
+      "transformations": [
+        "Extract Controls section composition only, preserving source order/titles/defaultOpen/covered inputs; public UI factories, refresh/storage/document/settings and gamepad editor are supplied by host."
+      ]
+    },
+    {
+      "sourcePath": "src/assets/icons/gesture-mouse-left-button.svg",
+      "sourceBlob": "c39467faabd906e6ae3ff9b24e74317738aa8106",
+      "sourceSha256": "8643640929608e7e2341270d425f67dafab61c52ffa5dc8cd6171fb3f6bde152",
+      "bytes": 1297,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/assets/icons/gesture-mouse-left-button.svg",
+      "destinations": [
+        "assets/icons/gesture-mouse-left-button.svg",
+        "src/panels/gestureArtwork.ts"
+      ],
+      "transformations": [
+        "Verbatim gesture artwork asset and same raw string content in bundler-neutral optional Controls adapter."
+      ]
+    },
+    {
+      "sourcePath": "src/assets/icons/gesture-mouse-right-button.svg",
+      "sourceBlob": "f16027148cfd0d18fdd02755a7edde56112a0fc0",
+      "sourceSha256": "7f14c500c563bdaf0435461aa03466987ca5dc67996f16dfb949efcaae177fb2",
+      "bytes": 1290,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/assets/icons/gesture-mouse-right-button.svg",
+      "destinations": [
+        "assets/icons/gesture-mouse-right-button.svg",
+        "src/panels/gestureArtwork.ts"
+      ],
+      "transformations": [
+        "Verbatim gesture artwork asset and same raw string content in bundler-neutral optional Controls adapter."
+      ]
+    },
+    {
+      "sourcePath": "src/assets/icons/gesture-mouse-scroll-wheel.svg",
+      "sourceBlob": "aa006ffc3906b2d59a60977d94d99313d11b6108",
+      "sourceSha256": "986b475d3ff39decc04c3e21663260eebd153b48f6e41151a25c456f980b091a",
+      "bytes": 1692,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/assets/icons/gesture-mouse-scroll-wheel.svg",
+      "destinations": [
+        "assets/icons/gesture-mouse-scroll-wheel.svg",
+        "src/panels/gestureArtwork.ts"
+      ],
+      "transformations": [
+        "Verbatim gesture artwork asset and same raw string content in bundler-neutral optional Controls adapter."
+      ]
+    },
+    {
+      "sourcePath": "src/assets/icons/gesture-one-finger-click.svg",
+      "sourceBlob": "f6f54fc858904688fc28d2ac8201050866dbcd6d",
+      "sourceSha256": "81c7572848775d89022e6c48c874c16f8681c45ae18755d8229abe3e7bd527ae",
+      "bytes": 2331,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/assets/icons/gesture-one-finger-click.svg",
+      "destinations": [
+        "assets/icons/gesture-one-finger-click.svg",
+        "src/panels/gestureArtwork.ts"
+      ],
+      "transformations": [
+        "Verbatim gesture artwork asset and same raw string content in bundler-neutral optional Controls adapter."
+      ]
+    },
+    {
+      "sourcePath": "src/assets/icons/gesture-pinch.svg",
+      "sourceBlob": "87c258cc937f2ddb6b49301a1a2ec67609c32f5c",
+      "sourceSha256": "bc845001a3c267afd217a92810a1a333f56463d6e1459cc27a38e60f9baed6d3",
+      "bytes": 2781,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/assets/icons/gesture-pinch.svg",
+      "destinations": [
+        "assets/icons/gesture-pinch.svg",
+        "src/panels/gestureArtwork.ts"
+      ],
+      "transformations": [
+        "Verbatim gesture artwork asset and same raw string content in bundler-neutral optional Controls adapter."
+      ]
+    },
+    {
+      "sourcePath": "src/assets/icons/gesture-two-finger-swipe.svg",
+      "sourceBlob": "118c2fb5da79de73e046057a47652e955150ec21",
+      "sourceSha256": "dcd9875dfd0b809d21b63d8e2bd24418505e18be86dce8acba61c2714a326ad1",
+      "bytes": 2914,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/assets/icons/gesture-two-finger-swipe.svg",
+      "destinations": [
+        "assets/icons/gesture-two-finger-swipe.svg",
+        "src/panels/gestureArtwork.ts"
+      ],
+      "transformations": [
+        "Verbatim gesture artwork asset and same raw string content in bundler-neutral optional Controls adapter."
+      ]
+    },
+    {
+      "sourcePath": "src/assets/icons/gesture-two-finger-touch.svg",
+      "sourceBlob": "bc1d52df1e5dc895dd2cf2f1387c060a6cf783cf",
+      "sourceSha256": "042616c8361fffb0671f2d61ef76b0735d1678a9f8969163fae082bf63853d9a",
+      "bytes": 2706,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/assets/icons/gesture-two-finger-touch.svg",
+      "destinations": [
+        "assets/icons/gesture-two-finger-touch.svg",
+        "src/panels/gestureArtwork.ts"
+      ],
+      "transformations": [
+        "Verbatim gesture artwork asset and same raw string content in bundler-neutral optional Controls adapter."
+      ]
+    },
+    {
+      "sourcePath": "src/assets/providers/carto-logo-on-dark.svg",
+      "sourceBlob": "bfe585132db77746e1e3b868a08ce2f837a070fc",
+      "sourceSha256": "8f0d26d14228b4f3941652b5e4f87f57cdd5c3e09eae320fe3484c9777fae92f",
+      "bytes": 1138,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/assets/providers/carto-logo-on-dark.svg",
+      "destinations": [
+        "assets/providers/carto-logo-on-dark.svg"
+      ],
+      "transformations": [
+        "Verbatim committed provider artwork; existing source attribution remains with catalog."
+      ]
+    },
+    {
+      "sourcePath": "src/assets/providers/carto-logo-on-light.svg",
+      "sourceBlob": "87aff94b9bfb51a7eb6137d7a3886f78abff6168",
+      "sourceSha256": "9baa1cc7e094a86863b05820884dc0629e33bf6e0c25c9db7cad997f26b2470d",
+      "bytes": 1136,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/assets/providers/carto-logo-on-light.svg",
+      "destinations": [
+        "assets/providers/carto-logo-on-light.svg"
+      ],
+      "transformations": [
+        "Verbatim committed provider artwork; existing source attribution remains with catalog."
+      ]
+    },
+    {
+      "sourcePath": "src/assets/providers/openstreetmap.png",
+      "sourceBlob": "d2c8da1cc51271d62c4f0e2f5737239c300399a3",
+      "sourceSha256": "01b04a8daa2032ae585976e7328edfb9d860c7deaf2d2f7e541c00ba35ccfcc9",
+      "bytes": 3430,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/assets/providers/openstreetmap.png",
+      "destinations": [
+        "assets/providers/openstreetmap.png"
+      ],
+      "transformations": [
+        "Verbatim committed provider artwork; existing source attribution remains with catalog."
+      ]
+    },
+    {
+      "sourcePath": "src/camera/anchorPan.test.ts",
+      "sourceBlob": "7e9691f8773513b15e781fdb9277fb414f34da8e",
+      "sourceSha256": "1a4414e66e9cbf227925023eabde4876d8c861201ad08433bc18b70c0063d577",
+      "bytes": 1802,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/camera/anchorPan.test.ts",
+      "destinations": [
+        "tests/anchorPan.test.ts"
+      ],
+      "transformations": [
+        "Retain source behavioral cases; route owner imports and inject required test clock/ports."
+      ]
+    },
+    {
+      "sourcePath": "src/camera/anchorPan.ts",
+      "sourceBlob": "600ff0a59b357b33ef221bfd67ddb063d1c83494",
+      "sourceSha256": "29a99cfed45c7bb73558ba2b3c889fb5ef973ddf4be6cafc42f13a2871102c2f",
+      "bytes": 6354,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/camera/anchorPan.ts",
+      "destinations": [
+        "src/babylon/anchorPan.ts"
+      ],
+      "transformations": [
+        "Faithful anchor/ellipsoid query against the supplied Babylon camera/scene."
+      ]
+    },
+    {
+      "sourcePath": "src/camera/cameraGlide.test.ts",
+      "sourceBlob": "50ee3dc2c7bafe1a65ef47e170e64a5b0ace9fc5",
+      "sourceSha256": "c88e5d64127f88cb7ed1fe98ef18143a4a5d4ca114b1bbc3f41c2f3e8f56310d",
+      "bytes": 5949,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/camera/cameraGlide.test.ts",
+      "destinations": [
+        "tests/cameraGlide.test.ts"
+      ],
+      "transformations": [
+        "Keep all mixed glide behavior cases; route geographic and globe orbit helpers to their engine-owned split."
+      ]
+    },
+    {
+      "sourcePath": "src/camera/cameraGlide.ts",
+      "sourceBlob": "fa74ffaec0b904f4da075c4c7a2ca9b63c890dc1",
+      "sourceSha256": "c92a137336a948386c6f3677477f821c59cc72bce1bfead1853966fcefbf1821",
+      "bytes": 5945,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/camera/cameraGlide.ts",
+      "destinations": [
+        "src/camera/cameraGlide.ts"
+      ],
+      "transformations": [
+        "Faithful committed-source extraction with ESM relative imports."
+      ]
+    },
+    {
+      "sourcePath": "src/camera/cameraLimits.ts",
+      "sourceBlob": "c5076270b70656e276a0bcc3cd8905d70da70c34",
+      "sourceSha256": "57db35693c74d53a81ace42ed301eaf60ebeabf71aa3d702efc77c0ea1e12a80",
+      "bytes": 2280,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/camera/cameraLimits.ts",
+      "destinations": [
+        "src/camera/cameraLimits.ts"
+      ],
+      "transformations": [
+        "Faithful committed-source extraction with ESM relative imports."
+      ]
+    },
+    {
+      "sourcePath": "src/camera/cameraMath.test.ts",
+      "sourceBlob": "6bf63c2c66af3cb5d3c76eb40a36d4db506188dd",
+      "sourceSha256": "c4f09cb0f585fd077c4430f39e452f157e9ce739ab9122e612ad4fdd172b8197",
+      "bytes": 10106,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/camera/cameraMath.test.ts",
+      "destinations": [
+        "tests/cameraMath.test.ts"
+      ],
+      "transformations": [
+        "Faithful committed-source extraction with ESM relative imports."
+      ]
+    },
+    {
+      "sourcePath": "src/camera/cameraMath.ts",
+      "sourceBlob": "3029ffe59297bb377407411eb387bdfa5355e867",
+      "sourceSha256": "9696fd8c88c0b8a9eb6fa90ec76aaa5f05d50a719e28a4d884d1ea208d5a6157",
+      "bytes": 8103,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/camera/cameraMath.ts",
+      "destinations": [
+        "src/camera/cameraMath.ts"
+      ],
+      "transformations": [
+        "Faithful committed-source extraction with ESM relative imports."
+      ]
+    },
+    {
+      "sourcePath": "src/camera/cameraState.test.ts",
+      "sourceBlob": "376cda10885da9f41cad920c0d5e6876367899b5",
+      "sourceSha256": "c324cbbf6ebaf75de136c85b65234e369394c23176c57c36425e51b1426d3c3a",
+      "bytes": 5407,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/camera/cameraState.test.ts",
+      "destinations": [
+        "tests/cameraState.test.ts"
+      ],
+      "transformations": [
+        "Retain source behavioral cases; route owner imports and inject required test clock/ports."
+      ]
+    },
+    {
+      "sourcePath": "src/camera/cameraState.ts",
+      "sourceBlob": "5a8e0a637b01d1597caf396c415a50081db1971a",
+      "sourceSha256": "e0a23bdf7e41820d8ca6f164a8ee8d4bbba99ba83d6430386112a91ec3433c26",
+      "bytes": 16541,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/camera/cameraState.ts",
+      "destinations": [
+        "src/babylon/cameraState.ts"
+      ],
+      "transformations": [
+        "Keep controller limits/height-follow/pan/orbit/zoom/anchor logic; require supplied camera, shared clock and feature-point picking port; no sprite owner import."
+      ]
+    },
+    {
+      "sourcePath": "src/engine/babylon/createBabylonRuntime.sim.test.ts",
+      "sourceBlob": "888b7eec520103f9398839657c6717078c568685",
+      "sourceSha256": "6b561ae3b607c24a26824c56d31e8af8c700f1385bd84efd446bc5d4bec96e7b",
+      "bytes": 58923,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/engine/babylon/createBabylonRuntime.sim.test.ts",
+      "destinations": [
+        "fixtures/composition/LegacyGlobeRuntimeTests.ts"
+      ],
+      "transformations": [
+        "Retain all immutable mixed runtime assertions as registerLegacyGlobeRuntimeTests(ports), with explicit installed public runtime/settings/leaf mocks/frame/renderer/Sky/root/teardown and original host terrain policy. Replace app singleton/bootstrap mocks/private dynamic imports with public host ports. 25 direct test registrations plus parameterized cases preserved; registration is inactive and UNRUN until a real host adapter adopts it. No Flight/Campus implementation copied."
+      ]
+    },
+    {
+      "sourcePath": "src/engine/babylon/createBabylonRuntime.ts",
+      "sourceBlob": "18014094e72e2642356913f288445ec75c84851c",
+      "sourceSha256": "d144d8962f4539ab226fcbea892e5d0f92307bd8592f4345c06a49ec0e86129a",
+      "bytes": 114492,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/engine/babylon/createBabylonRuntime.ts",
+      "destinations": [
+        "src/babylon/cameraClipping.ts",
+        "src/babylon/createGlobeRuntime.ts",
+        "src/babylon/globeCamera.ts",
+        "src/babylon/globeInertia.ts",
+        "src/babylon/globeRuntimePorts.ts",
+        "src/babylon/navigationCamera.ts",
+        "src/camera/cameraDefaults.ts",
+        "src/input/globeIntentMotion.ts",
+        "src/settings/cameraSettings.ts",
+        "src/settings/catalogue/globeRuntime.ts",
+        "tests/globeCamera.test.ts",
+        "tests/globeIntentMotion.test.ts"
+      ],
+      "transformations": [
+        "Full retained globe runtime orchestration composed synchronously through required borrowed renderer/scene/scheduler/profile/lifecycle/settings/platform/map/Sky ports. Existing extracted camera/inertia/clipping/intent/navigation/surface/map helpers are reused. Renderer alone owns begin/render/end/context/resolution; engine owns feature resources/holds/subscriptions only. Preserve all 55 original runtime methods plus explicit host frame/external methods; full status/source/fallback/focus/readings/streaming/preparation body retained. Query/global/bootstrap/debug construction and aircraft acceptance/default-altitude policy become injected host responsibilities; Sky readings/notes use its actual public helper. Named source cost defaults are host catalogue contributions. Failure cleanup, cancelled preparation and shared refresh fixtures prepared, all UNRUN. No old constructor alias or checked artifact/adoption claim. Bounded authored compatibility repair resets frame/focus/camera/preparation state before supplied cleanup; operation+capture and terrain settlement failures are preserved/aggregated, timer/signal/hold/progress cleanup is all-attempted, eager timeout waits for its stop handle. Source-only causal tests cover these failure paths; native/provider reentrancy and hidden unreturned acquisition remain unqualified. Bounded source-only cleanup/frame/async renewal2026-10-09: src/babylon/cameraClipping.ts, src/babylon/createGlobeRuntime.ts, src/babylon/globeRuntimePorts.ts. Original assertions/records preserved; explicit ordinary frame and async metadata/retained-handle compatibility ports or independently attempted cleanup/stale restoration and causal fixtures added as applicable. UNRUN.",
+        "Reported primary typecheck causal repair: public owner signatures/defaults and fixture type adaptation, every assertion retained, repaired source UNRUN."
+      ]
+    },
+    {
+      "sourcePath": "src/engine/babylon/createRasterTilesRuntime.atlas.test.ts",
+      "sourceBlob": "a52473e3bc5ad97b189d7e15503994b013b9ab52",
+      "sourceSha256": "1e979a07dd2bd705f8f0f2d90017f32b686ae4de00e6b093bda02187230861d8",
+      "bytes": 32938,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/engine/babylon/createRasterTilesRuntime.atlas.test.ts",
+      "destinations": [
+        "tests/createRasterTilesRuntime.atlas.test.ts"
+      ],
+      "transformations": [
+        "retain all source runtime/atlas/morph/coverage assertions; module mocks become required host ports, registry is public UI+owner catalogues"
+      ]
+    },
+    {
+      "sourcePath": "src/engine/babylon/createRasterTilesRuntime.test.ts",
+      "sourceBlob": "70d04bc65bb753e8fb76c4fd31786ce7ca4c81a5",
+      "sourceSha256": "17b4efe067c5f4b498dce8e3e7ca62555ab879ae42b8ff278190c5bd0260cc72",
+      "bytes": 14201,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/engine/babylon/createRasterTilesRuntime.test.ts",
+      "destinations": [
+        "tests/createRasterTilesRuntime.test.ts"
+      ],
+      "transformations": [
+        "retain all source runtime/atlas/morph/coverage assertions; module mocks become required host ports, registry is public UI+owner catalogues",
+        "Reported primary typecheck causal repair: public owner signatures/defaults and fixture type adaptation, every assertion retained, repaired source UNRUN."
+      ]
+    },
+    {
+      "sourcePath": "src/engine/babylon/createRasterTilesRuntime.ts",
+      "sourceBlob": "0831cc4d1e10123321f375a0a40eb170b150d079",
+      "sourceSha256": "e154ba84d2c56d053e3e722910b3a4c323cbe3a737774b249147b257ae2cba21",
+      "bytes": 56794,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/engine/babylon/createRasterTilesRuntime.ts",
+      "destinations": [
+        "src/babylon/createRasterTilesRuntime.ts",
+        "src/babylon/terrainMesh.ts",
+        "src/map/runtimeContracts.ts"
+      ],
+      "transformations": [
+        "Split unchanged hidden-first terrain mesh builder from mixed imagery/streaming runtime; supplied scene/worldRoot and monotonic clock, unchanged source segments default/geometry.",
+        "Split unchanged feedback/terrain/detail types from mixed streamed runtime, plus explicit structural status fields used by owner panels and host connectors.",
+        "Retain complete source legacy/atlas tile selection, DEM replacement, cache/LRU, smoothing/seams/revision, suspension/retry, automatic detail and feedback. Existing renderer/lighting/loaders/settings/shared clock/wake/log plus named source 2 ms rebuild budget are required ports; no app singleton/device/scheduler construction. Mesh extraction is reused. Bounded source-only cleanup/frame/async renewal2026-10-09: src/babylon/createRasterTilesRuntime.ts. Original assertions/records preserved; explicit ordinary frame and async metadata/retained-handle compatibility ports or independently attempted cleanup/stale restoration and causal fixtures added as applicable. UNRUN.",
+        "Current source-only optional managed Atlas whole-batch/retirement/table integration; original immutable blobs and complete algorithm/test selection remain retained. No executed qualification.",
+        "Reported primary typecheck causal repair: public owner signatures/defaults and fixture type adaptation, every assertion retained, repaired source UNRUN."
+      ]
+    },
+    {
+      "sourcePath": "src/engine/babylon/createTilesRuntime.test.ts",
+      "sourceBlob": "30b8796a428e1316a837cb93849ffa984d6a3e9f",
+      "sourceSha256": "7c0474bb54530e4f239ee9131528c7e45f82d67c6cfb98cbf38f86a36c6f6c26",
+      "bytes": 13740,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/engine/babylon/createTilesRuntime.test.ts",
+      "destinations": [
+        "tests/createTilesRuntime.test.ts"
+      ],
+      "transformations": [
+        "retain every drawable/loading/focus/revision assertion with injected third-party factories, public readiness and owner registry",
+        "Reported primary typecheck causal repair: public owner signatures/defaults and fixture type adaptation, every assertion retained, repaired source UNRUN."
+      ]
+    },
+    {
+      "sourcePath": "src/engine/babylon/createTilesRuntime.ts",
+      "sourceBlob": "d777bb6d4469f8f33a8194b79831e8461425e371",
+      "sourceSha256": "2aa49e4f3783065f13f885aad58ea5cbf9dce04dca90f06213a2466fea8b1b25",
+      "bytes": 21445,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/engine/babylon/createTilesRuntime.ts",
+      "destinations": [
+        "src/babylon/createTilesRuntime.ts"
+      ],
+      "transformations": [
+        "Retain complete source Google auth/traversal refinement/focus/horizon/suspension/cache/loading/error/surface-revision behavior. Host supplies scene parser/auth factories, public renderer shader readiness, combined cancellation, lighting/settings/response/timing/log ports; no new backend/clock/scheduler."
+      ]
+    },
+    {
+      "sourcePath": "src/engine/babylon/describeGoogleTileFailure.test.ts",
+      "sourceBlob": "aff6733a627010cc74fa1529b52a549fe89c188b",
+      "sourceSha256": "82f66cb6bf202197f62215d10fc7e76ae0d13095cc0349c237b5403b27d3d64b",
+      "bytes": 1378,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/engine/babylon/describeGoogleTileFailure.test.ts",
+      "destinations": [
+        "tests/describeGoogleTileFailure.test.ts"
+      ],
+      "transformations": [
+        "retain all Google redaction/cause assertions"
+      ]
+    },
+    {
+      "sourcePath": "src/engine/babylon/describeGoogleTileFailure.ts",
+      "sourceBlob": "ec0a184e7b3de7f7eb808c152c789aa30aa801f6",
+      "sourceSha256": "8a30eabe9e7208aca2403ffa3d1f7df646032951f06f478f5fe5cbfd62d7b3d3",
+      "bytes": 3624,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/engine/babylon/describeGoogleTileFailure.ts",
+      "destinations": [
+        "src/browser/describeGoogleTileFailure.ts"
+      ],
+      "transformations": [
+        "Keep source Google HTTP failure descriptions, secret query redaction, bounded body and causal reports; resource timing entries are required supplied data instead of global performance reads."
+      ]
+    },
+    {
+      "sourcePath": "src/engine/babylon/imagery/createImageryRuntime.continuity.test.ts",
+      "sourceBlob": "971f48082c7b732ad6962c29a741a598428e1711",
+      "sourceSha256": "e97ab63ba9f3ce7e5a3e22feea7ad289236488df2528fedefef1e74206dad984",
+      "bytes": 20897,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/engine/babylon/imagery/createImageryRuntime.continuity.test.ts",
+      "destinations": [
+        "tests/createImageryRuntime.continuity.test.ts"
+      ],
+      "transformations": [
+        "retain every actual selector/residency/material/continuity assertion; existing single test clock/device/timer supplied explicitly"
+      ]
+    },
+    {
+      "sourcePath": "src/engine/babylon/imagery/createImageryRuntime.test.ts",
+      "sourceBlob": "4d3b828ad41ff2b9ee5f0f77db865e1f15acabde",
+      "sourceSha256": "a9823561b087d9fe3d4061537138ed786c105a14efb60ba711f727e9aacbf243",
+      "bytes": 22078,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/engine/babylon/imagery/createImageryRuntime.test.ts",
+      "destinations": [
+        "tests/createImageryRuntime.test.ts"
+      ],
+      "transformations": [
+        "retain every actual selector/residency/material/continuity assertion; existing single test clock/device/timer supplied explicitly Bounded source-only cleanup/frame/async renewal2026-10-09: tests/createImageryRuntime.test.ts. Original assertions/records preserved; explicit ordinary frame and async metadata/retained-handle compatibility ports or independently attempted cleanup/stale restoration and causal fixtures added as applicable. UNRUN.",
+        "Reported primary typecheck causal repair: public owner signatures/defaults and fixture type adaptation, every assertion retained, repaired source UNRUN."
+      ]
+    },
+    {
+      "sourcePath": "src/engine/babylon/imagery/createImageryRuntime.ts",
+      "sourceBlob": "5cc189462535238e2650fd9732e700d8a5e60fdb",
+      "sourceSha256": "4cc70c01e899958facd8a44b0d24ecf2c546484cd568b01ef80ad9902c81256c",
+      "bytes": 41752,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/engine/babylon/imagery/createImageryRuntime.ts",
+      "destinations": [
+        "src/babylon/imagery/createImageryRuntime.ts"
+      ],
+      "transformations": [
+        "Keep complete source atlas selection, coverage-first handovers, budgets, hidden/current bindings, residency and feedback; required loader/device/capabilities/host cancellation/shared clock/wake/log ports replace browser defaults/backend construction. No new scheduler or device. Bounded source-only cleanup/frame/async renewal2026-10-09: src/babylon/imagery/createImageryRuntime.ts. Original assertions/records preserved; explicit ordinary frame and async metadata/retained-handle compatibility ports or independently attempted cleanup/stale restoration and causal fixtures added as applicable. UNRUN.",
+        "Current source-only optional managed Atlas whole-batch/retirement/table integration; original immutable blobs and complete algorithm/test selection remain retained. No executed qualification.",
+        "Reported primary typecheck causal repair: public owner signatures/defaults and fixture type adaptation, every assertion retained, repaired source UNRUN."
+      ]
+    },
+    {
+      "sourcePath": "src/engine/babylon/imagery/imageryAtlas.ts",
+      "sourceBlob": "e57810db4841db0eb24fd30bd36bd633f151121a",
+      "sourceSha256": "3fa711399752a275dc287b557f76ebd9fa7050a28fd05194c0ca41c0155c9bed",
+      "bytes": 6092,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/engine/babylon/imagery/imageryAtlas.ts",
+      "destinations": [
+        "src/babylon/imagery/imageryAtlas.ts"
+      ],
+      "transformations": [
+        "Retain complete atlas slot/block allocator, format/filter/gamma/clamp/layout planning and mip/table update coordinates; required generic renderer device factory/write ports replace RawTexture construction and scene.getEngine update calls. Renderer capability snapshot is supplied. Bounded source-only cleanup/frame/async renewal2026-10-09: src/babylon/imagery/imageryAtlas.ts. Original assertions/records preserved; explicit ordinary frame and async metadata/retained-handle compatibility ports or independently attempted cleanup/stale restoration and causal fixtures added as applicable. UNRUN.",
+        "Current source-only optional managed Atlas whole-batch/retirement/table integration; original immutable blobs and complete algorithm/test selection remain retained. No executed qualification."
+      ]
+    },
+    {
+      "sourcePath": "src/engine/babylon/imagery/imageryAtlasLayout.ts",
+      "sourceBlob": "55fc1fa4a75f7e6b3924278251df188c0cc0bf2a",
+      "sourceSha256": "0db9c40e5bb816aadc87c0cd5f4e36f8dfcb19ee42daf6f6d1a8bd1f882cf359",
+      "bytes": 7129,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/engine/babylon/imagery/imageryAtlasLayout.ts",
+      "destinations": [
+        "src/terrain/imagery/imageryAtlasLayout.ts"
+      ],
+      "transformations": [
+        "Faithful atlas page/layout and display-binding format policy; no device creation or texture upload implementation."
+      ]
+    },
+    {
+      "sourcePath": "src/engine/babylon/imagery/imageryBinding.test.ts",
+      "sourceBlob": "120d9274383935cba24f5b922a7e82e39a8e9167",
+      "sourceSha256": "9dd9c7f8f8324ccfc5b9004a851ed663ab4f45292730d2f7793474fb99d15e6b",
+      "bytes": 11887,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/engine/babylon/imagery/imageryBinding.test.ts",
+      "destinations": [
+        "tests/imageryBinding.test.ts"
+      ],
+      "transformations": [
+        "Retain complete source format/binding/page/residency behavior tests with owner paths and explicit host cancellation."
+      ]
+    },
+    {
+      "sourcePath": "src/engine/babylon/imagery/imageryBinding.ts",
+      "sourceBlob": "3c38472396e2066f801cd63ba2b2d1703d171307",
+      "sourceSha256": "a2ec812398f4d42b8326588b9f21276017109d1a5375277bf0d28f06fca4e237",
+      "bytes": 12135,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/engine/babylon/imagery/imageryBinding.ts",
+      "destinations": [
+        "src/terrain/imagery/imageryBinding.ts"
+      ],
+      "transformations": [
+        "Faithful atlas page/layout and display-binding format policy; no device creation or texture upload implementation."
+      ]
+    },
+    {
+      "sourcePath": "src/engine/babylon/imagery/imageryDecodeWorker.ts",
+      "sourceBlob": "f1cb7345fb338f15487b9bc84eac34a07d814084",
+      "sourceSha256": "02359c83060631c8b5cdad7da48dd5e6a9328277eaacca60bbbee9ceaa1da241",
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/omitted-originals/src/engine/babylon/imagery/imageryDecodeWorker.ts",
+      "bytes": 1054,
+      "destinations": [
+        "src/browser/atlasImageryWorkerKernel.ts",
+        "src/browser/atlasImageryWorkerProtocol.ts"
+      ],
+      "transformations": [
+        "Original optional worker/factory/fallback, native decode and transparent/page preparation/whole mip transport represented by explicit public worker factory/message/kernel seams. Native implementations supplied by host; actual Images transport/header/cache/dimension/broker reused, private encoded copies and bitmap/RGBA/page holds preadmitted; no common view detach or fabricated void retirement proof. Browser compatibility/current adoption UNRUN."
+      ]
+    },
+    {
+      "sourcePath": "src/engine/babylon/imagery/imageryLoader.ts",
+      "sourceBlob": "3728f7099ffd19e70bce15cd7ab9a3913e2f9cae",
+      "sourceSha256": "b5dcfdfd5ca1fbf7bb1b2478e1bccacf7552e8f1718f3382c425960c1efb026f",
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/omitted-originals/src/engine/babylon/imagery/imageryLoader.ts",
+      "bytes": 3986,
+      "destinations": [
+        "src/browser/atlasImageryWorkerBridge.ts",
+        "src/browser/boundedAtlasImageryLoader.ts"
+      ],
+      "transformations": [
+        "Original optional worker/factory/fallback, native decode and transparent/page preparation/whole mip transport represented by explicit public worker factory/message/kernel seams. Native implementations supplied by host; actual Images transport/header/cache/dimension/broker reused, private encoded copies and bitmap/RGBA/page holds preadmitted; no common view detach or fabricated void retirement proof. Browser compatibility/current adoption UNRUN.",
+        "Reported primary typecheck causal repair: public owner signatures/defaults and fixture type adaptation, every assertion retained, repaired source UNRUN."
+      ]
+    },
+    {
+      "sourcePath": "src/engine/babylon/imagery/imageryMaterialPlugin.ts",
+      "sourceBlob": "d53bd57465f4c67a989770bcd97cbd46d5b82e8f",
+      "sourceSha256": "340ca67752f50aed0eb1fc768a438df6a7dfdefe8df9725aaa6f54a67bf3bf6d",
+      "bytes": 10960,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/engine/babylon/imagery/imageryMaterialPlugin.ts",
+      "destinations": [
+        "src/babylon/imagery/imageryMaterialPlugin.ts"
+      ],
+      "transformations": [
+        "Retain owner terrain imagery shader/binding/view conventions with supplied scene/resources; public host atlas port replaces backend implementation.",
+        "Current source-only optional managed Atlas whole-batch/retirement/table integration; original immutable blobs and complete algorithm/test selection remain retained. No executed qualification."
+      ]
+    },
+    {
+      "sourcePath": "src/engine/babylon/imagery/imageryPagePreparation.test.ts",
+      "sourceBlob": "38766296adbdffcde6833ce133cd8bfb9818da0a",
+      "sourceSha256": "20bb5a32b56dffa09585a95eee40533d1bb11271be92b86fa02db230af165061",
+      "bytes": 794,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/engine/babylon/imagery/imageryPagePreparation.test.ts",
+      "destinations": [
+        "tests/imageryPagePreparation.test.ts"
+      ],
+      "transformations": [
+        "Retain complete source format/binding/page/residency behavior tests with owner paths and explicit host cancellation."
+      ]
+    },
+    {
+      "sourcePath": "src/engine/babylon/imagery/imageryPagePreparation.ts",
+      "sourceBlob": "713eb3ca59210f9b033c53e354ec011acc912e74",
+      "sourceSha256": "4d303139109abe921912decf8ff9c5271e5135c17384af1cbe0f80a20cb6b8f3",
+      "bytes": 2034,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/engine/babylon/imagery/imageryPagePreparation.ts",
+      "destinations": [
+        "src/terrain/imagery/imageryPagePreparation.ts"
+      ],
+      "transformations": [
+        "Split unchanged RGBA page/gutter/mip preparation and transparent-missing detection; browser decode is supplied by the host loader."
+      ]
+    },
+    {
+      "sourcePath": "src/engine/babylon/imagery/imageryParameters.ts",
+      "sourceBlob": "f94b4af163ea8fc4283ae7ad3829dd037f37f447",
+      "sourceSha256": "1a27652a2734381fd08666ca077cf7fd2effd48a270355beb350e8d591f2be51",
+      "bytes": 3063,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/engine/babylon/imagery/imageryParameters.ts",
+      "destinations": [
+        "src/settings/imageryParameters.ts"
+      ],
+      "transformations": [
+        "Keep source map imagery limit/tuning IDs and precise MiB/seconds/count conversion; public supplied registry types, no singleton."
+      ]
+    },
+    {
+      "sourcePath": "src/engine/babylon/imagery/imageryResidency.test.ts",
+      "sourceBlob": "ab7fc723a8cae7f0273ff564517ad25949ba0fc6",
+      "sourceSha256": "307448897da1b52aca8d85ec0fed9109c958753893363ab75c41f58bd3f4408d",
+      "bytes": 11155,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/engine/babylon/imagery/imageryResidency.test.ts",
+      "destinations": [
+        "tests/imageryResidency.test.ts"
+      ],
+      "transformations": [
+        "Retain complete source format/binding/page/residency behavior tests with owner paths and explicit host cancellation. Bounded source-only cleanup/frame/async renewal2026-10-09: tests/imageryResidency.test.ts. Original assertions/records preserved; explicit ordinary frame and async metadata/retained-handle compatibility ports or independently attempted cleanup/stale restoration and causal fixtures added as applicable. UNRUN."
+      ]
+    },
+    {
+      "sourcePath": "src/engine/babylon/imagery/imageryResidency.ts",
+      "sourceBlob": "51d2fb2db57dfb0e5ad3497fb2a99ed42eb52f33",
+      "sourceSha256": "66770ea27ebd37dccf4e29411216fef90e3d3b9eb62a47563f7b38b65d7fb072",
+      "bytes": 19283,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/engine/babylon/imagery/imageryResidency.ts",
+      "destinations": [
+        "src/terrain/imagery/imageryResidency.ts"
+      ],
+      "transformations": [
+        "Retain source bounded map demand/residency/pinning/admission/retry/late response behavior and limits. Required generic cancellation/monotonic clock and injected loader/page store remove browser globals and backend allocation. Bounded source-only cleanup/frame/async renewal2026-10-09: src/terrain/imagery/imageryResidency.ts. Original assertions/records preserved; explicit ordinary frame and async metadata/retained-handle compatibility ports or independently attempted cleanup/stale restoration and causal fixtures added as applicable. UNRUN.",
+        "SOURCE-ONLY bounded Atlas renewal: optional complete managed prepared lifetime; fourth loader priority; retire identities/charges before all-attempted close callbacks; explicit native managed refusal before slot allocation; original plain records/selection/retry/pins preserved. UNRUN.",
+        "Current source-only optional managed Atlas whole-batch/retirement/table integration; original immutable blobs and complete algorithm/test selection remain retained. No executed qualification."
+      ]
+    },
+    {
+      "sourcePath": "src/engine/babylon/imagery/imageryView.ts",
+      "sourceBlob": "d9199469374a6a951d7f2999801a3a6daf6d98e1",
+      "sourceSha256": "e7cae5c09b0769bae568963cf406164d1e2a67f2ee0538b6432185f50aa8fc99",
+      "bytes": 2565,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/engine/babylon/imagery/imageryView.ts",
+      "destinations": [
+        "src/babylon/imagery/imageryView.ts"
+      ],
+      "transformations": [
+        "Retain owner terrain imagery shader/binding/view conventions with supplied scene/resources; public host atlas port replaces backend implementation."
+      ]
+    },
+    {
+      "sourcePath": "src/engine/babylon/imagery/terrainLightPlugin.test.ts",
+      "sourceBlob": "799033d5a79f16feda9e683bd64f85387176663f",
+      "sourceSha256": "ec4605a402a6260049a7417eb07a1d7b004365a9bbee74ce91b73591315abb40",
+      "bytes": 24697,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/engine/babylon/imagery/terrainLightPlugin.test.ts",
+      "destinations": [
+        "tests/terrainLightPlugin.test.ts"
+      ],
+      "transformations": [
+        "all lighting/shader/night/local-light assertions retained with public Sky fixture inputs and scoped actual plugin constructor",
+        "Reported primary typecheck causal repair: public owner signatures/defaults and fixture type adaptation, every assertion retained, repaired source UNRUN."
+      ]
+    },
+    {
+      "sourcePath": "src/engine/babylon/imagery/terrainLightPlugin.ts",
+      "sourceBlob": "f141920136fbaf48482cf28fc5bdec7f7d7c9829",
+      "sourceSha256": "fc5f6e50ad6be7ce8c5d12a14df238a4f666548266a218689672cfae842aff5e",
+      "bytes": 27319,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/engine/babylon/imagery/terrainLightPlugin.ts",
+      "destinations": [
+        "src/babylon/imagery/terrainLightPlugin.ts"
+      ],
+      "transformations": [
+        "Keep exact terrain lighting value contracts, CPU factors and GLSL/WGSL shader/program behavior; sky-owned table math/constants are required structural host ports, and the source scene registry is scoped to a host-created adapter rather than a module singleton."
+      ]
+    },
+    {
+      "sourcePath": "src/engine/babylon/loadMapTexture.ts",
+      "sourceBlob": "45bf45e6bd0a25a22ce3c445f45010e2d4f0521d",
+      "sourceSha256": "bdadde27628e6e535b4f2de3d8d9109a289462ffc400b734069439b894f19bac",
+      "bytes": 1482,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/engine/babylon/loadMapTexture.ts",
+      "destinations": [
+        "src/babylon/imagery/mapTextureLoader.ts"
+      ],
+      "transformations": [
+        "Retain single fetch/chunk count/pending callback contract through actual public renderer createPendingImageTexture factory; host supplies transport/cache/blob admission/object URLs/realm. Source defaults/gamma stay renderer compatibility adapter-owned."
+      ]
+    },
+    {
+      "sourcePath": "src/engine/babylon/mapDownloadMeter.test.ts",
+      "sourceBlob": "b00bbc47813c648cbf9daada58cb560d6b364ece",
+      "sourceSha256": "400acb427d799f5f7f33b2271f69a902f113bf30a2eaee195a390202e28b4a39",
+      "bytes": 2324,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/engine/babylon/mapDownloadMeter.test.ts",
+      "destinations": [
+        "tests/mapDownloadMeter.test.ts"
+      ],
+      "transformations": [
+        "retain all stream/meter assertions with explicit host clock/timer/response realm"
+      ]
+    },
+    {
+      "sourcePath": "src/engine/babylon/mapDownloadMeter.ts",
+      "sourceBlob": "bc2432ab8108d3bc990eb3de0d71dfcb86e1c0db",
+      "sourceSha256": "955842eb05d55961dbe7aa78e92ed125c31d08b1c17d06b7e19553e71775ce93",
+      "bytes": 2321,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/engine/babylon/mapDownloadMeter.ts",
+      "destinations": [
+        "src/browser/mapDownloadMeter.ts"
+      ],
+      "transformations": [
+        "Preserve rolling one-second payload rate and source one-stream counting; mandatory host monotonic clock/timer/Response/TransformStream realm, no network singleton or duplicate request."
+      ]
+    },
+    {
+      "sourcePath": "src/engine/babylon/navigationLease.test.ts",
+      "sourceBlob": "77e5b90dfbb48194690be5793a00306ef5ccf48c",
+      "sourceSha256": "ab2802be81f28f766705cd714bbb08866e3b46f906bfe5a562182e69be99e679",
+      "bytes": 5002,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/engine/babylon/navigationLease.test.ts",
+      "destinations": [
+        "tests/navigationLease.test.ts"
+      ],
+      "transformations": [
+        "Keep complete original seven lease cases with explicit native test cancellation/focus ports."
+      ]
+    },
+    {
+      "sourcePath": "src/engine/babylon/navigationLease.ts",
+      "sourceBlob": "6ecd2ee4deda4de624886c2f6ee79434a2a6ae09",
+      "sourceSha256": "30f6e9b9e142601898e40faf96b81051aef6ce895ed1d20f37aa7602038d66e9",
+      "bytes": 9349,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/engine/babylon/navigationLease.ts",
+      "destinations": [
+        "src/navigation/navigationLease.ts"
+      ],
+      "transformations": [
+        "Preserve exclusive lease/generation/presentation/abort/continuous-hold bookkeeping. Required focus/cancellation host ports and generic identities remove DOM/global construction from pure core."
+      ]
+    },
+    {
+      "sourcePath": "src/engine/babylon/rasterBaseMaps.ts",
+      "sourceBlob": "ce9a2e4f079d8757834640935fc5e5c9fa3674e4",
+      "sourceSha256": "5f9f6bf1ea8ec4715e6822ad5de78520c702a84e3346e7bb9b4aa99216826ea9",
+      "bytes": 9217,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/engine/babylon/rasterBaseMaps.ts",
+      "destinations": [
+        "src/map/rasterBaseMaps.ts"
+      ],
+      "transformations": [
+        "Retain entire source catalog/protocol/retina/content/prefetch/coverage/key rules; use shipped asset URLs instead of bundler-only image imports."
+      ]
+    },
+    {
+      "sourcePath": "src/engine/babylon/resolveMapRuntimeConfig.ts",
+      "sourceBlob": "b62896974b669bc01f0699a90be0098a3187863f",
+      "sourceSha256": "ab62684cab6c31bd86541100adc18677b178cda43f4d6364f00c410da056ac76",
+      "bytes": 6491,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/engine/babylon/resolveMapRuntimeConfig.ts",
+      "destinations": [
+        "src/settings/mapRuntimeConfig.ts"
+      ],
+      "transformations": [
+        "Preserve source option/saved/key/map/terrain/atlas-legacy resolution and host-default precedence; require public supplied settings, no isolated/app singleton registry construction."
+      ]
+    },
+    {
+      "sourcePath": "src/engine/types.ts",
+      "sourceBlob": "e48b313c5b018c9c10e8c5d03c399c2092dff47b",
+      "sourceSha256": "00cfd8712b13df7b3725ee24898353fad8ec82ed820a2fc6d20668ff3b672bf5",
+      "bytes": 2004,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/engine/types.ts",
+      "destinations": [
+        "src/layers/contracts.ts",
+        "src/view.ts"
+      ],
+      "transformations": [
+        "Faithful committed-source extraction with ESM relative imports. Split pure GlobeLayer contracts from view; retain view compatibility exports and original fields without an app singleton."
+      ]
+    },
+    {
+      "sourcePath": "src/hud/compassScaleTuner.ts",
+      "sourceBlob": "9473f892f10fa3bb8e1fd13b6800e93a163cf2fb",
+      "sourceSha256": "89c3244f4692a7b09322cb90238ba5215001115a99cb74adc4d69cadc2cd8fb6",
+      "bytes": 6065,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/hud/compassScaleTuner.ts",
+      "destinations": [
+        "src/hud/compassScaleTuner.ts",
+        "src/visualization/defaults.ts"
+      ],
+      "transformations": [
+        "Retain source form/apply/save/default behavior and pure defaults; inject explicit document/settings, preserve refused Save state and remove late listeners."
+      ]
+    },
+    {
+      "sourcePath": "src/hud/inputModeHud.test.ts",
+      "sourceBlob": "44f99bbd74c82b64862a2ab4aa232b0c92fe34e3",
+      "sourceSha256": "ea9263e6933dfe8b4218f8260d3b5f2330a4929ced0ea605cf330ea64a1af8dd",
+      "bytes": 5601,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/hud/inputModeHud.test.ts",
+      "destinations": [
+        "tests/inputModeHud.test.ts"
+      ],
+      "transformations": [
+        "Retain every original mode/touch/laptop/persistence/sensitivity/button/inline lifecycle case; construct public UI registry only in host test with engine legacy migrations and injected hints/document/log."
+      ]
+    },
+    {
+      "sourcePath": "src/hud/inputModeHud.ts",
+      "sourceBlob": "ce119d7077e459c05dd9c7721ba0d2de965bf4c9",
+      "sourceSha256": "793a83ad64ee3ad148a0dd66170335a16d99655fab7c17b289e49ea1260700d1",
+      "bytes": 21860,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/hud/inputModeHud.ts",
+      "destinations": [
+        "src/panels/inputModeHud.ts"
+      ],
+      "transformations": [
+        "Keep complete input-method inline editor/toolbar button, original SVG gesture artwork and debug behavior; supplied document/settings/device hints/log replace app singleton/global realm reads."
+      ]
+    },
+    {
+      "sourcePath": "src/hud/poiSpriteSizeTuner.ts",
+      "sourceBlob": "92c8040caf6cabaf60da4b0f0d499974d4a714c0",
+      "sourceSha256": "7de3c64851eb40f05d78cd8fb679441d9fa9b1a9d2f2519efbd8f948c4606202",
+      "bytes": 6099,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/hud/poiSpriteSizeTuner.ts",
+      "destinations": [
+        "src/hud/poiSpriteSizeTuner.ts",
+        "src/visualization/defaults.ts"
+      ],
+      "transformations": [
+        "Retain source form/apply/save/default behavior and pure defaults; inject explicit document/settings, preserve refused Save state and remove late listeners."
+      ]
+    },
+    {
+      "sourcePath": "src/input/anchorPanDebugOverlay.ts",
+      "sourceBlob": "3d9c9a51afc24501ac48ec2b7dd78443023d1bbc",
+      "sourceSha256": "dbe1810f238b3b42845cf92ec22710a28062d5a18941debb4c9e23954708e96b",
+      "bytes": 2304,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/input/anchorPanDebugOverlay.ts",
+      "destinations": [
+        "src/browser/anchorPanDebugOverlay.ts"
+      ],
+      "transformations": [
+        "Retain overlay artwork/lifecycle, using the supplied canvas document; the host decides contribution activation."
+      ]
+    },
+    {
+      "sourcePath": "src/input/createInputController.test.ts",
+      "sourceBlob": "ed13019a86ae9bb5300b18e40bd202e0b78398a8",
+      "sourceSha256": "7758a0d392dc8efe269fba901ec4e102964dea41e9a64c0458ff04b23bc22b48",
+      "bytes": 7480,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/input/createInputController.test.ts",
+      "destinations": [
+        "fixtures/composition/viewerInputTests.ts",
+        "tests/createInputController.test.ts"
+      ],
+      "transformations": [
+        "Split complete original case set: seven engine cases remain tests; two original viewer cases register through explicit actual-viewer host fixture, pending public360 consumer composition."
+      ]
+    },
+    {
+      "sourcePath": "src/input/createInputController.ts",
+      "sourceBlob": "715a54e1d47291d8867d417743f18ac29f88c507",
+      "sourceSha256": "7b4d52d27156a3072cac9f75f8240e8f74ecea791703b5b9ddffdabbf94a9779",
+      "bytes": 7358,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/input/createInputController.ts",
+      "destinations": [
+        "src/browser/createInputController.ts"
+      ],
+      "transformations": [
+        "Retain all composition/suspend/handback semantics; require host realm/shared clock and preference callbacks and inject diagnostics."
+      ]
+    },
+    {
+      "sourcePath": "src/input/globeNavigation.test.ts",
+      "sourceBlob": "2169f8b0871a920f5aad3afb975ab1a15e51b81f",
+      "sourceSha256": "4a11ab2bd14f0fa0e7cc1dcfc5888c2b3cdf66260748fd9016d509135c6dadda",
+      "bytes": 8300,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/input/globeNavigation.test.ts",
+      "destinations": [
+        "tests/globeNavigation.test.ts"
+      ],
+      "transformations": [
+        "Keep source standard profile/context/capture/deadzone behavior with original panorama data injected explicitly, no viewer implementation import.",
+        "Reported primary typecheck causal repair: public owner signatures/defaults and fixture type adaptation, every assertion retained, repaired source UNRUN."
+      ]
+    },
+    {
+      "sourcePath": "src/input/globeNavigation.ts",
+      "sourceBlob": "9f86376a5e0533951de80fe98c34ea6eb434aafc",
+      "sourceSha256": "08a986bd4b559d5587d7b4f9723aa85389aa2c82033811430df248b747bcae31",
+      "bytes": 9444,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/input/globeNavigation.ts",
+      "destinations": [
+        "fixtures/composition/panoramaBindings.ts",
+        "src/gamepad/index.ts",
+        "src/input/gamepadDefaults.ts",
+        "src/input/globeNavigationTypes.ts"
+      ],
+      "transformations": [
+        "Split pure globe rates/defaults and optional public gamepad adapter; panorama action/profile data becomes explicit host feature contribution fixture, no360 implementation import."
+      ]
+    },
+    {
+      "sourcePath": "src/input/inertialCameraController.test.ts",
+      "sourceBlob": "30cb0540813ac05096ba0f5a9e5747c2f2b56586",
+      "sourceSha256": "6f0cc2361ac82a5792ceba08c9d912f001718f44a407d77a60e3cdecc82fd571",
+      "bytes": 2927,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/input/inertialCameraController.test.ts",
+      "destinations": [
+        "tests/inertialCameraController.test.ts"
+      ],
+      "transformations": [
+        "Preserve original inertia behavior cases and inject test clock."
+      ]
+    },
+    {
+      "sourcePath": "src/input/inertialCameraController.ts",
+      "sourceBlob": "e63c58cc9a2f5abc9b5b8fe35d175df86e300887",
+      "sourceSha256": "20f469862c3eb10f7324cbbe8bd073a6c6734a9e592422aa36654ca2713c183d",
+      "bytes": 4837,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/input/inertialCameraController.ts",
+      "destinations": [
+        "src/input/inertialCameraController.ts"
+      ],
+      "transformations": [
+        "Preserve velocity, clamps, single decay, update timing and cancellation; generic canvas identity and required host monotonic clock replace DOM/performance dependencies."
+      ]
+    },
+    {
+      "sourcePath": "src/input/inputRates.ts",
+      "sourceBlob": "83cc12e02c4690bf71653620160cf8c1916e1bc1",
+      "sourceSha256": "64435b15fa7b2e6202d4a6fc0c20f3ae64bb9092822137c2bbd2a14308c0b2ec",
+      "bytes": 2182,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/input/inputRates.ts",
+      "destinations": [
+        "src/input/inputRates.ts"
+      ],
+      "transformations": [
+        "Faithful committed-source extraction with ESM relative imports."
+      ]
+    },
+    {
+      "sourcePath": "src/input/inputSettings.ts",
+      "sourceBlob": "3c96f2e84f732b813e8f9d9ed2efac3654c1be19",
+      "sourceSha256": "208e0148ce57358a959c234efb16740d22f5c31276a4e7741835160dcfc0dcc1",
+      "bytes": 5289,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/input/inputSettings.ts",
+      "destinations": [
+        "src/input/inputSettings.ts",
+        "src/settings/inputPreferences.ts"
+      ],
+      "transformations": [
+        "Split defaults/normalization into pure core and replace every persistence singleton with supplied public SettingsRegistry."
+      ]
+    },
+    {
+      "sourcePath": "src/input/mouseController.ts",
+      "sourceBlob": "a168ba3976ba205360fa500420cbc4c08efaa93d",
+      "sourceSha256": "ae630056ec191c9803720d7ac3c930161c023e53df02398b81ff1b0e81d8f6f3",
+      "bytes": 7151,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/input/mouseController.ts",
+      "destinations": [
+        "src/browser/mouseController.ts"
+      ],
+      "transformations": [
+        "Keep complete mouse press/click/drag/anchor behavior and held-press handback; supplied optional diagnostic factory replaces implicit overlay construction."
+      ]
+    },
+    {
+      "sourcePath": "src/input/orbitInvertSettings.ts",
+      "sourceBlob": "7b655983ba356658770c056cc9e598fba2fd2e54",
+      "sourceSha256": "613fe5010a876216b7703906fcc91f675f3aed208f5143f1b6d477bc391887f9",
+      "bytes": 2096,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/input/orbitInvertSettings.ts",
+      "destinations": [
+        "src/input/orbitInvertSettings.ts",
+        "src/settings/orbitPreferences.ts"
+      ],
+      "transformations": [
+        "Split pure defaults/normalization from public injected registry persistence; preserve ids and legacy storage migration handoff."
+      ]
+    },
+    {
+      "sourcePath": "src/input/passToWorld.test.ts",
+      "sourceBlob": "dd41172ea66995122c8bae7a0a5c57a64df5e906",
+      "sourceSha256": "1f1dcdece1da9fd0712bf893b58176d3c8827be517927df37ea42e26b5918602",
+      "bytes": 5747,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/input/passToWorld.test.ts",
+      "destinations": [
+        "tests/passToWorld.test.ts"
+      ],
+      "transformations": [
+        "Retain source propagation suite with supplied browser constructor realm/shared test clock."
+      ]
+    },
+    {
+      "sourcePath": "src/input/passToWorld.ts",
+      "sourceBlob": "3f3cacdbf039b43f13717708f4ebe32dc59372ff",
+      "sourceSha256": "44044406f4203ccd15d479ee140b1a8ea7484312f2e78d00778af26b6bebdbed",
+      "bytes": 5956,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/input/passToWorld.ts",
+      "destinations": [
+        "src/browser/passToWorld.ts"
+      ],
+      "transformations": [
+        "Preserve main-axis scroll ownership, focused number input, gesture ownership and copying; require host DOM constructor realm/shared clock, no globals."
+      ]
+    },
+    {
+      "sourcePath": "src/input/safariGestures.test.ts",
+      "sourceBlob": "7b18d2a6f7e7be0e218750ff8060dd616aa8b2b6",
+      "sourceSha256": "2c25a2b8eec57df0d0ab8baf79fdfdcbbfdd8611762e36d5cbd79a59d6ffbc53",
+      "bytes": 1743,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/input/safariGestures.test.ts",
+      "destinations": [
+        "tests/safariGestures.test.ts"
+      ],
+      "transformations": [
+        "Retain source behavioral cases; route owner imports and inject required test clock/ports."
+      ]
+    },
+    {
+      "sourcePath": "src/input/safariGestures.ts",
+      "sourceBlob": "219bf1f62da0d663a785fe306fc350ee7bd537f7",
+      "sourceSha256": "4b10ff6dda81e3f673a23069720abc450f22a9d868848e0d001c12b58d9b6a44",
+      "bytes": 3493,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/input/safariGestures.ts",
+      "destinations": [
+        "src/browser/safariGestures.ts"
+      ],
+      "transformations": [
+        "Retain Safari gesture behavior; explicit userAgent/hasGestureEvent detection ports replace global realm reads."
+      ]
+    },
+    {
+      "sourcePath": "src/input/touchController.test.ts",
+      "sourceBlob": "de16fccbfdd91eda51bf0942c28b122e8a159b0a",
+      "sourceSha256": "60823bea0979fa977421bada23f250676d91a1c98a1a13f810f3c4d52ba6126d",
+      "bytes": 8528,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/input/touchController.test.ts",
+      "destinations": [
+        "tests/touchController.test.ts"
+      ],
+      "transformations": [
+        "Retain source behavioral cases; route owner imports and inject required test clock/ports."
+      ]
+    },
+    {
+      "sourcePath": "src/input/touchController.ts",
+      "sourceBlob": "476ca20758afe87ee91fdf213f5e54ad92f721b3",
+      "sourceSha256": "649bf3f42d0b59daf08265dcee5885c7a2f2aa4b17df2b34b7c8c8f108582f65",
+      "bytes": 16973,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/input/touchController.ts",
+      "destinations": [
+        "src/browser/touchController.ts"
+      ],
+      "transformations": [
+        "Preserve all touch transitions/clamps/hysteresis and immediate input; optional host diagnostic contribution replaces URL/storage activation."
+      ]
+    },
+    {
+      "sourcePath": "src/input/touchDebugOverlay.ts",
+      "sourceBlob": "8471830ce73556a96ab1ae4b2ab7519ea2c69fc5",
+      "sourceSha256": "810f171eec07eb2c4c4bc22383a19b4fe84336b8dc84b84da65cf823aef18b9b",
+      "bytes": 9586,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/input/touchDebugOverlay.ts",
+      "destinations": [
+        "src/input/touchDiagnostics.ts"
+      ],
+      "transformations": [
+        "Split pure diagnostic event/handle contract; complete old overlay is retained as source evidence, pending host-owned Dev contribution composition."
+      ]
+    },
+    {
+      "sourcePath": "src/input/wheelController.test.ts",
+      "sourceBlob": "2c0077df0c5d953486417d7e24c175cdd36f63ba",
+      "sourceSha256": "9cacb167069caddce65f84808f56468d4d533c829b9bf3eaa264fba457881ae0",
+      "bytes": 9461,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/input/wheelController.test.ts",
+      "destinations": [
+        "tests/wheelController.test.ts"
+      ],
+      "transformations": [
+        "Retain source behavioral cases; route owner imports and inject required test clock/ports.",
+        "Reported primary typecheck causal repair: public owner signatures/defaults and fixture type adaptation, every assertion retained, repaired source UNRUN."
+      ]
+    },
+    {
+      "sourcePath": "src/input/wheelController.ts",
+      "sourceBlob": "1043b4145ebc0fb27f28f2f565d776e3550bf3a5",
+      "sourceSha256": "f4242cac2388a059d45d01e5739534645a1d3c6d0558dba049c8011653cd0f36",
+      "bytes": 9327,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/input/wheelController.ts",
+      "destinations": [
+        "src/browser/wheelController.ts",
+        "src/input/wheelGesture.ts"
+      ],
+      "transformations": [
+        "Split pure classifier from browser subscription/handler; use required host shared clock/window and retain gesture-start, momentum-ignore and classification behavior."
+      ]
+    },
+    {
+      "sourcePath": "src/layers/layerRegistry.test.ts",
+      "sourceBlob": "5d47071069b19560acdf30444315ab1b572f401f",
+      "sourceSha256": "0e953fb0f80649d8b2bc8b99b117f7491c3aee232ca60bf54e7d57d2eb501606",
+      "bytes": 3257,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/layers/layerRegistry.test.ts",
+      "destinations": [
+        "tests/layerRegistry.test.ts"
+      ],
+      "transformations": [
+        "Retain original behavior assertions against extracted owner entries."
+      ]
+    },
+    {
+      "sourcePath": "src/layers/layerRegistry.ts",
+      "sourceBlob": "e1cf791f862002d71f983c8ee56d86e33f956f54",
+      "sourceSha256": "2edb5ab0b5fb8009cac26cd20ac38f9e23bf63daece4e5121806cc7e3b2bc3df",
+      "bytes": 3115,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/layers/layerRegistry.ts",
+      "destinations": [
+        "src/layers/layerRegistry.ts"
+      ],
+      "transformations": [
+        "Retain source layer lifecycle, same-ID replacement and POI/culling/anchor rebuilds through supplied host handles."
+      ]
+    },
+    {
+      "sourcePath": "src/layers/poiTracking.test.ts",
+      "sourceBlob": "d4eb8a2e2099c1b2b6a99b22d5d664982318eb6e",
+      "sourceSha256": "115f9a63714ee8e9ad6238fb96a3ff7daef31c4bc1f1ea2c1c30b03e0c043975",
+      "bytes": 1491,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/layers/poiTracking.test.ts",
+      "destinations": [
+        "tests/poiTracking.test.ts"
+      ],
+      "transformations": [
+        "Retain original drag-threshold assertion; add supplied-scene tracking/suspension/late-disposal causal fixture. Unrun."
+      ]
+    },
+    {
+      "sourcePath": "src/layers/poiTracking.ts",
+      "sourceBlob": "85eed4422b2fe4a6398e412a093493f12489fc3a",
+      "sourceSha256": "d2557c3baafa06a0023b7c130a6b12ba4d62bc031202509a87260764edda467a",
+      "bytes": 6413,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/layers/poiTracking.ts",
+      "destinations": [
+        "src/layers/poiTracking.ts"
+      ],
+      "transformations": [
+        "Retain source mouse pick/follow/entry snap; inject render/log callbacks, guard disposed/suspended entry and remove late observers on teardown."
+      ]
+    },
+    {
+      "sourcePath": "src/layers/types.ts",
+      "sourceBlob": "92954eaa5b0ea7a7d459b6927a0e03048f85055e",
+      "sourceSha256": "e3802a2078cc4048427b93a58079020b38e370847f99132e4b3dd4aa773e44cf",
+      "bytes": 4068,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/layers/types.ts",
+      "destinations": [
+        "src/layers/types.ts"
+      ],
+      "transformations": [
+        "Retain source optional Babylon layer state; import pure engine contracts and owner culling/anchor ports with ESM .js imports."
+      ]
+    },
+    {
+      "sourcePath": "src/perf/culling.test.ts",
+      "sourceBlob": "01e650ab44df319547070e2968e3d4c396dc05a1",
+      "sourceSha256": "8989becebc2a9f7a8cf11c5b65f9ebfa5307b23abf342e9035d7677a6072080b",
+      "bytes": 1455,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/perf/culling.test.ts",
+      "destinations": [
+        "tests/culling.test.ts"
+      ],
+      "transformations": [
+        "Retain source full-scan assertions; add custom host horizon policy case, unrun."
+      ]
+    },
+    {
+      "sourcePath": "src/perf/culling.ts",
+      "sourceBlob": "a23a0653b1c4a2d9f94a323bc75f27e494ecb3da",
+      "sourceSha256": "51016ddc68f2b88b94e65e54e7c28bd1f2bc8ad92a6ac15dc85b161edd5cb035",
+      "bytes": 3616,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/perf/culling.ts",
+      "destinations": [
+        "src/perf/culling.ts",
+        "src/settings/catalogue/visualization.ts"
+      ],
+      "transformations": [
+        "Retain source full primitive scan/spherical WGS84 horizon and statistics; expose only actual source .03 horizon margin through optional host policy."
+      ]
+    },
+    {
+      "sourcePath": "src/scenes/panoramaFlight.test.ts",
+      "sourceBlob": "db9dbf002063070f0d7fb41a56da0fffe87f04c4",
+      "sourceSha256": "8ea8da6fa6289d085d641b37c8b116c0da35c392001dc536c02893e9cc94f0dc",
+      "bytes": 8238,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/scenes/panoramaFlight.test.ts",
+      "destinations": [
+        "tests/glideSettling.test.ts"
+      ],
+      "transformations": [
+        "Preserve the original complete single-decay settling case; remaining viewer-specific flight cases stay with 360."
+      ]
+    },
+    {
+      "sourcePath": "src/scenes/panoramaFlight.ts",
+      "sourceBlob": "80aacfcca4bd465aa9673b3b7f2cb6cdef9a8b63",
+      "sourceSha256": "17cb3b296c8ed4611abe12d94efa7045e0d8ca5f3f1c648ba1eca549b865dd74",
+      "bytes": 9698,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/scenes/panoramaFlight.ts",
+      "destinations": [
+        "src/camera/glideSettling.ts",
+        "src/camera/orbitMath.ts"
+      ],
+      "transformations": [
+        "Split globe orbit basis/look/angles/level-up only; orb transitions stay viewer-owned.",
+        "Split unchanged generic single-decay settling curve and source constants from viewer flight; engine owns it and viewers receive the function through host world ports."
+      ]
+    },
+    {
+      "sourcePath": "src/scenes/panoramaMath.test.ts",
+      "sourceBlob": "28f90a9de6bfd92829a1ed60d26fe161ba6c2ca3",
+      "sourceSha256": "6adf79d0197516faa391c42251b8df6a9df4973a62cbb690e486f01c0d5d828a",
+      "bytes": 10208,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-six-causal-failures/originals/src/scenes/panoramaMath.test.ts",
+      "destinations": [
+        "tests/geographicPlacement.test.ts"
+      ],
+      "transformations": [
+        "Retain the two original geographic placement case bodies/assertions verbatim; move only imports and enclosing describe name to the Engine geographic owner. Viewer-specific size cases stay with 360."
+      ]
+    },
+    {
+      "sourcePath": "src/scenes/panoramaMath.ts",
+      "sourceBlob": "c4193c7932266639ec58e72000a2edb38f22c705",
+      "sourceSha256": "071a5fbcb150ace6d3f26fd7164ed06924ad5b4c0b5ce5c8b8ea854593660e68",
+      "bytes": 20181,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/scenes/panoramaMath.ts",
+      "destinations": [
+        "src/camera/geographicFrames.ts"
+      ],
+      "transformations": [
+        "Split only vector/ECEF/ENU/geodetic helpers; representation and viewer math remain with their owners.",
+        "Also retain original groundQueryPoint/groundRelativeMarker/captureRelativeMarker and CaptureLocation verbatim as Engine-owned geographic placement math; no scene/viewer implementation."
+      ]
+    },
+    {
+      "sourcePath": "src/scenes/sceneView.test.ts",
+      "sourceBlob": "e7d85604f001674b09f0d4ead0d0f2997b1a4a8c",
+      "sourceSha256": "8a2a625da6ef6dd1c57bfa1750d09373573bf832f6ba2870f4c0ac994b133c74",
+      "bytes": 3315,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/scenes/sceneView.test.ts",
+      "destinations": [
+        "tests/geographicView.test.ts"
+      ],
+      "transformations": [
+        "Keep all three source ENU presentation/attitude/FOV/vertical-look cases; source viewer interpolation and scene-envelope overview cases stay with those host fixtures."
+      ]
+    },
+    {
+      "sourcePath": "src/scenes/sceneView.ts",
+      "sourceBlob": "fb884af09a27c0695b8b38676aff105c8491b46d",
+      "sourceSha256": "301f9ba2db26bd0c8ac3fdc39cea7fc3e6a8cbe1d9a95a4491ff07ac5ed85a83",
+      "bytes": 4893,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/scenes/sceneView.ts",
+      "destinations": [
+        "src/camera/geographicView.ts",
+        "src/camera/orbitView.ts"
+      ],
+      "transformations": [
+        "Extract exact GeoView/ENU geographic presentation conversions only, preserving heading/pitch/roll/FOV units and vertical-look fallback. Viewer interpolation and scene envelope overview remain with their owners.",
+        "Preserve original globe overview snapshot math using explicitly resolved generic world-view target coordinate height; no scene envelope or physical datum policy import."
+      ]
+    },
+    {
+      "sourcePath": "src/search/locationLookup.persistence.test.ts",
+      "sourceBlob": "7a2e16fb311cb8a03ced834d7770e4cfd5274903",
+      "sourceSha256": "8c27d9e3c6f0b2f801762fa1844dee4480707e81a376d66fd0d0175335aa1338",
+      "bytes": 6635,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/search/locationLookup.persistence.test.ts",
+      "destinations": [
+        "fixtures/composition/locationProviderHost.ts",
+        "tests/location/locationLookup.persistence.test.ts"
+      ],
+      "transformations": [
+        "All original literal/parameterized persistence, alias, cache bypass and failure assertions retained. Native realm/IO/cache reload and original aircraft metadata are fixture-only host adapters.",
+        "Reported primary typecheck causal repair: public owner signatures/defaults and fixture type adaptation, every assertion retained, repaired source UNRUN."
+      ]
+    },
+    {
+      "sourcePath": "src/search/locationSearch.test.ts",
+      "sourceBlob": "162c18c17ee1a106b4dd97fbe4cedbfa0aa33b96",
+      "sourceSha256": "fa5a9b0387d6f638c2fe3ae7eef26d448d6e649aa5b403f49bf3f54bc1472422",
+      "bytes": 3388,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/search/locationSearch.test.ts",
+      "destinations": [
+        "tests/location/locationSearch.test.ts"
+      ],
+      "transformations": [
+        "All original assertions retained via actual explicit-port provider fixture; no copied provider implementation."
+      ]
+    },
+    {
+      "sourcePath": "src/search/locationSearch.ts",
+      "sourceBlob": "e6bb9326acf207d0c0df1a3a7ad206a349a6819c",
+      "sourceSha256": "54b36a0a57bf9d94a70724af0f2536f3c28c89a0c7c0719e1b53be8adf7b12d6",
+      "bytes": 11248,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/search/locationSearch.ts",
+      "destinations": [
+        "src/location/provider/locationSearch.ts",
+        "src/location/provider/transport.ts"
+      ],
+      "transformations": [
+        "Retain request schemas/cache URLs/geocoder queue/result hierarchy; supplied shared transport/timers, host airport provider/query suffix/result hostData. First request eligible on zero-origin clock; rate wait cleanup always settles; no Flight implementation.",
+        "Declaration exposure repair exports already public result callback NearbyCity interface; no algorithm/assertion changes, source UNRUN."
+      ]
+    },
+    {
+      "sourcePath": "src/search/lookupCache.test.ts",
+      "sourceBlob": "524efdb8792dcb30826fefa205c5a0dc18eae20d",
+      "sourceSha256": "e7995bd26447c776d835d394019a1be3ea2629730382e0f60f98ef33cb0e8a9f",
+      "bytes": 7398,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/search/lookupCache.test.ts",
+      "destinations": [
+        "tests/location/lookupCache.test.ts"
+      ],
+      "transformations": [
+        "All original literal and parameterized assertions retained; explicit cache instances replace module singleton reloads."
+      ]
+    },
+    {
+      "sourcePath": "src/search/lookupCache.ts",
+      "sourceBlob": "1d6a4e2d1ba1c5694e5fb328eec07a2b7d63ef3f",
+      "sourceSha256": "018508ca3ea9830118f294b64d08fece65db39210179abafbe5f6e5abba59fa5",
+      "bytes": 4165,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/search/lookupCache.ts",
+      "destinations": [
+        "src/location/provider/lookupCache.ts"
+      ],
+      "transformations": [
+        "Retain rows/key/aliases/TTL/LRU/successful-empty persistence and caller cancellation; instance-scoped storage/epoch clock/native controller/error ports, explicit disposal and late-result guards."
+      ]
+    },
+    {
+      "sourcePath": "src/search/searchDefaults.ts",
+      "sourceBlob": "749c106ec5174c4a7c8cae41015e17a32bea3b9d",
+      "sourceSha256": "c4f1c6f55817ae50d0867da63185abd4519dd4adc2992131672cc21029c17446",
+      "bytes": 650,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/search/searchDefaults.ts",
+      "destinations": [
+        "src/location/provider/searchDefaults.ts"
+      ],
+      "transformations": [
+        "Faithful existing defaults and SearchTuning; no registry singleton."
+      ]
+    },
+    {
+      "sourcePath": "src/search/searchTuning.ts",
+      "sourceBlob": "92834bad4ad2cf806498a9dd3237984af463029b",
+      "sourceSha256": "6affcf897157ec7d12f2c1c34fe5ed2872f72f0fce1e8ef3daa7bc496a602a93",
+      "bytes": 700,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/search/searchTuning.ts",
+      "destinations": [
+        "src/location/provider/searchTuning.ts"
+      ],
+      "transformations": [
+        "Retain original IDs/fallbacks/entry rounding; inject host SettingsRegistry and return a live getter."
+      ]
+    },
+    {
+      "sourcePath": "src/search/types.ts",
+      "sourceBlob": "719589488ebafc271da9925b8a71bceb5705464a",
+      "sourceSha256": "16b289a8bc238f6e4a75770062081e49ec3e2d4448ddac258267ecb031066057",
+      "bytes": 810,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/search/types.ts",
+      "destinations": [
+        "src/location/contracts.ts"
+      ],
+      "transformations": [
+        "Retain generic coordinate/search/result capability contract with structural generic cancellation; airport/runway/flight preset implementation fields become explicit hostData contribution, no aircraft imports."
+      ]
+    },
+    {
+      "sourcePath": "src/settings/catalogue/auto.ts",
+      "sourceBlob": "da6d96cd1ec3f9d61121b4e7eab4a9750e6496c0",
+      "sourceSha256": "794cb7094124d9c621ca13cadf96f6e3ec680b28e563d2df8cbdd86424d455e5",
+      "bytes": 5196,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/settings/catalogue/auto.ts",
+      "destinations": [
+        "src/settings/catalogue/auto.ts"
+      ],
+      "transformations": [
+        "Faithful owner controls/map/loading/automatic-selection ParameterSpec catalog with public UI types; no settings singleton or other feature catalog.; public source links rewritten to actual owner paths; source values/homes/migrations retained"
+      ]
+    },
+    {
+      "sourcePath": "src/settings/catalogue/controls.ts",
+      "sourceBlob": "9c67ae0c160bcce785cbea528f2ad9a011bfcb70",
+      "sourceSha256": "7d4d59d95e486498715d73d188fc17a7192d1415d06cabd74dfb6395b41ce7e1",
+      "bytes": 14227,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/settings/catalogue/controls.ts",
+      "destinations": [
+        "src/settings/catalogue/controls.ts"
+      ],
+      "transformations": [
+        "Faithful owner controls/map/loading/automatic-selection ParameterSpec catalog with public UI types; no settings singleton or other feature catalog.; public source links rewritten to actual owner paths; source values/homes/migrations retained"
+      ]
+    },
+    {
+      "sourcePath": "src/settings/catalogue/index.ts",
+      "sourceBlob": "b801537459f08d65437f22e5e91ddad92f00f652",
+      "sourceSha256": "ad6f0a046826e1925307ede8fad987c4cdb12dedeaca06f08ee8b67076325586",
+      "bytes": 13205,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/settings/catalogue/index.ts",
+      "destinations": [
+        "src/settings/migrations.ts",
+        "src/visualization/migrations.ts"
+      ],
+      "transformations": [
+        "Split engine-owned map-detail/input legacy migrations; preserve original keys/version/normalization, require host storage for version lookups and leave old records for rollback.; public source links rewritten to actual owner paths; source values/homes/migrations retained Split original five visualization saved-key migrations into pure engine entry; retain existing composed engine migrations."
+      ]
+    },
+    {
+      "sourcePath": "src/settings/catalogue/interface.ts",
+      "sourceBlob": "d4765a9126b7978d19be7fe958022504731881ee",
+      "sourceSha256": "794e4a0546e9e146d323405f40b83f824e6bbac3e79d77c0f7a4e1692448a1ea",
+      "bytes": 24472,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/settings/catalogue/interface.ts",
+      "destinations": [
+        "src/settings/catalogue/locationLookup.ts",
+        "src/settings/catalogue/visualization.ts",
+        "src/settings/catalogue/positionGeoid.ts"
+      ],
+      "transformations": [
+        "Extract exact source eleven visualization/tuner records with existing Controls/Renderer homes; add separately documented host policy records for existing fixed point/texture costs.",
+        "Extract exact three search.* records with Interface/search/main homes, units/bounds/defaults/reasons/live/log2/step preserved; no feature singleton or new Search tab.",
+        "Extract exact committed interface.position.seaLevelGrid model/resource parameter, preserving original ID/home/choices/default/reason/visibility/source; Toolbar presentation retains ID, primary composes catalogue once. Source only UNRUN."
+      ]
+    },
+    {
+      "sourcePath": "src/settings/catalogue/loading.ts",
+      "sourceBlob": "e67c388e4a44def308bc4f1608c800f49ed646ce",
+      "sourceSha256": "473c75bfe9c2909a7d9dab4eeab1f4ae15c0601873e0906cfbbcd3d3b3331bdd",
+      "bytes": 17721,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/settings/catalogue/loading.ts",
+      "destinations": [
+        "src/settings/catalogue/loading.ts"
+      ],
+      "transformations": [
+        "Faithful owner controls/map/loading/automatic-selection ParameterSpec catalog with public UI types; no settings singleton or other feature catalog.; public source links rewritten to actual owner paths; source values/homes/migrations retained"
+      ]
+    },
+    {
+      "sourcePath": "src/settings/catalogue/map.ts",
+      "sourceBlob": "0330a311657cee2b29128532d44b91d7dcac1b2c",
+      "sourceSha256": "c369316d7dea2cfd733b9c1c8c051b3f37139ef3bd0c864ac6c8a03f21198342",
+      "bytes": 13378,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/settings/catalogue/map.ts",
+      "destinations": [
+        "src/settings/catalogue/map.ts"
+      ],
+      "transformations": [
+        "Faithful owner controls/map/loading/automatic-selection ParameterSpec catalog with public UI types; no settings singleton or other feature catalog.; public source links rewritten to actual owner paths; source values/homes/migrations retained"
+      ]
+    },
+    {
+      "sourcePath": "src/shell/MapCachePanel.tsx",
+      "sourceBlob": "7fe2db3345dbc657c8fdb1957318efeb506de5f9",
+      "sourceSha256": "3a275743126d1401f145ac1349ff4cfab51035a6dcf43a3f03c5c2beb6dd6217",
+      "bytes": 4053,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/shell/MapCachePanel.tsx",
+      "destinations": [
+        "src/map/mapCachePresentation.ts",
+        "src/map/react/MapCachePanel.tsx",
+        "src/settings/catalogue/mapCachePresentation.ts"
+      ],
+      "transformations": [
+        "Retain original React markup/classes/provider grouping/availability/clear/browser-vs-managed distinction/path-only rows. Required existing Engine cache, host refresh/visibility/clock/policy replace singleton/private2s timer. Named40-row/2000ms defaults preserved; actual maxBytes note, stale-answer/clear/rebind/detach failure lifecycle guards authored, all source checks UNRUN."
+      ]
+    },
+    {
+      "sourcePath": "src/shell/connectMapDetailRuntime.test.ts",
+      "sourceBlob": "514a690dd9f52af70fd2c7666689c08111913edf",
+      "sourceSha256": "d0ef0b5078e7248ad3b28ac3eb9f57e09b950b16fc764395ddf0a0a2e72c8b84",
+      "bytes": 10287,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/shell/connectMapDetailRuntime.test.ts",
+      "destinations": [
+        "tests/connectMapDetailRuntime.test.ts"
+      ],
+      "transformations": [
+        "Retain every source Map Detail DOM/requirement/source-switch/settled-delivery behavior case; host fixture supplies public UI registry/track/document and existing engine policy."
+      ]
+    },
+    {
+      "sourcePath": "src/shell/connectMapDetailRuntime.ts",
+      "sourceBlob": "d9b88212c99c2a8495f10e9bcc116f0f5013a617",
+      "sourceSha256": "4e4464525f01e4f1d5c2e7dbbf1846b231bb3ad99a7748f66ec09baf6e0180b2",
+      "bytes": 4978,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/shell/connectMapDetailRuntime.ts",
+      "destinations": [
+        "src/map/connectMapDetailRuntime.ts"
+      ],
+      "transformations": [
+        "Keep complete single-writer target/source/delivery connector; replace app runtime status with structural owner contracts and preserve subscriptions/target replay after replacement."
+      ]
+    },
+    {
+      "sourcePath": "src/shell/mapCacheSection.ts",
+      "sourceBlob": "5a4705aea697e0363c9e70786723fa0514cb2197",
+      "sourceSha256": "14d08c1741fc756a4e3cd58b446bb431a7fa3ddada8cd1d04e1e9256a39eab4f",
+      "bytes": 6411,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/shell/mapCacheSection.ts",
+      "destinations": [
+        "src/map/mapCachePresentation.ts",
+        "src/map/mapCacheSection.ts"
+      ],
+      "transformations": [
+        "Retain full provider/cache/privacy/clear presentation with supplied document/cache/shared host refresh pulse and explicit monotonic cadence. No private timer. Deduplicate pending inspection, guard pre-clear generations and late disposal, handle post-clear inspection rejection; causal source fixtures UNRUN.",
+        "Prior faithful DOM extraction retained; now required shared live rowLimit getter replaces fixed40 with named public policy; visible pulses update row list without extra cache inspection. Prior source assertions retained."
+      ]
+    },
+    {
+      "sourcePath": "src/shell/mapDetailController.test.ts",
+      "sourceBlob": "00be01e3ddd156c50e1e0810b6671c002d794014",
+      "sourceSha256": "fc8a3a5960bc983a2881ad91d90f27baefcd06569fb15e7335dc0aae4447f34d",
+      "bytes": 14495,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/shell/mapDetailController.test.ts",
+      "destinations": [
+        "tests/mapDetailController.test.ts"
+      ],
+      "transformations": [
+        "Retain complete source policy/legacy migration/runtime requirements fixture using isolated public UI registry constructed only in the host test wrapper."
+      ]
+    },
+    {
+      "sourcePath": "src/shell/mapDetailController.ts",
+      "sourceBlob": "301a9d0cda9c7e77d3d0621b55d2cfc4df55a3ba",
+      "sourceSha256": "eae30c61001ee14ad784805931dc6946ac7b3c02cb8e00ab585f10922aa343f9",
+      "bytes": 20905,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/shell/mapDetailController.ts",
+      "destinations": [
+        "src/map/mapDetailController.ts"
+      ],
+      "transformations": [
+        "Retain complete detail policy/requirements/markers/recommendation/session/reset/delivery controller; required public host registry and device hints, no app/private registry construction."
+      ]
+    },
+    {
+      "sourcePath": "src/shell/mapDetailExplanations.ts",
+      "sourceBlob": "353e62d9d920f437efa813ff55759659348d1db4",
+      "sourceSha256": "bffe1ddeef81864782ffcf73ff407c66d542bdde9b388837bfa149eba4c37313",
+      "bytes": 7576,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/shell/mapDetailExplanations.ts",
+      "destinations": [
+        "src/map/mapDetailExplanations.ts"
+      ],
+      "transformations": [
+        "Retain map-specific pure constraint explanations."
+      ]
+    },
+    {
+      "sourcePath": "src/shell/mapDetailLog.ts",
+      "sourceBlob": "1acc9143037c05ec257b657fa35057289ec2a01b",
+      "sourceSha256": "42e9c24519bce80b63e876c18552e9875a0bd743a53b5b99965bc331d4b4c7e1",
+      "bytes": 3148,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/shell/mapDetailLog.ts",
+      "destinations": [
+        "src/map/mapDetailLog.ts"
+      ],
+      "transformations": [
+        "Retain source settled imagery constraint/automatic adjustment log behavior; structural runtime and public UI GameLog print port, no copied log shell."
+      ]
+    },
+    {
+      "sourcePath": "src/shell/mapDetailPanel.test.ts",
+      "sourceBlob": "4354fc3e4fa004d3c7e94ef9b39680397fd5f6fc",
+      "sourceSha256": "55c43f369b5b6c3cf26dd64c102e5438f78694352879e0cf59dff67ce95558b9",
+      "bytes": 15924,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/shell/mapDetailPanel.test.ts",
+      "destinations": [
+        "tests/mapDetailPanel.test.ts"
+      ],
+      "transformations": [
+        "Retain every source Map Detail DOM/requirement/source-switch/settled-delivery behavior case; host fixture supplies public UI registry/track/document and existing engine policy.",
+        "Reported primary typecheck causal repair: public owner signatures/defaults and fixture type adaptation, every assertion retained, repaired source UNRUN."
+      ]
+    },
+    {
+      "sourcePath": "src/shell/mapDetailPanel.ts",
+      "sourceBlob": "a9ffe5f29008839862b00d5066a7494dee90b99f",
+      "sourceSha256": "233774fd72d6ac54185f8fbfbf9bdcb40312eab58577a6e7279317b535c584f1",
+      "bytes": 15050,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/shell/mapDetailPanel.ts",
+      "destinations": [
+        "src/map/mapDetailPanel.ts"
+      ],
+      "transformations": [
+        "Retain full Map Detail editor; mandatory host document/unique identity/public UI track factory, no copied UI implementation or global panel count."
+      ]
+    },
+    {
+      "sourcePath": "src/shell/mapDetailSlider.ts",
+      "sourceBlob": "be22e64a15257aa85de046399742cd8f33ab1781",
+      "sourceSha256": "88728484c87f328e095be1c28e796bfcd2b391456146082ece16601c032a658e",
+      "bytes": 10280,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/shell/mapDetailSlider.ts",
+      "destinations": [
+        "src/map/mapDetailSlider.ts"
+      ],
+      "transformations": [
+        "Retain full HUD detail slider state/status/markers/limits/interactions; host supplies document and shared detail controller."
+      ]
+    },
+    {
+      "sourcePath": "src/shell/mapSourceHud.ts",
+      "sourceBlob": "f7e7cd2e0dbddd7ead24831f497745ea06db9ed9",
+      "sourceSha256": "29ee2cbb8afe68ba6af5546064575f67ca27b25d743d957145b5a310795e0e39",
+      "bytes": 6884,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/shell/mapSourceHud.ts",
+      "destinations": [
+        "src/map/mapSourceHud.ts"
+      ],
+      "transformations": [
+        "Retain map provider/detail/source-credit contribution and outgoing displayed-source attribution; required host document/public UI icon/download/streaming factories replace shell wrapper imports. Mounting remains host toolbar placement.",
+        "Reported primary typecheck causal repair: public owner signatures/defaults and fixture type adaptation, every assertion retained, repaired source UNRUN."
+      ]
+    },
+    {
+      "sourcePath": "src/shell/mapSourcePanel.ts",
+      "sourceBlob": "c379f33e9c9b96a89f29907b429912372ca8c3ea",
+      "sourceSha256": "2dab4080d2cc8a4ba9ec22894836c0b97b878c268ad9b74019b6cb0028cd6336",
+      "bytes": 8181,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/shell/mapSourcePanel.ts",
+      "destinations": [
+        "src/map/mapSourcePanel.ts"
+      ],
+      "transformations": [
+        "Retain full Map/source/elevation/Detail/auto/loading/selection/host sections and IDs; explicit public UI factories/settings/cache/document/input realm plus required host refresh/presentation storage. Same pulse feeds all parameter/host/cache sections; no implicit UI clock."
+      ]
+    },
+    {
+      "sourcePath": "src/sprites/atlas.ts",
+      "sourceBlob": "e5430af84957f49cf88e597467ade3449b5d9586",
+      "sourceSha256": "b009f94c376fffb55936b06c2392dff8667b162bf8e8f7e61221e73df169d2cc",
+      "bytes": 1447,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/sprites/atlas.ts",
+      "destinations": [
+        "src/settings/catalogue/visualization.ts",
+        "src/sprites/atlas.ts"
+      ],
+      "transformations": [
+        "Retain source circular atlas pixels/default64; replace scene allocation/update with actual public renderer supplied canvas device and failure disposal; expose host cell policy."
+      ]
+    },
+    {
+      "sourcePath": "src/sprites/index.ts",
+      "sourceBlob": "788ada93ccbdd4ac91ccc5e7b3bb101f98ebb4c9",
+      "sourceSha256": "7b2185d509a2f5264ae8b943584cc27a91f929c56c94965a8931f7c0692a7620",
+      "bytes": 171,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/sprites/index.ts",
+      "destinations": [
+        "src/sprites/index.ts"
+      ],
+      "transformations": [
+        "Retain source optional sprite public barrel with owner-local ESM imports and pure helpers."
+      ]
+    },
+    {
+      "sourcePath": "src/sprites/picking.ts",
+      "sourceBlob": "6099dbf12e4b7d54efc973c538b08dc312dfb269",
+      "sourceSha256": "449b5311d729a2dd35a6e3dda66cd4529d9a260fb6af1e1eaedaa73ad13898e7",
+      "bytes": 2050,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/sprites/picking.ts",
+      "destinations": [
+        "src/sprites/picking.ts"
+      ],
+      "transformations": [
+        "Retain original supplied-scene point metadata/pick behavior with ESM imports."
+      ]
+    },
+    {
+      "sourcePath": "src/sprites/positioning.ts",
+      "sourceBlob": "1f5e20a8fdd9521d803df4c32f860a298e18aaf9",
+      "sourceSha256": "7d11ddc283f6c6b4ab3a2b69be93ce2449f89113fa4c6d6faa7c3cfa7273d13c",
+      "bytes": 3692,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/sprites/positioning.ts",
+      "destinations": [
+        "src/settings/catalogue/visualization.ts",
+        "src/sprites/core.ts",
+        "src/sprites/positioning.ts"
+      ],
+      "transformations": [
+        "Separate source pure tile index/refinement policy math from supplied-scene height ray cast; retain source band defaults and expose named host probe/LOD/radius costs."
+      ]
+    },
+    {
+      "sourcePath": "src/sprites/spriteManager.ts",
+      "sourceBlob": "2759a349bd816c8454778317b15dd2304a3e9f3d",
+      "sourceSha256": "3a206b3fb262a7156e37a125fdefb829f0c776cc7f0bb04a8852f2893a3cdc3f",
+      "bytes": 2186,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/sprites/spriteManager.ts",
+      "destinations": [
+        "src/settings/catalogue/visualization.ts",
+        "src/sprites/spriteManager.ts"
+      ],
+      "transformations": [
+        "Retain provided-scene Babylon sprite/manager semantics; expose original capacity floor as host minCapacity policy, no new device or clock."
+      ]
+    },
+    {
+      "sourcePath": "src/sprites/spriteSize.ts",
+      "sourceBlob": "66f604a235f584a255e94969f5b3ea617b46802b",
+      "sourceSha256": "fac4dbe6ddd53ae25bfe47f9f24c32ef64cbd2f7b6e98a9e3974de2e03c40111",
+      "bytes": 1241,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/sprites/spriteSize.ts",
+      "destinations": [
+        "src/sprites/core.ts",
+        "src/sprites/spriteSize.ts"
+      ],
+      "transformations": [
+        "Split source distance-to-size curve into pure spriteSizeForDistance; retain Babylon camera wrapper."
+      ]
+    },
+    {
+      "sourcePath": "src/sprites/types.ts",
+      "sourceBlob": "9a9646d9aa47887d3b3c95ecc01609efa4950f47",
+      "sourceSha256": "e20edf7f91c3f8a9b67a6759595cae7ae6ea33ff0381fbb814da50a846a18264",
+      "bytes": 487,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/sprites/types.ts",
+      "destinations": [
+        "src/sprites/types.ts"
+      ],
+      "transformations": [
+        "Retain pure marker style/color constants; name original SpriteManager floor 32000 as DEFAULT_SPRITE_CAPACITY."
+      ]
+    },
+    {
+      "sourcePath": "src/styles/hud.css",
+      "sourceBlob": "cbd0c99b22835493f0ee659a73bdc89bd4258f7b",
+      "sourceSha256": "cc221b7efd23f13037023bbc095ecdfeb150f5cd9cd959ec49c5a26f6399dff4",
+      "bytes": 49184,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/styles/hud.css",
+      "destinations": [
+        "styles/map-cache.css",
+        "styles/map.css"
+      ],
+      "transformations": [
+        "Split only engine-owned .map-detail-*, .input-mode-* and .gesture-* selectors and their media/keyframe ancestors; shared shell selectors remain with UI/toolbar.",
+        "Extract only original React cache block lines679\u2013689; scope original shared tile class below .foss-earth-map-cache to avoid overwriting UI generic section. Generic map-cache-section list/progress styles remain UI owner; no mixed HUD feature copy. Classes/property values otherwise retained."
+      ]
+    },
+    {
+      "sourcePath": "src/styles/input-mode.css",
+      "sourceBlob": "873cd9615b5e5737a32d0ec2bd73fedf37d017cc",
+      "sourceSha256": "aec601518fcbcd5c209eb8ba44f2ed02856c4cb3a647983a8975063848bc5dc1",
+      "bytes": 10667,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/styles/input-mode.css",
+      "destinations": [
+        "styles/input-mode.css"
+      ],
+      "transformations": [
+        "Split only engine-owned .map-detail-*, .input-mode-* and .gesture-* selectors and their media/keyframe ancestors; shared shell selectors remain with UI/toolbar."
+      ]
+    },
+    {
+      "sourcePath": "src/terrain/anchorHeight.test.ts",
+      "sourceBlob": "767afe39a8c336c42fbe3eac33891353ffec0615",
+      "sourceSha256": "8179852eef80f9ece51f2e7cf7976a441c86ac0935e588ecdb5a8d38f9c30321",
+      "bytes": 4722,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/terrain/anchorHeight.test.ts",
+      "destinations": [
+        "tests/anchorHeight.test.ts"
+      ],
+      "transformations": [
+        "Keep every committed terrain smoothing/seam/finite query/precision behavior case using the extracted owner modules and explicit host clock.",
+        "Reported primary typecheck causal repair: public owner signatures/defaults and fixture type adaptation, every assertion retained, repaired source UNRUN."
+      ]
+    },
+    {
+      "sourcePath": "src/terrain/anchorHeight.ts",
+      "sourceBlob": "8d59768d7089a396dbce7679a6921d7f196da682",
+      "sourceSha256": "288e20e0abc7530d5f7ccf33945a4a34b080cb464624e3501b7bfb9251779c78",
+      "bytes": 6957,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/terrain/anchorHeight.ts",
+      "destinations": [
+        "src/babylon/anchorHeight.ts"
+      ],
+      "transformations": [
+        "Faithful supplied-scene Babylon terrain helper; ESM/public owner paths. Anchor resolver requires the host monotonic clock. Displayed coordinate heights remain unqualified as physical terrain datum."
+      ]
+    },
+    {
+      "sourcePath": "src/terrain/autoDetail.test.ts",
+      "sourceBlob": "4cd9ea492bc88ab1accdf1b16ac0f888258b5c21",
+      "sourceSha256": "dc22da6912520789fa3718b0975d9ef3a889427fbda9162d8b4004671f75e030",
+      "bytes": 6065,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/terrain/autoDetail.test.ts",
+      "destinations": [
+        "tests/autoDetail.test.ts"
+      ],
+      "transformations": [
+        "Retain all source automatic selection observation/window/limits/hidden/stall/framecap behavior cases."
+      ]
+    },
+    {
+      "sourcePath": "src/terrain/autoDetail.ts",
+      "sourceBlob": "c6c752378a936ac89205ab86c5106681a301cecd",
+      "sourceSha256": "0b2b1acc4fa9a146fcc99d3a41db322958d9e16b04cad9914dc47dd102ff67b8",
+      "bytes": 5763,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/terrain/autoDetail.ts",
+      "destinations": [
+        "src/terrain/autoDetail.ts"
+      ],
+      "transformations": [
+        "Faithful pure terrain/map/imagery math and selection extraction; no runtime/scheduler initialization."
+      ]
+    },
+    {
+      "sourcePath": "src/terrain/geoid.test.ts",
+      "sourceBlob": "d324aa8a646de72501fd93dab94894075cbc61dc",
+      "sourceSha256": "2d217216a9604605e7679b300fc77d9b0ca79ac96af08e81cf99f94cbe734231",
+      "bytes": 3741,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/terrain/geoid.test.ts",
+      "destinations": [
+        "tests/geoid.test.ts"
+      ],
+      "transformations": [
+        "Retain all shipped-byte hash/error-bound, datum-mode convention, compressed/plain, pole/dateline and corrupt-file cases with explicit Node decompression fixture."
+      ]
+    },
+    {
+      "sourcePath": "src/terrain/geoid.ts",
+      "sourceBlob": "55de5b7dfc1d2705bc138d31304ba1c238c0c36c",
+      "sourceSha256": "fa2a30379f5f94676de651acbb9bb6e3a328c272983da84c207c7fa4334af228",
+      "bytes": 5178,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/terrain/geoid.ts",
+      "destinations": [
+        "src/browser/geoid.ts",
+        "src/terrain/geoid.ts"
+      ],
+      "transformations": [
+        "Split exact grid decoder/interpolation and legacy mode datum convention; supplied fetch/gunzip and per-host-session cache replace implicit global transport/cache. No physical terrain height conversion."
+      ]
+    },
+    {
+      "sourcePath": "src/terrain/geoidGrids/egm2008-15.bin",
+      "sourceBlob": "c85b6f9b938fced08a907d8d549ac77958bb2e8c",
+      "sourceSha256": "b269e989d2511117747f52a1ed8b3a0de3cbf269c479a035506248c671346dc8",
+      "bytes": 1032678,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/terrain/geoidGrids/egm2008-15.bin",
+      "destinations": [
+        "assets/geoid/egm2008-15.bin"
+      ],
+      "transformations": [
+        "Original committed geoid grid/provenance bytes, no regeneration."
+      ]
+    },
+    {
+      "sourcePath": "src/terrain/geoidGrids/egm2008-30.bin",
+      "sourceBlob": "1fa49ece143343b08999b1fbb26d1551e8a16e35",
+      "sourceSha256": "194f1dfde8ac27b0298100a511e475f74a221338680296be0f2dbac6c06b47b4",
+      "bytes": 308915,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/terrain/geoidGrids/egm2008-30.bin",
+      "destinations": [
+        "assets/geoid/egm2008-30.bin"
+      ],
+      "transformations": [
+        "Original committed geoid grid/provenance bytes, no regeneration."
+      ]
+    },
+    {
+      "sourcePath": "src/terrain/geoidGrids/egm2008-60.bin",
+      "sourceBlob": "6371418bf55d3a32b196a5a049e5f24abc4c59ad",
+      "sourceSha256": "fe9b73a63c00f09b6543dcc1b85b59688b1b1df45ae19bd6e0ac829ca16ce7ff",
+      "bytes": 88729,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/terrain/geoidGrids/egm2008-60.bin",
+      "destinations": [
+        "assets/geoid/egm2008-60.bin"
+      ],
+      "transformations": [
+        "Original committed geoid grid/provenance bytes, no regeneration."
+      ]
+    },
+    {
+      "sourcePath": "src/terrain/geoidGrids/provenance.json",
+      "sourceBlob": "2664f843a736a7576531263e73588310b6beea94",
+      "sourceSha256": "bdfecaae166c89982a395985918eb4ca69ee13b8f87691285883d7a8e78816bf",
+      "bytes": 2787,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/terrain/geoidGrids/provenance.json",
+      "destinations": [
+        "assets/geoid/provenance.json"
+      ],
+      "transformations": [
+        "Original committed geoid grid/provenance bytes, no regeneration."
+      ]
+    },
+    {
+      "sourcePath": "src/terrain/globalTerrain.ts",
+      "sourceBlob": "1f1873918ccfec8b821a97e2f473f62cb493bf45",
+      "sourceSha256": "1cb39178fa89c25698a60cd96c8d608851c469dc01b7d1500cd9a675d2324486",
+      "bytes": 11508,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/terrain/globalTerrain.ts",
+      "destinations": [
+        "src/terrain/globalTerrain.ts"
+      ],
+      "transformations": [
+        "Faithful pure terrain/map/imagery math and selection extraction; no runtime/scheduler initialization."
+      ]
+    },
+    {
+      "sourcePath": "src/terrain/imagery/imageryConstraints.ts",
+      "sourceBlob": "af73c0fa6b57f524c63ed09c74adbc280679ab30",
+      "sourceSha256": "623eca03b99c19d106d31cd2b2ad8d7f9006e3d421b2df8b73159f190ddfd424",
+      "bytes": 4517,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/terrain/imagery/imageryConstraints.ts",
+      "destinations": [
+        "src/terrain/imagery/imageryConstraints.ts"
+      ],
+      "transformations": [
+        "Faithful pure terrain/map/imagery math and selection extraction; no runtime/scheduler initialization."
+      ]
+    },
+    {
+      "sourcePath": "src/terrain/imagery/imageryGeometry.ts",
+      "sourceBlob": "570503b66fd68fbd7b629c3e180e2123e22a0dcd",
+      "sourceSha256": "19bb3c8a79a5673ab0f8c99db1d34b4a458406056ab1864a9ec0cc03fcd461bb",
+      "bytes": 15060,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/terrain/imagery/imageryGeometry.ts",
+      "destinations": [
+        "src/terrain/imagery/imageryGeometry.ts"
+      ],
+      "transformations": [
+        "Faithful pure terrain/map/imagery math and selection extraction; no runtime/scheduler initialization."
+      ]
+    },
+    {
+      "sourcePath": "src/terrain/imagery/imagerySelector.test.ts",
+      "sourceBlob": "92368a1880648e4797fa08340b2be13040067203",
+      "sourceSha256": "fc342bc11c4648eb25e16db56c3bdc0fd21627459971609dbfb8c4df3ba4f001",
+      "bytes": 38448,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/terrain/imagery/imagerySelector.test.ts",
+      "destinations": [
+        "tests/terrain/imagery/imagerySelector.test.ts"
+      ],
+      "transformations": [
+        "Keep source math/selection behavior tests and route engine-owned relative imports."
+      ]
+    },
+    {
+      "sourcePath": "src/terrain/imagery/imagerySelector.ts",
+      "sourceBlob": "4c5b5af9563d505ed5f394c5504162b11e29ff29",
+      "sourceSha256": "0739313672020ae613b46ec17acc9f99898f6c1dee5709e046d118f3e30b9b20",
+      "bytes": 49558,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/terrain/imagery/imagerySelector.ts",
+      "destinations": [
+        "src/terrain/imagery/imagerySelector.ts"
+      ],
+      "transformations": [
+        "Faithful pure terrain/map/imagery math and selection extraction; no runtime/scheduler initialization."
+      ]
+    },
+    {
+      "sourcePath": "src/terrain/imagery/imagerySources.ts",
+      "sourceBlob": "70a6d8e28125ff620fe3a8dd69aef1811f7dcc01",
+      "sourceSha256": "bd7feb563d129094856d9278c4664a4da771f39ba8ed8b6ab473cb75be3bca6d",
+      "bytes": 3538,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/terrain/imagery/imagerySources.ts",
+      "destinations": [
+        "src/terrain/imagery/imagerySources.ts"
+      ],
+      "transformations": [
+        "Faithful pure terrain/map/imagery math and selection extraction; no runtime/scheduler initialization."
+      ]
+    },
+    {
+      "sourcePath": "src/terrain/imagery/imageryTestViews.ts",
+      "sourceBlob": "d5db2c3acd6d9d0c84fee61ded42f5a2a32df494",
+      "sourceSha256": "335de1ab463671855c10d3de76177a672c22ea643659f154d631071edf428e4d",
+      "bytes": 4744,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/terrain/imagery/imageryTestViews.ts",
+      "destinations": [
+        "src/terrain/imagery/imageryTestViews.ts"
+      ],
+      "transformations": [
+        "Faithful pure terrain/map/imagery math and selection extraction; no runtime/scheduler initialization."
+      ]
+    },
+    {
+      "sourcePath": "src/terrain/mapCache.test.ts",
+      "sourceBlob": "723356a8d8d45544f53f126de8b4ae6484a2cba2",
+      "sourceSha256": "f6bb4790025c17d62db8173486fcc28b674df657ca33dae1d34632fca238c1e5",
+      "bytes": 4402,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/terrain/mapCache.test.ts",
+      "destinations": [
+        "tests/mapCache.test.ts"
+      ],
+      "transformations": [
+        "Retain complete source HTTP eligibility/freshness/private-query-denial/clear tests and injected original storage/fetch/time with required Response/Request/Headers realm."
+      ]
+    },
+    {
+      "sourcePath": "src/terrain/mapCache.ts",
+      "sourceBlob": "8ef8c3edfdc3fdb9086ffb78d2007f438e64830c",
+      "sourceSha256": "e09991237d5b9dc6c8c743d86801d8e5df860f2c0449e927f4038cff8fd1ee3f",
+      "bytes": 10652,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/terrain/mapCache.ts",
+      "destinations": [
+        "src/browser/mapCache.ts"
+      ],
+      "transformations": [
+        "Retain complete bounded HTTP cache/freshness/Vary/key-denial/clear-generation behavior; mandatory storage/fetch/wall-clock/constructors, remove module singleton and compatibility functions."
+      ]
+    },
+    {
+      "sourcePath": "src/terrain/mapDetailPolicy.test.ts",
+      "sourceBlob": "26752b45b8900d0d123a2697b14124dd5edb53fa",
+      "sourceSha256": "f5ea910f83b48da93cbef9712cd7d549a173433fb4c779435f22d1a85de0300e",
+      "bytes": 7775,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/terrain/mapDetailPolicy.test.ts",
+      "destinations": [
+        "tests/terrain/mapDetailPolicy.test.ts"
+      ],
+      "transformations": [
+        "Keep source math/selection behavior tests and route engine-owned relative imports."
+      ]
+    },
+    {
+      "sourcePath": "src/terrain/mapDetailPolicy.ts",
+      "sourceBlob": "96ea7e0835cdf5411eaf1c66c176cc92cf89564b",
+      "sourceSha256": "76a7a161240c19743f8f41a2701db552ece7ee6726b9e2eb53b05510bc5425b0",
+      "bytes": 16638,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/terrain/mapDetailPolicy.ts",
+      "destinations": [
+        "src/terrain/mapDetailPolicy.ts"
+      ],
+      "transformations": [
+        "Faithful pure terrain/map/imagery math and selection extraction; no runtime/scheduler initialization."
+      ]
+    },
+    {
+      "sourcePath": "src/terrain/meshRefinement.test.ts",
+      "sourceBlob": "9db9e05086b890730c0a530d4461374dcb3882c5",
+      "sourceSha256": "663d24032819f9c5c0fc3df35a62f519341d95633ad44d83b273dc8a35c09564",
+      "bytes": 7852,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/terrain/meshRefinement.test.ts",
+      "destinations": [
+        "tests/meshRefinement.test.ts"
+      ],
+      "transformations": [
+        "Keep every committed terrain smoothing/seam/finite query/precision behavior case using the extracted owner modules and explicit host clock."
+      ]
+    },
+    {
+      "sourcePath": "src/terrain/meshRefinement.ts",
+      "sourceBlob": "862253d7956c737e878ce8755c6befad688be7b6",
+      "sourceSha256": "121fab25ad96876af86f90258532214b0269d31d7bdfe6bedb40315df30c3e40",
+      "bytes": 9406,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/terrain/meshRefinement.ts",
+      "destinations": [
+        "src/babylon/meshRefinement.ts"
+      ],
+      "transformations": [
+        "Faithful supplied-scene Babylon terrain helper; ESM/public owner paths. Anchor resolver requires the host monotonic clock. Displayed coordinate heights remain unqualified as physical terrain datum."
+      ]
+    },
+    {
+      "sourcePath": "src/terrain/rasterSurfaceSampler.test.ts",
+      "sourceBlob": "5c98d9b953e2ec2a8312d92718f82908194276eb",
+      "sourceSha256": "197a51a5d2c55b6fa2c4208cbfb870b561db7dbbd441d7b5f73ab0ded1bf0a24",
+      "bytes": 7593,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/terrain/rasterSurfaceSampler.test.ts",
+      "destinations": [
+        "tests/rasterSurfaceSampler.test.ts"
+      ],
+      "transformations": [
+        "Keep every committed terrain smoothing/seam/finite query/precision behavior case using the extracted owner modules and explicit host clock.",
+        "Reported primary typecheck causal repair: public owner signatures/defaults and fixture type adaptation, every assertion retained, repaired source UNRUN."
+      ]
+    },
+    {
+      "sourcePath": "src/terrain/rasterSurfaceSampler.ts",
+      "sourceBlob": "d8e28e1b58d837e6be2351e48884ba27e454dea3",
+      "sourceSha256": "1d48008559f78a8ecc3b903afa588b2dfc6267501d51e33c6571c9be80907e34",
+      "bytes": 7180,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/terrain/rasterSurfaceSampler.ts",
+      "destinations": [
+        "src/babylon/rasterSurfaceSampler.ts"
+      ],
+      "transformations": [
+        "Faithful supplied-scene Babylon terrain helper; ESM/public owner paths. Anchor resolver requires the host monotonic clock. Displayed coordinate heights remain unqualified as physical terrain datum."
+      ]
+    },
+    {
+      "sourcePath": "src/terrain/retryDelay.ts",
+      "sourceBlob": "7399e9d4732d420d690ca3df4d2da7e51ca447c3",
+      "sourceSha256": "083d940837d5216800bc9f1c87c9a20c9463c836a2e981968e4780a573babb74",
+      "bytes": 709,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/terrain/retryDelay.ts",
+      "destinations": [
+        "src/terrain/retryDelay.ts"
+      ],
+      "transformations": [
+        "Faithful pure terrain/map/imagery math and selection extraction; no runtime/scheduler initialization."
+      ]
+    },
+    {
+      "sourcePath": "src/terrain/smoothElevation.test.ts",
+      "sourceBlob": "ce0472fd852427ffed2e741088fc1cb7166cda36",
+      "sourceSha256": "2f4ee383e31af9be8afd7d38e0b157482bf1e2d1e8dc173d7c2bb98043dbb083",
+      "bytes": 1905,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/terrain/smoothElevation.test.ts",
+      "destinations": [
+        "tests/terrain/smoothElevation.test.ts"
+      ],
+      "transformations": [
+        "Keep source math/selection behavior tests and route engine-owned relative imports."
+      ]
+    },
+    {
+      "sourcePath": "src/terrain/smoothElevation.ts",
+      "sourceBlob": "4c5da33e1f54c7b03d2b1792ffc8a302b4f6ef29",
+      "sourceSha256": "408466c56fb2b309f7d554afdc2b97cc47c71d00ae943255337b2423911e0bc3",
+      "bytes": 2395,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/terrain/smoothElevation.ts",
+      "destinations": [
+        "src/terrain/smoothElevation.ts"
+      ],
+      "transformations": [
+        "Faithful pure terrain/map/imagery math and selection extraction; no runtime/scheduler initialization."
+      ]
+    },
+    {
+      "sourcePath": "src/terrain/smoothElevationCoefficients.ts",
+      "sourceBlob": "d3353418b3b2750ccaee1f82ef833f3370a2b06b",
+      "sourceSha256": "c3a43d61ed99b511bbcb708f7babb8236a161c452fa18092308e8616554602e9",
+      "bytes": 3408,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/terrain/smoothElevationCoefficients.ts",
+      "destinations": [
+        "src/terrain/smoothElevationCoefficients.ts"
+      ],
+      "transformations": [
+        "Faithful pure terrain/map/imagery math and selection extraction; no runtime/scheduler initialization."
+      ]
+    },
+    {
+      "sourcePath": "src/terrain/surfaceQuery.test.ts",
+      "sourceBlob": "c98dffbcb8b05eacda6855ce47e1af3c35352110",
+      "sourceSha256": "4e3a04939b71daf9d7f0bb1569302c08c037524fcd79e398dc62873f7079ac2f",
+      "bytes": 7774,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/terrain/surfaceQuery.test.ts",
+      "destinations": [
+        "tests/surfaceQuery.test.ts"
+      ],
+      "transformations": [
+        "Faithful committed-source extraction with ESM relative imports.",
+        "Reported primary typecheck causal repair: public owner signatures/defaults and fixture type adaptation, every assertion retained, repaired source UNRUN."
+      ]
+    },
+    {
+      "sourcePath": "src/terrain/surfaceQuery.ts",
+      "sourceBlob": "9d789240ea166b18e312a6da31ee8785b8e3cb8c",
+      "sourceSha256": "9c2d3d2311317ba5e0e3f295a7cfb3aee17f7acd8af585db4f61a530d5341b92",
+      "bytes": 5490,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/terrain/surfaceQuery.ts",
+      "destinations": [
+        "src/babylon/surfaceQuery.ts",
+        "src/surface/contracts.ts"
+      ],
+      "transformations": [
+        "Split pure hit/query declarations from unchanged Babylon displayed-geometry query; retain floating-origin transform, finite-ray bounds and authoritative raster miss behavior."
+      ]
+    },
+    {
+      "sourcePath": "src/terrain/terrainPerformanceCapture.test.ts",
+      "sourceBlob": "e1c76ee83aaebcc8d8e810d40a9f14c279894778",
+      "sourceSha256": "85857b5cf498a28ceaa394a4bdf4f0484664af265819ff7ba429d53928f5402f",
+      "bytes": 970,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/terrain/terrainPerformanceCapture.test.ts",
+      "destinations": [
+        "tests/terrainPerformanceCapture.test.ts"
+      ],
+      "transformations": [
+        "Retain opt-in bounded numeric capture and source fixture; frame times are provided by host, no performance sampler or benchmark is started."
+      ]
+    },
+    {
+      "sourcePath": "src/terrain/terrainPerformanceCapture.ts",
+      "sourceBlob": "765b7c01762675c34407e4f24d5ae8f15f7ebc76",
+      "sourceSha256": "417c28c51ce142ab5f3623adb6747988a2d66bd10fc2511440ccb77165d233f0",
+      "bytes": 3267,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/terrain/terrainPerformanceCapture.ts",
+      "destinations": [
+        "src/terrain/terrainPerformanceCapture.ts"
+      ],
+      "transformations": [
+        "Retain opt-in bounded numeric capture and source fixture; frame times are provided by host, no performance sampler or benchmark is started."
+      ]
+    },
+    {
+      "sourcePath": "src/terrain/terrainReadiness.ts",
+      "sourceBlob": "83650710c0d68cd94ebd7a720876c6642d4a7fba",
+      "sourceSha256": "bc1c03bc92d136a1b3bdec6e083acf14155d5c28bcc16d345a7c217539044697",
+      "bytes": 6798,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/terrain/terrainReadiness.ts",
+      "destinations": [
+        "src/surface/coverageSamples.ts",
+        "src/surface/terrainPreparation.ts"
+      ],
+      "transformations": [
+        "Split pure great-circle coverage positions and source options/progress/result/input validation records. Structural cancellation keeps pure core declarations realm-independent. New required TerrainPreparationPolicy explicitly supplies acceptance/fallback altitude/quality/timing; aircraft contact, spawn altitude/clearance safety and original evaluator are host-owned, not implicit engine defaults. Mixed assertions retained for original host policy adoption; all UNRUN."
+      ]
+    },
+    {
+      "sourcePath": "src/terrain/terrainSelector.test.ts",
+      "sourceBlob": "0879a07adc7983863de59435627448a443b9ec0c",
+      "sourceSha256": "d3cf95c1376aaba7ca8fecff7d541df5da78ca52faf1f3c6d23ddd934a1b70ae",
+      "bytes": 5942,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/terrain/terrainSelector.test.ts",
+      "destinations": [
+        "tests/terrain/terrainSelector.test.ts"
+      ],
+      "transformations": [
+        "Keep source math/selection behavior tests and route engine-owned relative imports."
+      ]
+    },
+    {
+      "sourcePath": "src/terrain/terrainSelector.ts",
+      "sourceBlob": "7322b2140ff2df19ed1ce5842c9c0df7e65b11c3",
+      "sourceSha256": "500ae63d282dad174590aa645f345945658abd4cf6bc288ae15f70f25853a713",
+      "bytes": 12010,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/terrain/terrainSelector.ts",
+      "destinations": [
+        "src/terrain/terrainSelector.ts"
+      ],
+      "transformations": [
+        "Faithful pure terrain/map/imagery math and selection extraction; no runtime/scheduler initialization."
+      ]
+    },
+    {
+      "sourcePath": "src/terrain/terrainTiles.test.ts",
+      "sourceBlob": "587084f37c5c26f679b379b4cbb7bd34a1d8a52c",
+      "sourceSha256": "79851350596905cd20804402dade73f3ff5e50c78b70c31c0b10aac2e5b54dc0",
+      "bytes": 2688,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/terrain/terrainTiles.test.ts",
+      "destinations": [
+        "tests/terrainTiles.test.ts"
+      ],
+      "transformations": [
+        "Retain complete original Terrarium, interpolation, six-slot 404 fallback, neighbor edge and no-fabricated-ground cases using explicit transport/decode/cancellation fixtures. Primary added queued-disposal and late-decode causal cases; current cases are unrun."
+      ]
+    },
+    {
+      "sourcePath": "src/terrain/terrainTiles.ts",
+      "sourceBlob": "460c1445c681b2718d98573e45824417c91a7882",
+      "sourceSha256": "ea718026395a2e2e9222930eec4a6c707e9008ac63d11eb784cf057a52ed8074",
+      "bytes": 9818,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/terrain/terrainTiles.ts",
+      "destinations": [
+        "src/terrain/terrainGrid.ts",
+        "src/terrain/terrainLoader.ts",
+        "src/browser/terrainImageDecoder.ts"
+      ],
+      "transformations": [
+        "Split pure provider/grid/Terrarium/sample math from host-injected transport/decode/cancellation. Original six/256/20s limits become explicit host limits retaining defaults. Primary-prepared lifecycle repair rejects paused queued work on disposal and refuses late decoded cache publication; causal fixtures prepared and unrun.",
+        "Extract committed native Blob Terrarium decoder with injected createImageBitmap/canvas/performance/CPU-report and named 1\u20131024px maxTileSide; raw native WebP behavior and unchanged decodeTerrarium; close/report all-attempt cleanup causal errors. Source only UNRUN."
+      ]
+    },
+    {
+      "sourcePath": "src/terrain/tileHeightProvider.ts",
+      "sourceBlob": "933b707c5e0207cc5f3b589d2b88e81930ed5452",
+      "sourceSha256": "431a51f45364d91285b2dfa93269632118bdd327b161b2c4be4269e3433ae3e7",
+      "bytes": 2919,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/terrain/tileHeightProvider.ts",
+      "destinations": [
+        "src/babylon/tileHeightProvider.ts"
+      ],
+      "transformations": [
+        "Faithful supplied-scene Babylon terrain helper; ESM/public owner paths. Anchor resolver requires the host monotonic clock. Displayed coordinate heights remain unqualified as physical terrain datum."
+      ]
+    },
+    {
+      "sourcePath": "src/visualization/orbitCompass.ts",
+      "sourceBlob": "3287b5e580290b9f961798293761a1ef2cb258c8",
+      "sourceSha256": "076445268f654d7a14eb99059cf2e30f57dbf61e1446126e23d2f5bc04c932a7",
+      "bytes": 8347,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/visualization/orbitCompass.ts",
+      "destinations": [
+        "src/settings/catalogue/visualization.ts",
+        "src/visualization/defaults.ts",
+        "src/visualization/orbitCompass.ts"
+      ],
+      "transformations": [
+        "Retain source geometry, fade, scale and label defaults; inject renderer canvas device and changed-only frame callback, disable implicit drawText update, clean owned resources and late calls."
+      ]
+    },
+    {
+      "sourcePath": "src/windowing/react/LocationPanel.results.test.tsx",
+      "sourceBlob": "7b56c7178166d539150192748ccff1991d35061d",
+      "sourceSha256": "2c38bec3eb5b0f58a27e2a471c20b801a665efceab20864fd1847aebcbba12d6",
+      "bytes": 8072,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/windowing/react/LocationPanel.results.test.tsx",
+      "destinations": [
+        "fixtures/composition/LocationPanel.resultsContributionTests.tsx",
+        "tests/LocationPanel.results.test.tsx"
+      ],
+      "transformations": [
+        "preserve all mixed-source panel assertions for concrete flight adapter registration; never imports aircraft implementation; retain plain coordinate/search/live-placeholder/offline/draft/denied-storage assertions using explicit engine host ports; mixed tests remain registered separately"
+      ]
+    },
+    {
+      "sourcePath": "src/windowing/react/LocationPanel.test.tsx",
+      "sourceBlob": "89ee293e627f91943bb291ca2db6ac2cf9eb2e29",
+      "sourceSha256": "8bee9d4c01c91540d88372e462598a6a48c7b73d485c20ef68ce08e9857ab9cb",
+      "bytes": 15278,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/windowing/react/LocationPanel.test.tsx",
+      "destinations": [
+        "fixtures/composition/LocationPanelContributionTests.tsx",
+        "tests/LocationPanel.test.tsx"
+      ],
+      "transformations": [
+        "preserve all mixed-source panel assertions for concrete flight adapter registration; never imports aircraft implementation; retain plain coordinate/search/live-placeholder/offline/draft/denied-storage assertions using explicit engine host ports; mixed tests remain registered separately",
+        "Reported primary typecheck causal repair: public owner signatures/defaults and fixture type adaptation, every assertion retained, repaired source UNRUN."
+      ]
+    },
+    {
+      "sourcePath": "src/windowing/react/LocationPanel.tsx",
+      "sourceBlob": "31d8cc192be2061d60d46e5ade4d796df80769cc",
+      "sourceSha256": "ca07bbc189e7a10764d0e56f07e22077180f736c1b9be32a5fd463728e8a5fcf",
+      "bytes": 11525,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/windowing/react/LocationPanel.tsx",
+      "destinations": [
+        "src/location/react/LocationPanel.tsx"
+      ],
+      "transformations": [
+        "Retain full Earth coordinate/search/draft/current-view editor behavior. Host supplies current-location observation/storage/cancellation/provider/attribution; aircraft runway preset selection/resolve/apply/render/validation becomes explicit domain contribution, no aircraft implementation import. Original mixed branch retained in source snapshot for host adoption."
+      ]
+    },
+    {
+      "sourcePath": "src/windowing/react/LocationSearchResults.test.tsx",
+      "sourceBlob": "d2562d4bf433e362f06551fcf380c8d770fc2595",
+      "sourceSha256": "57ac66eb59cd59a100739ebf15e571dbb4774126b7d7cd5248c600ec2bf43f2b",
+      "bytes": 7829,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/windowing/react/LocationSearchResults.test.tsx",
+      "destinations": [
+        "tests/LocationSearchResults.test.tsx"
+      ],
+      "transformations": [
+        "retain every search-result expansion/retry/cancel/assertion with supplied native realm cancellation factory"
+      ]
+    },
+    {
+      "sourcePath": "src/windowing/react/LocationSearchResults.tsx",
+      "sourceBlob": "8c8ecc1e1b0eeedc997802b116b6ff8ff29e3827",
+      "sourceSha256": "acc2bbbe80f07c2181f4f2eb8470487b5290c63dfedf9b7e1cad354cafaf3a75",
+      "bytes": 3289,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/windowing/react/LocationSearchResults.tsx",
+      "destinations": [
+        "src/location/react/LocationSearchResults.tsx"
+      ],
+      "transformations": [
+        "Retain complete source grouped result presentation/lazy expansion/retry/cancellation; browser cancellation factory supplied, no own controller realm or provider implementation."
+      ]
+    },
+    {
+      "sourcePath": "src/windowing/react/locationDraft.ts",
+      "sourceBlob": "1c9da9113a50921d75557aec7eb58c833b9f2fee",
+      "sourceSha256": "97e4e702dacb665a32a12faf108c7dcdd47c2a6020c6d9c50d1c44189780f534",
+      "bytes": 2027,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/windowing/react/locationDraft.ts",
+      "destinations": [
+        "src/location/locationDraft.ts"
+      ],
+      "transformations": [
+        "Retain coordinate/search preference draft and existing place namespace/rollback-compatible empty legacy fields; supplied storage/key + optional owner legacy validator/hostData codec replace localStorage and airport implementation."
+      ]
+    },
+    {
+      "sourcePath": "src/windowing/react/locationResults.test.ts",
+      "sourceBlob": "4e809cb9ae4da7d2d0583d8ec113e00f260281a6",
+      "sourceSha256": "fed71cffffe08aa599627016365189595b8fde3be07c2d06f2994dcdbc7bc223",
+      "bytes": 11554,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/windowing/react/locationResults.test.ts",
+      "destinations": [
+        "fixtures/composition/locationResultContributionTests.ts",
+        "tests/locationResults.test.ts"
+      ],
+      "transformations": [
+        "preserve complete immutable mixed test body as explicit host registration; not executed by engine test include; route generic result/tree/cancellation/corruption assertions; all airport/flight payload assertions retained in host registration"
+      ]
+    },
+    {
+      "sourcePath": "src/windowing/react/locationResults.ts",
+      "sourceBlob": "dd50656e56bcc5dcd8f3c07e100e9de69a633404",
+      "sourceSha256": "89f690c96c9d92e879b4abbd9c7b6104d0419383fb7183eda2b5c2a57cc78730",
+      "bytes": 8392,
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/originals/src/windowing/react/locationResults.ts",
+      "destinations": [
+        "src/location/locationResults.ts"
+      ],
+      "transformations": [
+        "Retain complete source hierarchical snapshots, validation/cycle guards/lazy provider capability reattachment and reference-preserving updates; structural generic signal plus explicit hostData copy/validation replace aircraft serializers/validators."
+      ]
+    }
+  ],
+  "mixedBoundaries": [
+    {
+      "source": "src/airports/geometry.ts + src/airports/types.ts",
+      "engine": "Airport data/validation/bearing/distance/runway lookup",
+      "host": "destination/airportSpawn/AirportMode/AirportFlightPreset and aircraft application remain Flight-host owned; original whole blobs retained for lineage."
+    },
+    {
+      "source": "src/search/locationSearch.ts",
+      "engine": "Coordinates/place/geocoder/city/nearby/result mechanics",
+      "host": "Query suffix and opaque airport contribution provided explicitly; hostData codec/panel contribution and aircraft presets remain host policy."
+    },
+    {
+      "source": "src/airports/airports.test.ts",
+      "engine": "Four globe-only assertions registered in owner tests",
+      "host": "All five source assertions retained via registerLegacyAirportSourceAssertions; aircraft placement requires actual Flight public adapter."
+    },
+    {
+      "source": "src/settings/catalogue/interface.ts",
+      "engine": "Exact existing search.cacheDuration/search.cacheEntries/search.timeout records",
+      "host": "Interface tab composition retains original search section, one host registry, no new Search tab."
+    },
+    {
+      "source": "src/styles/hud.css + src/shell/MapCachePanel.tsx",
+      "engine": "React cache presentation and its scoped original .foss-earth-map-cache styling; existing public cache + live named row/cadence policy",
+      "ui": "Generic common .foss-earth-map-cache-section list/progress wrappers remain UI source at ./styles.css; no UI write."
+    },
+    {
+      "source": "src/engine/babylon/createBabylonRuntime.ts",
+      "engine": "Ordinary framePreparation.prepare runs on existing host frame before Sky; owned clipping/camera/fallback cleanup attempted independently.",
+      "host": "Supplies current one timestamp/delta/scene and prepares existing viewers/uploaders; no simMode workaround or second scheduler."
+    },
+    {
+      "source": "src/engine/babylon/createRasterTilesRuntime.ts",
+      "engine": "Optional async per-mesh ready handle publication/generation cancellation/outgoing lifetime; legacy sync API preserved.",
+      "host": "Actual source/tile file metadata and one common broker/cache/uploader/cancellation/readiness realm.",
+      "images": "Generic decoded-input retain already public; generic RGBA/header/status acquisition still a separate prerequisite."
+    }
+  ],
+  "omittedSurfaces": [
+    {
+      "sourcePath": "src/engine/babylon/imagery/imageryPagePreparation.ts",
+      "sourceBlob": "713eb3ca59210f9b033c53e354ec011acc912e74",
+      "sourceSha256": "4d303139109abe921912decf8ff9c5271e5135c17384af1cbe0f80a20cb6b8f3",
+      "retainedOriginalPath": "build/source-only/2026-10-09-engine-async-cleanup/omitted-originals/src/engine/babylon/imagery/imageryPagePreparation.ts",
+      "reason": "Pure preparePages/isBlankImage already extracted unchanged. Native decode/canvas implementation is supplied through host ports and actual public Images services, not copied. Optional Engine worker protocol/kernel/bridge now selected separately. Actual original native format/orientation/browser fidelity remains unqualified."
+    }
+  ],
+  "noDirtyInputs": true,
+  "noSourceHistoryMutation": true,
+  "currentGeographicPlacementRenewal": {
+    "preparedAtUtc": "2026-10-09T19:53:07.788946+00:00",
+    "additionalOriginalPaths": [
+      "src/scenes/panoramaMath.test.ts"
+    ],
+    "actualAdditionalCleanLineage": "pending primary-owned history intake; existing SOURCE_LINEAGE.json retained byte-for-byte",
+    "checksExecuted": []
+  }
+}

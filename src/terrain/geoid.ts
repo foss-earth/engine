@@ -1,4 +1,4 @@
-import type { RuntimeMode } from "../engine/babylon/createBabylonRuntime";
+export type RuntimeMode = "google-tiles" | "raster-basemap" | "fallback";
 
 /**
  * Mean sea level: the EGM2008 geoid's height above the WGS84 ellipsoid, from a
@@ -24,7 +24,7 @@ export interface GeoidModel {
   heightMeters(latDeg: number, lonDeg: number): number;
 }
 
-/** What the heights of the world a runtime draws are measured from. */
+/** Legacy runtime mode convention; this does not convert displayed coordinates to a physical provider datum. */
 export function surfaceHeightDatum(mode: RuntimeMode): HeightDatum {
   return mode === "google-tiles" ? "ellipsoid" : "geoid";
 }
@@ -72,41 +72,4 @@ export function decodeGeoidGrid(bytes: Uint8Array): GeoidModel {
       return catmullRom(across(row - 1), across(row), across(row + 1), across(row + 2), ty) * METERS_PER_UNIT;
     },
   };
-}
-
-/** A grid file is gzip, unless a server already took that off for the browser. */
-async function gunzip(bytes: Uint8Array): Promise<Uint8Array> {
-  if (bytes[0] !== 0x1f || bytes[1] !== 0x8b) return bytes;
-  const stream = new Blob([bytes as BlobPart]).stream().pipeThrough(new DecompressionStream("gzip"));
-  return new Uint8Array(await new Response(stream).arrayBuffer());
-}
-
-export async function readGeoidGrid(bytes: Uint8Array): Promise<GeoidModel> {
-  return decodeGeoidGrid(await gunzip(bytes));
-}
-
-// Literal URLs, so the bundler finds and ships each grid.
-const GRID_URLS: Record<GeoidGridId, () => URL> = {
-  "60": () => new URL("./geoidGrids/egm2008-60.bin", import.meta.url),
-  "30": () => new URL("./geoidGrids/egm2008-30.bin", import.meta.url),
-  "15": () => new URL("./geoidGrids/egm2008-15.bin", import.meta.url),
-};
-
-/**
- * Each grid is downloaded once a page, when first asked for. A grid that could
- * not load is not asked for again until the page reloads, so a missing file is
- * one failed request, not one a frame.
- */
-const loaded = new Map<GeoidGridId, Promise<GeoidModel>>();
-
-export function loadGeoid(grid: GeoidGridId): Promise<GeoidModel> {
-  let model = loaded.get(grid);
-  if (!model) {
-    model = fetch(GRID_URLS[grid]()).then(async response => {
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      return readGeoidGrid(new Uint8Array(await response.arrayBuffer()));
-    });
-    loaded.set(grid, model);
-  }
-  return model;
 }

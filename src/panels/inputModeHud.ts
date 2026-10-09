@@ -1,0 +1,518 @@
+import { oneFingerClickSvgRaw, mouseLeftButtonSvgRaw, mouseRightButtonSvgRaw, mouseScrollWheelSvgRaw, trackpadPinchSvgRaw, trackpadSwipeSvgRaw, trackpadTouchSvgRaw } from "./gestureArtwork.js";
+import type { GlobeInputSensitivitySettings } from "../view.js";
+import type { SettingsRegistry } from "@foss-earth/ui/settings";
+import {
+  loadInputModePreference,
+  loadInputSensitivityPreference,
+  saveInputModePreference,
+  saveInputSensitivityPreference,
+} from "../settings/inputPreferences.js";
+import type { HudInputMode } from "../input/inputSettings.js";
+
+export type MovementKind = "pan" | "orbit" | "zoom";
+
+export interface InputModeHudHandle {
+  /**
+   * Draws the Input method section into `container`: a Touch part on a device
+   * with a touchscreen, then a Mouse or trackpad part on one with a pointer.
+   * Every mounted view shares one state. Returns an unmount.
+   */
+  mountInline(container: HTMLElement): () => void;
+  setAutoBadgeActive(active: boolean): void;
+  setOnAutoModeExit(handler: (() => void) | null): void;
+  destroy(): void;
+}
+
+export interface InputModeDeviceHints {
+  platform: string;
+  maxTouchPoints: number;
+  coarsePointer: boolean;
+  finePointer: boolean;
+}
+export interface InputModeHudOptions {
+  document: Document;
+  settings: SettingsRegistry;
+  deviceHints: InputModeDeviceHints;
+  log: { info(...values: unknown[]): void };
+  availableModes?: ReadonlySet<HudInputMode>;
+  movements?: readonly MovementKind[];
+  trackpadOrbitGesture?: "touch" | "swipe";
+  gestureDescription?: (mode: HudInputMode, movement: MovementKind) => string;
+  onModeChange?: (mode: HudInputMode) => void;
+  onSensitivityChange?: (settings: GlobeInputSensitivitySettings) => void;
+  /** The HUD button shows or hides the host's Controls tab, where the section lives. */
+  onToggle?: () => void;
+}
+
+const DELTA_EPSILON = 0.001;
+const HUD_ACCENT = "#0284c7";
+const HUD_ACCENT_ACTIVE_BG = "rgba(14, 165, 233, 0.16)";
+
+const INPUT_MODE_ACCENT_STYLE_ID = "foss-earth-input-mode-accent";
+
+function ensureInputModeAccentStyles(document: Document): void {
+  if (document.getElementById(INPUT_MODE_ACCENT_STYLE_ID)) return;
+  const style = document.createElement("style");
+  style.id = INPUT_MODE_ACCENT_STYLE_ID;
+  style.textContent = `
+    .input-mode-inline .input-mode-toggle-option.is-active,
+    .input-mode-inline .input-mode-toggle-option.is-active span {
+      color: ${HUD_ACCENT} !important;
+    }
+    .input-mode-inline .input-mode-toggle-option.is-active {
+      background: ${HUD_ACCENT_ACTIVE_BG} !important;
+    }
+    .input-mode-inline .input-mode-toggle-option.is-active svg {
+      stroke: ${HUD_ACCENT} !important;
+    }
+  `;
+  document.head.append(style);
+}
+
+function applyAccentToSvg(svg: SVGElement | null): void {
+  if (!svg) return;
+  svg.style.stroke = HUD_ACCENT;
+}
+
+const MODE_LABELS: Record<HudInputMode, string> = {
+  mouse: "Mouse mode",
+  trackpad: "Trackpad mode",
+  touch: "Touch mode",
+};
+
+const MOVEMENT_LABELS: Record<MovementKind, string> = {
+  pan: "Pan",
+  orbit: "Orbit",
+  zoom: "Zoom",
+};
+
+function hasFractionalDelta(value: number): boolean {
+  return Math.abs(value - Math.round(value)) > DELTA_EPSILON;
+}
+
+function isLikelyMouseWheel(e: WheelEvent): boolean {
+  const absDeltaX = Math.abs(e.deltaX);
+  const absDeltaY = Math.abs(e.deltaY);
+  const hasHorizontal = absDeltaX > DELTA_EPSILON;
+  const hasFine = hasFractionalDelta(e.deltaX) || hasFractionalDelta(e.deltaY);
+
+  if (e.deltaMode !== 0) return absDeltaY > DELTA_EPSILON;
+  return !hasHorizontal && !hasFine && absDeltaY > DELTA_EPSILON;
+}
+
+function clampSensitivity(value: unknown): number {
+  const num = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(num)) return 1;
+  return Math.max(0.1, Math.min(10, Math.round(num * 100) / 100));
+}
+
+function cloneSensitivity(settings: GlobeInputSensitivitySettings): GlobeInputSensitivitySettings {
+  return {
+    mouse: { ...settings.mouse },
+    trackpad: { ...settings.trackpad },
+    touch: { ...settings.touch },
+  };
+}
+
+export function detectAvailableModes(hints: InputModeDeviceHints): Set<HudInputMode> {
+  const modes = new Set<HudInputMode>();
+  const isMac = /mac/i.test(hints.platform);
+  const hasTouch = hints.maxTouchPoints > 0 || hints.coarsePointer;
+  const hasFinePointer = hints.finePointer;
+
+  if (hasFinePointer || !hasTouch) modes.add("mouse");
+  if (isMac || hasFinePointer) modes.add("trackpad");
+  if (hasTouch) modes.add("touch");
+  if (modes.size === 0) modes.add("mouse");
+
+  return modes;
+}
+
+const SVG_ICON_ATTRS = `xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="${HUD_ACCENT}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"`;
+const SVG_ACTION_ATTRS = `xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="${HUD_ACCENT}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"`;
+function sanitizeGestureSvg(svgRaw: string): string {
+  return svgRaw
+    .replace(/<\?xml[^>]*>/i, "")
+    .replace(/<!--[^]*?-->/g, "")
+    .replace(/<!DOCTYPE[^>]*>/i, "")
+    .replace(/fill="#000000"/gi, 'fill="currentColor"')
+    .replace(/width="800px"/i, 'width="14"')
+    .replace(/height="800px"/i, 'height="14"')
+    .trim();
+}
+const MOUSE_LEFT_BUTTON_SVG = sanitizeGestureSvg(mouseLeftButtonSvgRaw);
+const MOUSE_RIGHT_BUTTON_SVG = sanitizeGestureSvg(mouseRightButtonSvgRaw);
+const MOUSE_SCROLL_WHEEL_SVG = sanitizeGestureSvg(mouseScrollWheelSvgRaw);
+const ONE_FINGER_CLICK_SVG = sanitizeGestureSvg(oneFingerClickSvgRaw);
+const TRACKPAD_PINCH_SVG = sanitizeGestureSvg(trackpadPinchSvgRaw);
+const TRACKPAD_SWIPE_SVG = sanitizeGestureSvg(trackpadSwipeSvgRaw);
+const TRACKPAD_TOUCH_SVG = sanitizeGestureSvg(trackpadTouchSvgRaw);
+
+function gestureIconSvg(mode: HudInputMode, movement: MovementKind): string {
+  const a = SVG_ICON_ATTRS;
+  if (mode === "mouse") {
+    if (movement === "pan") return MOUSE_LEFT_BUTTON_SVG;
+    if (movement === "zoom") return MOUSE_SCROLL_WHEEL_SVG;
+    if (movement === "orbit") return MOUSE_RIGHT_BUTTON_SVG;
+  }
+  if (mode === "trackpad") {
+    if (movement === "pan") {
+      return `<div class="gesture-card-bg-stack" aria-hidden="true">${TRACKPAD_SWIPE_SVG}${ONE_FINGER_CLICK_SVG}</div>`;
+    }
+    if (movement === "zoom") return TRACKPAD_PINCH_SVG;
+    if (movement === "orbit") return TRACKPAD_TOUCH_SVG;
+  }
+  if (movement === "pan") return `<svg ${a}><line x1="12" y1="3" x2="12" y2="15"/><path d="M9 18l3 4 3-4" stroke-width="1.5"/></svg>`;
+  if (movement === "zoom") return `<svg ${a}><path d="M7 4L3 8"/><path d="M17 4l4 4"/><path d="M7 20L3 16"/><path d="M17 20l4-4"/><circle cx="12" cy="12" r="2" fill="currentColor" fill-opacity=".3"/></svg>`;
+  return `<svg ${a}><line x1="9" y1="5" x2="9" y2="15"/><line x1="15" y1="5" x2="15" y2="15"/><path d="M6 18l6 4 6-4" stroke-width="1.5"/></svg>`;
+}
+
+function actionIconSvg(movement: MovementKind): string {
+  const a = SVG_ACTION_ATTRS;
+  if (movement === "pan") return `<svg ${a}><path d="M5 9l-3 3 3 3"/><path d="M9 5l3-3 3 3"/><path d="M15 19l-3 3-3-3"/><path d="M19 9l3 3-3 3"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="12" y1="2" x2="12" y2="22"/></svg>`;
+  if (movement === "zoom") return `<svg ${a}><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>`;
+  if (movement === "orbit") return `<svg ${a}><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>`;
+  return "";
+}
+
+const RESET_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>';
+const PLAY_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><path d="M5 3l14 9-14 9V3z"/></svg>';
+
+function svgForMode(mode: HudInputMode): string {
+  const common = `xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="${HUD_ACCENT}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"`;
+  if (mode === "mouse") {
+    return `<svg ${common}><rect x="5" y="2" width="14" height="20" rx="7"/><path d="M12 6v4"/></svg>`;
+  }
+  if (mode === "trackpad") {
+    return `<svg ${common}><rect width="20" height="16" x="2" y="4" rx="2"/><path d="M2 14h20"/><path d="M12 20v-6"/></svg>`;
+  }
+  return `<svg ${common}><path d="M22 14a8 8 0 0 1-8 8"/><path d="M18 11v-1a2 2 0 0 0-2-2a2 2 0 0 0-2 2"/><path d="M14 10V9a2 2 0 0 0-2-2a2 2 0 0 0-2 2v1"/><path d="M10 9.5V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v10"/><path d="M18 11a2 2 0 1 1 4 0v3a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/></svg>`;
+}
+
+/** The modes that read wheel and gesture events; touch is handled on its own. */
+const POINTER_MODES: readonly HudInputMode[] = ["mouse", "trackpad"];
+
+/**
+ * The input-method button in the HUD bar, and the Input method section a host
+ * puts in its Controls tab.
+ *
+ * The settings have one home, the section. The button shows the pointer mode
+ * and opens that tab; it never pops up a copy of the settings.
+ *
+ * Touch is not a mode. Touch gestures are handled whatever the pointer mode is,
+ * with their own sensitivity, so a device with a touchscreen gets a Touch part,
+ * and one with a mouse or trackpad gets a Mouse or trackpad part beneath it. A
+ * touch laptop, or an iPad with a keyboard and trackpad, gets both. The pointer
+ * mode only decides how wheel and gesture events are read.
+ */
+export function createInputModeHud(
+  container: HTMLElement,
+  anchorAfter: HTMLElement,
+  options: InputModeHudOptions,
+): InputModeHudHandle {
+  const document = options.document;
+  const settings = options.settings;
+  ensureInputModeAccentStyles(document);
+  const availableModes = options.availableModes ?? detectAvailableModes(options.deviceHints);
+  const pointerModes = POINTER_MODES.filter((mode) => availableModes.has(mode));
+  const hasTouch = availableModes.has("touch");
+  const movements = options.movements ?? ["pan", "orbit", "zoom"] as const;
+  // With no mouse or trackpad the mode stays "touch", which reads no wheel.
+  const modeChoices = new Set<HudInputMode>(pointerModes.length > 0 ? pointerModes : ["touch"]);
+  let activeMode = loadInputModePreference(settings, modeChoices);
+  let sensitivity = loadInputSensitivityPreference(settings);
+  let debugMode = false;
+  let autoModeActive = false;
+  let onAutoModeExit: (() => void) | null = null;
+  const inlineViews = new Set<HTMLElement>();
+
+  const control = document.createElement("div");
+  control.className = "input-mode-control";
+
+  const anchor = document.createElement("div");
+  anchor.className = "input-mode-anchor";
+
+  const button = document.createElement("button");
+  button.id = "inputModeButton";
+  button.className = "hud-circle-button input-mode-button";
+  button.type = "button";
+
+  const modeIcon = document.createElement("span");
+  modeIcon.className = "input-mode-button-icon";
+
+  const autoBadge = document.createElement("span");
+  autoBadge.className = "input-mode-auto-badge";
+  autoBadge.textContent = "AUTO";
+  autoBadge.hidden = true;
+  autoBadge.setAttribute("aria-hidden", "true");
+
+  function syncButtonA11y(): void {
+    const label = autoModeActive ? "Exit auto camera mode" : `${MODE_LABELS[activeMode]}. Show or hide input settings`;
+    button.title = label;
+    button.setAttribute("aria-label", label);
+  }
+
+  const setAutoBadgeActive = (active: boolean): void => {
+    autoModeActive = active;
+    autoBadge.hidden = !active;
+    button.classList.toggle("input-mode-button--auto", active);
+    syncButtonA11y();
+  };
+
+  function renderButton(): void {
+    modeIcon.innerHTML = svgForMode(activeMode);
+    button.classList.toggle("input-mode-button--debug", debugMode);
+    syncButtonA11y();
+  }
+
+  /** Redraws every view but `except`, which holds the field being typed in. */
+  function renderAll(except?: HTMLElement): void {
+    for (const view of inlineViews) if (view !== except) renderInto(view);
+  }
+
+  function heading(text: string): HTMLElement {
+    const element = document.createElement("div");
+    element.className = "input-mode-heading";
+    element.textContent = text;
+    return element;
+  }
+
+  function renderInto(target: HTMLElement): void {
+    target.replaceChildren();
+    if (hasTouch) target.append(heading("Touch"), renderCards(target, "touch"));
+    if (pointerModes.length === 0) return;
+
+    target.append(heading(pointerModes.length > 1 ? "Mouse or trackpad" : MODE_LABELS[pointerModes[0]].replace(" mode", "")));
+    if (pointerModes.length > 1) {
+      const toggleRow = document.createElement("div");
+      toggleRow.className = "input-mode-toggle-row";
+      toggleRow.setAttribute("role", "group");
+      toggleRow.setAttribute("aria-label", "Pointer");
+      for (const mode of pointerModes) {
+        const btn = document.createElement("button");
+        btn.className = "input-mode-toggle-option";
+        btn.type = "button";
+        btn.setAttribute("aria-pressed", String(activeMode === mode));
+        btn.dataset.mode = mode;
+        if (activeMode === mode) {
+          btn.classList.add("is-active");
+          btn.style.color = HUD_ACCENT;
+          btn.style.background = HUD_ACCENT_ACTIVE_BG;
+        }
+        btn.innerHTML = `<span class="input-mode-toggle-icon">${svgForMode(mode)}</span><span>${MODE_LABELS[mode].replace(" mode", "")}</span>`;
+        applyAccentToSvg(btn.querySelector(".input-mode-toggle-icon svg"));
+        btn.addEventListener("click", () => {
+          activeMode = mode;
+          saveInputModePreference(settings, mode);
+          options.onModeChange?.(mode);
+          renderButton();
+          renderAll();
+        });
+        toggleRow.appendChild(btn);
+      }
+      target.appendChild(toggleRow);
+    }
+    target.appendChild(renderCards(target, activeMode));
+
+    const debugRow = document.createElement("label");
+    debugRow.className = "input-mode-debug-toggle";
+    debugRow.innerHTML = `<input type="checkbox" ${debugMode ? "checked" : ""}><span>Debug wheel events</span>`;
+    const input = debugRow.querySelector("input");
+    if (input) input.style.accentColor = HUD_ACCENT;
+    input?.addEventListener("change", () => {
+      debugMode = Boolean(input.checked);
+      renderButton();
+      renderAll(target);
+      options.log.info(debugMode ? "[InputMode] Debug ON" : "[InputMode] Debug OFF");
+    });
+    target.appendChild(debugRow);
+  }
+
+  function renderCards(target: HTMLElement, mode: HudInputMode): HTMLElement {
+    const panel = document.createElement("div");
+    panel.className = "input-mode-sensitivity-panel";
+    panel.dataset.mode = mode;
+
+    for (const movement of movements) {
+      const card = document.createElement("div");
+      card.className = "gesture-card";
+
+      const backgroundEl = document.createElement("div");
+      backgroundEl.className = "gesture-card-bg";
+      backgroundEl.classList.add(`gesture-card-bg--${movement}`);
+      backgroundEl.setAttribute("aria-hidden", "true");
+      backgroundEl.innerHTML = mode === "trackpad" && movement === "orbit" && options.trackpadOrbitGesture === "swipe"
+        ? TRACKPAD_SWIPE_SVG : gestureIconSvg(mode, movement);
+      const description = options.gestureDescription?.(mode, movement);
+      if (description) {
+        card.title = description;
+        card.setAttribute("aria-label", description);
+      }
+
+      const topRowEl = document.createElement("div");
+      topRowEl.className = "gesture-top-row";
+
+      const numInput = document.createElement("input");
+      numInput.type = "number";
+      numInput.className = "gesture-value-input";
+      numInput.min = "0.1";
+      numInput.max = "10";
+      numInput.step = "0.1";
+      numInput.value = sensitivity[mode][movement].toFixed(2);
+
+      const resetBtn = document.createElement("button");
+      resetBtn.type = "button";
+      resetBtn.className = "gesture-reset-btn";
+      resetBtn.title = "Reset to default";
+      resetBtn.innerHTML = RESET_SVG;
+
+      const playBtn = document.createElement("button");
+      playBtn.type = "button";
+      playBtn.className = "gesture-play-btn";
+      playBtn.title = "Apply";
+      playBtn.hidden = true;
+      playBtn.style.color = HUD_ACCENT;
+      playBtn.innerHTML = PLAY_SVG.replace('fill="currentColor"', `fill="${HUD_ACCENT}"`);
+
+      const getVal = (): number => clampSensitivity(parseFloat(numInput.value) || 1);
+
+      const syncPlay = (): void => {
+        playBtn.hidden = Math.abs(getVal() - sensitivity[mode][movement]) <= 0.005;
+      };
+
+      const applyVal = (v: number): void => {
+        const clamped = clampSensitivity(v);
+        numInput.value = clamped.toFixed(2);
+        const next = cloneSensitivity(sensitivity);
+        next[mode][movement] = clamped;
+        sensitivity = next;
+        saveInputSensitivityPreference(settings, next);
+        options.onSensitivityChange?.(next);
+        syncPlay();
+        renderAll(target);
+      };
+
+      numInput.addEventListener("input", syncPlay);
+      numInput.addEventListener("keydown", (e: KeyboardEvent) => { if (e.key === "Enter") applyVal(getVal()); });
+      numInput.addEventListener("blur", () => { numInput.value = getVal().toFixed(1); syncPlay(); });
+      playBtn.addEventListener("click", () => applyVal(getVal()));
+      resetBtn.addEventListener("click", () => applyVal(1.0));
+
+      const inputWrapEl = document.createElement("div");
+      inputWrapEl.className = "gesture-input-wrap";
+      inputWrapEl.appendChild(numInput);
+
+      const buttonWrapEl = document.createElement("div");
+      buttonWrapEl.className = "gesture-btn-wrap";
+      buttonWrapEl.append(resetBtn, playBtn);
+
+      topRowEl.append(inputWrapEl, buttonWrapEl);
+
+      const movementMetaEl = document.createElement("div");
+      movementMetaEl.className = "gesture-meta-row";
+
+      const actionLabelEl = document.createElement("span");
+      actionLabelEl.className = "gesture-action-label";
+      actionLabelEl.textContent = MOVEMENT_LABELS[movement];
+
+      const actionIconEl = document.createElement("span");
+      actionIconEl.className = "gesture-action-icon";
+      actionIconEl.innerHTML = actionIconSvg(movement);
+
+      movementMetaEl.append(actionLabelEl, actionIconEl);
+      const contentEl = document.createElement("div");
+      contentEl.className = "gesture-card-content";
+      contentEl.append(topRowEl, movementMetaEl);
+
+      card.append(backgroundEl, contentEl);
+      panel.appendChild(card);
+    }
+    return panel;
+  }
+
+  function onButtonClick(e: MouseEvent): void {
+    e.preventDefault();
+    e.stopPropagation();
+    if (autoModeActive) {
+      onAutoModeExit?.();
+      return;
+    }
+    options.onToggle?.();
+  }
+
+  function onWheel(e: WheelEvent): void {
+    if (!debugMode) return;
+    const likelyMouse = isLikelyMouseWheel(e);
+    const hasHorizontal = Math.abs(e.deltaX) > DELTA_EPSILON;
+    const hasFine = hasFractionalDelta(e.deltaX) || hasFractionalDelta(e.deltaY);
+    options.log.info(
+      "[InputMode] wheel selected=%s classifier=%s mode=%d ctrl=%s dx=%.4f dy=%.4f horizontal=%s fine=%s likelyMouse=%s",
+      activeMode,
+      e.ctrlKey || !likelyMouse ? "trackpad" : "mouse",
+      e.deltaMode,
+      e.ctrlKey,
+      e.deltaX,
+      e.deltaY,
+      hasHorizontal,
+      hasFine,
+      likelyMouse,
+    );
+  }
+
+  renderButton();
+  button.append(modeIcon, autoBadge);
+  anchor.append(button);
+  control.append(anchor);
+  anchorAfter.insertAdjacentElement("afterend", control);
+  options.onModeChange?.(activeMode);
+  options.onSensitivityChange?.(sensitivity);
+
+  button.addEventListener("click", onButtonClick);
+  container.addEventListener("wheel", onWheel, { passive: true });
+
+  // A change made elsewhere, such as under Show all parameters or by an
+  // import, reaches this section and the camera. The section's own edits are
+  // already drawn, and redrawing would take the field being typed in.
+  const offSettings = settings.subscribe(changed => {
+    if (![...changed].some(id => id === "input.mode" || id.startsWith("input.sensitivity."))) return;
+    const nextMode = loadInputModePreference(settings, modeChoices);
+    const nextSensitivity = loadInputSensitivityPreference(settings);
+    const modeChanged = nextMode !== activeMode;
+    const sensitivityChanged = JSON.stringify(nextSensitivity) !== JSON.stringify(sensitivity);
+    if (!modeChanged && !sensitivityChanged) return;
+    activeMode = nextMode;
+    sensitivity = nextSensitivity;
+    if (modeChanged) options.onModeChange?.(activeMode);
+    if (sensitivityChanged) options.onSensitivityChange?.(sensitivity);
+    renderButton();
+    const typing = document.activeElement?.closest<HTMLElement>(".input-mode-inline") ?? null;
+    renderAll(typing ?? undefined);
+  });
+
+  return {
+    mountInline(target: HTMLElement): () => void {
+      const view = document.createElement("div");
+      view.className = "input-mode-inline";
+      target.append(view);
+      inlineViews.add(view);
+      renderInto(view);
+      return () => {
+        inlineViews.delete(view);
+        view.remove();
+      };
+    },
+    setAutoBadgeActive,
+    setOnAutoModeExit(handler: (() => void) | null): void {
+      onAutoModeExit = handler;
+    },
+    destroy(): void {
+      offSettings();
+      document.getElementById(INPUT_MODE_ACCENT_STYLE_ID)?.remove();
+      button.removeEventListener("click", onButtonClick);
+      container.removeEventListener("wheel", onWheel);
+      for (const view of inlineViews) view.remove();
+      inlineViews.clear();
+      control.remove();
+    },
+  };
+}

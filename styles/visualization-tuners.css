@@ -1,0 +1,4 @@
+.poi-sprite-tuner-grid,.poi-sprite-tuner-actions {display:flex;flex-wrap:wrap;align-items:flex-start;gap:.5rem}
+.poi-sprite-tuner-field {display:flex;flex-direction:column;flex:none;max-width:100%}
+.poi-sprite-tuner-field input {width:9em;max-width:100%;box-sizing:border-box}
+.poi-sprite-tuner-actions button {flex:none;width:max-content;max-width:100%}

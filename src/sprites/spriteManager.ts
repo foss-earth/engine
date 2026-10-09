@@ -1,5 +1,5 @@
 import { Color4, Sprite, SpriteManager, type DynamicTexture, type Scene, type Vector3 } from "@babylonjs/core";
-import { DEFAULT_DOT_TEXTURE_SIZE, DEFAULT_SPRITE_CAPACITY } from "./types";
+import { DEFAULT_DOT_TEXTURE_SIZE, DEFAULT_SPRITE_CAPACITY } from "./types.js";
 
 export function setSpriteOpacity(sprite: Sprite, opacity: number): void {
   sprite.color = new Color4(1, 1, 1, opacity);
@@ -9,6 +9,8 @@ export interface CreatePointSpriteManagerOptions {
   scene: Scene;
   name: string;
   capacity: number;
+  /** Host policy; legacy allocation floor was 32,000 sprites. */
+  minCapacity?: number;
   texture: DynamicTexture;
   cellSize?: number;
   renderingGroupId?: number;
@@ -19,7 +21,7 @@ export function createPointSpriteManager(opts: CreatePointSpriteManagerOptions):
   const manager = new SpriteManager(
     opts.name,
     "",
-    Math.max(DEFAULT_SPRITE_CAPACITY, opts.capacity),
+    Math.max(opts.minCapacity ?? DEFAULT_SPRITE_CAPACITY, opts.capacity),
     opts.cellSize ?? DEFAULT_DOT_TEXTURE_SIZE,
     opts.scene,
   );
