@@ -89,7 +89,11 @@
     "assets",
     "styles",
     "SOURCE_LINEAGE.json",
-    "SOURCE_RECEIPT.json"
+    "SOURCE_RECEIPT.json",
+    "CODE_OF_CONDUCT.md",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
+    "AGENTS.md"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",

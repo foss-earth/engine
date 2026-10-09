@@ -1666,7 +1666,7 @@
       "destinations": [
         {
           "path": "src/babylon/createTilesRuntime.ts",
-          "sha256": "9e1ca8688d93af23a294d9c7738b76bb7e6670da81a27a2d661bc402c41e0528"
+          "sha256": "fe4e020d53dc09b4756a8adf9b1af38d50a9bd385141a98c736122fc9fbf700c"
         }
       ],
       "transformation": "Retain complete source Google auth/traversal refinement/focus/horizon/suspension/cache/loading/error/surface-revision behavior. Host supplies scene parser/auth factories, public renderer shader readiness, combined cancellation, lighting/settings/response/timing/log ports; no new backend/clock/scheduler."
@@ -2876,7 +2876,7 @@
     },
     {
       "path": "package.json",
-      "sha256": "0504f9abd98c8faed70cf8ae99795930135f68bb21763aa1a23c26d9c5cb985a",
+      "sha256": "a0975ab028160208f8eff1787b7914270160a1a9a635b6d76d7fd9e95d332026",
       "purpose": "Host ports, public barrel/configuration, composition/consumer fixture or source-status documentation authored for the recorded extraction; unvalidated source only."
     },
     {
@@ -4366,7 +4366,7 @@
     "release": "EXPLICIT SOURCE-ONLY RELEASE: Engine/main sole-writer lease returned to primary. No further Engine writes/checks without reassignment."
   },
   "primarySourceSnapshot": {
-    "createdAtUtc": "2026-10-09T20-04-02Z",
+    "createdAtUtc": "2026-10-09T20-07-43Z",
     "status": "source-only; no qualification or artifact seal",
     "authoredFiles": [
       {
@@ -4437,8 +4437,8 @@
       },
       {
         "path": "package.json",
-        "sha256": "0504f9abd98c8faed70cf8ae99795930135f68bb21763aa1a23c26d9c5cb985a",
-        "bytes": 4847,
+        "sha256": "a0975ab028160208f8eff1787b7914270160a1a9a635b6d76d7fd9e95d332026",
+        "bytes": 4932,
         "status": "authored source/scaffold/adapter/fixture; UNRUN"
       },
       {

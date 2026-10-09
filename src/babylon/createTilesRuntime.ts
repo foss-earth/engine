@@ -1,8 +1,7 @@
 import { describeGoogleTileFailure, readGoogleTileHttpFailure, type GoogleTileHttpFailure } from "../browser/describeGoogleTileFailure.js";
 import { measureMapResponse } from "../browser/mapDownloadMeter.js";
 import { Matrix, Vector3, type Scene, type TransformNode } from "@babylonjs/core";
-import type { Tile } from "3d-tiles-renderer/core";
-import type { TilesRenderer } from "3d-tiles-renderer/babylonjs";
+import type { Tile, TilesRendererBase, TilesRendererBaseEventMap } from "3d-tiles-renderer/core";
 import type { GoogleCloudAuthPlugin } from "3d-tiles-renderer/core/plugins";
 import type { SettingsRegistry } from "@foss-earth/ui/settings";
 import type { NumberRange } from "@foss-earth/ui/settings";
@@ -10,6 +9,12 @@ import { isSphereBelowHorizon } from "../terrain/imagery/imageryGeometry.js";
 import type { TerrainLightingAdapter } from "./imagery/terrainLightPlugin.js";
 import type { whenMeshesReady } from "@foss-earth/renderer/babylon";
 import type { GoogleTileResourceTiming } from "../browser/describeGoogleTileFailure.js";
+
+/** Structural Babylon binding over the public core traversal contract. */
+export interface GoogleTilesRenderer extends TilesRendererBase<TilesRendererBaseEventMap<TransformNode>> {
+  group: TransformNode;
+  checkCollisions: boolean;
+}
 
 const GOOGLE_3D_TILES_ROOT_URL = "https://tile.googleapis.com/v1/3dtiles/root.json";
 
@@ -35,7 +40,7 @@ export interface GoogleTilesRuntimeOptions {
   /** The registry holding `map.google.*`, followed live. Required from the host. */
   settings: SettingsRegistry;
   /** Third-party map traversal/parser consumes the supplied scene/device. */
-  createTilesRenderer(rootUrl: string, scene: Scene): TilesRenderer;
+  createTilesRenderer(rootUrl: string, scene: Scene): GoogleTilesRenderer;
   createAuthPlugin(options: { apiToken: string; autoRefreshToken: boolean; useRecommendedSettings: boolean }): GoogleCloudAuthPlugin;
   createAbortController(): AbortController;
   combineSignals(signals: readonly AbortSignal[]): AbortSignal;
@@ -51,7 +56,7 @@ export interface GoogleTilesRuntimeOptions {
 }
 
 export interface GoogleTilesRuntime {
-  tiles: TilesRenderer;
+  tiles: GoogleTilesRenderer;
   /** Changes when the visible collision surface is replaced or removed. */
   getRevision(): number;
   /** What the `map.google.*` budgets bound right now. */
@@ -102,7 +107,7 @@ const MiB = 1024 * 1024;
 export const GOOGLE_LOADING_IDS = ["map.google.cacheTiles", "map.google.cacheBytes", "map.google.downloads", "map.google.parses"] as const;
 
 /** The renderer's cache and queues as the `map.google.*` parameters say. */
-function applyLoadingParameters(tiles: TilesRenderer, settings: SettingsRegistry, suspended = false): void {
+function applyLoadingParameters(tiles: GoogleTilesRenderer, settings: SettingsRegistry, suspended = false): void {
   const count = settings.get<NumberRange>("map.google.cacheTiles");
   const bytes = settings.get<NumberRange>("map.google.cacheBytes");
   tiles.lruCache.minSize = Math.round(count.min);
@@ -169,14 +174,14 @@ function tileSphere(tile: TileWithBabylonBounds): { center: { x: number; y: numb
   return sphere;
 }
 
-interface TilesRendererWithViewError extends TilesRenderer {
+interface GoogleTilesRendererWithViewError extends GoogleTilesRenderer {
   calculateTileViewError(tile: TileWithBabylonBounds, target: TileViewErrorTarget): void;
 }
 
 /** Reuse the traversal's camera measurement before any focus/anchor overrides. */
-function observeLoadedError(tiles: TilesRenderer): () => number | null {
+function observeLoadedError(tiles: GoogleTilesRenderer): () => number | null {
   const errors = new WeakMap<Tile, number | null>();
-  const renderer = tiles as TilesRendererWithViewError;
+  const renderer = tiles as GoogleTilesRendererWithViewError;
   const calculate = renderer.calculateTileViewError.bind(renderer);
   renderer.calculateTileViewError = (tile, target) => {
     calculate(tile, target);
@@ -194,13 +199,13 @@ function observeLoadedError(tiles: TilesRenderer): () => number | null {
   };
 }
 
-interface TilesRendererWithParsing extends TilesRenderer {
+interface GoogleTilesRendererWithParsing extends GoogleTilesRenderer {
   parseTile(buffer: ArrayBuffer, tile: Tile & { engineData: { scene: TransformNode | null } }, extension: string, uri: string, signal: AbortSignal): Promise<void>;
 }
 
 /** A parsed tile must remain unavailable to REPLACE traversal until it can draw. */
-function prepareDrawableTiles(tiles: TilesRenderer, signal: AbortSignal, ports: Pick<GoogleTilesRuntimeOptions, "whenMeshesReady" | "combineSignals">): void {
-  const renderer = tiles as TilesRendererWithParsing;
+function prepareDrawableTiles(tiles: GoogleTilesRenderer, signal: AbortSignal, ports: Pick<GoogleTilesRuntimeOptions, "whenMeshesReady" | "combineSignals">): void {
+  const renderer = tiles as GoogleTilesRendererWithParsing;
   const parseTile = renderer.parseTile.bind(renderer);
   renderer.parseTile = async (buffer, tile, extension, uri, tileSignal) => {
     await parseTile(buffer, tile, extension, uri, tileSignal);
@@ -227,14 +232,14 @@ function prepareDrawableTiles(tiles: TilesRenderer, signal: AbortSignal, ports: 
  * by the camera; only what is loaded changes.
  */
 function applyViewMeasure(
-  tiles: TilesRenderer,
+  tiles: GoogleTilesRenderer,
   scene: Scene,
   getTerrainDetailAnchor: (() => Vector3 | null) | undefined,
   getFocus: (() => GoogleFocus | null) | undefined,
 ): void {
   if (!getTerrainDetailAnchor && !getFocus) return;
 
-  const renderer = tiles as TilesRendererWithViewError;
+  const renderer = tiles as GoogleTilesRendererWithViewError;
   const nativeCalculateTileViewError = renderer.calculateTileViewError.bind(renderer);
   const nativeUpdate = tiles.update.bind(tiles);
   const worldToTiles = Matrix.Identity();

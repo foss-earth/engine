@@ -1,16 +1,16 @@
 {
   "schemaVersion": 1,
   "owner": "foss-earth/engine",
-  "preparedAtUtc": "2026-10-09T20-04-02Z",
+  "preparedAtUtc": "2026-10-09T20-07-43Z",
   "status": "SOURCE-ONLY current bytes; checks/history/installed consumers/artifacts/adoption/admission UNRUN",
   "sourceRevision": "90e23b3ee96f53ec5900afc5991a21fffa58649d",
-  "priorSourceReceipt": "build/source-only/2026-10-09T20-04-02Z/SOURCE_RECEIPT.json.before",
-  "sourceManifestPath": "build/source-only/2026-10-09T20-04-02Z/source-manifest.json",
+  "priorSourceReceipt": "build/source-only/2026-10-09T20-07-43Z/SOURCE_RECEIPT.json.before",
+  "sourceManifestPath": "build/source-only/2026-10-09T20-07-43Z/source-manifest.json",
   "sourceManifestEncoding": "UTF-8 sorted path JSON array, indent2, trailing LF; ignored outputs and receipt excluded",
-  "sourceManifestSha256": "e01bb916cf3c3b709d0d0e6c1dd0652611f6b628040399dd936810e65c9d267c",
+  "sourceManifestSha256": "bff9d98e101376feea5e9b975b38be56c2561851ab4f74effa818b99c06fa1fe",
   "sourceFileCount": 333,
   "provenancePath": "extraction-provenance.json",
-  "provenanceSha256": "5e958fca7226a0edf826cd6e66b3c7414030580313b959edbedc59c85f8d44c5",
+  "provenanceSha256": "f6a22e90f06c70664ef2031d37c8bd9005207132fefa8f8fdc211bc918247d6c",
   "publicExports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -342,7 +342,7 @@
     },
     {
       "path": "extraction-provenance.json",
-      "sha256": "5e958fca7226a0edf826cd6e66b3c7414030580313b959edbedc59c85f8d44c5",
+      "sha256": "f6a22e90f06c70664ef2031d37c8bd9005207132fefa8f8fdc211bc918247d6c",
       "bytes": 254818
     },
     {
@@ -512,8 +512,8 @@
     },
     {
       "path": "package.json",
-      "sha256": "0504f9abd98c8faed70cf8ae99795930135f68bb21763aa1a23c26d9c5cb985a",
-      "bytes": 4847
+      "sha256": "a0975ab028160208f8eff1787b7914270160a1a9a635b6d76d7fd9e95d332026",
+      "bytes": 4932
     },
     {
       "path": "scripts/check-installed-consumer.mjs",
@@ -557,8 +557,8 @@
     },
     {
       "path": "src/babylon/createTilesRuntime.ts",
-      "sha256": "9e1ca8688d93af23a294d9c7738b76bb7e6670da81a27a2d661bc402c41e0528",
-      "bytes": 22429
+      "sha256": "fe4e020d53dc09b4756a8adf9b1af38d50a9bd385141a98c736122fc9fbf700c",
+      "bytes": 22724
     },
     {
       "path": "src/babylon/globeCamera.ts",
