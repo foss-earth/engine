@@ -1,6 +1,6 @@
 import type { createMapTextureLoader } from "./imagery/mapTextureLoader.js";
 import type { BoundedMapTextureRequest, LoadedMapTexture } from "./imagery/boundedMapTextureLoader.js";
-import type { ImageFile } from "@foss-earth/images";
+import type { HeaderImageRequest } from "@foss-earth/images/browser";
 import { finishOwnedCleanup } from "./ownedCleanup.js";
 import { createTerrainMesh, DEFAULT_TILE_SEGMENTS } from "./terrainMesh.js";
 import type { createTerrainTileLoader } from "../terrain/terrainLoader.js";
@@ -36,10 +36,10 @@ import type { ImageryView } from "../terrain/imagery/imageryGeometry.js";
 import { selectTerrain, type TerrainFocus, type TerrainSelection } from "../terrain/terrainSelector.js";
 import { createAutoDetailController, type AutoDetailDecision } from "../terrain/autoDetail.js";
 
-/** Actual provider metadata, supplied by the host; MIME is never inferred from
- * a URL extension or silently added to an existing source descriptor. */
+/** Reviewed provider dimensions supplied by the host. An omitted MIME is
+ * validated from response headers/bytes by the common file service, never URL. */
 export interface RasterMapTextureMetadata {
-  file: ImageFile;
+  file: HeaderImageRequest;
   declaredBytes: number;
   priority: number;
 }
@@ -47,7 +47,7 @@ export interface AsyncRasterMapTextures {
   resolve(source: Readonly<RasterBaseMapSource>, tile: Readonly<{ z: number; x: number; y: number }>, url: string): RasterMapTextureMetadata;
   /** Resolves only when the retained texture is ready. Rejections must clean
    * unpublished resources; a late result is disposed by the runtime. */
-  acquire(file: ImageFile, request: BoundedMapTextureRequest): Promise<LoadedMapTexture>;
+  acquire(file: HeaderImageRequest, request: BoundedMapTextureRequest): Promise<LoadedMapTexture>;
   createAbortController(): AbortController;
 }
 
@@ -505,7 +505,8 @@ const TERRAIN_SELECTION_IDS = new Set([
 ]);
 
 export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): RasterTilesRuntime {
-  if (!options.loadMapTexture && !options.asyncMapTextures) throw new Error("Raster maps need an explicit legacy or async texture acquisition port.");
+  const hasTileAcquisition = Boolean(options.loadMapTexture || options.asyncMapTextures);
+  if (options.imagery !== "atlas" && !hasTileAcquisition) throw new Error("Raster maps need an explicit legacy or async texture acquisition port.");
   const capture = options.performanceCapture;
   const settings = options.settings;
   const setting = (id: string): number => {
@@ -675,7 +676,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
 
   let imageryRuntime: ImageryRuntime | null = null;
   let imageryUnavailableReason: string | null = null;
-  if (options.imagery === "atlas") {
+  try { if (options.imagery === "atlas") {
     const created = createImageryRuntime({
       ...options.imageryPorts, now: options.nowMs, after: options.after, log: options.log,
       scene: options.scene,
@@ -706,9 +707,13 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
     } else {
       // Report it rather than hide it: the map still draws, but detail is unavailable.
       imageryUnavailableReason = created.getFeedback().reason ?? "Projected imagery is not supported by this renderer.";
-      options.log.warn("[imagery]", imageryUnavailableReason, "Using per-tile imagery.");
       created.dispose();
+      if (!hasTileAcquisition) throw new Error(`Raster atlas fallback needs an explicit legacy or async texture acquisition port: ${imageryUnavailableReason}`);
+      options.log.warn("[imagery]", imageryUnavailableReason, "Using per-tile imagery.");
     }
+  } } catch (error) {
+    finishOwnedCleanup([() => imageryRuntime?.dispose(), () => terrain.dispose()], "Raster construction and cleanup failed.", [error]);
+    throw error;
   }
   // Detail follows its request, the link and automatic adjustment wherever
   // they change: imagery at once, terrain at the next selection.

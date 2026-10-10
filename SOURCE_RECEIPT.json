@@ -1776,9 +1776,9 @@
   "verifiedAtUtc": "2026-10-10T03:33:15.824576+00:00",
   "currentSourceManifest": {
     "evidenceId": "engine-current-source-files.json",
-    "sha256": "484e11143ce23f46e90f3291e0a46db2c7d01073f13b516f924a35956ea19c7d",
-    "fileCount": 342,
-    "scope": "Private retained documentary evidence, not an artifact path or public URL"
+    "sha256": "a23894e328f89e99cb28e3e5a77f57a09281913ee7ca9654c8059da30aa2f8c8",
+    "fileCount": 343,
+    "scope": "Portable source seal; exact checked source/archive/export revision supplied by external delivery descriptor."
   },
   "currentSharedCi": {
     "revision": "1db73d1ddb342e348a2c9e8387f7bbc7ebb3225e",
@@ -1805,5 +1805,17 @@
     "scope": "Portable public provenance for prior retained local qualification. Execution/source manifests remain private retained evidence identified by documentary evidence IDs and their unchanged SHA256 seals. Evidence IDs are not package-relative files or public download URLs.",
     "originalReceiptSha256": "2a4a5c9560d8f11c2a5b9f4496a96c752f97bb9a9d10ccf8165ee7828342603f",
     "currentPreparation": "Metadata-only portable publication candidate; new source/artifact/ref qualification remains pending. Existing individual check receipts and exact archive descriptors retain qualification only for their original bytes and scope."
+  },
+  "runtimeRepairR7": {
+    "preparedAtUtc": "2026-10-10T16:45:19.270135+00:00",
+    "sourceBase": "693d48d80911dda364140202413e2d16c08a79ba",
+    "scope": "Mode-aware atlas/legacy admission, owned construction cleanup and common validated-header bounded texture acquisition. No new broker/device/scheduler authority.",
+    "causalTests": {
+      "files": 5,
+      "passed": 78
+    },
+    "finishedCi": "Pending producer; exact outcome retained in external delivery.",
+    "installedPublicFixture": "fixtures/raster-texture-contract-consumer.mjs",
+    "browserQualification": "Pending actual new App composition/build/browser; CPU native doubles are not GPU evidence."
   }
 }

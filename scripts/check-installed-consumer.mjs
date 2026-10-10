@@ -130,6 +130,7 @@ await writeFile(join(workspace, 'globe-consumer.mjs'), await readFile(join(owner
 await writeFile(join(workspace,'location-consumer.mjs'),await readFile(join(owner,'fixtures','location-consumer.mjs')));
 await writeFile(join(workspace,'map-cache-consumer.mjs'),await readFile(join(owner,'fixtures','map-cache-consumer.mjs')));
 await writeFile(join(workspace,'async-raster-consumer.mjs'),await readFile(join(owner,'fixtures','async-raster-consumer.mjs')));
+await writeFile(join(workspace,'raster-texture-contract-consumer.mjs'),await readFile(join(owner,'fixtures','raster-texture-contract-consumer.mjs')));
 await writeFile(join(workspace,'bounded-atlas-consumer.mjs'),await readFile(join(owner,'fixtures','bounded-atlas-consumer.mjs')));
 await writeFile(join(workspace,'owned-atlas-consumer.mjs'),await readFile(join(owner,'fixtures','owned-atlas-consumer.mjs')));
 await writeFile(join(workspace,'browser-worker-consumer.mjs'),await readFile(join(owner,'fixtures','browser-worker-consumer.mjs')));
@@ -194,6 +195,7 @@ await run(process.execPath, [...guarded, './declarations.mjs'], 'declarations', 
 await run(process.execPath,[...guarded,'./location-consumer.mjs'],'location',environment);
 await run(process.execPath,[...guarded,'./map-cache-consumer.mjs'],'map-cache',environment);
 await run(process.execPath,[...guarded,'./async-raster-consumer.mjs'],'async-raster',environment);
+await run(process.execPath,[...guarded,'./raster-texture-contract-consumer.mjs'],'raster-texture-contract',environment);
 await run(process.execPath,[...guarded,'./bounded-atlas-consumer.mjs'],'bounded-atlas',environment);
 await run(process.execPath,[...guarded,'./owned-atlas-consumer.mjs'],'owned-atlas',environment);
 await run(process.execPath,[...guarded,'./browser-worker-consumer.mjs'],'browser-worker',environment);

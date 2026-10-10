@@ -18,6 +18,27 @@ function fixture() {
   return {broker,files,uploaded,dispose,upload,close,fetch,whenReady,load};
 }
 describe("shared bounded map acquisition",()=>{
+  it("infers MIME from validated headers/bytes at a misleading URL, preserving reviewed dimensions", async () => {
+    const f = fixture(), url = "https://fixture.invalid/not-a-jpeg.jpg";
+    const held = await f.load({ url, width: 2, height: 1 }, { declaredBytes: 0, priority: 1 });
+    expect(f.fetch).toHaveBeenCalledOnce(); expect(f.upload).toHaveBeenCalledOnce(); held.dispose();
+    expect(f.broker.pools.live()).toEqual([]); f.broker.dispose();
+  });
+  it("keeps supplied MIME strict and rejects dimension/content-type disagreements without native upload", async () => {
+    const f = fixture();
+    await expect(f.load({ ...file, mimeType: "image/jpeg" }, { declaredBytes: 0, priority: 1 })).rejects.toThrow();
+    await expect(f.load({ url: file.url, width: 1, height: 1 }, { declaredBytes: 0, priority: 1 })).rejects.toThrow();
+    f.fetch.mockImplementationOnce(async () => new Response(png, { headers: { "content-type": "image/jpeg" } }));
+    await expect(f.load({ url: file.url, width: 2, height: 1 }, { declaredBytes: 0, priority: 1 })).rejects.toThrow();
+    expect(f.upload).not.toHaveBeenCalled(); expect(f.broker.pools.live()).toEqual([]); f.broker.dispose();
+  });
+  it("refuses inferred requests when only the old strict service is injected, without guessing MIME", async () => {
+    const f = fixture(), files = { obtain: f.files.obtain, decode: f.files.decode };
+    const load = createBoundedMapTextureLoader({ broker: f.broker, files, uploader: { upload: f.upload } as unknown as ImageTextureUploader,
+      maxTextureSide: () => 256, whenReady: f.whenReady });
+    await expect(load({ url: file.url, width: 2, height: 1 }, { declaredBytes: 0, priority: 1 })).rejects.toThrow(/header-inferred/);
+    expect(f.fetch).not.toHaveBeenCalled(); expect(f.broker.pools.live()).toEqual([]); f.broker.dispose();
+  });
   it("keeps source GPU/overlap until the host atomic swap and uses original map colour flags",async()=>{
     const f=fixture(),first=await f.load(file,{declaredBytes:png.length,priority:2}),next=await f.load(file,{declaredBytes:png.length,priority:9,overlap:true});
     expect(f.upload.mock.calls[0][0]).toMatchObject({kind:"2d",textureColor:{useSRGBBuffer:false,gammaSpace:true}});

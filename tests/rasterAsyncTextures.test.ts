@@ -1,6 +1,6 @@
 import { NullEngine, Scene, Texture, StandardMaterial } from "@babylonjs/core";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
-import type { ImageFile } from "@foss-earth/images";
+import type { HeaderImageRequest } from "@foss-earth/images/browser";
 import { createRasterTilesRuntime, type AsyncRasterMapTextures, type RasterTilesRuntimeOptions } from "../src/babylon/createRasterTilesRuntime.js";
 import type { BoundedMapTextureRequest, LoadedMapTexture } from "../src/babylon/imagery/boundedMapTextureLoader.js";
 import { RASTER_BASE_MAP_SOURCES } from "../src/map/rasterBaseMaps.js";
@@ -8,7 +8,7 @@ import { createEngineSettings, testAtlasDevice } from "../fixtures/composition/r
 
 const flush = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
 interface ReadyMap { handle: LoadedMapTexture; texture: Texture; events: string[]; dispose: Mock<() => void>; settleReplacement: Mock<() => void>; invalidate(): void }
-interface PendingMap { file: ImageFile; request: BoundedMapTextureRequest; resolve(handle: LoadedMapTexture): void; reject(error: Error): void }
+interface PendingMap { file: HeaderImageRequest; request: BoundedMapTextureRequest; resolve(handle: LoadedMapTexture): void; reject(error: Error): void }
 /** Only transport/ready handles are supplied doubles. All tile selection,
  * terrain fallback, generations, materials, publication and disposal are real. */
 function fixture(change: Partial<RasterTilesRuntimeOptions> = {}) {
@@ -22,7 +22,7 @@ function fixture(change: Partial<RasterTilesRuntimeOptions> = {}) {
   const source = { ...RASTER_BASE_MAP_SOURCES[0], protocol: "xyz" as const, urlTemplate: "https://fixture.invalid/original/{z}/{x}/{y}" };
   const runtime = createRasterTilesRuntime({ scene, settings, source, nowMs: () => now,
     after(callback) { timers.add(callback); return () => { timers.delete(callback); }; },
-    loadMapTexture: legacy, asyncMapTextures: { resolve, acquire, createAbortController: () => new AbortController() },
+    asyncMapTextures: { resolve, acquire, createAbortController: () => new AbortController() },
     attachTerrainLighting: () => ({}) as ReturnType<RasterTilesRuntimeOptions["attachTerrainLighting"]>,
     createTerrainLoader: () => ({ dispose: terrainDispose, getMetrics: () => ({ active: 0, queued: 0, decodedBytes: 0 }),
       setPaused() {}, load: terrainLoads, loadPatch: terrainLoads }),

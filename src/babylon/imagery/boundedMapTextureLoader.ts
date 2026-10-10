@@ -1,6 +1,6 @@
 import type { BaseTexture } from "@babylonjs/core";
-import { rgba8Bytes, type ImageFile, type ImageSessionBroker } from "@foss-earth/images";
-import type { EncodedImageFile, HeldDecodedImage, ImageFileService } from "@foss-earth/images/browser";
+import { rgba8Bytes, type ImageSessionBroker } from "@foss-earth/images";
+import type { EncodedImageFile, HeldDecodedImage, ImageFileService, HeaderImageRequest } from "@foss-earth/images/browser";
 import type { ImageTextureUploader, UploadedImageTexture } from "@foss-earth/renderer/babylon";
 import { finishOwnedCleanup } from "../ownedCleanup.js";
 
@@ -32,12 +32,14 @@ export interface LoadedMapTexture {
 /**
  * Explicit async map path. It never creates a decoder, cache, uploader, device
  * or frame loop. Legacy synchronous Texture/updateURL remains a separate API.
- * File MIME/dimensions must be the actual provider tile metadata, not guessed.
+ * Dimensions are reviewed provider metadata. An omitted MIME is validated by
+ * the same common file service from actual response content-type/image bytes.
  */
-export function createBoundedMapTextureLoader(ports: BoundedMapTexturePorts): (file: ImageFile, request: BoundedMapTextureRequest) => Promise<LoadedMapTexture> {
+export function createBoundedMapTextureLoader(ports: BoundedMapTexturePorts): (file: HeaderImageRequest, request: BoundedMapTextureRequest) => Promise<LoadedMapTexture> {
   return async (input, request) => {
     request.signal?.throwIfAborted();
-    const file = Object.freeze({ url: input.url, mimeType: input.mimeType, width: input.width, height: input.height });
+    let file = Object.freeze({ url: input.url, mimeType: input.mimeType, width: input.width, height: input.height });
+    if (file.mimeType !== undefined && file.mimeType !== "image/png" && file.mimeType !== "image/jpeg") throw new Error("Map MIME must be a supported explicit PNG/JPEG type or omitted for header validation.");
     const maximum = ports.maxTextureSide();
     if (!Number.isSafeInteger(maximum) || maximum < 1) throw new Error("The host did not supply a valid renderer texture-size limit.");
     if (![file.width,file.height].every(value => Number.isSafeInteger(value) && value > 0 && value <= maximum)) throw new Error("Map tile dimensions exceed the borrowed renderer's limits.");
@@ -61,8 +63,17 @@ export function createBoundedMapTextureLoader(ports: BoundedMapTexturePorts): (f
       // Full RGBA8 mip chain is a conservative pre-allocation bound. NPOT GL1
       // omits illegal mips, then resizes this reservation to the actual result.
       const gpu = scope.reserve("sourceGpu", rgba8Bytes(file.width,file.height), file.url, { overlap: request.overlap });
-      encoded = await ports.files.obtain(file,request.declaredBytes,scope,request.onBytes,request.priority); scope.signal.throwIfAborted();
-      decoded = await ports.files.decode(encoded,file,scope,request.priority); scope.signal.throwIfAborted();
+      if (file.mimeType !== undefined) {
+        encoded = await ports.files.obtain({ ...file, mimeType: file.mimeType },request.declaredBytes,scope,request.onBytes,request.priority);
+      } else {
+        if (!ports.files.obtainInferred) throw new Error("Map MIME inference requires the common header-inferred file service.");
+        const obtained = await ports.files.obtainInferred(file,request.declaredBytes,scope,request.onBytes,request.priority);
+        encoded = obtained.body;
+        file = Object.freeze(obtained.file);
+      }
+      scope.signal.throwIfAborted();
+      if (!file.mimeType) throw new Error("The common map file service did not validate a MIME type.");
+      decoded = await ports.files.decode(encoded,{ ...file, mimeType: file.mimeType },scope,request.priority); scope.signal.throwIfAborted();
       encoded.release(); encoded = undefined;
       // The queued uploader can read this bitmap on a later host pump. Scope
       // cancellation must defer both native close and the existing pixel charge.

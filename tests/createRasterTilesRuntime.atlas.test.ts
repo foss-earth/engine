@@ -1,4 +1,6 @@
-import { GeospatialCamera, NullEngine, Scene } from "@babylonjs/core";
+import { GeospatialCamera, NullEngine, Scene, Texture } from "@babylonjs/core";
+import { createImageSessionBroker } from "@foss-earth/images";
+import { createTextureDevicePorts, createTextureTransferTracker } from "@foss-earth/renderer/babylon";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { geodeticToEcef } from "../src/camera/cameraMath.js";
 import { HostCameraController as CameraController } from "../fixtures/composition/runtimeHost.js";
@@ -24,7 +26,6 @@ function createRasterTilesRuntime(options: Partial<RasterTilesRuntimeOptions> & 
   return createCoreRaster({
     settings, nowMs: () => performance.now(), after: testAfter, requestRender: () => {},
     meshRebuildCpuMs: () => settings.get<number>("map.terrain.meshRebuildTimePerFrame"),
-    loadMapTexture: () => { pending.legacyImagery += 1; throw new Error("The atlas path must not load per-tile textures."); },
     attachTerrainLighting: () => ({}) as ReturnType<RasterTilesRuntimeOptions["attachTerrainLighting"]>,
     createTerrainLoader: () => ({ dispose: vi.fn(),
       getMetrics: () => ({ active: 0, queued: 0, decodedBytes: 0 }), setPaused: vi.fn(),
@@ -45,6 +46,79 @@ beforeEach(() => { settings = createEngineSettings();
   pending.legacyImagery = 0;
 });
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
+
+describe("selected raster acquisition contract", () => {
+  function host(gpuBytes = 512 * 2 ** 20, maxTextureSize = 8192) {
+    const engine = new NullEngine(), scene = new Scene(engine);
+    engine.getCaps().maxTextureSize = 8192;
+    const broker = createImageSessionBroker({ requests: 1, decodes: 1,
+      pools: { sourceGpu: gpuBytes, decoded: 32 * 2 ** 20, encoded: 1024, uploadOutstanding: 8 * 2 ** 20, overlap: gpuBytes } });
+    const grant = (pool: Parameters<typeof broker.pools.reserve>[0], bytes: number, label: string, flags = {}) => {
+      const result = broker.pools.reserve(pool, bytes, label, flags);
+      return result.ok ? result.reservation : null;
+    };
+    const managedAtlas: NonNullable<RasterTilesRuntimeOptions["imageryPorts"]["managedAtlas"]> = {
+      generation: () => broker.generation(), reserveGpu: (bytes, label, flags) => grant("sourceGpu", bytes, label, flags),
+      reserveTable: (bytes, label) => grant("decoded", bytes, label),
+      reserveCopy(bytes, label) { const result = grant("decoded", bytes, label); if (!result) throw new Error("Fixture copy budget denied."); return result; },
+      canUpload: (bytes, extra = 0) => broker.pools.fits("uploadOutstanding", bytes) && broker.pools.fits("decoded", bytes + extra),
+      subscribeAvailable: listener => broker.pools.subscribeAvailable(listener),
+      capacityKey: () => JSON.stringify(broker.pools.stats()),
+    };
+    const releaseOwnedLoader = vi.fn(), terrainDispose = vi.fn(), terrainCreate = vi.fn(() => ({
+      dispose: terrainDispose, getMetrics: () => ({ active: 0, queued: 0, decodedBytes: 0 }), setPaused() {},
+      load: () => new Promise<TerrainGrid>(() => {}), loadPatch: () => new Promise<TerrainGrid>(() => {}),
+    }));
+    const tracker = createTextureTransferTracker({ scene, admit: (bytes, label) => grant("uploadOutstanding", bytes, label), requestRender() {} });
+    const device = createTextureDevicePorts({ scene, transfer: tracker.transfer, tryAdmit: tracker.tryAdmit });
+    const allocation = vi.spyOn(device, "createRawTexture");
+    const imageryPorts: RasterTilesRuntimeOptions["imageryPorts"] = { device, managedAtlas, releaseOwnedLoader,
+      capabilities: { backend: "webgl2", maxTextureSize, explicitGradients: true },
+      loader: { async load(_url, expected) { return { ...expected, compressedBytes: 1, pages: [[new Uint8Array(4)]] }; } },
+      createAbortController: () => new AbortController(),
+    };
+    const create = (extra: Partial<RasterTilesRuntimeOptions> = {}) => createRasterTilesRuntime({ scene,
+      source: RASTER_BASE_MAP_SOURCES[0], imagery: "atlas", imageryPorts, createTerrainLoader: terrainCreate, ...extra });
+    return { create, imageryPorts, terrainCreate, terrainDispose, releaseOwnedLoader, allocation, broker, scene,
+      dispose() { tracker.dispose(); broker.dispose(); scene.dispose(); engine.dispose(); } };
+  }
+  it("admits the actual managed atlas host without either per-tile acquisition port", () => {
+    const f = host();
+    let runtime: ReturnType<typeof f.create> | undefined;
+    try { runtime = f.create(); runtime.update(); expect(runtime.getImageryDiagnostics().mode).toBe("atlas");
+      expect(runtime.getDetailFeedback().support).toBe("ready"); expect(f.broker.pools.stats().sourceGpu.reserved).toBeGreaterThan(0);
+      runtime.dispose(); expect(f.releaseOwnedLoader).toHaveBeenCalledOnce(); expect(f.broker.pools.live()).toEqual([]);
+    } finally { runtime?.dispose(); f.dispose(); }
+  });
+  it.each(["budget", "backend"] as const)("keeps managed %s denial unavailable without hidden per-tile fallback", kind => {
+    const f = host(kind === "budget" ? 0 : 512 * 2 ** 20, kind === "backend" ? 128 : 8192);
+    const legacy = vi.fn(() => { throw new Error("Managed denial must not use this factory."); });
+    try { const runtime = f.create({ loadMapTexture: legacy }); runtime.update();
+      expect(runtime.getImageryDiagnostics().mode).toBe("atlas"); expect(runtime.getDetailFeedback().support).toBe("unavailable");
+      expect(legacy).not.toHaveBeenCalled(); expect(f.allocation).not.toHaveBeenCalled();
+      runtime.dispose(); expect(f.broker.pools.live()).toEqual([]);
+    } finally { f.dispose(); }
+  });
+  it.each([undefined, "legacy"] as const)("rejects default/explicit legacy %s before constructing owners without acquisition", imagery => {
+    const f = host();
+    try { expect(() => f.create({ imagery })).toThrow(/explicit legacy or async texture/);
+      expect(f.terrainCreate).not.toHaveBeenCalled(); expect(f.allocation).not.toHaveBeenCalled();
+    } finally { f.dispose(); }
+  });
+  it("allows unsupported unmanaged atlas fallback only with a real texture acquisition port", () => {
+    const f = host(512 * 2 ** 20, 128), acquire = vi.fn(() => new Texture(null, f.scene));
+    try { const runtime = f.create({ imageryPorts: { ...f.imageryPorts, managedAtlas: undefined }, loadMapTexture: acquire });
+      expect(runtime.getImageryDiagnostics().mode).toBe("legacy"); expect(f.releaseOwnedLoader).toHaveBeenCalledOnce();
+      runtime.update(); expect(acquire).toHaveBeenCalled(); runtime.dispose();
+    } finally { f.dispose(); }
+  });
+  it("truthfully rejects unsupported unmanaged atlas with no fallback and disposes constructed owners", () => {
+    const f = host(512 * 2 ** 20, 128);
+    try { expect(() => f.create({ imageryPorts: { ...f.imageryPorts, managedAtlas: undefined } })).toThrow(/atlas fallback needs/);
+      expect(f.releaseOwnedLoader).toHaveBeenCalledOnce(); expect(f.terrainDispose).toHaveBeenCalledOnce(); expect(f.broker.pools.live()).toEqual([]);
+    } finally { f.dispose(); }
+  });
+});
 
 const flush = async () => { for (let i = 0; i < 8; i++) await Promise.resolve(); };
 
