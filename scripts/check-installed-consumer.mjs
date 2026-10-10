@@ -123,6 +123,8 @@ Module._resolveFilename = function (...args) {
 };`);
 await writeFile(join(workspace, 'core.ts'), await readFile(join(owner, 'fixtures', 'consumer.ts')));
 await writeFile(join(workspace, 'public-entries.ts'), await readFile(join(owner, 'fixtures', 'publicEntries.ts')));
+await writeFile(join(workspace, 'surface-readiness.ts'), await readFile(join(owner, 'fixtures', 'surface-readiness', 'public-consumer.ts')));
+await writeFile(join(workspace, 'surface-readiness.mjs'), await readFile(join(owner, 'fixtures', 'surface-readiness', 'public-consumer.mjs')));
 await writeFile(join(workspace, 'visualization-consumer.mjs'), (await readFile(join(owner, 'fixtures', 'visualization-consumer.mjs'), 'utf8')).replace('__OUTSIDE_IMPORT__', pathToFileURL(join(owner,'package.json')).href));
 await writeFile(join(workspace, 'globe-consumer.mjs'), await readFile(join(owner, 'fixtures', 'globe-consumer.mjs')));
 await writeFile(join(workspace,'location-consumer.mjs'),await readFile(join(owner,'fixtures','location-consumer.mjs')));
@@ -165,7 +167,7 @@ console.log('Isolated public entries, core math, exact optional peers, React SSR
 await writeFile(join(workspace, 'declarations.mjs'), `import ts from 'typescript';
 import { realpathSync } from 'node:fs';
 const base = realpathSync(process.env.ENGINE_CONSUMER_WORKSPACE);
-for (const [filename, libs] of [['core.ts', ['lib.es2022.d.ts']], ['public-entries.ts', ['lib.es2022.d.ts', 'lib.dom.d.ts', 'lib.dom.iterable.d.ts']]]) {
+for (const [filename, libs] of [['core.ts', ['lib.es2022.d.ts']], ['public-entries.ts', ['lib.es2022.d.ts', 'lib.dom.d.ts', 'lib.dom.iterable.d.ts']], ['surface-readiness.ts', ['lib.es2022.d.ts', 'lib.dom.d.ts', 'lib.dom.iterable.d.ts']]]) {
   const program = ts.createProgram([filename], { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.NodeNext,
     moduleResolution: ts.ModuleResolutionKind.NodeNext, strict: true, noEmit: true, skipLibCheck: false,
     jsx: ts.JsxEmit.ReactJSX, types: [], lib: libs });
@@ -182,6 +184,7 @@ const environment = { ENGINE_CONSUMER_WORKSPACE: workspace };
 const guarded = ['--require', './guard.cjs', '--loader', './guard.mjs'];
 await writeFile(join(workspace,'pure.mjs'),`import assert from 'node:assert/strict';for(const name of ['document','window','navigator','fetch','requestAnimationFrame'])Object.defineProperty(globalThis,name,{configurable:true,get(){throw new Error('PURE_HOST_GLOBAL:'+name);}});const core=await import('@foss-earth/engine');const lookup=await import('@foss-earth/engine/location-provider');assert.equal(typeof core.createNavigationOwner,'function');assert.equal(typeof lookup.createLocationSearch,'function');`);
 await run(process.execPath,[...guarded,'./pure.mjs'],'pure',{...environment,CONSUMER_FORBID_PEERS:'1'});
+await run(process.execPath,[...guarded,'./surface-readiness.mjs'],'surface-readiness',{...environment,CONSUMER_FORBID_PEERS:'1'});
 await writeFile(join(workspace,'peer-negative.mjs'),`import assert from 'node:assert/strict';await assert.rejects(import('@foss-earth/ui/settings'),/PURE_IMPORTED_PEER/);`);
 await run(process.execPath,[...guarded,'./peer-negative.mjs'],'pure-peer-negative',{...environment,CONSUMER_FORBID_PEERS:'1'});
 await run(process.execPath, [...guarded, './consumer.mjs'], 'runtime', environment);

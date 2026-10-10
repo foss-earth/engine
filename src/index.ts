@@ -14,6 +14,7 @@ export * from "./input/inertialCameraController.js";
 export * from "./navigation/navigationLease.js";
 export * from "./surface/contracts.js";
 export * from "./surface/access.js";
+export * from "./surface/currentReadiness.js";
 export * from "./terrain/terrainGrid.js";
 export * from "./terrain/terrainLoader.js";
 export * from "./terrain/mapDetailPolicy.js";

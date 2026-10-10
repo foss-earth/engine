@@ -1,4 +1,4 @@
-import { Frustum, GeospatialCamera, GeospatialClippingBehavior, NullEngine, Scene, StandardMaterial, Texture } from "@babylonjs/core";
+import { Frustum, GeospatialCamera, GeospatialClippingBehavior, NullEngine, Scene, StandardMaterial, Texture, VertexBuffer } from "@babylonjs/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HostCameraController as CameraController } from "../fixtures/composition/runtimeHost.js";
 import * as refinement from "../src/babylon/meshRefinement.js";
@@ -168,6 +168,45 @@ describe("raster imagery and terrain lifecycle", () => {
     expect(meshes.some((mesh, index) => (mesh.material as StandardMaterial).diffuseTexture !== previousTextures[index])).toBe(true);
     runtime.dispose(); engine.dispose();
   });
+  it("does not publish incoming DEM quality or geometry until the displayed buffer commit", async () => {
+    const engine = new NullEngine(), scene = new Scene(engine), changes = vi.fn();
+    const runtime = createRasterTilesRuntime({ scene, source: RASTER_BASE_MAP_SOURCES[0], onSurfaceChange: changes });
+    try {
+      runtime.update(); pending.imagery.forEach(loaded => loaded()); runtime.update();
+      const displayed = scene.meshes.filter(mesh => mesh.isEnabled() && mesh.metadata?.mapSurface);
+      expect(displayed.length).toBeGreaterThan(0);
+      const before = displayed.map(mesh => ({ mesh, quality: mesh.metadata.terrainZoom,
+        positions: [...mesh.getVerticesData(VertexBuffer.PositionKind)!], normals: [...mesh.getVerticesData(VertexBuffer.NormalKind)!] }));
+      const hit = runtime.sample(0.1, 0.1), revision = runtime.getRevision(); expect(hit).not.toBeNull(); changes.mockClear();
+      await resolveFirstDetail();
+      expect(runtime.getRevision()).toBe(revision); expect(runtime.sample(0.1, 0.1)).toEqual(hit);
+      for (const record of before) {
+        expect(record.mesh.metadata.terrainZoom).toBe(record.quality);
+        expect([...record.mesh.getVerticesData(VertexBuffer.PositionKind)!]).toEqual(record.positions);
+        expect([...record.mesh.getVerticesData(VertexBuffer.NormalKind)!]).toEqual(record.normals);
+      }
+      expect(changes).toHaveBeenCalledWith("loading"); runtime.update();
+      expect(runtime.getRevision()).toBeGreaterThan(revision);
+      expect(before.some(record => record.mesh.metadata.terrainZoom > record.quality)).toBe(true);
+      expect(changes).toHaveBeenLastCalledWith("geometry");
+    } finally { runtime.dispose(); engine.dispose(); }
+  });
+  it("discards superseded elevation completions and notifies terminal owner disposal", async () => {
+    const engine = new NullEngine(), scene = new Scene(engine), changes = vi.fn();
+    const runtime = createRasterTilesRuntime({ scene, source: RASTER_BASE_MAP_SOURCES[0], onSurfaceChange: changes });
+    try {
+      runtime.update(); pending.imagery.forEach(loaded => loaded()); runtime.update();
+      const oldLoads = [...pending.terrain], revision = runtime.getRevision();
+      const displayed = scene.meshes.filter(mesh => mesh.isEnabled() && mesh.metadata?.mapSurface);
+      const before = displayed.map(mesh => ({ mesh, positions: [...mesh.getVerticesData(VertexBuffer.PositionKind)!], quality: mesh.metadata.terrainZoom }));
+      runtime.setTerrainSource({ id: "replacement-fixture", label: "Replacement", provider: "fixture", urlTemplate: "https://fixture.invalid/{z}/{x}/{y}", maxZoom: 15, attribution: "Fixture" });
+      for (const load of oldLoads) load.resolve({ ...load.tile, size: 2, heights: new Float32Array([500, 500, 500, 500]) }); await flush();
+      expect(runtime.getRevision()).toBe(revision);
+      for (const record of before) { expect([...record.mesh.getVerticesData(VertexBuffer.PositionKind)!]).toEqual(record.positions); expect(record.mesh.metadata.terrainZoom).toBe(record.quality); }
+      runtime.setSuspended(true); expect(changes).toHaveBeenLastCalledWith("status");
+      runtime.dispose(); expect(changes).toHaveBeenLastCalledWith("disposed"); expect(runtime.sample(0.1, 0.1)).toBeNull();
+    } finally { runtime.dispose(); engine.dispose(); }
+  });
   it("keeps the displayed terrain alive while an elevation provider switches", async () => {
     const engine = new NullEngine(); const scene = new Scene(engine);
     const runtime = createRasterTilesRuntime({ scene, source: RASTER_BASE_MAP_SOURCES[0], getViewState: () => view });
@@ -184,6 +223,34 @@ describe("raster imagery and terrain lifecycle", () => {
     runtime.update();
     expect(runtime.getRevision()).toBe(revision);
     runtime.dispose(); engine.dispose();
+  });
+  it("invalidates retained revisions and notifies when a terrain commit fails after a write", async () => {
+    const engine = new NullEngine(), scene = new Scene(engine), changes = vi.fn();
+    const runtime = createRasterTilesRuntime({ scene, source: RASTER_BASE_MAP_SOURCES[0], onSurfaceChange: changes });
+    try {
+      runtime.update(); pending.imagery.forEach(loaded => loaded()); runtime.update(); await resolveFirstDetail();
+      const revision = runtime.getRevision(); changes.mockClear();
+      const stitch = vi.spyOn(refinement, "stitchTerrainEdges").mockImplementationOnce(() => { throw new Error("Synthetic seam commit failed"); });
+      expect(() => runtime.update()).toThrow("Synthetic seam commit failed");
+      expect(runtime.getRevision()).toBeGreaterThan(revision); expect(changes).toHaveBeenLastCalledWith("geometry");
+      stitch.mockRestore(); runtime.update(); expect(runtime.getRevision()).toBeGreaterThan(revision + 1);
+    } finally { runtime.dispose(); engine.dispose(); }
+  });
+  it("versions a visible mesh replacement and retains its outgoing owner when disposal fails", () => {
+    const engine = new NullEngine(), scene = new Scene(engine), changes = vi.fn();
+    const runtime = createRasterTilesRuntime({ scene, source: RASTER_BASE_MAP_SOURCES[0], onSurfaceChange: changes,
+      nowMs: () => 0, meshRebuildCpuMs: () => 2 });
+    try {
+      runtime.update(); pending.imagery.forEach(loaded => loaded()); runtime.update();
+      const outgoing = scene.meshes.find(mesh => mesh.isEnabled() && mesh.metadata?.mapSurface)!;
+      expect(outgoing).toBeDefined(); const revision = runtime.getRevision();
+      vi.spyOn(outgoing, "dispose").mockImplementationOnce(() => { throw new Error("Synthetic mesh release failed"); });
+      settings.set("map.terrain.tileSegments", 32); changes.mockClear();
+      expect(() => runtime.update()).toThrow("Synthetic mesh release failed");
+      expect(runtime.getRevision()).toBeGreaterThan(revision); expect(changes).toHaveBeenLastCalledWith("geometry");
+      expect(outgoing.isEnabled()).toBe(false); expect(outgoing.isDisposed()).toBe(false);
+      runtime.dispose(); expect(outgoing.isDisposed()).toBe(true);
+    } finally { runtime.dispose(); engine.dispose(); }
   });
   it.each([false, true])("commits terrain once and idles when settled (alwaysRefresh=%s)", async alwaysRefresh => {
     let now = 0;
@@ -239,6 +306,8 @@ describe("raster imagery and terrain lifecycle", () => {
     expect(retried).toBeDefined();
     retried!.resolve({ ...retried!.tile, size: 2, heights: new Float32Array([250, 250, 250, 250]) });
     await flush();
+    // Incoming grid metadata becomes displayed quality only with its positions.
+    runtime.update();
     expect(scene.meshes.some(mesh => mesh.metadata?.terrainZoom === detail.tile.z)).toBe(true);
     runtime.dispose(); engine.dispose();
   });

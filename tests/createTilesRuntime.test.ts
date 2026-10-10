@@ -208,9 +208,29 @@ describe("Google collision surface revisions", () => {
     expect(runtime.getRevision()).toBeGreaterThan(hidden);
     const disposed = runtime.getRevision();
     runtime.dispose();
+    const terminal = runtime.getRevision();
+    expect(terminal).toBeGreaterThan(disposed);
     dispatch("tile-visibility-change", { visible: true });
     dispatch("dispose-model");
-    expect(runtime.getRevision()).toBe(disposed);
+    expect(runtime.getRevision()).toBe(terminal);
+  });
+  it("notifies asynchronous owner state, suspension and disposal and detaches those event hooks", () => {
+    const onSurfaceChange = vi.fn(), runtime = createGoogleTilesRuntime({ scene: {} as Scene, apiKey: "test", onSurfaceChange });
+    const dispatch = (type: string) => runtime.tiles.dispatchEvent({ type } as never);
+    for (const type of ["tile-download-start", "load-content", "load-tileset"]) dispatch(type);
+    expect(onSurfaceChange.mock.calls.map(call => call[0])).toEqual(["loading", "loading", "loading"]);
+    runtime.setSuspended(true); expect(onSurfaceChange).toHaveBeenLastCalledWith("status");
+    runtime.dispose(); expect(onSurfaceChange).toHaveBeenLastCalledWith("disposed"); onSurfaceChange.mockClear();
+    for (const type of ["tile-download-start", "load-content", "load-tileset"]) dispatch(type);
+    expect(onSurfaceChange).not.toHaveBeenCalled();
+  });
+  it("attempts terminal notification and every event detach even when traversal disposal fails", () => {
+    const onSurfaceChange = vi.fn(), runtime = createGoogleTilesRuntime({ scene: {} as Scene, apiKey: "test", onSurfaceChange });
+    vi.spyOn(runtime.tiles, "dispose").mockImplementation(() => { throw new Error("Synthetic traversal cleanup failed"); });
+    expect(() => runtime.dispose()).toThrow("Synthetic traversal cleanup failed"); expect(onSurfaceChange).toHaveBeenLastCalledWith("disposed");
+    onSurfaceChange.mockClear();
+    for (const type of ["tile-visibility-change", "dispose-model", "load-content", "tiles-load-end"]) runtime.tiles.dispatchEvent({ type } as never);
+    expect(onSurfaceChange).not.toHaveBeenCalled(); runtime.dispose();
   });
 });
 

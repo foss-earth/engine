@@ -7,7 +7,7 @@ export interface SurfaceHit {
   /** WGS84 ellipsoid-coordinate height of the displayed geometry. */
   heightMeters: number;
   meshId: string;
-  /** Changes when displayed raster geometry changes, not when an aircraft moves. */
+  /** Changes when displayed map geometry changes, not when an aircraft moves. */
   revision: number;
   quality: number;
   /** Geometric error advertised by the Google 3D tile owning this triangle. */

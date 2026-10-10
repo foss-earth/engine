@@ -633,7 +633,7 @@
           "sha256": "ddaeb4eac8b30522173fdf07bca490d7408d72fa0cc42526f1d4152b6a8aa920"
         }
       ],
-      "transformation": "Split pure provider/grid/Terrarium/sample math from host-injected transport/decode/cancellation. Original six/256/20s limits become explicit host limits retaining defaults. Primary-prepared lifecycle repair rejects paused queued work on disposal and refuses late decoded cache publication; causal fixtures prepared and unrun. Extract committed native Blob Terrarium decoder with injected createImageBitmap/canvas/performance/CPU-report and named 1\u20131024px maxTileSide; raw native WebP behavior and unchanged decodeTerrarium; close/report all-attempt cleanup causal errors. Source only UNRUN."
+      "transformation": "Split pure provider/grid/Terrarium/sample math from host-injected transport/decode/cancellation. Original six/256/20s limits become explicit host limits retaining defaults. Primary-prepared lifecycle repair rejects paused queued work on disposal and refuses late decoded cache publication; causal fixtures prepared and unrun. Extract committed native Blob Terrarium decoder with injected createImageBitmap/canvas/performance/CPU-report and named 1–1024px maxTileSide; raw native WebP behavior and unchanged decodeTerrarium; close/report all-attempt cleanup causal errors. Source only UNRUN."
     },
     {
       "sourcePath": "src/engine/babylon/createRasterTilesRuntime.ts",
@@ -2565,7 +2565,7 @@
           "sha256": "fff7cbfd05a85ec65d62f6f900f012124b59e3262a8f6cbd8ed3646fd5868e6d"
         }
       ],
-      "transformation": "Extract only original React cache block lines679\u2013689; scope original shared tile class below .foss-earth-map-cache to avoid overwriting UI generic section. Generic map-cache-section list/progress styles remain UI owner; no mixed HUD feature copy. Classes/property values otherwise retained."
+      "transformation": "Extract only original React cache block lines679–689; scope original shared tile class below .foss-earth-map-cache to avoid overwriting UI generic section. Generic map-cache-section list/progress styles remain UI owner; no mixed HUD feature copy. Classes/property values otherwise retained."
     },
     {
       "sourcePath": "src/settings/catalogue/interface.ts",
@@ -3707,7 +3707,7 @@
     "priorRootReceiptSha256": "ee9c1305dd4b18ecee87bb497b1345da2518754d8bdbb3b3fded45034287f125",
     "document": "docs/causal-typecheck-repairs.md",
     "reportedPrimaryCheck": {
-      "path": "/Users/felg/gh/foss-earth/build/repository-split/checks/2026-10-09T18-20-48Z-earth-delivery/engine-typecheck.log",
+      "evidenceId": "engine-typecheck.log",
       "retainedCopy": "build/source-only/2026-10-09-engine-type-repair/reported-engine-typecheck.log",
       "sha256": "e124a5f912bb9cba69aab224dc68ef4b90cc6cca05b43f123b5eb41b670cdcc1",
       "exitCode": 2,
@@ -4252,7 +4252,7 @@
     "priorRootReceiptSha256": "2912133ef6645053a5dfd339bb3c433bd78ae194d0e47b464b4551782f68fd18",
     "document": "docs/causal-typecheck-repairs.md",
     "reportedPrimaryCheck": {
-      "path": "/Users/felg/gh/foss-earth/build/repository-split/checks/2026-10-09T18-20-48Z-earth-delivery/engine-typecheck-causal-repair.log",
+      "evidenceId": "engine-typecheck-causal-repair.log",
       "retainedCopy": "build/source-only/2026-10-09-engine-declaration-exposure/reported-engine-typecheck-causal-repair.log",
       "sha256": "3eab5ba86afcd5f2503501d92f9a9c4a0d88d03bf5f3338f4502fda67ed4f747",
       "exitCode": 2,
@@ -4280,7 +4280,7 @@
     "beforeManifestSha256": "9b7747e14a496fc49ee4189555e6d5064a131e19f487dbe1bb25dc86ae80dcbe",
     "document": "docs/retained-test-fixture-repairs.md",
     "reportedFailure": {
-      "path": "/Users/felg/gh/foss-earth/build/repository-split/checks/2026-10-09T18-20-48Z-earth-delivery/engine-retained-tests.log",
+      "evidenceId": "engine-retained-tests.log",
       "retainedCopy": "build/source-only/2026-10-09T19-32-00Z-retained-behavior-repairs/engine-retained-tests.log",
       "bytes": 69162,
       "sha256": "d2e69d24e964548fe85f9c778b48bf4ac0d84256769938ef7855c1bcd59387dc",
@@ -5050,5 +5050,9 @@
     "sourceHistoryMutation": false,
     "publicExportsChanged": false,
     "rollback": "Omit managedAtlas for the retained legacy plain-record pathway. Current source repair remains unqualified until primary checks."
+  },
+  "portablePublicationEvidence": {
+    "scope": "Reported primary check evidence remains private retained history. Documentary evidence IDs preserve the original basenames and existing SHA256 fields; these IDs are not package-relative paths or public download URLs. Original machine context is preserved privately.",
+    "originalMetadataSha256": "22ea980a74c7ed12ad51fef33982f141a4c4e143f6c6ebc33801c7c18c430c33"
   }
 }

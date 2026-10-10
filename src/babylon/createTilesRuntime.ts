@@ -9,6 +9,8 @@ import { isSphereBelowHorizon } from "../terrain/imagery/imageryGeometry.js";
 import type { TerrainLightingAdapter } from "./imagery/terrainLightPlugin.js";
 import type { whenMeshesReady } from "@foss-earth/renderer/babylon";
 import type { GoogleTileResourceTiming } from "../browser/describeGoogleTileFailure.js";
+import type { SurfaceOwnerChange } from "../surface/currentReadiness.js";
+import { finishOwnedCleanup } from "./ownedCleanup.js";
 
 /** Structural Babylon binding over the public core traversal contract. */
 export interface GoogleTilesRenderer extends TilesRendererBase<TilesRendererBaseEventMap<TransformNode>> {
@@ -37,6 +39,8 @@ export interface GoogleTilesRuntimeOptions {
   onLoadEnd?: (visibleTiles: number, activeTiles: number) => void;
   /** The camera-visible loaded geometric error changed after a traversal. */
   onDetailFeedback?: () => void;
+  /** Actual visibility/disposal/adoption or loading/suspension status changed. */
+  onSurfaceChange?: (change: SurfaceOwnerChange) => void;
   /** The registry holding `map.google.*`, followed live. Required from the host. */
   settings: SettingsRegistry;
   /** Third-party map traversal/parser consumes the supplied scene/device. */
@@ -389,14 +393,22 @@ export function createGoogleTilesRuntime(options: GoogleTilesRuntimeOptions): Go
   const defaultErrorTarget = tiles.errorTarget;
   let overrideErrorTarget: number | null = null;
   let surfaceRevision = 0;
-  const handleSurfaceChange = (): void => { surfaceRevision += 1; };
+  let disposed = false;
+  const handleSurfaceChange = (): void => {
+    if (disposed) return;
+    surfaceRevision += 1;
+    options.onSurfaceChange?.("geometry");
+  };
 
   const handleLoadStart = (): void => {
+    if (disposed) return;
     options.log.info("[tiles] Google 3D tiles loading started");
     onLoadStart?.();
+    if (!disposed) options.onSurfaceChange?.("loading");
   };
 
   const handleLoadEnd = (): void => {
+    if (disposed) return;
     const visibleTiles = tiles.visibleTiles.size;
     const activeTiles = tiles.activeTiles.size;
 
@@ -406,17 +418,22 @@ export function createGoogleTilesRuntime(options: GoogleTilesRuntimeOptions): Go
     });
 
     onLoadEnd?.(visibleTiles, activeTiles);
+    if (!disposed) options.onSurfaceChange?.("loading");
   };
 
   const handleLoadModel = (event: { scene: TransformNode; tile: Tile }): void => {
+    if (disposed) return;
     for (const mesh of event.scene.getChildMeshes()) {
       mesh.metadata = { ...mesh.metadata, googleGeometricErrorMeters: event.tile.geometricError };
       // A tile whose material comes unlit is shown under the sky's light on the ground, as 2D imagery is.
       if (mesh.material) options.lighting.followTerrainLight(mesh.material);
     }
+    options.onSurfaceChange?.("loading");
   };
+  const handleAsyncLoadChange = (): void => { if (!disposed) options.onSurfaceChange?.("loading"); };
 
   const handleLoadError = (event: { error: Error; url: string | URL }): void => {
+    if (disposed) return;
     const url = String(event.url);
     let pathname = url;
     try {
@@ -434,12 +451,16 @@ export function createGoogleTilesRuntime(options: GoogleTilesRuntimeOptions): Go
     });
     options.log.error("[tiles] Failed to load Google 3D tile resource", report);
     onLoadError?.(new Error(report), url);
+    if (!disposed) options.onSurfaceChange?.("loading");
   };
 
   tiles.addEventListener("tiles-load-start", handleLoadStart);
   tiles.addEventListener("tiles-load-end", handleLoadEnd);
   tiles.addEventListener("load-error", handleLoadError);
   tiles.addEventListener("load-model", handleLoadModel);
+  tiles.addEventListener("load-content", handleAsyncLoadChange);
+  tiles.addEventListener("load-tileset", handleAsyncLoadChange);
+  tiles.addEventListener("tile-download-start", handleAsyncLoadChange);
   tiles.addEventListener("tile-visibility-change", handleSurfaceChange);
   tiles.addEventListener("dispose-model", handleSurfaceChange);
 
@@ -472,33 +493,42 @@ export function createGoogleTilesRuntime(options: GoogleTilesRuntimeOptions): Go
       tiles.errorTarget = overrideErrorTarget ?? defaultErrorTarget;
     },
     update() {
-      if (suspended) return;
+      if (suspended || disposed) return;
       tiles.update();
       const next = readLoadedError();
       if (next !== loadedErrorTarget) {
         loadedErrorTarget = next;
         options.onDetailFeedback?.();
       }
+      options.onSurfaceChange?.("status");
     },
     setSuspended(next) {
-      if (suspended === next) return;
+      if (suspended === next || disposed) return;
       suspended = next;
       applyLoadingParameters(tiles, settings, suspended);
       if (!suspended) {
         // Queued jobs wait for an addition or a completion to run; start them now.
         for (const queue of [tiles.downloadQueue, tiles.parseQueue]) (queue as unknown as { scheduleJobRun?: () => void }).scheduleJobRun?.();
       }
+      options.onSurfaceChange?.("status");
     },
     dispose() {
-      drawableLifetime.abort();
-      unsubscribeSettings();
-      tiles.removeEventListener("tiles-load-start", handleLoadStart);
-      tiles.removeEventListener("tiles-load-end", handleLoadEnd);
-      tiles.removeEventListener("load-error", handleLoadError);
-      tiles.removeEventListener("load-model", handleLoadModel);
-      tiles.removeEventListener("tile-visibility-change", handleSurfaceChange);
-      tiles.removeEventListener("dispose-model", handleSurfaceChange);
-      tiles.dispose();
+      if (disposed) return;
+      disposed = true;
+      surfaceRevision += 1;
+      finishOwnedCleanup([
+        () => drawableLifetime.abort(), unsubscribeSettings,
+        () => tiles.removeEventListener("tiles-load-start", handleLoadStart),
+        () => tiles.removeEventListener("tiles-load-end", handleLoadEnd),
+        () => tiles.removeEventListener("load-error", handleLoadError),
+        () => tiles.removeEventListener("load-model", handleLoadModel),
+        () => tiles.removeEventListener("load-content", handleAsyncLoadChange),
+        () => tiles.removeEventListener("load-tileset", handleAsyncLoadChange),
+        () => tiles.removeEventListener("tile-download-start", handleAsyncLoadChange),
+        () => tiles.removeEventListener("tile-visibility-change", handleSurfaceChange),
+        () => tiles.removeEventListener("dispose-model", handleSurfaceChange),
+        () => tiles.dispose(), () => options.onSurfaceChange?.("disposed"),
+      ], "Google map cleanup failed.");
     },
   };
 }

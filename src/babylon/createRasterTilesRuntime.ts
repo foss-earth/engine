@@ -18,6 +18,7 @@ import { sampleTerrainGrid, type TerrainGrid, type TerrainSource } from "../terr
 import { GLOBAL_TERRAIN } from "../terrain/globalTerrain.js";
 import { createRasterSurfaceSampler } from "./rasterSurfaceSampler.js";
 import type { SurfaceHit } from "../surface/contracts.js";
+import type { SurfaceOwnerChange } from "../surface/currentReadiness.js";
 import type { TerrainPerformanceCapture } from "../terrain/terrainPerformanceCapture.js";
 import { retryDelayMs, type RetryDelay } from "../terrain/retryDelay.js";
 import { meshPositions, patchesForGeometryCommit, stitchTerrainEdges, updateTerrainPositions } from "./meshRefinement.js";
@@ -131,6 +132,8 @@ export interface RasterTilesRuntimeOptions {
   onDownloadBytes?: (bytes: number) => void;
   onLoadEnd?: (visibleTiles: number, activeTiles: number) => void;
   onLoadError?: (error: Error, url: string) => void;
+  /** Called after displayed/query commits and asynchronous or suspended status changes. */
+  onSurfaceChange?: (change: SurfaceOwnerChange) => void;
   onDebugEvent?: (event: string, detail?: Record<string, unknown>) => void;
 }
 
@@ -194,6 +197,8 @@ interface RasterTileRecord {
   settled: boolean;
   grid?: TerrainGrid;
   target: number[];
+  /** Incoming grid quality, published only beside its committed positions. */
+  targetTerrainZoom: number;
   imageryGeneration: number;
   replaceImagery(source: RasterBaseMapSource, generation: number): void;
   terrainGeneration: number;
@@ -256,6 +261,7 @@ function createTileRecord(
     settled: false,
     grid: options.getSurfaceHeightMeters ? undefined : GLOBAL_TERRAIN,
     target: meshPositions(mesh),
+    targetTerrainZoom: mesh.metadata.terrainZoom ?? -1,
     imageryGeneration: 0,
     replaceImagery: () => {},
     terrainGeneration: 0,
@@ -283,7 +289,7 @@ function createTileRecord(
     record.grid = grid;
     record.heightBounds = readyMesh.metadata.heightBounds;
     record.appliedTerrainGeneration = generation;
-    record.mesh.metadata.terrainZoom = grid?.z ?? -1;
+    record.targetTerrainZoom = grid?.z ?? -1;
     readyMesh.dispose();
     if (options.performanceCapture) options.performanceCapture.counters.preparationCpuMs += options.nowMs() - started;
     onChanged(record);
@@ -599,6 +605,8 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
   const dirtyGeometryKeys = new Set<string>();
   let visibilityDirty = false;
   const meshRebuildQueue = new Set<string>();
+  /** A throwing disposer has not proved handback; retain that owner for teardown. */
+  const retiredMeshes = new Set<Mesh>();
   // What the last terrain selection was made from, and what it chose.
   let selectionDirty = true;
   let selectedView: ImageryView | null = null;
@@ -771,6 +779,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
       loadCycleActive = true;
       options.onLoadStart?.();
     }
+    options.onSurfaceChange?.("loading");
   }
 
   function emitLoadEndIfIdle(): void {
@@ -798,6 +807,10 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
     if (record.failed) {
       // Drop failed tiles from the cache so we can retry on next request.
       cache.delete(record.key);
+      if (visibleTileKeys.delete(record.key)) {
+        revision += 1;
+        surfaceSampler.setCoverage([...visibleTileKeys].map(key => cache.get(key)!).filter(Boolean));
+      }
       const failures = (imageryFailures.get(record.key) ?? 0) + 1;
       imageryFailures.set(record.key, failures);
       const retryAt = options.nowMs() + retryDelayMs(failures, meshOptions.retryDelay?.());
@@ -812,6 +825,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
     visibilityDirty = true;
     options.requestRender?.();
     emitLoadEndIfIdle();
+    options.onSurfaceChange?.("loading");
   }
 
   function ensureCached(tile: TileCoord): void {
@@ -838,6 +852,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
       visibilityDirty = true;
       heightsArrived = true;
       options.requestRender?.();
+      options.onSurfaceChange?.("loading");
     }, scheduleRetry, imageryRuntime);
     cache.set(key, record);
   }
@@ -953,6 +968,9 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
     if (changed) {
       for (const key of representatives) if (!oldVisible.has(key)) dirtyGeometryKeys.add(key);
       geometryDirty = true;
+      // Visibility itself changes queried coverage, including removal of the
+      // final patch when there is no geometry left for commitTerrain to write.
+      revision += 1;
     }
     visibleTileKeys = representatives;
     for (const [key, record] of cache) {
@@ -1023,17 +1041,51 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
     const visible = [...visibleTileKeys].map(key => cache.get(key)!);
     const changed = visible.filter(record => dirtyGeometryKeys.has(record.key));
     if (!geometryDirty || changed.length === 0) return;
-    for (const record of changed) {
+    const failures: unknown[] = [];
+    try {
+      for (const record of changed) {
+        updateTerrainPositions(record.mesh, record.target);
+        record.mesh.metadata.terrainZoom = record.targetTerrainZoom;
+        if (capture) capture.counters.geometryWrites++;
+      }
+      // A replacement is a discrete commit. Stitch the committed tiles and the
+      // visible neighbors that read them. Unrelated tiles keep their last upload.
+      const dirtyKeys = new Set(changed.map(record => record.key));
+      stitchTerrainEdges(patchesForGeometryCommit(visible, dirtyKeys), capture?.counters);
+      for (const record of changed) dirtyGeometryKeys.delete(record.key);
+      geometryDirty = false;
+    } catch (error) { failures.push(error); }
+    // A throwing upload/seam operation may have changed some CPU triangles.
+    // Invalidate retained evidence even then; keep dirty work for a later retry.
+    revision += 1;
+    finishOwnedCleanup([() => options.onSurfaceChange?.("geometry")], "Terrain commit and observation failed.", failures);
+  }
+
+  /** Prepare hidden replacements before committed quality can admit them.
+   * Hidden buffers do not belong to the displayed/query surface. A failed
+   * preparation leaves its old quality and usable visible ancestor in place.
+   */
+  function prepareHiddenTerrain(): void {
+    const started = options.nowMs();
+    let prepared = false;
+    for (const key of dirtyGeometryKeys) {
+      if (visibleTileKeys.has(key)) continue;
+      const record = cache.get(key);
+      if (!record || record.mesh.isDisposed()) { dirtyGeometryKeys.delete(key); continue; }
+      if (!record.loaded || record.failed) continue;
       updateTerrainPositions(record.mesh, record.target);
+      record.mesh.metadata.terrainZoom = record.targetTerrainZoom;
       if (capture) capture.counters.geometryWrites++;
-      dirtyGeometryKeys.delete(record.key);
+      dirtyGeometryKeys.delete(key);
+      prepared = true;
+      if (options.nowMs() - started >= options.meshRebuildCpuMs()) break;
     }
-    // A replacement is a discrete commit. Stitch the committed tiles and the
-    // visible neighbors that read them. Unrelated tiles keep their last upload.
-    const dirtyKeys = new Set(changed.map(record => record.key));
-    stitchTerrainEdges(patchesForGeometryCommit(visible, dirtyKeys), capture?.counters);
-    revision++;
-    geometryDirty = false;
+    if (prepared) visibilityDirty = true;
+    geometryDirty = dirtyGeometryKeys.size > 0;
+    if ([...dirtyGeometryKeys].some(key => {
+      const record = cache.get(key);
+      return !visibleTileKeys.has(key) && record?.loaded && !record.failed;
+    })) options.requestRender?.();
   }
 
   /**
@@ -1055,11 +1107,18 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
       replacement.setEnabled(oldMesh.isEnabled());
       record.mesh = replacement;
       record.target = meshPositions(replacement);
+      record.targetTerrainZoom = replacement.metadata.terrainZoom ?? -1;
       record.heightBounds = replacement.metadata.heightBounds;
-      oldMesh.dispose();
+      if (oldMesh.isEnabled()) {
+        revision += 1;
+        surfaceSampler.setCoverage([...visibleTileKeys].map(key => cache.get(key)!).filter(Boolean));
+      }
       dirtyGeometryKeys.add(key);
       geometryDirty = true;
       rebuilt = true;
+      retiredMeshes.add(oldMesh);
+      try { oldMesh.setEnabled(false); oldMesh.dispose(); retiredMeshes.delete(oldMesh); }
+      catch (error) { finishOwnedCleanup([() => options.onSurfaceChange?.("geometry")], "Mesh replacement and observation failed.", [error]); }
       // Cap preparation work so an explicit quality change cannot make the
       // flight hitch in the way the LOD system is meant to prevent.
       if (options.nowMs() - started >= options.meshRebuildCpuMs()) break;
@@ -1181,17 +1240,20 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
         if (now - selectedAt >= setting("map.terrain.reselectWhileMoving")) selectTiles(view, focus);
         else options.requestRender?.();
       }
-      if (visibilityDirty) recomputeVisibility();
-      // Imagery follows the camera and only uploads pages and page tables; it
-      // never writes terrain buffers or changes the adopted surface.
-      imageryRuntime?.update();
+      prepareHiddenTerrain();
       if (visibilityDirty) recomputeVisibility();
       processMeshRebuilds();
       // One atomic terrain replacement after coverage adoption, including
       // stationary/paused frames. There is no continuous CPU morph.
       commitTerrain();
+      // Imagery sees the committed surface and only uploads pages/tables.
+      imageryRuntime?.update();
+      // New imagery can unlock usable startup coverage. Commit it before any
+      // final owner notification publishes displayed geometry evidence.
+      if (visibilityDirty) { recomputeVisibility(); commitTerrain(); }
       evictIfNeeded();
       emitLoadEndIfIdle();
+      options.onSurfaceChange?.("geometry");
       if (capture) {
         // Mesh construction is already recorded as preparation; do not count it twice.
         capture.counters.updateCpuMs += options.nowMs() - started - (capture.counters.preparationCpuMs - previousPreparation);
@@ -1226,9 +1288,10 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
         selectionDirty = true;
         options.requestRender?.();
       }
+      options.onSurfaceChange?.("status");
     },
     setTerrainSource(source): void {
-      if (terrainSource?.id === source.id) return;
+      if (disposed || terrainSource?.id === source.id) return;
       terrain.dispose();
       terrainSource = source;
       terrain = createTerrainLoader();
@@ -1242,6 +1305,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
         if (record) record.replaceTerrain(loadProgressive, terrainGeneration);
       }
       options.requestRender?.();
+      options.onSurfaceChange?.("loading");
     },
     getMetrics,
     getRevision: () => revision,
@@ -1290,7 +1354,9 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
     dispose(): void {
       if (disposed) return;
       disposed = true;
-      const records = [...cache.values()], ownedImagery = imageryRuntime, stopRetry = retryTimer;
+      revision += 1;
+      const records = [...cache.values()], retired = [...retiredMeshes], ownedImagery = imageryRuntime, stopRetry = retryTimer;
+      retiredMeshes.clear();
       imageryRuntime = null; retryTimer = undefined;
       for (const record of records) record.settled = true;
       cache.clear();
@@ -1306,7 +1372,9 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
       finishOwnedCleanup([
         unsubscribeSettings, () => terrain.dispose(), () => ownedImagery?.dispose(),
         ...records.map(record => () => disposeTile(record)),
+        ...retired.map(mesh => () => mesh.dispose()),
         () => surfaceSampler.setCoverage([]), () => stopRetry?.(),
+        () => options.onSurfaceChange?.("disposed"),
       ], "Raster runtime cleanup failed.");
     },
   };

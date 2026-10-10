@@ -5,6 +5,7 @@ import type { SkyRuntime } from "@foss-earth/sky/babylon";
 import { createMapDownloadMeter } from "../browser/mapDownloadMeter.js";
 import { createSurfaceQuery } from "./surfaceQuery.js";
 import type { SurfaceQuery } from "../surface/contracts.js";
+import { createCurrentDisplayedSurface, type CurrentDisplayedSurface, type CurrentSurfaceOwnerState, type SurfaceOwnerChange } from "../surface/currentReadiness.js";
 import { resolveTerrainSource, type TerrainSource } from "../terrain/terrainGrid.js";
 import { terrainReadinessSamples } from "../surface/coverageSamples.js";
 import { validateTerrainPreparation, type TerrainPreparationOptions, type TerrainPreparationResult } from "../surface/terrainPreparation.js";
@@ -124,6 +125,8 @@ export interface GlobeRuntime {
   prepareTerrain(options: TerrainPreparationOptions): Promise<TerrainPreparationResult>;
   /** Collision and placement queries against the currently displayed map mesh. */
   surface: SurfaceQuery;
+  /** Engine-owned current local displayed query evidence and paused-safe subscriptions. */
+  displayedSurface: CurrentDisplayedSurface;
   engine: Engine | WebGPUEngine;
   scene: Scene;
   renderer: RendererSelection;
@@ -444,6 +447,36 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
   let preparationTick: ((now: number) => void) | null = null;
   let cancelPreparation: ((error: Error) => void) | null = null;
   let activeRasterBaseMap = options.rasterBaseMap ?? null;
+  let requestedRenderPause = false;
+  // The maps can call this during initialization, before the query is created.
+  let refreshCurrentSurface = (): void => {};
+  let afterSurfaceSettlement: (() => void) | null = null;
+  const currentSurfaceChanged = (change: SurfaceOwnerChange): void => {
+    if (disposed) return;
+    refreshCurrentSurface();
+    if (disposed || change !== "loading" || afterSurfaceSettlement) return;
+    // A single coalesced read after async owner queue/reservation cleanup;
+    // this is the host clock, no loading/readiness polling or rendering loop.
+    let finished = false, cancelled = false;
+    let stop: (() => void) | null = null;
+    const cancel = (): void => { cancelled = true; const owned = stop; stop = null; owned?.(); };
+    afterSurfaceSettlement = cancel;
+    try {
+      stop = clock.after(() => {
+        finished = true;
+        if (afterSurfaceSettlement === cancel) afterSurfaceSettlement = null;
+        if (!cancelled && !disposed) refreshCurrentSurface();
+      }, 0);
+    } catch (error) {
+      if (afterSurfaceSettlement === cancel) afterSurfaceSettlement = null;
+      finishOwnedCleanup([cancel], "Surface settlement scheduling and cleanup failed.", [error]);
+    }
+    if (finished || cancelled || disposed) {
+      if (afterSurfaceSettlement === cancel) afterSurfaceSettlement = null;
+      cancel();
+    }
+  };
+  authority.own(() => { const stop = afterSurfaceSettlement; afterSurfaceSettlement = null; stop?.(); });
   authority.own(() => { tilesRuntime?.dispose(); tilesRuntime = null; });
   authority.own(() => { rasterTilesRuntime?.dispose(); rasterTilesRuntime = null; });
   authority.own(() => { inputController?.destroy(); inputController = null; });
@@ -588,6 +621,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
     rasterTilesRuntime?.update();
     profiler.add("map/raster tiles", started);
     adoptRasterCoverage();
+    refreshCurrentSurface();
     // The host renderer lifecycle has begun this frame before preparing it.
     const deltaSeconds = Math.max(renderer.engine.getDeltaTime() / 1000, 1 / 240);
     simTick?.(deltaSeconds);
@@ -598,8 +632,9 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
     sky.update();
     profiler.add("sky", started);
     } catch (error) {
-      try { closeFrame(); }
-      catch (cleanup) { throw new AggregateError([error, cleanup], "Globe frame preparation and capture cleanup failed."); }
+      // A failed map operation can have partially changed actual triangles.
+      // Publish that owner's new evidence before retiring this frame boundary.
+      finishOwnedCleanup([refreshCurrentSurface, closeFrame], "Globe frame preparation and observation/capture cleanup failed.", [error]);
       throw error;
     }
     finally { preparingFrame = false; }
@@ -647,6 +682,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
   let rasterDetailOffset = 0;
   const emitStatus = (): void => {
     if (disposed) return;
+    refreshCurrentSurface();
     options.onStatusChange?.({ ...status });
     for (const listener of [...statusListeners]) listener({ ...status });
   };
@@ -939,6 +975,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
         },
         imagery: options.rasterImagery ?? (settings.get("map.detail.imageryPath") === "legacy" ? "legacy" : DEFAULT_RASTER_IMAGERY),
         onDetailFeedback: emitRasterDetailFeedback,
+        onSurfaceChange: currentSurfaceChanged,
         performanceCapture: terrainCapture,
         requestRender: () => scheduler.requestRender(),
         onDebugEvent: recordMapDebugEvent,
@@ -965,7 +1002,8 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
           emitStatus();
         },
       });
-    } else if (rasterTilesRuntime.source.id !== rasterBaseMap.id) {
+    } else if (rasterTilesRuntime.source.id !== rasterBaseMap.id || rasterTilesRuntime.source.version !== rasterBaseMap.version
+      || rasterTilesRuntime.source.urlTemplate !== keyedSource(rasterBaseMap).urlTemplate) {
       rasterTilesRuntime.setSource(keyedSource(rasterBaseMap));
     }
     rasterTilesRuntime.setSuspended(mapsSuspended);
@@ -1036,6 +1074,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
         onDetailFeedback: () => {
           if (status.mode === "google-tiles") for (const listener of [...googleDetailListeners]) listener();
         },
+        onSurfaceChange: currentSurfaceChanged,
         // An external-camera host attaches its world to a floating-origin parent.
         // Before that happens, terrain preparation owns the active camera and
         // its normal camera-based detail selection remains the safe behavior.
@@ -1151,6 +1190,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
       releaseStartupHold();
       tilesRuntime?.setSuspended(true);
       rasterTilesRuntime?.setSuspended(true);
+      refreshCurrentSurface();
     },
     resume() {
       intentHandler = null;
@@ -1170,6 +1210,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
       }
       streamingBeforeSuspension = false;
       startupHoldBeforeSuspension = false;
+      refreshCurrentSurface();
     },
     present(view) {
       const camera = geospatialCamera;
@@ -1213,7 +1254,8 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
       if (status.mode !== "google-tiles") enableGoogleTilesMode();
       return;
     }
-    if (activeRasterBaseMap?.id === source.id && status.mode === "raster-basemap") return;
+    if (activeRasterBaseMap?.id === source.id && activeRasterBaseMap.version === source.version
+      && activeRasterBaseMap.urlTemplate === source.urlTemplate && status.mode === "raster-basemap") return;
     activeRasterBaseMap = source;
     enableRasterBaseMapMode(null);
   }
@@ -1465,9 +1507,63 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
   // Kick the first frame so initial scene state paints.
   scheduler.requestRender();
 
+  // Revisions never reset when a renderer is replaced or source mode changes.
+  // Imagery-only selection changes its source generation, not terrain revision.
+  let displayedRevision = 0, sourceGeneration = 0;
+  let previousGoogle: GoogleTilesRuntime | null = tilesRuntime, previousRaster: RasterTilesRuntime | null = rasterTilesRuntime;
+  const readGoogleRevision = (): number => tilesRuntime?.getRevision() ?? 0;
+  const readRasterRevision = (): number => rasterTilesRuntime?.getRevision() ?? 0;
+  let previousGoogleRevision = readGoogleRevision(), previousRasterRevision = readRasterRevision();
+  let previousMode = status.mode, previousDisposed = disposed, previousSource = "";
+  let previousRasterUrl: string | undefined;
+  const readCurrentSurfaceState = (): CurrentSurfaceOwnerState => {
+    const googleRevision = readGoogleRevision(), rasterRevision = readRasterRevision();
+    if (previousGoogle !== tilesRuntime || previousRaster !== rasterTilesRuntime
+      || previousGoogleRevision !== googleRevision || previousRasterRevision !== rasterRevision
+      || previousMode !== status.mode || previousDisposed !== disposed) {
+      displayedRevision += 1;
+      previousGoogle = tilesRuntime; previousRaster = rasterTilesRuntime;
+      previousGoogleRevision = googleRevision; previousRasterRevision = rasterRevision;
+      previousMode = status.mode; previousDisposed = disposed;
+    }
+    const selectedSource = status.mode === "google-tiles" ? "google"
+      : status.mode === "raster-basemap" ? `raster:${activeRasterBaseMap?.id ?? "unknown"}@${activeRasterBaseMap?.version ?? "unversioned"}:terrain:${activeTerrainSource.id}` : "fallback";
+    const rasterUrl = status.mode === "raster-basemap" ? activeRasterBaseMap?.urlTemplate : undefined;
+    if (selectedSource !== previousSource || rasterUrl !== previousRasterUrl) {
+      sourceGeneration += 1; previousSource = selectedSource;
+      previousRasterUrl = rasterUrl;
+      const stop = afterSurfaceSettlement; afterSurfaceSettlement = null; stop?.();
+    }
+    const displayedSources = [
+      ...((tilesRuntime?.tiles.visibleTiles.size ?? 0) > 0 ? ["google"] : []),
+      ...((rasterTilesRuntime?.getMetrics().visibleTiles ?? 0) > 0 ? ["raster"] : []),
+    ];
+    const google = tilesRuntime?.getLoadingState(), raster = rasterTilesRuntime?.getLoadingDiagnostics?.();
+    // These are workload diagnostics only. Local ready always requires hits.
+    const loading = !disposed && (startupHeld || Boolean(google && google.queued + google.downloading + google.parsing
+      + google.waitingToParse + google.preparingChildren > 0) || Boolean(raster && raster.activeElevationRequests
+      + raster.queuedElevationRequests + raster.pendingTiles > 0));
+    return { revision: displayedRevision, sourceGeneration, selectedSource, displayedSources,
+      loading, paused: requestedRenderPause, simulationRunning: simMode ? simRunning : null,
+      // Keep legacy status/debug diagnostics intact. The new loggable local
+      // observation must not carry request URL credentials, signed paths,
+      // query tokens or fragments from provider error text.
+      suspended: mapsSuspended,
+      error: status.lastError?.replace(/(?:[a-z][a-z\d+.-]*:)?\/\/[^\s)"'<>]+/gi, "[provider URL]") ?? null };
+  };
   const surface = createSurfaceQuery(scene, () => worldRoot, isMapSurface,
-    () => status.mode === "google-tiles" ? tilesRuntime?.getRevision() ?? 0 : rasterTilesRuntime?.getRevision() ?? 0,
-    (lat, lon) => status.mode === "raster-basemap" ? rasterTilesRuntime?.sample(lat, lon) : undefined);
+    () => readCurrentSurfaceState().revision,
+    (lat, lon) => {
+      if (status.mode !== "raster-basemap" || !rasterTilesRuntime) return undefined;
+      const hit = rasterTilesRuntime.sample(lat, lon);
+      if (hit) return { ...hit, revision: hit.revision === rasterTilesRuntime.getRevision() ? readCurrentSurfaceState().revision : -1 };
+      // A source transition can still display outgoing Google triangles. Query
+      // those real triangles until the ordinary adoption path retires them.
+      return (tilesRuntime?.tiles.visibleTiles.size ?? 0) > 0 ? undefined : null;
+    });
+  const displayedSurface = createCurrentDisplayedSurface(surface, readCurrentSurfaceState);
+  refreshCurrentSurface = () => { readCurrentSurfaceState(); displayedSurface.refresh(); };
+  authority.own(() => { refreshCurrentSurface = () => {}; displayedSurface.dispose(); });
 
   function prepareTerrain(request: TerrainPreparationOptions): Promise<TerrainPreparationResult> {
     if (disposed) return Promise.reject(platform.abortError("Globe runtime destroyed."));
@@ -1658,13 +1754,17 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
     const current = simViewState ?? { latDeg: DEFAULT_CAMERA_LAT_DEG, lonDeg: DEFAULT_CAMERA_LON_DEG, headingDeg: 0, pitchDeg: 0, zoomMeters: DEFAULT_CAMERA_ALTITUDE_METERS };
     simViewState = { ...current, ...partial }; rasterTilesRuntime?.update();
   };
-  const setExternalRunning = (running: boolean): void => { if (!simMode || disposed || simRunning === running) return; simRunning = running; scheduler.requestRender(); };
+  const setExternalRunning = (running: boolean): void => {
+    if (!simMode || disposed || simRunning === running) return;
+    simRunning = running; refreshCurrentSurface(); scheduler.requestRender();
+  };
   const setExternalFrameCallback = (callback: ((deltaSeconds: number) => void) | null): void => { if (!disposed) simTick = callback; };
   return {
     prepareFrame, afterFrame, isPreparingFrame: () => preparingFrame,
     shouldKeepRendering: () => !disposed && (simRunning || (inertialCameraController?.isActive() ?? false) || navigationCamera.isFovReturning()),
     setExternalViewState, setExternalRunning, setExternalFrameCallback,
     surface,
+    displayedSurface,
     prepareTerrain,
     engine: renderer.engine,
     scene,
@@ -1753,7 +1853,8 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
     },
     setRasterBaseMap(source): void {
       if (disposed) return;
-      if (activeRasterBaseMap?.id === source.id && status.mode === "raster-basemap") return;
+      if (activeRasterBaseMap?.id === source.id && activeRasterBaseMap.version === source.version
+        && activeRasterBaseMap.urlTemplate === source.urlTemplate && status.mode === "raster-basemap") return;
       activeRasterBaseMap = source;
       enableRasterBaseMapMode(null);
     },
@@ -1794,7 +1895,10 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
       scheduler.endContinuous();
     },
     setPaused(paused: boolean): void {
+      if (disposed) return;
+      requestedRenderPause = paused;
       scheduler.setPaused(paused);
+      refreshCurrentSurface();
     },
     isRendering(): boolean {
       return scheduler.isActive();
