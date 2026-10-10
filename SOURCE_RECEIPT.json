@@ -1775,8 +1775,8 @@
   "policySentence": "You cannot have AI as a co-author, or your contributions will be rejected.",
   "verifiedAtUtc": "2026-10-10T03:33:15.824576+00:00",
   "currentSourceManifest": {
-    "evidenceId": "engine-current-source-files.json",
-    "sha256": "a23894e328f89e99cb28e3e5a77f57a09281913ee7ca9654c8059da30aa2f8c8",
+    "evidenceId": "engine-source-fixture-correction.json",
+    "sha256": "1670ae3aff12509a324ea543baf946883b56503d80c8912c45b8f403157dcf83",
     "fileCount": 343,
     "scope": "Portable source seal; exact checked source/archive/export revision supplied by external delivery descriptor."
   },
@@ -1816,6 +1816,11 @@
     },
     "finishedCi": "Pending producer; exact outcome retained in external delivery.",
     "installedPublicFixture": "fixtures/raster-texture-contract-consumer.mjs",
-    "browserQualification": "Pending actual new App composition/build/browser; CPU native doubles are not GPU evidence."
+    "browserQualification": "Pending actual new App composition/build/browser; CPU native doubles are not GPU evidence.",
+    "fixtureCorrection": {
+      "cause": "Installed fixture initially supplied a bundled argument where public acquire accepts file and request separately. Runtime admission passed; failed consumer retained.",
+      "correctedPublicFixture": "PASS with actual installed Engine and public guards; complete successor consumer follows.",
+      "atUtc": "2026-10-10T16:51:35.109968+00:00"
+    }
   }
 }

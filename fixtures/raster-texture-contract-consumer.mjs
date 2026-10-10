@@ -82,9 +82,9 @@ for (const imagery of [undefined, 'legacy']) {
   });
   try {
     const signal = new AbortController().signal;
-    const texture = await acquire({ file: { url: 'https://fixture.invalid/misleading.jpg', width: 2, height: 1 }, declaredBytes: 0, priority: 1, signal });
+    const texture = await acquire({ url: 'https://fixture.invalid/misleading.jpg', width: 2, height: 1 }, { declaredBytes: 0, priority: 1, signal });
     texture.dispose(); assert.equal(transfers, 1); assert.deepEqual(f.broker.pools.live(), []);
-    await assert.rejects(acquire({ file: { url: 'https://fixture.invalid/explicit', mimeType: 'image/jpeg', width: 2, height: 1 }, declaredBytes: 0, priority: 1, signal }));
+    await assert.rejects(acquire({ url: 'https://fixture.invalid/explicit', mimeType: 'image/jpeg', width: 2, height: 1 }, { declaredBytes: 0, priority: 1, signal }));
     assert.equal(transfers, 1); assert.deepEqual(f.broker.pools.live(), []);
   } finally { f.dispose(); }
 }
