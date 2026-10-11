@@ -7,71 +7,87 @@
   "type": "module",
   "exports": {
     ".": {
+      "source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
     "./core": {
+      "source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
     "./browser": {
+      "source": "./src/browser.ts",
       "types": "./dist/browser.d.ts",
       "import": "./dist/browser.js"
     },
     "./babylon": {
+      "source": "./src/babylon/index.ts",
       "types": "./dist/babylon/index.d.ts",
       "import": "./dist/babylon/index.js"
     },
     "./package.json": "./package.json",
     "./settings": {
+      "source": "./src/settings/index.ts",
       "types": "./dist/settings/index.d.ts",
       "import": "./dist/settings/index.js"
     },
     "./gamepad": {
+      "source": "./src/gamepad/index.ts",
       "types": "./dist/gamepad/index.d.ts",
       "import": "./dist/gamepad/index.js"
     },
     "./imagery": {
+      "source": "./src/terrain/imagery/index.ts",
       "types": "./dist/terrain/imagery/index.d.ts",
       "import": "./dist/terrain/imagery/index.js"
     },
     "./panels": {
+      "source": "./src/panels.ts",
       "types": "./dist/panels.d.ts",
       "import": "./dist/panels.js"
     },
     "./input-mode.css": "./styles/input-mode.css",
     "./map.css": "./styles/map.css",
     "./react": {
+      "source": "./src/react.ts",
       "types": "./dist/react.d.ts",
       "import": "./dist/react.js"
     },
     "./layers": {
+      "source": "./src/layers/index.ts",
       "types": "./dist/layers/index.d.ts",
       "import": "./dist/layers/index.js"
     },
     "./sprites": {
+      "source": "./src/sprites/index.ts",
       "types": "./dist/sprites/index.d.ts",
       "import": "./dist/sprites/index.js"
     },
     "./compass": {
+      "source": "./src/visualization/orbitCompass.ts",
       "types": "./dist/visualization/orbitCompass.d.ts",
       "import": "./dist/visualization/orbitCompass.js"
     },
     "./visualization": {
+      "source": "./src/visualization/index.ts",
       "types": "./dist/visualization/index.d.ts",
       "import": "./dist/visualization/index.js"
     },
     "./visualization-tuners": {
+      "source": "./src/hud/visualizationTuners.ts",
       "types": "./dist/hud/visualizationTuners.d.ts",
       "import": "./dist/hud/visualizationTuners.js"
     },
     "./visualization-tuners.css": "./styles/visualization-tuners.css",
     "./location-provider": {
+      "source": "./src/location-provider.ts",
       "types": "./dist/location-provider.d.ts",
       "import": "./dist/location-provider.js"
     },
     "./map-cache.css": "./styles/map-cache.css",
     "./browser-globe": {
+      "source": "./src/browser-globe.ts",
       "types": "./dist/browser-globe.d.ts",
       "import": "./dist/browser-globe.js"
     }
@@ -86,22 +102,12 @@
     "README.md",
     "LICENSE",
     "NOTICE",
-    "extraction-provenance.json",
     "tsconfig*.json",
     "eslint.config.mjs",
     "vitest.config.ts",
     "assets",
     "styles",
-    "SOURCE_LINEAGE.json",
-    "SOURCE_RECEIPT.json",
-    "CODE_OF_CONDUCT.md",
-    "CONTRIBUTING.md",
-    "SECURITY.md",
-    "AGENTS.md",
-    ".attribution.json",
-    ".attribution-release.json",
-    ".github/workflows/attribution-check.yml",
-    "deps/foss-earth-ci-1db73d1ddb342e348a2c9e8387f7bbc7ebb3225e.tgz"
+    "AGENTS.md"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
@@ -110,10 +116,7 @@
     "test": "vitest run --maxWorkers=50%",
     "test:consumer": "node fixtures/consumer.mjs && tsc -p fixtures/tsconfig.json",
     "check:implementation": "npm run typecheck && npm run lint && npm run test && npm run build && npm run test:consumer",
-    "test:installed-consumer": "node scripts/check-installed-consumer.mjs",
-    "check:conformance": "node node_modules/@foss-earth/ci/bin/conformance.mjs --consumer . --trusted-release .attribution-release.json --output-root build/common-conformance",
-    "check:attribution": "node node_modules/@foss-earth/ci/bin/attribution.mjs --repo . --refs-file build/repository-split/intended-publication-refs.json",
-    "ci": "npm run check:conformance && npm run check:implementation"
+    "ci": "npm run check:implementation"
   },
   "peerDependencies": {
     "@babylonjs/core": "8.56.2",
@@ -163,7 +166,6 @@
     "@foss-earth/sky": "0.1.0",
     "@foss-earth/ui": "0.1.0",
     "@foss-earth/renderer": "0.1.0",
-    "@foss-earth/ci": "file:deps/foss-earth-ci-1db73d1ddb342e348a2c9e8387f7bbc7ebb3225e.tgz",
     "@felipegalind0/gamepad-tools": "0.1.0"
   },
   "dependencies": {

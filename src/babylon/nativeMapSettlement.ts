@@ -1,9 +1,11 @@
 /** Actual owner jobs, including inner work whose queue result was cancelled early. */
 export class NativeMapStartupError extends AggregateError {
-  constructor(failures: readonly unknown[], message: string, readonly whenSettled: () => Promise<void>) {
+  readonly whenSettled: () => Promise<void>;
+  constructor(failures: readonly unknown[], message: string, whenSettled: () => Promise<void>) {
     const causes = failures.flatMap(error => error instanceof AggregateError ? error.errors as unknown[] : [error]);
     const details = causes.map(error => error instanceof Error ? error.message : String(error)).filter(Boolean).join("; ");
     super(causes, details ? `${message} ${details}` : message);
+    this.whenSettled = whenSettled;
     this.name = "NativeMapStartupError";
   }
 }

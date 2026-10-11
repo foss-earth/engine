@@ -95,7 +95,10 @@ export class CameraController {
    */
   private zoomFloorMeters: number | null = null;
 
-  constructor(camera: GeospatialCamera, private readonly ports: CameraControllerPorts) {
+  private readonly ports: CameraControllerPorts;
+
+  constructor(camera: GeospatialCamera, ports: CameraControllerPorts) {
+    this.ports = ports;
     this.camera = camera;
   }
 
