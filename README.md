@@ -1,27 +1,51 @@
 # @foss-earth/engine
 
-Source draft of globe coordinates, camera/input, navigation, terrain/maps, layers/POI/sprites/orbit compass and Map/Location/Controls panels, extracted from Earth `90e23b3ee96f53ec5900afc5991a21fffa58649d`. The full `createGlobeRuntime` source borrows renderer/lifecycle/scheduler/profile/Sky and requires explicit host terrain policy; see [runtime adoption](docs/globe-runtime.md). See [public contracts](docs/public-contracts.md), [host adoption and compatibility](docs/adoption.md) and [source status](docs/source-status.md). No checks, emitted declarations, artifact, candidate commit, admission or consumer adoption have been issued for this draft.
+Globe engine for FOSS Earth: geographic coordinates, camera and input, navigation, terrain and maps, layers, points of interest, sprites, the orbit compass, and the Map, Location and Controls panels.
 
-The host supplies the renderer, scene, scheduler, settings, clock and feature contributions. Root/core and imagery imports are pure. Browser, Babylon, settings, gamepad, panels and React have explicit optional entries. The pure `./visualization` entry exposes source defaults, point math, migrations and horizon culling; optional layer/sprite/compass/tuner entries require host ports. See the [visualization and bounded-map contracts](docs/visualization-contracts.md). A displayed geometry coordinate height does not establish a physical terrain datum conversion.
+The host supplies the renderer, scene, scheduler, settings, clock and feature contributions. `createGlobeRuntime` borrows the renderer, lifecycle, scheduler, profiler and sky from the host and needs an explicit host terrain policy. See [globe runtime](docs/globe-runtime.md).
 
-The optional [existing Location provider/cache](docs/location-provider.md) preserves its original persisted records, aliases and Interface → search settings with injected IO/cancellation/clock/timers/storage/settings and airport/host contributions. Map/Controls supply their Document to the current UI factory contract. The nine [retained immutable Engine specifications](docs/retained-specifications.md) preserve source prose and proposal limits.
+## Entries
 
-The [React map cache panel](docs/map-cache-presentation.md) borrows the existing Engine cache and host pulse/visibility/clock, shares the named 40-row/two-second policy with the DOM section, and reports actual storage limits. Engine `./map-cache.css` retains original React feature rules while generic cache-section styles remain UI-owned. All new causal cases and installed public fixtures are prepared and unrun.
+Root, `/core` and `/imagery` are pure. Everything else is an explicit optional entry.
 
-After a coordinator-granted slot, `npm run check:implementation` retains incremental TypeScript/lint caches and caps tests at 50%. Record every run under `build/`. The separate [installed-consumer harness](docs/installed-consumer.md) requires complete exact archive name/version/hash/size/location closure, sanitizes subprocess IO/temp authority and guards runtime/declaration resolution inside its isolated workspace. Its inputs and checks remain pending. Source preparation does not authorize a check, server, benchmark or native/GPU build.
+| Export | Contents |
+| --- | --- |
+| `@foss-earth/engine` and `/core` | Pure geographic and camera math, layer contracts, navigation. |
+| `/browser`, `/browser-globe` | Browser bindings, including the full globe mouse, wheel and touch input (Safari included). |
+| `/babylon` | Babylon integration (optional peer `@babylonjs/core`). |
+| `/settings` | Engine settings and migrations. |
+| `/gamepad` | Gamepad host adapter (optional peer `@felipegalind0/gamepad-tools`). |
+| `/imagery` | Legacy and atlas imagery selection, residency and material binding. |
+| `/panels` | Map, Location and Controls panels, built through the UI package's factories. |
+| `/react` | React components, including the map cache panel (optional peer `react`). |
+| `/layers`, `/sprites`, `/compass` | Layer, sprite and orbit compass host adapters. Need host ports. |
+| `/visualization` | Pure source defaults, point math, migrations and horizon culling. |
+| `/visualization-tuners` | Visualization tuner HUD. |
+| `/location-provider` | Location provider and cache. |
+| `/input-mode.css`, `/map.css`, `/map-cache.css`, `/visualization-tuners.css` | Engine-owned styles. Generic cache-section styles belong to [`@foss-earth/ui`](https://github.com/foss-earth/ui). |
 
-Every destination must consume the same pinned `foss-earth/ci` attribution component and shared conformance tests, including documentation-only metadata admission. The primary has staged the shared caller at revision `9e046dd482e0229dc7c7b2d71b079d5905664656`, artifact SHA256 `450ede699f55f9b9c78146eadb73de7c6297e56553e7d7f9e5b164786a7beb24`, policy SHA256 `9ca88bf5861685e22e65e5f39fa65b05faaf9c218875fccbecce1b9f2dca5bd3`. The workflow has no path filter. Engine conformance, installation and actual remote admission verification remain pending; a staged caller is not a passing result.
+Other optional peers: `@foss-earth/renderer`, `@foss-earth/ui`, `@foss-earth/sky` and `3d-tiles-renderer`. Terrain and imagery code uses [`@foss-earth/images`](https://github.com/foss-earth/images). Terrain covers sources, grids, download, selection, refinement and displayed-height queries, plus Google and raster streaming runtimes.
 
+A displayed geometry coordinate height does not establish a physical terrain datum conversion.
 
-Current source-only renewal: [ordinary frame preparation, async raster handles and independently attempted owned cleanup](docs/async-raster-and-cleanup.md). Existing immutable originals, CI9e scaffold, prior archives and evidence remain preserved. Causal fixtures and public installed consumers are prepared, not executed or adopted.
+## Documents
 
-The source-only [bounded Atlas page producer](docs/bounded-atlas-producer.md) uses the same public Images acquisition/readback broker and returns explicitly held pages. Managed pages require the optional actual owned whole-batch pathway below; legacy void stores are refused before allocation. No current checked artifact/application adoption or original worker fidelity is claimed.
+- [Public contracts](docs/public-contracts.md) and [host adoption and compatibility](docs/adoption.md).
+- [Visualization and bounded-map contracts](docs/visualization-contracts.md).
+- [Location provider and cache](docs/location-provider.md). It keeps the original persisted records, aliases and Interface search settings, with injected IO, cancellation, clock, timers, storage and settings, and airport and host contributions. The Map and Controls panels pass their `Document` to the UI factory contract.
+- [Map cache panel](docs/map-cache-presentation.md). The React panel borrows the engine's map cache and the host's pulse, visibility and clock, shares the named 40-row, two-second policy with the DOM section, and reports actual storage limits.
+- [Frame preparation, async raster handles and owned cleanup](docs/async-raster-and-cleanup.md).
+- [Bounded atlas page producer](docs/bounded-atlas-producer.md). It uses the public images acquisition and readback broker and returns explicitly held pages. Managed pages need the optional owned atlas runtime below; legacy void stores are refused before allocation.
+- [Managed atlas runtime](docs/owned-atlas-runtime.md). It uses the renderer's whole-batch admission, completion and retirement with explicit GPU, table and copy grants from the same broker. Transactional tables reserve two physical blocks per logical patch inside the GPU budget.
+- [Retained engine specifications](docs/retained-specifications.md): nine specifications kept with their proposal limits.
 
-The optional [managed Atlas runtime](docs/owned-atlas-runtime.md) source now
-consumes actual Renderer whole-batch admission/completion/retirement with explicit
-same-broker GPU, table and copy grants. Transactional tables reserve two physical
-blocks per logical patch inside the existing GPU budget. Source and causal/public
-fixtures remain UNRUN; actual artifact and current application adoption are pending.
+## Assets
+
+`assets/` contains the geoid grids (`geoid/`, EGM2008 at 15, 30 and 60 arc-minutes, with `provenance.json`), gesture icons (`icons/`) and map provider logos (`providers/`: CARTO and OpenStreetMap). Map data, terrain data, imagery services and logos have their own licenses and terms; see `NOTICE` and `assets/geoid/provenance.json`.
+
+## Development
+
+`@foss-earth/engine` depends on other `@foss-earth/*` libraries (images, renderer, ui and sky) and names them by versions that are not published. Its own `npm install`, tests and build therefore do not work on their own yet. Develop it through the app, which uses libraries straight from their checkouts: see [local source](https://github.com/foss-earth/app#local-source).
 
 ## Project policies
 
