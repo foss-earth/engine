@@ -39,3 +39,4 @@ export * from "./camera/cameraDefaults.js";
 export * from "./input/globeIntentMotion.js";
 export * from "./visualization/index.js";
 export * from "./surface/terrainPreparation.js";
+export * from "./navigation/globeOverview.js";

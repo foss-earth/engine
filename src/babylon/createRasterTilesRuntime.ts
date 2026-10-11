@@ -1,3 +1,4 @@
+import { createNativeMapSettlement } from "./nativeMapSettlement.js";
 import type { createMapTextureLoader } from "./imagery/mapTextureLoader.js";
 import type { BoundedMapTextureRequest, LoadedMapTexture } from "./imagery/boundedMapTextureLoader.js";
 import type { HeaderImageRequest } from "@foss-earth/images/browser";
@@ -176,6 +177,7 @@ export interface RasterTilesRuntime {
   reportFrame(now: number, frameMs: number, suspended: boolean): void;
   dispose(): void;
 }
+export interface SettledRasterTilesRuntime extends RasterTilesRuntime { whenSettled(): Promise<void> }
 
 interface TileCoord {
   z: number;
@@ -239,7 +241,8 @@ function createTileRecord(
   loadTerrain: (tile: TileCoord, progress: (grid: TerrainGrid) => void) => Promise<TerrainGrid>,
   onChanged: (record: RasterTileRecord) => void,
   onRetryScheduled: (at: number) => void,
-  imagery: ImageryRuntime | null = null,
+  imagery: ImageryRuntime | null,
+  work: ReturnType<typeof createNativeMapSettlement>,
 ): RasterTileRecord {
   const { scene } = options;
   const key = tileKey(tile);
@@ -302,7 +305,7 @@ function createTileRecord(
     record.terrainGeneration = generation;
     record.terrainRetryAt = Infinity;
     const terrain = options.getSurfaceHeightMeters ? Promise.resolve(undefined) : nextLoadTerrain(tile, grid => applyGrid(grid, generation));
-    void terrain.then(grid => {
+    void work.track(terrain.then(grid => {
       applyGrid(grid, generation);
       if (record.mesh.isDisposed() || generation !== record.terrainGeneration) return;
       record.terrainFailures = 0;
@@ -322,7 +325,7 @@ function createTileRecord(
         terrainReady = true;
         finish();
       }
-    });
+    }));
   };
   record.replaceTerrain = (nextLoadTerrain, generation) => requestTerrain(nextLoadTerrain, generation, false);
   requestTerrain(loadTerrain, 0, true);
@@ -345,7 +348,7 @@ function createTileRecord(
       record.cancelPendingImagery = cancel;
       const current = (): boolean => !cancelled && !record.disposed && !record.mesh.isDisposed()
         && generation === record.imageryGeneration && !controller?.signal.aborted;
-      void (async () => {
+      void work.track((async () => {
         let incoming: LoadedMapTexture | undefined, published = false;
         const failures: unknown[] = [];
         try {
@@ -400,13 +403,17 @@ function createTileRecord(
       })().catch(error => {
         // Every resource has already been retired. A throwing supplied error
         // observer must not create an unhandled rejection or retry publication.
+        work.recordCleanupFailure(error);
         try { options.log.warn("Map acquisition observer failed.", error); } catch { /* supplied diagnostic failure */ }
-      });
+      }));
       return;
     }
     let texture: Texture | null = null;
-    texture = options.loadMapTexture!(url, scene,
+    let finishNative!: () => void;
+    work.track(new Promise<void>(resolve => { finishNative = resolve; }));
+    try { texture = options.loadMapTexture!(url, scene,
       () => {
+        try {
         if (!texture || record.mesh.isDisposed() || generation !== record.imageryGeneration) {
           texture?.dispose();
           return;
@@ -423,8 +430,10 @@ function createTileRecord(
           options.requestRender?.();
         }
         options.onDebugEvent?.("imagery-request-success", { key, source: nextSource.id, generation });
+        } catch (error) { work.recordCleanupFailure(error); throw error; } finally { finishNative(); }
       },
       (message, exception) => {
+        try {
         if (record.mesh.isDisposed() || generation !== record.imageryGeneration) return;
         const detail = exception instanceof Error ? exception.message : String(message ?? "unknown texture load error");
         options.onDebugEvent?.("imagery-request-error", { key, source: nextSource.id, generation, url, error: detail });
@@ -434,9 +443,10 @@ function createTileRecord(
           onSettled(record);
         }
         // During a hot swap the old texture remains visible after a failure.
+        } catch (error) { work.recordCleanupFailure(error); throw error; } finally { finishNative(); }
       },
       (bytes) => options.onDownloadBytes?.(bytes),
-    );
+    ); } catch (error) { finishNative(); throw error; }
     texture.wrapU = Texture.CLAMP_ADDRESSMODE;
     texture.wrapV = Texture.CLAMP_ADDRESSMODE;
     texture.anisotropicFilteringLevel = options.anisotropy?.() ?? 1;
@@ -504,7 +514,8 @@ const TERRAIN_SELECTION_IDS = new Set([
   "map.terrain.coarsenBelow",
 ]);
 
-export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): RasterTilesRuntime {
+export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): SettledRasterTilesRuntime {
+  const work = createNativeMapSettlement();
   const hasTileAcquisition = Boolean(options.loadMapTexture || options.asyncMapTextures);
   if (options.imagery !== "atlas" && !hasTileAcquisition) throw new Error("Raster maps need an explicit legacy or async texture acquisition port.");
   const capture = options.performanceCapture;
@@ -858,7 +869,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
       heightsArrived = true;
       options.requestRender?.();
       options.onSurfaceChange?.("loading");
-    }, scheduleRetry, imageryRuntime);
+    }, scheduleRetry, imageryRuntime, work);
     cache.set(key, record);
   }
 
@@ -1356,8 +1367,10 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
       capture.counters.sampleCpuMs += options.nowMs() - started;
       return hit;
     },
+    whenSettled: () => work.whenSettled(),
     dispose(): void {
       if (disposed) return;
+      work.close();
       disposed = true;
       revision += 1;
       const records = [...cache.values()], retired = [...retiredMeshes], ownedImagery = imageryRuntime, stopRetry = retryTimer;
@@ -1374,13 +1387,13 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Ra
       neededKeys = new Set();
       loadingCount = 0;
       loadCycleActive = false;
-      finishOwnedCleanup([
+      try { finishOwnedCleanup([
         unsubscribeSettings, () => terrain.dispose(), () => ownedImagery?.dispose(),
         ...records.map(record => () => disposeTile(record)),
         ...retired.map(mesh => () => mesh.dispose()),
         () => surfaceSampler.setCoverage([]), () => stopRetry?.(),
         () => options.onSurfaceChange?.("disposed"),
-      ], "Raster runtime cleanup failed.");
+      ], "Raster runtime cleanup failed."); } catch (error) { work.recordCleanupFailure(error); throw error; }
     },
   };
 }

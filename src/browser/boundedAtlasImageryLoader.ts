@@ -1,6 +1,6 @@
 import type { AtlasImageryWorkerBridge } from "./atlasImageryWorkerBridge.js";
 import { imageDimensionMismatch, type ImageKind, type ImageOperationScope, type ImageSessionBroker, type Reservation } from "@foss-earth/images";
-import { ImageHttpStatusError, readbackDecodedImage, type CachedEncodedImageFile, type HeaderInferredImageFileService,
+import { ImageHttpStatusError, RgbaSurfaceCreationError, readbackDecodedImage, type CachedEncodedImageFile, type HeaderInferredImageFileService,
   type HeldDecodedImage, type HeldRgbaImage, type RgbaReadbackSurface } from "@foss-earth/images/browser";
 import { IMAGERY_PAGE_SIZE, pageUploadBytes } from "../terrain/imagery/imageryAtlasLayout.js";
 import { isBlankImage, preparePages } from "../terrain/imagery/imageryPagePreparation.js";
@@ -29,6 +29,10 @@ export interface BrowserImageryLoader extends ImageryLoader<AbortSignal> {
   readonly offThread: boolean;
   /** Owns operation scopes only; the broker, files, cache and realm are borrowed. */
   dispose(): void;
+}
+export interface SettledBrowserImageryLoader extends BrowserImageryLoader {
+  /** Includes late native decode/readback and retained prepared-page inputs. */
+  whenSettled(): Promise<void>;
 }
 
 function attempt(action: () => void, failures: unknown[]): void {
@@ -67,15 +71,47 @@ function classify(error: unknown): unknown {
  * Returned held pages require a proven owned-upload store; legacy void uploads
  * cannot establish native input retirement and are explicitly refused.
  */
-export function createBoundedAtlasImageryLoader(options: BoundedAtlasImageryLoaderOptions): BrowserImageryLoader {
+export function createBoundedAtlasImageryLoader(options: BoundedAtlasImageryLoaderOptions): SettledBrowserImageryLoader {
   if (typeof options.files.obtainInferred !== "function") throw new Error("Bounded Atlas imagery requires header-inferred common acquisition.");
   if (options.worker && !options.worker.uses(options.files, options.broker)) throw new Error("Worker imagery must use that bridge's exact common file service.");
   let disposed = false;
   const scopes = new Set<ImageOperationScope>();
+  let operations = 0;
+  const retirementErrors: unknown[] = [];
+  const surfaceProofs = new Set<Promise<void>>();
+  const waiters = new Set<{ resolve(): void; reject(error: unknown): void }>();
+  const notifySettled = (): void => {
+    if (operations || scopes.size || surfaceProofs.size) return;
+    const error = retirementErrors.length ? new AggregateError(retirementErrors, "Atlas imagery retirement failed.") : null;
+    for (const waiter of waiters) { if (error) waiter.reject(error); else waiter.resolve(); }
+    waiters.clear();
+  };
+  const observeSurface = (proof: Promise<void> | undefined): void => {
+    if (!proof || surfaceProofs.has(proof)) return;
+    surfaceProofs.add(proof);
+    void proof.then(() => { surfaceProofs.delete(proof); notifySettled(); }, error => {
+      // Rejection cannot establish that canvas storage was actually released.
+      // Keep the proof pending/charged; the Images owner retains its grant too.
+      retirementErrors.push(error);
+      try { options.onCleanupFailure?.(error); } catch (reporting) { retirementErrors.push(reporting); }
+    });
+  };
+  const createSurface = (width: number, height: number): RgbaReadbackSurface => {
+    try {
+      const surface = options.createSurface(width, height);
+      observeSurface(surface.retired);
+      return surface;
+    } catch (error) {
+      if (error instanceof RgbaSurfaceCreationError) observeSurface(error.retired);
+      throw error;
+    }
+  };
   return {
     get offThread() { return options.worker?.offThread ?? false; },
     async load(url, expected, signal, suppliedPriority): Promise<RetainedPreparedImage> {
       if (disposed) throw new Error("The bounded Atlas imagery loader is disposed.");
+      operations += 1;
+      try {
       signal.throwIfAborted();
       const { width, height } = expected;
       const pageCount = (width / IMAGERY_PAGE_SIZE) * (height / IMAGERY_PAGE_SIZE);
@@ -105,6 +141,8 @@ export function createBoundedAtlasImageryLoader(options: BoundedAtlasImageryLoad
           if (end) attempt(end, deferredFailures);
           attempt(detach, deferredFailures);
           attempt(() => scope.dispose(), deferredFailures);
+          retirementErrors.push(...deferredFailures);
+          notifySettled();
         }
         if (deferredFailures.length) throw failure(deferredFailures.splice(0));
       };
@@ -138,8 +176,11 @@ export function createBoundedAtlasImageryLoader(options: BoundedAtlasImageryLoad
           pages = prepared.pages;
         } else {
           rgba = await readbackDecodedImage({ broker: options.broker, scope, image: decoded, priority, label: url,
-            createSurface: (w, h) => options.createSurface(w, h),
-            onCleanupFailure: options.onCleanupFailure ? error => options.onCleanupFailure?.(error) : undefined });
+            createSurface,
+            onCleanupFailure(error) {
+              retirementErrors.push(error);
+              try { options.onCleanupFailure?.(error); } catch (reporting) { retirementErrors.push(reporting); }
+            } });
           requireCurrent(); endRgba = rgba.retain();
           if (isBlankImage(rgba.data)) throw new ImageryMissingError("Map tile has no data");
           output = scope.reserve("decoded", outputBytes, `${url} prepared Atlas pages`); endOutput = output.retain();
@@ -179,13 +220,17 @@ export function createBoundedAtlasImageryLoader(options: BoundedAtlasImageryLoad
         }
         throw classify(failure(errors));
       }
+      } finally { operations -= 1; notifySettled(); }
     },
     dispose() {
       if (disposed) return;
       disposed = true;
       const failures: unknown[] = [];
       for (const scope of [...scopes]) attempt(() => scope.dispose(), failures);
+      retirementErrors.push(...failures);
+      notifySettled();
       if (failures.length) throw failure(failures);
     },
+    whenSettled() { return new Promise<void>((resolve, reject) => { waiters.add({ resolve, reject }); notifySettled(); }); },
   };
 }

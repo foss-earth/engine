@@ -1,4 +1,147 @@
 /* Engine-owned selectors extracted from committed source. Shared shell styles come from UI/toolbar. */
+.map-source-hud {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+/*
+ * Two halves that each fill the chip to its rounded edge, so a hover lights the
+ * whole half: the provider button (speed, logo, name) and the credit link.
+ */
+.hud-chip.map-source-hud__chip {
+  align-items: stretch;
+  padding: 0;
+}
+
+.map-source-hud__provider {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 9px 0 6px;
+  border: 0;
+  border-radius: 7px 0 0 7px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.map-source-hud__provider .map-download-speed {
+  margin-left: 0;
+}
+
+/* A square mark the size of a letter, as an emoji would sit in the text. */
+.map-source-hud__logo {
+  flex: none;
+  width: 1.25em;
+  height: 1.25em;
+  border-radius: 2px;
+  object-fit: contain;
+}
+
+.map-source-hud__credit {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 6px;
+  border-radius: 0 7px 7px 0;
+  color: rgba(147, 197, 253, 0.92);
+  text-decoration: none;
+}
+
+/* The size of a letter, beside the text it links. */
+.map-source-hud .foss-earth-external-link-icon {
+  flex: none;
+  width: 1.15em;
+  height: 1.15em;
+}
+
+.map-source-hud__provider:hover,
+.map-source-hud__credit:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.map-source-hud__credit:hover {
+  color: rgba(191, 219, 254, 1);
+}
+
+/*
+ * A logo with the provider's name in it, followed by the basemap's own name.
+ * CARTO's letters fill the middle third of its height, so it stands taller
+ * than the text and the chip's padding absorbs it.
+ */
+.map-source-hud__wordmark {
+  display: inline-flex;
+  align-items: center;
+  margin: -5px 0;
+}
+
+.map-source-hud__wordmark img {
+  height: 24px;
+  width: auto;
+}
+
+.map-source-hud__wordmark-on-light,
+:root[data-theme="light"] .map-source-hud__wordmark-on-dark {
+  display: none;
+}
+
+:root[data-theme="light"] .map-source-hud__wordmark-on-light {
+  display: inline;
+}
+
+.map-source-hud__logo[hidden],
+.map-source-hud__credit[hidden],
+.map-source-hud__wordmark[hidden] {
+  display: none;
+}
+
+.map-source-hud__provider:focus-visible,
+.map-source-hud__credit:focus-visible {
+  outline: 2px solid var(--globe-accent, #60a5fa);
+  outline-offset: -2px;
+}
+
+:root[data-theme="light"] .map-source-hud__credit {
+  color: #1d4ed8;
+}
+
+:root[data-theme="light"] .map-source-hud__provider:hover,
+:root[data-theme="light"] .map-source-hud__credit:hover {
+  background: rgba(15, 23, 42, 0.08);
+}
+
+/* Feature-owned sizing; generic right-end placement belongs to Toolbar. */
+.map-source-hud,
+.map-source-hud__chip,
+.map-source-hud__provider {
+  min-width: 0;
+}
+
+.map-source-hud .map-source-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.map-source-hud__credit {
+  flex-shrink: 0;
+}
+
+/* Explicit opt-in: a wider rail above the same provider/attribution chip. */
+.map-source-hud[data-map-hud-layout="expanded"] {
+  flex-direction: column;
+  align-items: stretch;
+  width: 18rem;
+  max-width: 100%;
+}
+
+.map-source-hud[data-map-hud-layout="expanded"] .map-detail-control {
+  flex: none;
+  width: auto;
+  align-self: stretch;
+}
+
 .map-detail-control {
   --map-detail-loaded-colour: var(--globe-accent-bright, #38bdf8);
   --map-detail-loaded-outline: #061422;

@@ -9,8 +9,9 @@ import { createCurrentDisplayedSurface, type CurrentDisplayedSurface, type Curre
 import { resolveTerrainSource, type TerrainSource } from "../terrain/terrainGrid.js";
 import { terrainReadinessSamples } from "../surface/coverageSamples.js";
 import { validateTerrainPreparation, type TerrainPreparationOptions, type TerrainPreparationResult } from "../surface/terrainPreparation.js";
-import { createGoogleTilesRuntime, type GoogleTerrainDetailState, type GoogleTilesRuntime } from "./createTilesRuntime.js";
-import { createRasterTilesRuntime, type RasterDetailFeedback, type RasterTilesRuntime } from "./createRasterTilesRuntime.js";
+import { createGoogleTilesRuntime, type GoogleTerrainDetailState } from "./createTilesRuntime.js";
+import { NativeMapStartupError } from "./nativeMapSettlement.js";
+import { createRasterTilesRuntime, type RasterDetailFeedback } from "./createRasterTilesRuntime.js";
 import { finishOwnedCleanup } from "./ownedCleanup.js";
 import type { ImageryConstraint, ImageryConstraintCause } from "../terrain/imagery/imageryConstraints.js";
 import { DEFAULT_RASTER_IMAGERY } from "../settings/mapRuntimeConfig.js";
@@ -320,6 +321,8 @@ export interface GlobeRuntime {
   sky: Pick<SkyRuntime, "getEnvironment" | "subscribe" | "setGroundLights" | "setGroundLightReceiver">;
   destroy(): void;
 }
+/** Factory guarantee; legacy structural GlobeRuntime ports remain compatible. */
+export interface SettledGlobeRuntime extends GlobeRuntime { whenSettled(): Promise<void> }
 
 
 /** Source method/status compatibility types; construction now requires explicit borrowed owner ports. */
@@ -374,16 +377,17 @@ function createFallbackExperience(scene: Scene, worldRoot: TransformNode | null,
   }
 }
 
-export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRuntimeOptions): GlobeRuntime {
+export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRuntimeOptions): SettledGlobeRuntime {
   const { renderer, scene, settings, clock, platform } = options;
   if (scene.getEngine() !== renderer.engine) throw new Error("Globe scene and renderer must borrow the same host device.");
   const authority = createBorrowedRuntimeAuthority(options.scheduler);
   const scheduler = authority.scheduler;
   let disposed = false;
+  const mapDrains = new Set<Promise<void>>(), retirementErrors: unknown[] = [];
   const previousActiveCamera = scene.activeCamera;
   try {
   const savedGoogleKey = settings.get("map.source.googleKey");
-  const normalizedApiKey = options.googleApiKey?.trim() || (typeof savedGoogleKey === "string" ? savedGoogleKey.trim() : "");
+  let normalizedApiKey = options.googleApiKey?.trim() || (typeof savedGoogleKey === "string" ? savedGoogleKey.trim() : "");
   const mapDebugEnabled = options.observations?.mapDebug === true;
   const mapDebugEvents: MapDebugEvent[] = [];
   const recordMapDebugEvent = (event: string, detail?: Record<string, unknown>): void => {
@@ -421,11 +425,11 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
 
   const downloadMeter = createMapDownloadMeter({ nowMs: clock.nowMs, after: (ms, callback) => clock.after(callback, ms) });
   authority.own(() => downloadMeter.destroy());
-  let tilesRuntime: GoogleTilesRuntime | null = null;
+  let tilesRuntime: ReturnType<typeof createGoogleTilesRuntime> | null = null;
   let googleTerrainDetailTarget: number | null = null;
   const anchorForRefinement = (value: unknown): GoogleTerrainDetailAnchor => (value === "focus" ? "focus-point" : "camera");
   let googleTerrainDetailAnchor: GoogleTerrainDetailAnchor = anchorForRefinement(settings.get("map.focus.refineFrom"));
-  let rasterTilesRuntime: RasterTilesRuntime | null = null;
+  let rasterTilesRuntime: ReturnType<typeof createRasterTilesRuntime> | null = null;
   let googleTilesStartupWatchdog: (() => void) | null = null;
   let fallbackExperienceCreated = false;
   let fallbackExperience: FallbackExperience | null = null;
@@ -477,8 +481,28 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
     }
   };
   authority.own(() => { const stop = afterSurfaceSettlement; afterSurfaceSettlement = null; stop?.(); });
-  authority.own(() => { tilesRuntime?.dispose(); tilesRuntime = null; });
-  authority.own(() => { rasterTilesRuntime?.dispose(); rasterTilesRuntime = null; });
+  const rememberMapDrain = (drain: Promise<void>): void => {
+    mapDrains.add(drain);
+    void drain.then(() => mapDrains.delete(drain), error => { mapDrains.delete(drain); retirementErrors.push(error); });
+  };
+  const startMap = <T>(create: () => T): T => {
+    try { return create(); }
+    catch (error) {
+      // A hot source/key switch can recover into another map before this
+      // partially created parser finishes. Its error still owns the real drain.
+      if (error instanceof NativeMapStartupError) rememberMapDrain(error.whenSettled());
+      throw error;
+    }
+  };
+  const retireMap = (owner: { dispose(): void; whenSettled(): Promise<void> } | null): void => {
+    if (!owner) return;
+    let cleanupError: unknown;
+    try { owner.dispose(); } catch (error) { cleanupError = error; retirementErrors.push(error); }
+    rememberMapDrain(owner.whenSettled());
+    if (cleanupError !== undefined) throw cleanupError;
+  };
+  authority.own(() => { retireMap(tilesRuntime); tilesRuntime = null; });
+  authority.own(() => { retireMap(rasterTilesRuntime); rasterTilesRuntime = null; });
   authority.own(() => { inputController?.destroy(); inputController = null; });
   authority.own(() => { inertialCameraController?.cancel(); inertialCameraController = null; });
   authority.own(() => {
@@ -848,7 +872,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
     hideFallbackExperience();
     if (rasterTilesRuntime) {
       recordMapDebugEvent("raster-runtime-dispose");
-      rasterTilesRuntime.dispose();
+      retireMap(rasterTilesRuntime);
       rasterTilesRuntime = null;
     }
     clearGoogleWatchdog();
@@ -861,7 +885,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
     hideFallbackExperience();
     if (tilesRuntime) {
       recordMapDebugEvent("google-runtime-dispose");
-      tilesRuntime.dispose();
+      retireMap(tilesRuntime);
       tilesRuntime = null;
       googleLight?.dispose();
       googleLight = null;
@@ -889,10 +913,10 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
     clearGoogleWatchdog();
 
     if (tilesRuntime) recordMapDebugEvent("google-runtime-dispose");
-    tilesRuntime?.dispose();
+    retireMap(tilesRuntime);
     tilesRuntime = null;
     if (rasterTilesRuntime) recordMapDebugEvent("raster-runtime-dispose");
-    rasterTilesRuntime?.dispose();
+    retireMap(rasterTilesRuntime);
     rasterTilesRuntime = null;
 
     if (googleLight) {
@@ -927,7 +951,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
     // callbacks that can later change the selected raster mode.
     if (!retainGoogleCoverage) {
       if (tilesRuntime) recordMapDebugEvent("google-runtime-dispose");
-      tilesRuntime?.dispose();
+      retireMap(tilesRuntime);
       tilesRuntime = null;
       googleLight?.dispose();
       googleLight = null;
@@ -948,8 +972,8 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
 
     if (recreate || !rasterTilesRuntime) {
       if (rasterTilesRuntime) recordMapDebugEvent("raster-runtime-dispose");
-      rasterTilesRuntime?.dispose();
-      rasterTilesRuntime = createRasterTilesRuntime({
+      retireMap(rasterTilesRuntime);
+      rasterTilesRuntime = startMap(() => createRasterTilesRuntime({
         ...options.mapPorts.raster, nowMs: clock.nowMs, after: clock.after,
         onDownloadBytes: downloadMeter.addBytes,
         scene,
@@ -1001,7 +1025,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
           status.message = `${activeRasterBaseMap?.label ?? "Raster"} reported tile load errors.`;
           emitStatus();
         },
-      });
+      }));
     } else if (rasterTilesRuntime.source.id !== rasterBaseMap.id || rasterTilesRuntime.source.version !== rasterBaseMap.version
       || rasterTilesRuntime.source.urlTemplate !== keyedSource(rasterBaseMap).urlTemplate) {
       rasterTilesRuntime.setSource(keyedSource(rasterBaseMap));
@@ -1035,15 +1059,15 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
     // Preserve the last usable raster surface until Google has visible tiles.
     if (!retainRasterCoverage) {
       if (rasterTilesRuntime) recordMapDebugEvent("raster-runtime-dispose");
-      rasterTilesRuntime?.dispose();
+      retireMap(rasterTilesRuntime);
       rasterTilesRuntime = null;
     }
-    if (!hasGoogleApiKey) {
+    if (!normalizedApiKey) {
       if (activeRasterBaseMap) enableRasterBaseMapMode("Google 3D Tiles need an API key.");
       else enableFallbackMode("Google 3D Tiles need an API key.");
       return;
     }
-    tilesRuntime?.dispose();
+    retireMap(tilesRuntime);
     tilesRuntime = null;
     googleLight?.dispose();
     googleLight = null;
@@ -1066,7 +1090,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
       startupHeld = true;
       scheduler.beginContinuous();
 
-      tilesRuntime = createGoogleTilesRuntime({
+      tilesRuntime = startMap(() => createGoogleTilesRuntime({
         ...options.mapPorts.google,
         onDownloadBytes: downloadMeter.addBytes,
         scene,
@@ -1125,7 +1149,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
             adoptGoogleCoverage();
           }
         },
-      });
+      }));
 
       if (googleTerrainDetailTarget !== null) {
         tilesRuntime.setTerrainDetailTarget(googleTerrainDetailTarget);
@@ -1300,10 +1324,32 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
       // Imports/presets can change both controls together: draw that change once.
       if (visibleChange) scheduler.requestRender();
     }),
-    watch("map.source.basemap", value => {
-      const id = String(value);
-      if (id === "google") applyMapSource("google");
-      else if (isKnownRasterBaseMapId(id)) applyMapSource(resolveRasterBaseMapSource(id));
+    subscribe(changed => {
+      // An import may save the key and source together in either order. Read
+      // both committed values once, before constructing an authenticated session.
+      const sourceChanged = changed.has("map.source.basemap");
+      let keyChanged = false;
+      if (changed.has("map.source.googleKey")) {
+        const savedKey = settings.get("map.source.googleKey");
+        const nextKey = typeof savedKey === "string" ? savedKey.trim() : "";
+        keyChanged = nextKey !== normalizedApiKey;
+        normalizedApiKey = nextKey;
+        status.googleApiKeyProvided = normalizedApiKey.length > 0;
+      }
+      if (!sourceChanged && !keyChanged) return;
+      const id = String(settings.get("map.source.basemap"));
+      if (sourceChanged && isKnownRasterBaseMapId(id)) {
+        applyMapSource(resolveRasterBaseMapSource(id));
+      } else if (id === "google" || !sourceChanged && status.mode === "google-tiles") {
+        // A newly saved key also retries a previously selected, unavailable
+        // Google source. Replacement/clear retires the old tile session through
+        // the same map lifecycle; it never recreates the host scene or device.
+        if (keyChanged) enableGoogleTilesMode();
+        else applyMapSource("google");
+      } else if (keyChanged) {
+        // Saving a credential while using a raster map does not select Google.
+        emitStatus();
+      }
     }),
     watch("map.source.elevation", value => applyTerrainSource(resolveTerrainSource(String(value)))),
     watch("map.focus.refineFrom", value => {
@@ -1510,7 +1556,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
   // Revisions never reset when a renderer is replaced or source mode changes.
   // Imagery-only selection changes its source generation, not terrain revision.
   let displayedRevision = 0, sourceGeneration = 0;
-  let previousGoogle: GoogleTilesRuntime | null = tilesRuntime, previousRaster: RasterTilesRuntime | null = rasterTilesRuntime;
+  let previousGoogle: ReturnType<typeof createGoogleTilesRuntime> | null = tilesRuntime, previousRaster: ReturnType<typeof createRasterTilesRuntime> | null = rasterTilesRuntime;
   const readGoogleRevision = (): number => tilesRuntime?.getRevision() ?? 0;
   const readRasterRevision = (): number => rasterTilesRuntime?.getRevision() ?? 0;
   let previousGoogleRevision = readGoogleRevision(), previousRasterRevision = readRasterRevision();
@@ -1954,7 +2000,27 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
       subscribe(listener) { if (disposed) return () => undefined; return authority.own(sky.subscribe(listener)); },
       setGroundLights(lights) { if (!disposed) sky.setGroundLights(lights); },
       setGroundLightReceiver(receiver) { if (!disposed) sky.setGroundLightReceiver(receiver); } },
-    destroy() { if (disposed) return; disposed = true; authority.dispose(); },
+    destroy() {
+      if (disposed) return; disposed = true;
+      try { authority.dispose(); } catch (error) { retirementErrors.push(error); throw error; }
+    },
+    async whenSettled() {
+      const current = [tilesRuntime?.whenSettled(), rasterTilesRuntime?.whenSettled()];
+      const results = await Promise.allSettled(current);
+      while (mapDrains.size) await Promise.allSettled([...mapDrains]);
+      const failures = [...retirementErrors, ...results.flatMap(result => result.status === "rejected" ? [result.reason] : [])];
+      if (failures.length) throw new AggregateError(failures, "Globe native retirement failed.");
+    },
   };
-  } catch (error) { disposed = true; try { authority.dispose(); } catch (cleanup) { throw new AggregateError([error, cleanup], "Globe setup and cleanup failed."); } throw error; }
+  } catch (error) {
+    disposed = true;
+    const failures: unknown[] = [error];
+    try { authority.dispose(); } catch (cleanup) { failures.push(cleanup); }
+    throw new NativeMapStartupError(failures, "Globe setup and cleanup failed.", async () => {
+      const results = await Promise.allSettled([...(error instanceof NativeMapStartupError ? [error.whenSettled()] : []), ...mapDrains]);
+      while (mapDrains.size) await Promise.allSettled([...mapDrains]);
+      const errors = [...retirementErrors, ...results.flatMap(result => result.status === "rejected" ? [result.reason] : [])];
+      if (errors.length) throw new AggregateError(errors, "Globe startup retirement failed.");
+    });
+  }
 }

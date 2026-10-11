@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": [
+      "ES2023",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "types": [],
+    "strict": true,
+    "skipLibCheck": false,
+    "noEmit": true,
+    "verbatimModuleSyntax": true
+  },
+  "files": [
+    "consumer.ts"
+  ]
+}

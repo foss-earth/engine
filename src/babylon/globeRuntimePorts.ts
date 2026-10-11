@@ -81,6 +81,7 @@ export interface GlobeRuntimeOptions {
   terrainPreparation: TerrainPreparationPolicy;
   budgets: { fallbackSegments(): number; googleStartupTimeoutMs(external: boolean): number; debugEventCapacity(): number };
   external?: GlobeExternalCamera;
+  /** Startup credential; later map.source.googleKey saves/clears replace it live. */
   googleApiKey?: string | null;
   preferGoogleTiles?: boolean;
   rasterBaseMap?: RasterBaseMapSource | null;

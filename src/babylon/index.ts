@@ -22,5 +22,7 @@ export * from "../layers/index.js";
 export * from "../sprites/index.js";
 export * from "../visualization/orbitCompass.js";
 export * from "./imagery/boundedMapTextureLoader.js";
+export * from "./managedImageryAtlas.js";
 export * from "./createGlobeRuntime.js";
+export { NativeMapStartupError } from "./nativeMapSettlement.js";
 export type * from "./globeRuntimePorts.js";

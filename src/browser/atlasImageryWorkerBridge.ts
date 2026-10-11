@@ -13,6 +13,10 @@ export interface AtlasImageryWorkerBridge {
   /** Stop new work; active native replies/retirement drain before idle termination. */
   dispose(): void;
 }
+export interface SettledAtlasImageryWorkerBridge extends AtlasImageryWorkerBridge {
+  /** Waits for native fallback decodes and proved worker input/canvas retirement. */
+  whenSettled(): Promise<void>;
+}
 export interface AtlasImageryWorkerBridgeOptions {
   broker: ImageSessionBroker;
   /** Return null or throw when this host has no usable worker. */
@@ -23,18 +27,27 @@ export interface AtlasImageryWorkerBridgeOptions {
 }
 /** Original optional worker/fallback selection with retained same-broker
  * inputs. Only private admitted copies transfer; cache/body views never detach. */
-export function createAtlasImageryWorkerBridge(options: AtlasImageryWorkerBridgeOptions): AtlasImageryWorkerBridge {
+export function createAtlasImageryWorkerBridge(options: AtlasImageryWorkerBridgeOptions): SettledAtlasImageryWorkerBridge {
   let worker: AtlasImageryWorkerPort | null = null, closing = false, failed = false, nextId = 1;
   const services = new WeakSet<HeaderInferredImageFileService>();
   type Pending = { kind: "decode" | "prepare"; settled: boolean; canvasPending: boolean; canvasProven: boolean;
     resolve(reply: AtlasImageryWorkerReply): void; reject(error: unknown): void;
     finishInput(): void; finishCanvas(): void; failure?: unknown };
   const waiting = new Map<number, Pending>();
-  const report = (error: unknown): void => { try { options.onError?.(error); } catch { /* Existing host error port attempted. */ } };
+  let nativeDecodes = 0, preparations = 0;
+  const retirementErrors: unknown[] = [];
+  const waiters = new Set<{ resolve(): void; reject(error: unknown): void }>();
+  const notifySettled = (): void => {
+    if (waiting.size || nativeDecodes || preparations) return;
+    const error = retirementErrors.length ? new AggregateError(retirementErrors, "Imagery worker retirement failed.") : null;
+    for (const waiter of waiters) { if (error) waiter.reject(error); else waiter.resolve(); }
+    waiters.clear();
+  };
+  const report = (error: unknown): void => { retirementErrors.push(error); try { options.onError?.(error); } catch { /* Existing host error port attempted. */ } };
   const cleanup = (actions: (() => void)[], prior: unknown[] = []): unknown[] => { for (const action of actions) try { action(); } catch (error) { prior.push(error); } return prior; };
   const errorFrom = (errors: unknown[], message: string): unknown => errors.length === 1 ? errors[0] : new AggregateError(errors, message);
   const stopIdle = (): void => { if ((!closing && !failed) || waiting.size || !worker) return; const retiring = worker; worker = null; try { retiring.terminate(); } catch (error) { report(error); } };
-  const retirePending = (id: number, pending: Pending): void => { if (pending.settled && !pending.canvasPending) { waiting.delete(id); stopIdle(); } };
+  const retirePending = (id: number, pending: Pending): void => { if (pending.settled && !pending.canvasPending) { waiting.delete(id); stopIdle(); notifySettled(); } };
   const loseWorker = (error: unknown): void => {
     failed = true; report(error); const retiring = worker;
     // A fatal worker event is not native/queued-output retirement. Keep active
@@ -47,7 +60,7 @@ export function createAtlasImageryWorkerBridge(options: AtlasImageryWorkerBridge
         const errors = cleanup([pending.finishInput, pending.finishCanvas], [error]);
         if (!pending.settled) pending.reject(errorFrom(errors, "Imagery worker loss and cleanup failed.")); else if (errors.length > 1) report(errorFrom(errors, "Late worker retirement cleanup failed."));
       }
-      stopIdle();
+      stopIdle(); notifySettled();
     }, report);
     stopIdle();
   };
@@ -96,6 +109,8 @@ export function createAtlasImageryWorkerBridge(options: AtlasImageryWorkerBridge
     });
   };
   const decode = async (bytes: Uint8Array, mimeType: ImageKind): Promise<ImageBitmap> => {
+    nativeDecodes += 1;
+    try {
     if (closing) throw new Error("The imagery worker bridge is disposed.");
     if (!worker || failed) {
       const blob = reserve("encoded", bytes.byteLength, "native imagery Blob copy");
@@ -113,12 +128,16 @@ export function createAtlasImageryWorkerBridge(options: AtlasImageryWorkerBridge
     const reply = await request({ kind: "decode", id: nextId++, bytes: snapshot, mimeType }, [snapshot.buffer as ArrayBuffer], () => copies.release(), () => {});
     if (reply.kind !== "decoded") throw new Error("The worker did not return a decoded bitmap.");
     return reply.bitmap;
+    } finally { nativeDecodes -= 1; notifySettled(); }
   };
   return {
     get offThread() { return worker !== null && !closing && !failed; },
     createFileService(ports) { const files = createImageFileService({ ...ports, broker: options.broker, decode }); services.add(files); return files; },
     uses: (files, broker) => broker === options.broker && services.has(files),
     async prepare(image, scope, priority, outputBytes) {
+      if (closing) throw new Error("The imagery worker bridge is disposed.");
+      preparations += 1;
+      try {
       scope.signal.throwIfAborted(); if (!scope.isCurrent()) throw new Error("Stale worker imagery preparation.");
       if (!image.retain) throw new Error("Worker preparation requires held decoded input.");
       const { width, height } = image.image, expectedOutput = width / 256 * (height / 256) * pageUploadBytes();
@@ -146,7 +165,9 @@ export function createAtlasImageryWorkerBridge(options: AtlasImageryWorkerBridge
         if (posted) throw error;
         const errors = cleanup([finishInput, finishCanvas], [error]); throw errorFrom(errors, "Worker preparation admission failed.");
       }
+      } finally { preparations -= 1; notifySettled(); }
     },
-    dispose() { if (closing) return; closing = true; stopIdle(); },
+    dispose() { if (closing) return; closing = true; stopIdle(); notifySettled(); },
+    whenSettled() { return new Promise<void>((resolve, reject) => { waiters.add({ resolve, reject }); notifySettled(); }); },
   };
 }

@@ -6,6 +6,7 @@ import { createBorrowedRuntimeAuthority } from "../src/babylon/borrowedRuntimeAu
 import { createTerrainPerformanceCapture } from "../src/terrain/terrainPerformanceCapture.js";
 import { TransformNode, Color3, MeshBuilder, StandardMaterial, type Scene } from "@babylonjs/core";
 import type { GlobeRuntimeOptions } from "../src/babylon/globeRuntimePorts.js";
+import { createParameterControl } from "@foss-earth/ui/browser";
 
 /** The supplied traversal leaf never downloads; the actual globe and Google
  * adapter still own frame, preparation, camera, listeners and hold lifetime. */
@@ -43,6 +44,139 @@ class TerrainTilesFixture {
   removeEventListener(type: string,listener: (event: unknown) => void) { this.listeners.get(type)?.delete(listener); }
   dispose() { this.listeners.clear(); this.group.dispose(); }
 }
+
+/** Real runtime and settings/control behavior, with authenticated transport
+ * replaced at its public port. No live key, network or GPU is required. */
+function createGoogleKeyHost(initialKey: string | null = null) {
+  const tokens: string[] = [];
+  const renderers: TerrainTilesFixture[] = [];
+  const host = createTerrainHost(defaults => ({
+    googleApiKey: initialKey,
+    preferGoogleTiles: initialKey !== null,
+    mapPorts: { ...defaults.mapPorts, google: { ...defaults.mapPorts.google,
+      createTilesRenderer(_rootUrl, scene) {
+        void _rootUrl;
+        const renderer = new TerrainTilesFixture(scene);
+        renderers.push(renderer);
+        return renderer as unknown as ReturnType<GlobeRuntimeOptions["mapPorts"]["google"]["createTilesRenderer"]>;
+      },
+      createAuthPlugin({ apiToken }) {
+        tokens.push(apiToken);
+        return { fetchData: async () => { throw new Error("No fixture network."); } } as unknown as ReturnType<GlobeRuntimeOptions["mapPorts"]["google"]["createAuthPlugin"]>;
+      },
+    } },
+  }));
+  return { ...host, tokens, renderers };
+}
+
+describe("live Google key activation", () => {
+  it("uses a key saved after startup when Google is selected, without replacing the host", () => {
+    const host = createGoogleKeyHost();
+    const control = createParameterControl(host.settings, "map.source.googleKey", document);
+    const engineDispose = vi.spyOn(host.engine, "dispose"), sceneDispose = vi.spyOn(host.scene, "dispose");
+    const changed = vi.fn();
+    const unsubscribe = host.runtime.subscribeStatus(changed);
+    try {
+      expect(host.runtime.status).toMatchObject({ mode: "fallback", googleApiKeyProvided: false });
+      const input = control.element.querySelector<HTMLInputElement>('input[type="password"]')!;
+      input.value = "  saved-fixture-key  ";
+      [...control.element.querySelectorAll("button")].find(button => button.textContent === "Save")!.click();
+      expect(host.settings.get("map.source.googleKey")).toBe("saved-fixture-key");
+      expect(host.runtime.status.googleApiKeyProvided).toBe(true);
+      expect(changed).toHaveBeenCalled();
+      expect(host.tokens).toEqual([]);
+      expect(input.value).toBe("");
+      expect(control.element.textContent).not.toContain("Applies when the app next starts");
+
+      host.settings.set("map.source.basemap", "google");
+      expect(host.runtime.status).toMatchObject({ mode: "google-tiles", googleApiKeyProvided: true, lastError: null });
+      expect(host.tokens).toEqual(["saved-fixture-key"]);
+      expect(host.runtime.engine).toBe(host.engine);
+      expect(host.runtime.scene).toBe(host.scene);
+      expect(engineDispose).not.toHaveBeenCalled();
+      expect(sceneDispose).not.toHaveBeenCalled();
+      expect(host.timers.size).toBe(1);
+    } finally { unsubscribe(); control.destroy(); host.disposeHost(); }
+  });
+
+  it("retries an already selected Google source as soon as the missing key is saved", () => {
+    const host = createGoogleKeyHost();
+    try {
+      host.settings.set("map.source.basemap", "google");
+      expect(host.runtime.status.lastError).toBe("Google 3D Tiles need an API key.");
+      expect(host.tokens).toEqual([]);
+      host.settings.set("map.source.googleKey", "retry-fixture-key");
+      expect(host.runtime.status).toMatchObject({ mode: "google-tiles", googleApiKeyProvided: true, lastError: null });
+      expect(host.tokens).toEqual(["retry-fixture-key"]);
+    } finally { host.disposeHost(); }
+  });
+
+  it("rotates and clears a live credential, retiring the old tile session and its holds", () => {
+    const host = createGoogleKeyHost("host-fixture-key");
+    const control = createParameterControl(host.settings, "map.source.googleKey", document);
+    try {
+      const first = host.renderers[0];
+      host.settings.set("map.source.googleKey", "replacement-fixture-key");
+      expect(host.tokens).toEqual(["host-fixture-key", "replacement-fixture-key"]);
+      expect(first.group.isDisposed()).toBe(true);
+      expect(host.runtime.status.mode).toBe("google-tiles");
+      expect(host.timers.size).toBe(1);
+      expect(host.holdCount()).toBe(2);
+
+      host.settings.set("map.source.googleKey", " replacement-fixture-key ");
+      expect(host.tokens).toHaveLength(2);
+      // A standalone shared control borrows its presentation pulse from the
+      // host; the full Map section supplies this after registry changes.
+      control.update();
+      [...control.element.querySelectorAll("button")].find(button => button.textContent === "Clear")!.click();
+      expect(host.renderers[1].group.isDisposed()).toBe(true);
+      expect(host.runtime.status).toMatchObject({ mode: "fallback", googleApiKeyProvided: false });
+      expect(host.timers.size).toBe(0);
+      expect(host.holdCount()).toBe(1);
+      host.runtime.setMapSource("google");
+      expect(host.tokens).toHaveLength(2);
+      expect(host.runtime.status.lastError).toBe("Google 3D Tiles need an API key.");
+    } finally { control.destroy(); host.disposeHost(); }
+  });
+
+  it.each(["source-first", "key-first"])("applies a %s batched key/source update once with the new credential", order => {
+    const host = createGoogleKeyHost();
+    try {
+      const key = { "map.source.googleKey": "batch-fixture-key" };
+      const source = { "map.source.basemap": "google" };
+      expect(host.settings.setMany(order === "source-first" ? { ...source, ...key } : { ...key, ...source }).ok).toBe(true);
+      expect(host.runtime.status.mode).toBe("google-tiles");
+      expect(host.tokens).toEqual(["batch-fixture-key"]);
+      expect(host.renderers).toHaveLength(1);
+      expect(host.timers.size).toBe(1);
+    } finally { host.disposeHost(); }
+  });
+
+  it("keeps blank credentials unavailable and never creates an authenticated session", () => {
+    const host = createGoogleKeyHost();
+    try {
+      host.settings.set("map.source.googleKey", "   ");
+      host.settings.set("map.source.basemap", "google");
+      expect(host.runtime.status).toMatchObject({ mode: "fallback", googleApiKeyProvided: false });
+      expect(host.tokens).toEqual([]);
+      expect(host.holdCount()).toBe(1);
+    } finally { host.disposeHost(); }
+  });
+
+  it("detaches credential/source observers on destruction", () => {
+    const host = createGoogleKeyHost();
+    try {
+      host.settings.setMany({ "map.source.googleKey": "lifetime-fixture-key", "map.source.basemap": "google" });
+      expect(host.tokens).toEqual(["lifetime-fixture-key"]);
+      host.runtime.destroy();
+      host.settings.set("map.source.googleKey", "after-disposal-fixture-key");
+      expect(host.tokens).toEqual(["lifetime-fixture-key"]);
+      expect(host.renderers[0].group.isDisposed()).toBe(true);
+      expect(host.timers.size).toBe(0);
+      expect(host.holdCount()).toBe(1);
+    } finally { host.disposeHost(); }
+  });
+});
 
 describe("borrowed globe runtime", () => {
   it("prepares real globe work without rendering/bracketing a second frame", () => {

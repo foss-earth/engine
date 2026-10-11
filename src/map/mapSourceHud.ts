@@ -16,8 +16,12 @@ export const GOOGLE_3D_TILES = {
   attributionUrl: "https://www.google.com/help/legalnotices_maps/",
 };
 
+export type MapSourceHudLayout = "compact" | "expanded";
+
 export interface MapSourceHudOptions {
   document: Document;
+  /** Presentation choice supplied by the host; compact is the default. */
+  layout?: MapSourceHudLayout;
   ui: {
     createExternalLinkIcon: typeof createExternalLinkIcon;
     attachMapDownloadSpeed(button: HTMLElement, source: MapDownloadSource): () => void;
@@ -36,6 +40,8 @@ export type MapSourceHudStatus = Pick<MapRuntimeStatus, "mode" | "rasterBaseMap"
 
 export interface MapSourceHudHandle {
   element: HTMLElement;
+  /** Changes presentation only; retains the controller, rail and resource lifetime. */
+  setLayout(layout: MapSourceHudLayout): void;
   /** Shows the runtime's provider and refreshes the detail rail. Cheap enough for every frame. */
   update(status: MapSourceHudStatus): void;
   destroy(): void;
@@ -79,6 +85,11 @@ export function createMapSourceHud(container: HTMLElement, options: MapSourceHud
   element.className = "map-source-hud";
   element.setAttribute("role", "group");
   element.setAttribute("aria-label", "Map source");
+  const setLayout = (layout: MapSourceHudLayout): void => {
+    if (layout !== "compact" && layout !== "expanded") throw new RangeError("Unknown map HUD layout.");
+    element.dataset.mapHudLayout = layout;
+  };
+  setLayout(options.layout ?? "compact");
 
   const chip = document.createElement("span");
   chip.className = "hud-chip map-source-hud__chip";
@@ -160,6 +171,7 @@ export function createMapSourceHud(container: HTMLElement, options: MapSourceHud
 
   return {
     element,
+    setLayout,
     update,
     destroy(): void {
       provider.removeEventListener("click", options.onProviderClick);

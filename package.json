@@ -70,7 +70,11 @@
       "types": "./dist/location-provider.d.ts",
       "import": "./dist/location-provider.js"
     },
-    "./map-cache.css": "./styles/map-cache.css"
+    "./map-cache.css": "./styles/map-cache.css",
+    "./browser-globe": {
+      "types": "./dist/browser-globe.d.ts",
+      "import": "./dist/browser-globe.js"
+    }
   },
   "files": [
     "dist",
