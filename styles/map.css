@@ -5,6 +5,11 @@
   gap: 3px;
 }
 
+/* Hidden while a panorama is entered, where its credit takes the basemap's place. */
+.map-source-hud[hidden] {
+  display: none;
+}
+
 /*
  * Two halves that each fill the chip to its rounded edge, so a hover lights the
  * whole half: the provider button (speed, logo, name) and the credit link.
