@@ -325,6 +325,11 @@ baseColor.rgb = pow(pow(baseColor.rgb, vec3(2.2)) * (terrainLightAt(vPositionW) 
       expect(code).toContain("texel.r * 65.28 + texel.g * 0.255");
       expect(code).toContain(`${1 - WGS84_E2} * length(`);
     }
+    // Lamps are on, wholly, only where the Sun's height has a sine at most the switch's, in the picture's w.
+    expect(glsl.CUSTOM_FRAGMENT_DEFINITIONS).toContain("float on = step(dot(p, terrainLightSun.xyz), terrainNightPicture.w * length(p));");
+    expect(glsl.CUSTOM_FRAGMENT_DEFINITIONS).toContain("- terrainNightLight.w, 0.0) * inside * on;");
+    expect(wgsl.CUSTOM_FRAGMENT_DEFINITIONS).toContain("let on = step(dot(p, uniforms.terrainLightSun.xyz), uniforms.terrainNightPicture.w * length(p));");
+    expect(wgsl.CUSTOM_FRAGMENT_DEFINITIONS).toContain("- uniforms.terrainNightLight.w, 0.0) * inside * on;");
     for (const name of ["terrainNightAxisX", "terrainNightWindow", "terrainNightLight", "terrainNightPicture"]) {
       expect(standard.getUniforms(ShaderLanguage.GLSL).fragment).toContain(`uniform vec4 ${name};`);
     }
@@ -371,8 +376,12 @@ baseColor.rgb = pow(pow(baseColor.rgb, vec3(2.2)) * (terrainLightAt(vPositionW) 
     expect(buffer.updateFloat4).toHaveBeenCalledWith("terrainNightAxisY", 0, 1, 0, 0);
     expect(buffer.updateFloat4).toHaveBeenCalledWith("terrainNightWindow", 11, 19, 64, 8);
     expect(buffer.updateFloat4).toHaveBeenCalledWith("terrainNightLight", 0.1, 0.2, 0.3, 0.5);
-    expect(buffer.updateFloat4).toHaveBeenCalledWith("terrainNightPicture", 0.01, 0.02, 0.03, 0);
+    // Without a switch the lamps are on everywhere: no height of the Sun has a sine of 2.
+    expect(buffer.updateFloat4).toHaveBeenCalledWith("terrainNightPicture", 0.01, 0.02, 0.03, 2);
     expect(buffer.setTexture).toHaveBeenCalledExactlyOnceWith("terrainNightMap", map.texture);
+    setTerrainLighting(target, lighting({ night: { ...NIGHT, switchSine: -0.08 } }));
+    plugin.bindForSubMesh(buffer as unknown as UniformBuffer);
+    expect(buffer.updateFloat4).toHaveBeenLastCalledWith("terrainNightPicture", 0.01, 0.02, 0.03, -0.08);
   });
 
   it("adds the lamps' light above the floor to the factor it computes for readings", () => {
@@ -386,5 +395,20 @@ baseColor.rgb = pow(pow(baseColor.rgb, vec3(2.2)) * (terrainLightAt(vPositionW) 
     expect(lit[2]).toBeCloseTo(3, 12);
     // Without night lights a radiance changes nothing.
     expect(terrainLightFactor(lighting({ ambient: [0, 0, 0] }), [], ground, 10.5)).toEqual([0, 0, 0]);
+  });
+
+  it("switches each place's lamps on where the Sun is at or below the switch's height, and off above it, with nothing between", () => {
+    // The Sun's light is left out, with a table whose light is none even in double precision, to see the lamps' alone.
+    const dark = new Float32Array(GROUND_LIGHT_SAMPLES * 4).fill(-1000);
+    const switched = lighting({ ambient: [0, 0, 0], table: dark, night: { ...NIGHT, switchSine: Math.sin(-4.5 * DEG) } });
+    const lamps = (elevation: number): number => terrainLightFactor(switched, [], pointUnderSun(elevation), 10.5)[0];
+    expect(lamps(-60)).toBeCloseTo(1, 9);
+    expect(lamps(-4.51)).toBeCloseTo(1, 9);
+    expect(lamps(-4.49)).toBe(0);
+    expect(lamps(-1)).toBe(0);
+    expect(lamps(30)).toBe(0);
+    // Without a switch, as from a sky that has none, they are on even by day.
+    const always = lighting({ ambient: [0, 0, 0], table: dark, night: NIGHT });
+    expect(terrainLightFactor(always, [], pointUnderSun(30), 10.5)[0]).toBeCloseTo(1, 9);
   });
 });

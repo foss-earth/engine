@@ -76,6 +76,12 @@ export interface TerrainNightLighting {
   picture: Readonly<Rgb>;
   /** Radiance taken as no lamp's, nW/(cm² sr). */
   floor: number;
+  /**
+   * The sine of the Sun's height at or below which lamps are on, as a
+   * photocell switches them where daylight has fallen to its level: each
+   * place's lamps are on or off, never between. Absent, they are on everywhere.
+   */
+  switchSine?: number;
 }
 export interface TerrainNightLightMap {
   texture: BaseTexture;
@@ -118,6 +124,9 @@ class TerrainLightDefines extends MaterialDefines {
 
 /** The least width of a beam's soft edge, as a difference of cosines: a hundredth of a degree at the beam's edge. */
 const BEAM_EDGE_COSINE = 1e-4;
+
+/** A switch's sine no height of the Sun reaches: lamps on everywhere, for night lights without a switch. */
+const LAMPS_ALWAYS_ON = 2;
 
 const FINE_INTERVALS = (GROUND_LIGHT_TABLE.fineToDeg - GROUND_LIGHT_TABLE.fromDeg) / GROUND_LIGHT_TABLE.fineStepDeg;
 
@@ -259,14 +268,15 @@ const dot = (a: Vec3 | number[], b: Vec3 | number[]): number => a[0] * b[0] + a[
  * computes it, for readings and tests: per point, the Sun's and the Moon's
  * light by their height there, plus the night sky's; then the local lights',
  * on level ground facing up from the Earth's centre; then the night lights',
- * for the radiance the map holds there, nW/(cm² sr).
+ * for the radiance the map holds there, nW/(cm² sr), where the Sun is low
+ * enough there for them to be switched on.
  */
 function terrainLightFactor(lighting: TerrainLighting, local: readonly TerrainLocalLight[], position: Vec3, nightRadiance = 0): Rgb {
   const up = [position[0] - lighting.centre[0], position[1] - lighting.centre[1], position[2] - lighting.centre[2]];
   const length = Math.hypot(up[0], up[1], up[2]) || 1;
   up[0] /= length; up[1] /= length; up[2] /= length;
   const out: Rgb = [lighting.ambient[0], lighting.ambient[1], lighting.ambient[2]];
-  if (lighting.night) {
+  if (lighting.night && dot(up, lighting.sunDirection) <= (lighting.night.switchSine ?? LAMPS_ALWAYS_ON)) {
     const above = Math.max(0, nightRadiance - lighting.night.floor);
     for (let band = 0; band < 3; band++) out[band] += above * lighting.night.light[band];
   }
@@ -327,7 +337,8 @@ const NIGHT = {
  * GLSL: the radiance above the floor at a point of the ground, nW/(cm² sr).
  * Its latitude on the ellipsoid, exact on the surface, and longitude place it
  * on the Web Mercator map, in tiles of the window's zoom; the texture wraps,
- * and outside the window there is none.
+ * and outside the window there is none. Where the Sun's height there has a
+ * sine above the switch's, the lamps are off and there is none either.
  */
 const GLSL_NIGHT = `#ifdef TERRAIN_NIGHT_LIGHTS
 uniform sampler2D terrainNightMap;
@@ -341,7 +352,8 @@ float terrainNightRadiance(vec3 positionW) {
   offset.x -= terrainNightWindow.z * floor(offset.x / terrainNightWindow.z);
   float inside = step(0.0, offset.y) * step(offset.x, terrainNightWindow.w) * step(offset.y, terrainNightWindow.w);
   vec4 texel = texture2D(terrainNightMap, tile / terrainNightWindow.w);
-  return max(texel.r * ${NIGHT.highByte} + texel.g * ${NIGHT.lowByte} - terrainNightLight.w, 0.0) * inside;
+  float on = step(dot(p, terrainLightSun.xyz), terrainNightPicture.w * length(p));
+  return max(texel.r * ${NIGHT.highByte} + texel.g * ${NIGHT.lowByte} - terrainNightLight.w, 0.0) * inside * on;
 }
 #endif`;
 
@@ -359,7 +371,8 @@ fn terrainNightRadiance(positionW: vec3f) -> f32 {
   offset.x = offset.x - area.z * floor(offset.x / area.z);
   let inside = step(0.0, offset.y) * step(offset.x, area.w) * step(offset.y, area.w);
   let texel = textureSampleLevel(terrainNightMap, terrainNightMapSampler, tile / area.w, 0.0);
-  return max(texel.r * ${NIGHT.highByte} + texel.g * ${NIGHT.lowByte} - uniforms.terrainNightLight.w, 0.0) * inside;
+  let on = step(dot(p, uniforms.terrainLightSun.xyz), uniforms.terrainNightPicture.w * length(p));
+  return max(texel.r * ${NIGHT.highByte} + texel.g * ${NIGHT.lowByte} - uniforms.terrainNightLight.w, 0.0) * inside * on;
 }
 #endif`;
 
@@ -463,6 +476,7 @@ const UNIFORMS: ReadonlyArray<readonly [string, number]> = [
   ["terrainNightWindow", 0],
   // The lamps' light per unit of radiance in rgb, and the floor in w.
   ["terrainNightLight", 0],
+  // The satellite's picture per unit of radiance in rgb, and in w the sine of the Sun's height lamps are on at or below.
   ["terrainNightPicture", 0],
 ];
 
@@ -558,7 +572,7 @@ class TerrainLightMaterialPlugin extends MaterialPluginBase {
     vec("terrainNightAxisZ", night.axes[2]);
     uniformBuffer.updateFloat4("terrainNightWindow", map.x, map.y, 2 ** map.zoom, map.tiles);
     uniformBuffer.updateFloat4("terrainNightLight", night.light[0], night.light[1], night.light[2], night.floor);
-    vec("terrainNightPicture", night.picture);
+    uniformBuffer.updateFloat4("terrainNightPicture", night.picture[0], night.picture[1], night.picture[2], night.switchSine ?? LAMPS_ALWAYS_ON);
     uniformBuffer.setTexture("terrainNightMap", map.texture);
   }
 
