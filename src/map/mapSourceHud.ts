@@ -1,6 +1,8 @@
 import type { MapRuntimeStatus } from "./runtimeContracts.js";
 import type { createExternalLinkIcon } from "@foss-earth/ui/browser";
 import { createMapDetailSlider, type MapDetailSliderHandle, type MapDetailSliderOptions } from "./mapDetailSlider.js";
+
+const googleLogo = new URL("../../assets/providers/google-g.svg", import.meta.url).href;
 export interface MapDownloadSource {
   getMapDownloadBytesPerSecond(): number;
   onMapDownloadRateChange(listener: (bytesPerSecond: number) => void): () => void;
@@ -12,8 +14,11 @@ export interface TileStreamingSource {
 
 export const GOOGLE_3D_TILES = {
   name: "Google 3D Tiles",
+  /** Shown beside the Google mark, which stands in for the word Google. */
+  shortLabel: "3D Tiles",
   credit: "Google",
   attributionUrl: "https://www.google.com/help/legalnotices_maps/",
+  logo: googleLogo,
 };
 
 export type MapSourceHudLayout = "compact" | "expanded";
@@ -49,6 +54,8 @@ export interface MapSourceHudHandle {
 
 interface Provider {
   name: string;
+  /** Words beside a logo when that logo stands in for the start of `name`. */
+  shortLabel: string | null;
   credit: string | null;
   attributionUrl: string | null;
   logo: string | null;
@@ -56,19 +63,20 @@ interface Provider {
 }
 
 function providerFor(status: MapSourceHudStatus): Provider {
-  if (status.mode === "google-tiles") return { ...GOOGLE_3D_TILES, logo: null, wordmark: null };
+  if (status.mode === "google-tiles") return { ...GOOGLE_3D_TILES, wordmark: null };
   if (status.mode === "raster-basemap") {
     // Credit the imagery on screen, which lags a switch until the new source can show.
     const source = status.displayedRasterBaseMap ?? status.rasterBaseMap;
     return {
       name: source?.label ?? "Raster Basemap",
+      shortLabel: null,
       credit: source?.attribution ?? null,
       attributionUrl: source?.attributionUrl ?? null,
       logo: source?.logo ?? null,
       wordmark: source?.wordmark ?? null,
     };
   }
-  return { name: "Fallback Globe", credit: null, attributionUrl: null, logo: null, wordmark: null };
+  return { name: "Fallback Globe", shortLabel: null, credit: null, attributionUrl: null, logo: null, wordmark: null };
 }
 
 /**
@@ -116,7 +124,13 @@ export function createMapSourceHud(container: HTMLElement, options: MapSourceHud
   wordmarkOnLight.className = "map-source-hud__wordmark-on-light";
   wordmarkOnLight.alt = "";
   wordmark.append(wordmarkOnDark, wordmarkOnLight);
-  provider.append(logo, wordmark, label);
+  // A warning sign after the name, outside the label so a shortened name keeps it.
+  const warning = document.createElement("span");
+  warning.className = "map-source-hud__warning";
+  warning.textContent = "\u26a0\ufe0f";
+  warning.setAttribute("aria-hidden", "true");
+  warning.hidden = true;
+  provider.append(logo, wordmark, label, warning);
   const credit = document.createElement("a");
   credit.className = "map-source-hud__credit";
   credit.target = "_blank";
@@ -140,11 +154,12 @@ export function createMapSourceHud(container: HTMLElement, options: MapSourceHud
     detail?.update();
     const current = providerFor(status);
     const name = status.lastError ? `${current.name} warning` : current.name;
-    const key = [status.mode, name, current.attributionUrl, current.logo, current.wordmark?.onDark].join("|");
+    const key = [status.mode, name, current.shortLabel, current.attributionUrl, current.logo, current.wordmark?.onDark].join("|");
     if (key === shown) return;
     shown = key;
-    const shortName = current.wordmark ? current.wordmark.label : current.name;
-    setMapSourceLabel(provider, status.lastError ? `${shortName} warning` : shortName);
+    const shortName = current.wordmark?.label ?? current.shortLabel ?? current.name;
+    setMapSourceLabel(provider, shortName);
+    warning.hidden = !status.lastError;
     provider.setAttribute("aria-label", `Basemap: ${name}. Show or hide the Map tab`);
     provider.title = `${name}. Click to show or hide the Map tab.`;
     wordmark.hidden = current.wordmark === null;

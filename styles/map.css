@@ -97,7 +97,8 @@
 
 .map-source-hud__logo[hidden],
 .map-source-hud__credit[hidden],
-.map-source-hud__wordmark[hidden] {
+.map-source-hud__wordmark[hidden],
+.map-source-hud__warning[hidden] {
   display: none;
 }
 
@@ -129,7 +130,8 @@
   text-overflow: ellipsis;
 }
 
-.map-source-hud__credit {
+.map-source-hud__credit,
+.map-source-hud__warning {
   flex-shrink: 0;
 }
 

@@ -1,8 +1,8 @@
 /* Engine-owned selectors extracted from committed source. Shared shell styles come from UI/toolbar. */
 .input-mode-button {
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
+  width: 30px;
+  height: 28px;
+  border-radius: 8px;
   justify-content: center;
   gap: 0;
   padding: 0;
@@ -10,12 +10,11 @@
 }
 
 .input-mode-button-icon {
-  width: 36px;
-  height: 36px;
+  width: 16px;
+  height: 16px;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 999px;
 }
 
 .input-mode-button-icon svg {
@@ -25,12 +24,13 @@
 
 .input-mode-button--auto {
   width: max-content;
-  min-width: 36px;
+  min-width: 30px;
   max-width: none;
-  border-radius: 999px;
+  height: 28px;
+  border-radius: 8px;
   justify-content: flex-start;
   gap: 6px;
-  padding: 0 8px 0 0;
+  padding: 0 8px;
   border-color: rgba(2, 132, 199, 0.55);
   background: rgba(8, 47, 73, 0.92);
 }
