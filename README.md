@@ -22,7 +22,7 @@ Root, `/core` and `/imagery` are pure. Everything else is an explicit optional e
 | `/visualization` | Pure source defaults, point math, migrations and horizon culling. |
 | `/visualization-tuners` | Visualization tuner HUD. |
 | `/location-provider` | Location provider and cache. |
-| `/input-mode.css`, `/map.css`, `/map-cache.css`, `/visualization-tuners.css` | Engine-owned styles. Generic cache-section styles belong to [`@foss-earth/ui`](https://github.com/foss-earth/ui). |
+| `/input-mode.css`, `/map.css`, `/map-cache.css`, `/location.css`, `/visualization-tuners.css` | Engine-owned styles. Generic cache-section styles belong to [`@foss-earth/ui`](https://github.com/foss-earth/ui). |
 
 Other optional peers: `@foss-earth/renderer`, `@foss-earth/ui`, `@foss-earth/sky` and `3d-tiles-renderer`. Terrain and imagery code uses [`@foss-earth/images`](https://github.com/foss-earth/images). Terrain covers sources, grids, download, selection, refinement and displayed-height queries, plus Google and raster streaming runtimes.
 

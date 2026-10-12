@@ -49,6 +49,7 @@
     },
     "./input-mode.css": "./styles/input-mode.css",
     "./map.css": "./styles/map.css",
+    "./location.css": "./styles/location.css",
     "./react": {
       "source": "./src/react.ts",
       "types": "./dist/react.d.ts",

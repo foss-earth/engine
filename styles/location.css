@@ -1,0 +1,212 @@
+/* Location owns its editor and search results; the window shell belongs to UI. */
+.foss-earth-location-panel {
+  --location-border: rgba(148, 163, 184, 0.32);
+  --location-field: rgba(255, 255, 255, 0.04);
+  --location-hover: rgba(255, 255, 255, 0.08);
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 6px;
+  font: 12px/1.4 system-ui, sans-serif;
+}
+
+.foss-earth-location-panel form {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+}
+
+.foss-earth-location-panel p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.foss-earth-location-panel a {
+  color: var(--globe-accent-bright, #38bdf8);
+}
+
+.foss-earth-location-panel :is(input, select, button) {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 28px;
+  border: 1px solid var(--location-border);
+  border-radius: 6px;
+  background: var(--location-field);
+  color: inherit;
+  font: inherit;
+}
+
+.foss-earth-location-panel :is(input, select) {
+  padding: 4px 6px;
+}
+
+.foss-earth-location-panel input::placeholder {
+  color: inherit;
+  opacity: 0.6;
+}
+
+.foss-earth-location-panel button {
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+.foss-earth-location-panel button:hover:not(:disabled) {
+  background: var(--location-hover);
+}
+
+.foss-earth-location-panel :is(input, select, button):focus-visible {
+  outline: 2px solid var(--globe-accent, #60a5fa);
+  outline-offset: 1px;
+}
+
+.foss-earth-location-panel :disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.foss-earth-location-search-row {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+  min-width: 0;
+}
+
+.foss-earth-location-search-row input {
+  flex: 1 1 0;
+  width: 0;
+}
+
+.foss-earth-location-search-row button {
+  display: grid;
+  flex: 0 0 32px;
+  place-items: center;
+  padding: 4px;
+}
+
+.foss-earth-location-search-row svg {
+  display: block;
+}
+
+.foss-earth-location-panel .foss-earth-location-coordinates {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.foss-earth-location-fields {
+  display: contents;
+}
+
+.foss-earth-location-fields label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.foss-earth-location-fields input {
+  appearance: textfield;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.foss-earth-location-fields input::-webkit-inner-spin-button,
+.foss-earth-location-fields input::-webkit-outer-spin-button {
+  margin: 0;
+  appearance: none;
+}
+
+.foss-earth-location-panel .foss-earth-location-play {
+  flex: none;
+  border-color: var(--globe-accent, #60a5fa);
+  background: rgba(56, 189, 248, 0.12);
+  font-weight: 600;
+}
+
+.foss-earth-location-results,
+.foss-earth-location-result-group,
+.foss-earth-location-result-children {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.foss-earth-location-result {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--location-border);
+  border-radius: 6px;
+}
+
+.foss-earth-location-result button {
+  width: 100%;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.foss-earth-location-panel .foss-earth-location-result-title {
+  font-weight: 600;
+}
+
+.foss-earth-location-result-subtitle {
+  display: block;
+  font-size: 11px;
+  font-weight: 400;
+  opacity: 0.7;
+}
+
+.foss-earth-location-result-kind {
+  display: inline-block;
+  margin-left: 6px;
+  font-size: 10px;
+  font-weight: 400;
+  opacity: 0.7;
+}
+
+.foss-earth-location-result-group {
+  border-top: 1px solid var(--location-border);
+}
+
+.foss-earth-location-result-children {
+  margin: 0 6px 6px 12px;
+  border-left: 1px solid var(--location-border);
+}
+
+.foss-earth-location-result-children p {
+  padding: 4px 8px;
+}
+
+.foss-earth-location-result-children p button {
+  width: auto;
+  border: 1px solid var(--location-border);
+  border-radius: 6px;
+}
+
+.foss-earth-location-attribution {
+  font-size: 10px;
+  opacity: 0.7;
+}
+
+.foss-earth-location-panel [hidden],
+.foss-earth-location-results:empty,
+.foss-earth-location-panel > [role="status"]:empty {
+  display: none;
+}
+
+:root[data-theme="light"] .foss-earth-location-panel {
+  --location-border: rgba(71, 85, 105, 0.3);
+  --location-field: rgba(15, 23, 42, 0.03);
+  --location-hover: rgba(15, 23, 42, 0.08);
+}
+
+:root[data-theme="light"] .foss-earth-location-panel a {
+  color: #1d4ed8;
+}
