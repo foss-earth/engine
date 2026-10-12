@@ -68,14 +68,16 @@ it("refreshes all placeholders from live location without overwriting edits", as
   await act(async () => root.render(<LocationPanel initialLocation={live} getCurrentLocation={() => live} onApply={() => {}} />));
   try {
     const inputs = host.querySelectorAll<HTMLInputElement>('.foss-earth-location-coordinates input');
-    expect(Array.from(inputs, input => input.placeholder)).toEqual(["45.00000000", "-93.00000000", "1200"]);
+    expect(Array.from(inputs, input => input.placeholder)).toEqual(["45.0000", "93.0000", "1200"]);
+    expect(Array.from(host.querySelectorAll<HTMLSelectElement>(".foss-earth-location-coordinates select"), select => select.value)).toEqual(["N", "W", "asl"]);
+    expect(host.querySelector(".foss-earth-location-fields")!.textContent?.replace(/\s/g, "")).toBe("NSEWASLAGL");
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(inputs[0], "46");
       inputs[0].dispatchEvent(new Event("input", { bubbles: true }));
     });
     live = { latDeg: 45.5123456789, lonDeg: -92.5123456789, altMeters: 1300.6 };
     await act(async () => { vi.advanceTimersByTime(100); });
-    expect(Array.from(inputs, input => input.placeholder)).toEqual(["45.51234568", "-92.51234568", "1301"]);
+    expect(Array.from(inputs, input => input.placeholder)).toEqual(["45.5123", "92.5123", "1301"]);
     expect(inputs[0].value).toBe("46");
   } finally {
     await act(async () => root.unmount());
@@ -99,7 +101,8 @@ it("keeps edited search text and coordinate entries after applying and reopening
     await act(async () => root.unmount());
     root = createRoot(host);
     await act(async () => root.render(panel));
-    expect(Array.from(host.querySelectorAll<HTMLInputElement>("input"), input => input.value)).toEqual(["unfinished search", "44.8800", "-93.2200", "1250"]);
+    expect(Array.from(host.querySelectorAll<HTMLInputElement>("input"), input => input.value)).toEqual(["unfinished search", "44.8800", "93.2200", "1250"]);
+    expect(host.querySelector<HTMLSelectElement>('[aria-label="Longitude hemisphere"]')!.value).toBe("W");
     expect(apply).toHaveBeenCalledExactlyOnceWith({ latDeg: 44.88, lonDeg: -93.22, altMeters: 1250 });
     expect(provider).not.toHaveBeenCalled();
   } finally { await act(async () => root.unmount()); }
@@ -114,8 +117,20 @@ it("keeps Location usable when device storage is denied", async () => {
   const apply = vi.fn();
   await act(async () => root.render(<LocationPanel initialLocation={{ latDeg: 0, lonDeg: 0 }} onApply={apply} />));
   try {
-    await edit(host.querySelector<HTMLInputElement>('[type="number"]')!, "45");
+    await edit(host.querySelector<HTMLInputElement>('[aria-label="Latitude"]')!, "45");
     await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Go to location"]')!.click());
     expect(apply).toHaveBeenCalledExactlyOnceWith({ latDeg: 45, lonDeg: 0 });
+  } finally { await act(async () => root.unmount()); }
+});
+
+it("keeps coordinates off the Location tab while the readout is showing them", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const host = document.createElement("div");
+  const root = createRoot(host);
+  await act(async () => root.render(<LocationPanel initialLocation={{ latDeg: 45, lonDeg: -93 }} showCoordinates={false} onApply={() => {}} />));
+  try {
+    expect(host.querySelector(".foss-earth-location-fields")).toBeNull();
+    expect(host.querySelector('[aria-label="Go to location"]')).toBeNull();
+    expect(host.querySelector('[aria-label="Location search"]')).not.toBeNull();
   } finally { await act(async () => root.unmount()); }
 });

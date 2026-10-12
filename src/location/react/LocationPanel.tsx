@@ -2,7 +2,7 @@ import { type ReactNode, useEffect, useEffectEvent, useRef, useState } from "rea
 
 
 import { LocationSearchResults } from "./LocationSearchResults.js";
-import type { LocationDraftStore } from "../locationDraft.js";
+import { type LatitudeHemisphere, type LocationDraftStore, type LongitudeHemisphere } from "../locationDraft.js";
 import { createLocationResults, restoreLocationResults, snapshotLocationResults, updateLocationResult, type LocationResultNode } from "../locationResults.js";
 import type { GeodeticLocation, LocationHostDataCodec, LocationSearchProvider } from "../contracts.js";
 export type { GeodeticLocation, LocationSearchResult, LocationSearchProvider } from "../contracts.js";
@@ -25,6 +25,30 @@ export interface LocationPanelContribution {
   hideCoordinates(hostData: unknown): boolean;
   blocked(hostData: unknown): boolean;
 }
+export type AltitudeReferenceChoice = "asl" | "agl";
+
+function unsignedDraft<H extends string>(saved: string, stored: string | undefined, live: number, negative: H, positive: H): { text: string; hemisphere: H } {
+  if (stored === negative) return { text: saved, hemisphere: negative };
+  if (stored === positive) return { text: saved, hemisphere: positive };
+  const trimmed = saved.trim();
+  if (trimmed.startsWith("-")) return { text: trimmed.slice(1), hemisphere: negative };
+  if (trimmed) return { text: saved, hemisphere: positive };
+  return { text: "", hemisphere: live < 0 ? negative : positive };
+}
+
+/** A leading minus chooses the southern or western side and leaves the field unsigned. */
+function stripLeadingMinus(value: string): { value: string; negative: boolean } {
+  const trimmed = value.trimStart();
+  if (!trimmed.startsWith("-")) return { value, negative: false };
+  return { value: trimmed.slice(1), negative: true };
+}
+
+function signedDegrees(text: string, negative: boolean, fallback: number): number {
+  const magnitude = text.trim() ? Math.abs(Number(text)) : Math.abs(fallback);
+  if (!Number.isFinite(magnitude)) return Number.NaN;
+  return negative && magnitude !== 0 ? -magnitude : magnitude;
+}
+
 export interface LocationPanelProps {
   initialLocation: GeodeticLocation;
   getCurrentLocation?: () => GeodeticLocation | null;
@@ -37,10 +61,14 @@ export interface LocationPanelProps {
   draft: LocationDraftStore;
   hostDataCodec?: LocationHostDataCodec;
   contribution?: LocationPanelContribution;
+  /** When false, latitude, longitude and altitude stay on the position readout. */
+  showCoordinates?: boolean;
+  altitudeReference?: AltitudeReferenceChoice;
+  onAltitudeReferenceChange?(reference: AltitudeReferenceChoice): void;
 }
 
 /** Shared location editor; the host owns navigation or simulation commands. */
-export function LocationPanel({ initialLocation, getCurrentLocation, onApply, searchProvider, observeLocation, searchAttribution, createAbortController, draft, hostDataCodec, contribution }: LocationPanelProps) {
+export function LocationPanel({ initialLocation, getCurrentLocation, onApply, searchProvider, observeLocation, searchAttribution, createAbortController, draft, hostDataCodec, contribution, showCoordinates = true, altitudeReference: altitudeReferenceProp, onAltitudeReferenceChange }: LocationPanelProps) {
   const [currentLocation, setCurrentLocation] = useState(initialLocation);
   const refreshLocation = useEffectEvent(() => {
     const next = getCurrentLocation?.() ?? initialLocation;
@@ -52,8 +80,13 @@ export function LocationPanel({ initialLocation, getCurrentLocation, onApply, se
   }, [observeLocation]);
   const currentAltitude = currentLocation.altMeters ?? currentLocation.zoomMeters;
   const [saved] = useState(() => draft.read());
-  const [lat, setLat] = useState(saved.lat);
-  const [lon, setLon] = useState(saved.lon);
+  const initialLat = unsignedDraft(saved.lat, saved.latHemisphere, initialLocation.latDeg, "S", "N");
+  const initialLon = unsignedDraft(saved.lon, saved.lonHemisphere, initialLocation.lonDeg, "W", "E");
+  const [lat, setLat] = useState(initialLat.text);
+  const [lon, setLon] = useState(initialLon.text);
+  const [latHemisphere, setLatHemisphere] = useState<LatitudeHemisphere>(initialLat.hemisphere);
+  const [lonHemisphere, setLonHemisphere] = useState<LongitudeHemisphere>(initialLon.hemisphere);
+  const [altitudeReference, setAltitudeReference] = useState<AltitudeReferenceChoice>(altitudeReferenceProp ?? "asl");
   const [altitude, setAltitude] = useState(saved.altitude);
   const [hostData, setHostData] = useState<unknown>(saved.hostData);
   const [resolving, setResolving] = useState(false);
@@ -65,9 +98,9 @@ export function LocationPanel({ initialLocation, getCurrentLocation, onApply, se
   const request = useRef<AbortController | null>(null);
   useEffect(() => () => request.current?.abort(), []);
   useEffect(() => {
-    draft.write({ query, lat, lon, altitude, hostData,
+    draft.write({ query, lat, lon, altitude, latHemisphere, lonHemisphere, hostData,
       resultQuery, results: snapshotLocationResults(results, hostDataCodec) });
-  }, [draft, hostDataCodec, query, lat, lon, altitude, hostData, resultQuery, results]);
+  }, [draft, hostDataCodec, query, lat, lon, altitude, latHemisphere, lonHemisphere, hostData, resultQuery, results]);
 
   const cancelResolution = () => {
     if (!resolving) return;
@@ -117,7 +150,8 @@ export function LocationPanel({ initialLocation, getCurrentLocation, onApply, se
       onApply({ latDeg: result.latDeg, lonDeg: result.lonDeg });
       setHostData(undefined);
       setCurrentLocation((current) => ({ ...current, latDeg: result.latDeg, lonDeg: result.lonDeg }));
-      setLat(String(result.latDeg)); setLon(String(result.lonDeg));
+      setLat(String(Math.abs(result.latDeg))); setLatHemisphere(result.latDeg < 0 ? "S" : "N");
+      setLon(String(Math.abs(result.lonDeg))); setLonHemisphere(result.lonDeg < 0 ? "W" : "E");
       setMessage(`Moved to ${result.label}.`);
     } catch (error) {
       if (!controller.signal.aborted) setMessage(error instanceof Error ? error.message : "Unable to load location details.");
@@ -126,6 +160,15 @@ export function LocationPanel({ initialLocation, getCurrentLocation, onApply, se
     }
   };
 
+  const reference = altitudeReferenceProp ?? altitudeReference;
+  const chooseReference = (value: AltitudeReferenceChoice) => {
+    setAltitudeReference(value);
+    onAltitudeReferenceChange?.(value);
+  };
+  const latPlaceholder = Math.abs(currentLocation.latDeg).toFixed(4);
+  const lonPlaceholder = Math.abs(currentLocation.lonDeg).toFixed(4);
+  const altPlaceholder = currentAltitude === undefined ? "" : currentAltitude.toFixed(0);
+  const showFields = showCoordinates && !(contribution?.hideCoordinates(hostData) ?? false);
   return <div className="foss-earth-location-panel">
     <form onSubmit={(event) => { event.preventDefault(); void search(); }}>
       <div className="foss-earth-location-search-row">
@@ -138,19 +181,20 @@ export function LocationPanel({ initialLocation, getCurrentLocation, onApply, se
           </svg>
         </button>
       </div>
-      {!searchProvider && <p>Place search is unavailable. Enter coordinates below.</p>}
+      {!searchProvider && showFields && <p>Place search is unavailable. Enter coordinates below.</p>}
       <LocationSearchResults results={results} createAbortController={createAbortController} onSelect={result => { void selectResult(result); }}
         onChange={(result, patch) => setResults(current => updateLocationResult(current, result, patch))} />
       {results.length > 0 && <p className="foss-earth-location-attribution">{searchAttribution}</p>}
     </form>
-    <form className="foss-earth-location-coordinates" onSubmit={(event) => {
+    {showFields || contribution ? <form className="foss-earth-location-coordinates" onSubmit={(event) => {
       event.preventDefault();
       if (contribution) {
         try { if (contribution.apply(contributionContext())) return; }
         catch (error) { setMessage(error instanceof Error ? error.message : "Unable to apply location."); return; }
       }
-      const latDeg = lat.trim() ? Number(lat) : currentLocation.latDeg;
-      const lonDeg = lon.trim() ? Number(lon) : currentLocation.lonDeg;
+      if (!showFields) return;
+      const latDeg = signedDegrees(lat, latHemisphere === "S", currentLocation.latDeg);
+      const lonDeg = signedDegrees(lon, lonHemisphere === "W", currentLocation.lonDeg);
       if (!Number.isFinite(latDeg) || !Number.isFinite(lonDeg) || Math.abs(latDeg) > 90 || Math.abs(lonDeg) > 180) {
         setMessage("Enter latitude from −90 to 90 and longitude from −180 to 180."); return;
       }
@@ -167,15 +211,41 @@ export function LocationPanel({ initialLocation, getCurrentLocation, onApply, se
       catch (error) { setMessage(error instanceof Error ? error.message : "Unable to apply location."); }
     }}>
       {contribution?.render(contributionContext())}
-      <div className="foss-earth-location-fields" hidden={contribution?.hideCoordinates(hostData) ?? false}>
-      <label>Lat<input type="number" step="any" min="-90" max="90" placeholder={currentLocation.latDeg.toFixed(8)} style={{ width: `calc(${Math.max(lat.length, currentLocation.latDeg.toFixed(8).length)}ch + 18px)` }} value={lat} onChange={(event) => setLat(event.target.value)} /></label>
-      <label>Lon<input type="number" step="any" min="-180" max="180" placeholder={currentLocation.lonDeg.toFixed(8)} style={{ width: `calc(${Math.max(lon.length, currentLocation.lonDeg.toFixed(8).length)}ch + 18px)` }} value={lon} onChange={(event) => setLon(event.target.value)} /></label>
-      <label>Alt<input aria-label="Altitude in meters" type="number" step="any" style={{ width: `calc(${Math.max(1, altitude.length, currentAltitude?.toFixed(0).length ?? 0)}ch + 18px)` }} value={altitude} onChange={(event) => setAltitude(event.target.value)} placeholder={currentAltitude === undefined ? "" : currentAltitude.toFixed(0)} /></label>
-      </div>
-      <button className="foss-earth-location-play" type="submit" disabled={resolving || (contribution?.blocked(hostData) ?? false)} aria-label="Go to location" title="Go to location">
+      {showFields ? <div className="foss-earth-location-fields">
+      <span className="foss-earth-location-coordinate">
+        <input aria-label="Latitude" inputMode="decimal" placeholder={latPlaceholder} style={{ width: `calc(${Math.max(lat.length, latPlaceholder.length)}ch + 18px)` }} value={lat} onChange={(event) => {
+          const next = stripLeadingMinus(event.target.value);
+          if (next.negative) setLatHemisphere("S");
+          setLat(next.value);
+        }} />
+        <select aria-label="Latitude hemisphere" value={latHemisphere} onChange={(event) => setLatHemisphere(event.target.value === "S" ? "S" : "N")}>
+          <option value="N">N</option>
+          <option value="S">S</option>
+        </select>
+      </span>
+      <span className="foss-earth-location-coordinate">
+        <input aria-label="Longitude" inputMode="decimal" placeholder={lonPlaceholder} style={{ width: `calc(${Math.max(lon.length, lonPlaceholder.length)}ch + 18px)` }} value={lon} onChange={(event) => {
+          const next = stripLeadingMinus(event.target.value);
+          if (next.negative) setLonHemisphere("W");
+          setLon(next.value);
+        }} />
+        <select aria-label="Longitude hemisphere" value={lonHemisphere} onChange={(event) => setLonHemisphere(event.target.value === "W" ? "W" : "E")}>
+          <option value="E">E</option>
+          <option value="W">W</option>
+        </select>
+      </span>
+      <span className="foss-earth-location-coordinate">
+        <input aria-label="Altitude in meters" inputMode="decimal" style={{ width: `calc(${Math.max(1, altitude.length, altPlaceholder.length)}ch + 18px)` }} value={altitude} onChange={(event) => setAltitude(event.target.value)} placeholder={altPlaceholder} />
+        <select aria-label="Altitude reference" value={reference} onChange={(event) => chooseReference(event.target.value === "agl" ? "agl" : "asl")}>
+          <option value="asl">ASL</option>
+          <option value="agl">AGL</option>
+        </select>
+      </span>
+      </div> : null}
+      {showFields || contribution ? <button className="foss-earth-location-play" type="submit" disabled={resolving || (contribution?.blocked(hostData) ?? false)} aria-label="Go to location" title="Go to location">
         Go
-      </button>
-    </form>
+      </button> : null}
+    </form> : null}
     <p role="status">{message}</p>
   </div>;
 }

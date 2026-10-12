@@ -1,9 +1,16 @@
 import { isLocationResultSnapshots, type LocationResultSnapshot } from "./locationResults.js";
 import type { LocationHostDataCodec } from "./contracts.js";
 
+export type LatitudeHemisphere = "N" | "S";
+export type LongitudeHemisphere = "E" | "W";
+
 /** Preference draft is separate from expiring service responses. */
 export interface LocationDraft {
   query: string; lat: string; lon: string; altitude: string;
+  /** Kept beside an unsigned latitude. Older drafts leave it out and keep the sign on `lat`. */
+  latHemisphere?: LatitudeHemisphere;
+  /** Kept beside an unsigned longitude. Older drafts leave it out and keep the sign on `lon`. */
+  lonHemisphere?: LongitudeHemisphere;
   hostData?: unknown;
   resultQuery?: string;
   results?: readonly LocationResultSnapshot[];
@@ -30,8 +37,12 @@ export function createLocationDraftStore(ports: LocationDraftStorePorts) {
         if (ports.legacy && !ports.legacy.valid(record)) return empty();
         const hostData = record.hostData ?? ports.legacy?.hostData(record);
         if (hostData !== undefined && !ports.hostDataCodec?.valid(hostData)) return empty();
+        const latHemisphere = record.latHemisphere === "N" || record.latHemisphere === "S" ? record.latHemisphere : undefined;
+        const lonHemisphere = record.lonHemisphere === "E" || record.lonHemisphere === "W" ? record.lonHemisphere : undefined;
         return {
           query: record.query as string, lat: record.lat as string, lon: record.lon as string, altitude: record.altitude as string,
+          ...(latHemisphere ? { latHemisphere } : {}),
+          ...(lonHemisphere ? { lonHemisphere } : {}),
           ...(hostData === undefined ? {} : { hostData: ports.hostDataCodec!.copy(hostData) }),
           resultQuery: typeof record.resultQuery === "string" ? record.resultQuery : record.query as string,
           results: isLocationResultSnapshots(record.results, ports.hostDataCodec) ? record.results : [],

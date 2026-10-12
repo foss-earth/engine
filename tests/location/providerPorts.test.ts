@@ -3,14 +3,14 @@ import { createLocationLookupCache,createLocationLookupTransport,createLocationS
 import { LOCATION_LOOKUP_PARAMETERS } from "../../src/settings/catalogue/locationLookup.js";
 import { createSettingsRegistry } from "@foss-earth/ui/settings";
 
-it("uses the one host registry live and preserves existing homes, units and defaults", () => {
+it("uses the one host registry live and keeps the Location search homes, units and defaults", () => {
   const settings = createSettingsRegistry({ storage: null });settings.register(LOCATION_LOOKUP_PARAMETERS);
   const tuning = createLocationSearchTuning(settings);
   expect(tuning()).toEqual({ cacheMs: 24*3600000,cacheEntries: 64,timeoutMs: 20000 });
   expect(LOCATION_LOOKUP_PARAMETERS.map(spec => [spec.id,spec.unit,spec.home])).toEqual([
-    ["search.cacheDuration","h",{tab:"interface",section:"search",level:"main"}],
-    ["search.cacheEntries","count",{tab:"interface",section:"search",level:"main"}],
-    ["search.timeout","s",{tab:"interface",section:"search",level:"main"}],
+    ["search.cacheDuration","h",{tab:"location",section:"search",level:"main"}],
+    ["search.cacheEntries","count",{tab:"location",section:"search",level:"main"}],
+    ["search.timeout","s",{tab:"location",section:"search",level:"main"}],
   ]);
   settings.setMany({ "search.cacheDuration": 2,"search.cacheEntries": 3,"search.timeout": 5 });
   expect(tuning()).toEqual({ cacheMs: 7200000,cacheEntries: 3,timeoutMs: 5000 });

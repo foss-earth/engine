@@ -100,12 +100,18 @@
   display: contents;
 }
 
-.foss-earth-location-fields label {
+.foss-earth-location-coordinate {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   min-width: 0;
   max-width: 100%;
+}
+
+.foss-earth-location-coordinate select {
+  field-sizing: content;
+  width: max-content;
+  flex: none;
 }
 
 .foss-earth-location-fields input {

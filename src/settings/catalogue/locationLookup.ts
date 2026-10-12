@@ -1,7 +1,7 @@
 import type { ParameterSpec } from "@foss-earth/ui/settings";
 import { SEARCH_DEFAULTS } from "../../location/provider/searchDefaults.js";
-const INTERFACE_TAB = "interface";
-/** Existing Location lookup controls retain Interface → search. No Search tab. */
+const LOCATION_TAB = "location";
+/** Place-lookup limits live at the bottom of the Location tab. */
 export const LOCATION_LOOKUP_PARAMETERS: readonly ParameterSpec[] = [
   {
     id: "search.cacheDuration",
@@ -14,7 +14,7 @@ export const LOCATION_LOOKUP_PARAMETERS: readonly ParameterSpec[] = [
     scale: "log2",
     default: SEARCH_DEFAULTS.cacheHours,
     defaultReason: "A day, as the geocoder's usage policy asks answers to be cached.",
-    home: { tab: INTERFACE_TAB, section: "search", level: "main" },
+    home: { tab: LOCATION_TAB, section: "search", level: "main" },
     appliesLive: true,
     source: "src/search/searchTuning.ts",
   },
@@ -29,7 +29,7 @@ export const LOCATION_LOOKUP_PARAMETERS: readonly ParameterSpec[] = [
     scale: "log2",
     default: SEARCH_DEFAULTS.cacheEntries,
     defaultReason: "What the place lookup kept before this became a parameter; the airport lookup kept 32.",
-    home: { tab: INTERFACE_TAB, section: "search", level: "main" },
+    home: { tab: LOCATION_TAB, section: "search", level: "main" },
     appliesLive: true,
     source: "src/search/searchTuning.ts",
   },
@@ -44,7 +44,7 @@ export const LOCATION_LOOKUP_PARAMETERS: readonly ParameterSpec[] = [
     scale: "log2",
     default: SEARCH_DEFAULTS.timeoutSeconds,
     defaultReason: "What both lookups waited before this became a parameter.",
-    home: { tab: INTERFACE_TAB, section: "search", level: "main" },
+    home: { tab: LOCATION_TAB, section: "search", level: "main" },
     appliesLive: true,
     source: "src/search/searchTuning.ts",
   },
