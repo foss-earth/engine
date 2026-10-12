@@ -1,5 +1,5 @@
-import { PointerEventTypes } from "@babylonjs/core";
-import type { AbstractMesh, GeospatialCamera, Scene, Vector3 } from "@babylonjs/core";
+import { PointerEventTypes, Vector3 } from "@babylonjs/core";
+import type { AbstractMesh, GeospatialCamera, Scene } from "@babylonjs/core";
 import { DEFAULT_INPUT_RATES } from "../input/inputRates.js";
 import type { PoiDescriptor } from "./types.js";
 
@@ -40,6 +40,12 @@ export interface PoiTrackingOptions {
    * so a press the map took as a drag never also selects a point.
    */
   dragThresholdPx?: () => number;
+  /**
+   * How much of the way from the view's centre to a newly tracked point is
+   * left after each 60 Hz frame, 0 to 1, such as `camera.inertiaDecay`:
+   * tracking eases the centre onto the point instead of jumping to it.
+   */
+  entryKeepPerFrame?: () => number;
   requestRender?(): void;
   log?(message: string): void;
 }
@@ -51,10 +57,17 @@ export interface PoiTrackingOptions {
  *    - If the hit mesh is a registered POI → enter tracking mode.
  *    - Otherwise (empty space or non-POI) → exit tracking if active.
  *  - Each frame: updates the GeospatialCamera's orbit center to the tracked
- *    POI's current ECEF position so the camera "follows" the POI.
+ *    POI's current ECEF position so the camera "follows" the POI. On entry
+ *    the centre eases onto the POI over a few frames rather than jumping.
  *
  * Touch events are intentionally excluded — those are handled by touchController.
  */
+const FRAME_MS = 1000 / 60;
+/** How much of the way to a newly tracked point is left after each 60 Hz frame, by default. */
+const DEFAULT_ENTRY_KEEP_PER_FRAME = 0.85;
+/** Nearer than this, metres, the centre is on the tracked point. */
+const ENTRY_SETTLED_METERS = 0.01;
+
 export function createPoiTracking(
   scene: Scene,
   getCamera: () => GeospatialCamera | null,
@@ -67,6 +80,8 @@ export function createPoiTracking(
   let disposed = false;
   let pointerDownX = 0;
   let pointerDownY = 0;
+  /** Where the centre still is from the tracked point while it eases onto it, ECEF metres, or null once it is there. */
+  let entryOffset: { x: number; y: number; z: number } | null = null;
 
   // ── Core tracking actions ─────────────────────────────────────────────────
 
@@ -76,12 +91,12 @@ export function createPoiTracking(
     currentPoi?.onTrackingExit?.();
     currentPoi = poi;
     poi.onTrackingEnter?.();
-    // Snap orbit center immediately on entry
+    // The centre eases onto the point from where it is, frame by frame: the view never jumps.
     const camera = getCamera();
     const pos = poi.getPosition();
-    if (camera && pos) {
-      camera.center = pos;
-    }
+    const from = camera?.center;
+    entryOffset = from && pos ? { x: from.x - pos.x, y: from.y - pos.y, z: from.z - pos.z } : null;
+    if (entryOffset && !(Math.hypot(entryOffset.x, entryOffset.y, entryOffset.z) > ENTRY_SETTLED_METERS)) entryOffset = null;
     options.requestRender?.(); options.log?.(`[poi-tracking] entered tracking poi=${poi.mesh.name}`);
   }
 
@@ -91,6 +106,7 @@ export function createPoiTracking(
     const name = currentPoi.mesh.name;
     currentPoi.onTrackingExit?.();
     currentPoi = null;
+    entryOffset = null;
     options.requestRender?.(); options.log?.(`[poi-tracking] exited tracking poi=${name}`);
   }
 
@@ -108,7 +124,19 @@ export function createPoiTracking(
     if (!currentPoi || suspended || disposed) return;
     const camera = getCamera();
     const pos = currentPoi.getPosition();
-    if (camera && pos) {
+    if (!camera || !pos) return;
+    if (entryOffset) {
+      const frameMs = scene.getEngine().getDeltaTime?.() ?? FRAME_MS;
+      const keep = Math.max(0, Math.min(1, options.entryKeepPerFrame?.() ?? DEFAULT_ENTRY_KEEP_PER_FRAME));
+      // The same share each 60 Hz frame whatever the frame rate; a stalled frame counts as at most a few.
+      const left = keep ** (Math.min(Math.max(frameMs, 0), 4 * FRAME_MS) / FRAME_MS);
+      entryOffset = { x: entryOffset.x * left, y: entryOffset.y * left, z: entryOffset.z * left };
+      if (!(Math.hypot(entryOffset.x, entryOffset.y, entryOffset.z) > ENTRY_SETTLED_METERS)) entryOffset = null;
+    }
+    if (entryOffset) {
+      camera.center = pos.add(new Vector3(entryOffset.x, entryOffset.y, entryOffset.z));
+      options.requestRender?.();
+    } else {
       camera.center = pos;
     }
   });

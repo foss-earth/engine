@@ -14,6 +14,7 @@ import type { GoogleTilesRuntimeOptions } from "./createTilesRuntime.js";
 import type { RasterTilesRuntimeOptions } from "./createRasterTilesRuntime.js";
 import type { BabylonRuntimeStatus } from "./createGlobeRuntime.js";
 import type { BorrowedGlobeScheduler } from "./borrowedRuntimeAuthority.js";
+import type { NavigationAnchorMarkers } from "../browser/navigationAnchorMarkers.js";
 
 export type BorrowedGlobeSky = Omit<SkyRuntime, "dispose">;
 export interface GlobeSkyContext {
@@ -35,6 +36,8 @@ export interface GlobeRuntimePlatform {
   passToWorld: PassToWorldOptions;
   hasPickablePointAt: NonNullable<import("./cameraState.js").CameraControllerPorts>["hasPickablePointAt"];
   navigation: Pick<NavigationHost, "focusReturn" | "createAbortController" | "abortReason">;
+  /** Markers for the points zoom and rotation act about, over the canvas (`input.showNavigationAnchors`); none without it. */
+  navigationAnchorMarkers?(canvas: HTMLCanvasElement): NavigationAnchorMarkers;
 }
 export type GlobeRasterPorts = Pick<RasterTilesRuntimeOptions, "loadMapTexture" | "asyncMapTextures" | "attachTerrainLighting" | "createTerrainLoader" | "imageryPorts" | "meshRebuildCpuMs" | "log">;
 export type GlobeGooglePorts = Pick<GoogleTilesRuntimeOptions, "createTilesRenderer" | "createAuthPlugin" | "createAbortController" | "combineSignals" | "whenMeshesReady" | "lighting" | "responseRealm" | "recordMapRequest" | "resourceTiming" | "online" | "origin" | "log">;

@@ -35,6 +35,11 @@ import { createGlobeInertia } from "./globeInertia.js";
 import { createCameraClipping } from "./cameraClipping.js";
 import { createNavigationCameraAdapter } from "./navigationCamera.js";
 import { createGlobeIntentMotion } from "../input/globeIntentMotion.js";
+import { createNavigationAnchorService, type GlobeNavigationAnchors, type NavigationAnchorService, type NavigationAnchorStatus } from "./navigationAnchorService.js";
+import { ANCHOR_FALLBACK_MESSAGES, ANCHOR_FAMILIES, ANCHOR_OPERATIONS, NAVIGATION_ANCHOR_SETTING_IDS, SHOW_NAVIGATION_ANCHORS_ID, navigationAnchorSettingId, navigationAnchorsFromSettings, type AnchorFamily, type AnchorOperation } from "../input/navigationAnchors.js";
+import { pointInViewProblem } from "../camera/anchoredMotion.js";
+import { ecefToVector3, projectEcefToClient } from "./anchorPan.js";
+import type { NavigationAnchorMarkers, NavigationAnchorMarkerView } from "../browser/navigationAnchorMarkers.js";
 import { createBorrowedRuntimeAuthority } from "./borrowedRuntimeAuthority.js";
 import type { GlobeRuntimeOptions, GlobeMapDebugSnapshot } from "./globeRuntimePorts.js";
 export type * from "./globeRuntimePorts.js";
@@ -293,6 +298,12 @@ export interface GlobeRuntime {
   /** The current lease's presented view, or null while the globe camera's view is drawn. */
   getPresentationView(): NavigationPresentation | null;
   /**
+   * The points zoom and rotation act about (`input.*.zoomAnchor`,
+   * `input.*.orbitPivot`): what each kind of input last used and why, and the
+   * session's pinned point, with Pick point, Pin compass target and Clear pin.
+   */
+  readonly navigationAnchors: GlobeNavigationAnchors;
+  /**
    * Where controller intents go in a context other than "globe": the lease
    * holder's handler. Returns a function that removes it.
    */
@@ -377,6 +388,9 @@ function createFallbackExperience(scene: Scene, worldRoot: TransformNode | null,
   }
 }
 
+/** How far toward a marked point the map surface is looked for: short of the point, which is on the surface it was picked from. */
+const ANCHOR_OCCLUSION_REACH = 0.995;
+
 export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRuntimeOptions): SettledGlobeRuntime {
   const { renderer, scene, settings, clock, platform } = options;
   if (scene.getEngine() !== renderer.engine) throw new Error("Globe scene and renderer must borrow the same host device.");
@@ -440,6 +454,10 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
   let inertialCameraController: InertialCameraController<HTMLCanvasElement> | null = null;
   let inputController: InputController | null = null;
   let orbitModeActive = false;
+  // Where zoom and rotation act, the pin and Pick point (navigationAnchorService.ts), made with the camera, and their markers.
+  let navigationAnchors: NavigationAnchorService | null = null;
+  let anchorMarkers: NavigationAnchorMarkers | null = null;
+  const anchorListeners = new Set<() => void>();
   let simRunning = simMode && options.external?.running !== false;
   let simTick: ((deltaSeconds: number) => void) | null = options.external?.onFrame ?? null;
   let simViewState: GlobeViewState | null = null;
@@ -505,6 +523,13 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
   authority.own(() => { retireMap(rasterTilesRuntime); rasterTilesRuntime = null; });
   authority.own(() => { inputController?.destroy(); inputController = null; });
   authority.own(() => { inertialCameraController?.cancel(); inertialCameraController = null; });
+  authority.own(() => {
+    // The pin, Pick point, gestures' anchors and markers go with the runtime; Controls says nothing of them after.
+    const owned = navigationAnchors, markers = anchorMarkers;
+    navigationAnchors = null; anchorMarkers = null;
+    finishOwnedCleanup([() => owned?.dispose(), () => markers?.destroy(), () => setAnchorNotes(() => null), () => anchorListeners.clear()],
+      "Navigation anchor cleanup failed.");
+  });
   authority.own(() => {
     const ownedClipping = clipping, ownedCamera = geospatialCamera, ownedPreparation = preparationCamera;
     clipping = null; geospatialCamera = null; cameraController = null; preparationCamera = null;
@@ -670,6 +695,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
       if (rendered) {
         const started = profiler.clock(); preparationTick?.(frameNow);
         profiler.add("map/terrain preparation", started);
+        showAnchorMarkers();
         if (mapDebugEnabled) recordMapDebugEvent("scene-render", { mode: status.mode, enabledMeshes: scene.meshes.filter(mesh => mesh.isEnabled()).length });
       }
     } catch (error) { failures.push(error); }
@@ -767,13 +793,114 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
     cameraController = new CameraController(geospatialCamera, { nowMs: clock.nowMs, hasPickablePointAt: platform.hasPickablePointAt });
     cameraController.setLimits(cameraLimits());
     cameraController.setGroundFollow(groundFollow());
-    inertialCameraController = createGlobeInertia(cameraController, { nowMs: clock.nowMs, decayPerFrame: () => settings.get<number>("camera.inertiaDecay"), renderer: scheduler });
+    const anchors = navigationAnchors = createNavigationAnchorService({
+      scene, canvas, getCamera: () => geospatialCamera, getPose: () => cameraController?.getPose() ?? null,
+      // Read when a gesture starts, once the runtime is built.
+      surface: { raycast: (origin, direction, lengthMeters) => surface.raycast(origin, direction, lengthMeters), revision: () => surface.revision?.() ?? 0 },
+      preferences: () => navigationAnchorsFromSettings(id => (settings.has(id) ? settings.get(id) : undefined)),
+      tracking: () => orbitModeActive,
+      pinningBlocked: anchorPinningBlocked,
+      owner: () => navigation.state()?.owner ?? "globe",
+      changed: navigationAnchorsChanged,
+    });
+    anchorMarkers = simMode ? null : platform.navigationAnchorMarkers?.(canvas) ?? null;
+    inertialCameraController = createGlobeInertia(cameraController, { nowMs: clock.nowMs, decayPerFrame: () => settings.get<number>("camera.inertiaDecay"), renderer: scheduler, anchors });
     inputController = simMode
       ? null
-      : createInputController(canvas, inertialCameraController, { ...platform.input, isOrbitMode: () => orbitModeActive });
+      : createInputController(canvas, inertialCameraController, { ...platform.input, isOrbitMode: () => orbitModeActive, pointSelection: anchors.selection });
     inputController?.setRates(inputRates());
 
     return geospatialCamera;
+  }
+
+  /** Why Pick point and Pin compass target cannot be used now, or null. */
+  function anchorPinningBlocked(): string | null {
+    if (disposed) return "The globe has closed.";
+    if (simMode) return "A simulation owns the camera.";
+    if (navigation.state()) return "Another view, such as a 360\u00B0 image, holds the camera. Pinning is available again when it gives the camera back.";
+    return geospatialCamera ? null : "The globe camera is not ready.";
+  }
+
+  /** What Controls says beside an anchor choice: what the last gesture used, and why when that was not what was asked. */
+  function anchorNote(status: NavigationAnchorStatus, family: AnchorFamily, operation: AnchorOperation, requested: unknown): string | null {
+    if (status.tracking) return `${ANCHOR_FALLBACK_MESSAGES.tracking}.`;
+    if (requested === "pinned" && !status.pin) return `${ANCHOR_FALLBACK_MESSAGES["no-pin"]}.`;
+    const last = status.last[family][operation];
+    if (!last || last.requested !== requested) return null;
+    // Tracking has ended: the next gesture uses the choice again.
+    if (last.fallback === "tracking") return null;
+    if (last.fallback) return `${ANCHOR_FALLBACK_MESSAGES[last.fallback]}.`;
+    if (requested === "target") return null;
+    const where = last.source === "pinned" ? "the pinned point"
+      : last.source === "target" ? "the compass target"
+        : `the point under ${family === "touch" ? "the fingers" : "the pointer"}${last.source === "ellipsoid" ? ", on the ellipsoid: no map surface was there" : ""}`;
+    return `Last used ${where}.`;
+  }
+
+  function setAnchorNotes(note: (family: AnchorFamily, operation: AnchorOperation, requested: unknown) => string | null): void {
+    for (const family of ANCHOR_FAMILIES) for (const operation of ANCHOR_OPERATIONS) {
+      const id = navigationAnchorSettingId(family, operation);
+      if (settings.has(id)) settings.setNote(id, note(family, operation, settings.get(id)));
+    }
+  }
+
+  function updateAnchorNotes(): void {
+    const status = globeNavigationAnchors.status();
+    setAnchorNotes((family, operation, requested) => anchorNote(status, family, operation, requested));
+  }
+
+  function navigationAnchorsChanged(): void {
+    if (disposed) return;
+    updateAnchorNotes();
+    for (const listener of [...anchorListeners]) listener();
+    // Markers move with the frames drawn.
+    scheduler.requestRender();
+  }
+
+  /** The anchors' public face, there before the camera is: its service once it is. */
+  const globeNavigationAnchors: GlobeNavigationAnchors = {
+    status: () => navigationAnchors?.status() ?? {
+      pin: null, selection: "off", pinningBlocked: anchorPinningBlocked(), tracking: orbitModeActive,
+      last: { mouse: {}, trackpad: {}, touch: {}, nonPointer: {} },
+    },
+    subscribe(listener) {
+      if (disposed) return () => undefined;
+      anchorListeners.add(listener);
+      return () => { anchorListeners.delete(listener); };
+    },
+    togglePick: () => navigationAnchors?.togglePick() ?? false,
+    armPick: () => navigationAnchors?.armPick() ?? false,
+    cancelPick: () => navigationAnchors?.cancelPick(),
+    pinTarget: () => navigationAnchors?.pinTarget() ?? false,
+    clearPin: () => navigationAnchors?.clearPin(),
+  };
+
+  /**
+   * Shows the points zoom and rotation act about where the frame just drawn
+   * has them: none behind the eye or past the horizon, and faint where the
+   * map surface is nearer the eye.
+   */
+  function showAnchorMarkers(): void {
+    if (!anchorMarkers) return;
+    const camera = geospatialCamera, pose = cameraController?.getPose() ?? null, anchors = navigationAnchors;
+    const shown = !mapsSuspended && (!settings.has(SHOW_NAVIGATION_ANCHORS_ID) || settings.get(SHOW_NAVIGATION_ANCHORS_ID) !== false);
+    const markers: NavigationAnchorMarkerView[] = [];
+    if (camera && pose && anchors && shown) {
+      for (const marker of anchors.markerPoints(inertialCameraController?.anchors() ?? { orbit: null, zoom: null })) {
+        const point: [number, number, number] = [marker.point.x, marker.point.y, marker.point.z];
+        if (pointInViewProblem(pose, point)) continue;
+        const at = projectEcefToClient(ecefToVector3(marker.point), scene, camera, canvas);
+        if (!at) continue;
+        const toPoint = [point[0] - pose.eye[0], point[1] - pose.eye[1], point[2] - pose.eye[2]];
+        const distance = Math.hypot(toPoint[0], toPoint[1], toPoint[2]);
+        // Short of the point itself, which is on the surface it was picked from.
+        const reach = distance * ANCHOR_OCCLUSION_REACH - 1;
+        const occluded = reach > 0 && surface.raycast({ x: pose.eye[0], y: pose.eye[1], z: pose.eye[2] },
+          { x: toPoint[0] / distance, y: toPoint[1] / distance, z: toPoint[2] / distance }, reach) !== null;
+        markers.push({ x: at.x, y: at.y, zoom: marker.zoom, orbit: marker.orbit, pinned: marker.pinned, occluded });
+      }
+    }
+    anchorMarkers.show(markers);
   }
 
   /**
@@ -1207,6 +1334,8 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
     suspend() {
       inputController?.setSuspended(true);
       navigationCamera.suspendCamera();
+      // The owner's view is not the globe's: no gesture's anchors or Pick point outlast the lease. The pin does.
+      navigationAnchors?.reset();
       mapsSuspended = true;
       streamingBeforeSuspension = streamingHeld;
       startupHoldBeforeSuspension = startupHeld;
@@ -1223,6 +1352,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
       tilesRuntime?.setSuspended(false);
       rasterTilesRuntime?.setSuspended(false);
       inputController?.setSuspended(false, navigationCamera.takeInputHandback() ?? undefined);
+      navigationAnchors?.refresh();
       // Continue a load the lease interrupted, if it still has work.
       const google = tilesRuntime?.getLoadingState();
       const googlePending = google ? google.queued + google.downloading + google.parsing + google.waitingToParse > 0 : false;
@@ -1382,7 +1512,11 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
     })),
     ...["camera.surfaceFollowSpeed", "camera.orbitTargetZoomStep"].map(id => watch(id, () => cameraController?.setGroundFollow(groundFollow()))),
     ...Object.values(INPUT_RATE_IDS).map(id => watch(id, () => inputController?.setRates(inputRates()))),
+    // The notes under the anchor choices say what each choice last did; the markers follow the switch.
+    ...NAVIGATION_ANCHOR_SETTING_IDS.filter(id => settings.has(id)).map(id => watch(id, updateAnchorNotes)),
+    ...(settings.has(SHOW_NAVIGATION_ANCHORS_ID) ? [watch(SHOW_NAVIGATION_ANCHORS_ID, () => scheduler.requestRender())] : []),
   ];
+  updateAnchorNotes();
 
   // The HTTP tile cache is shared by every map on the page; its limits are parameters.
   const MiB = 1024 * 1024;
@@ -1825,11 +1959,14 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
     },
     setViewState(partial: Partial<GlobeViewState>): void {
       inertialCameraController?.cancel();
+      // A view set from outside ends the gestures under way: their anchors with them.
+      navigationAnchors?.retire();
       cameraController?.setViewState(partial);
       scheduler.requestRender();
     },
     configureOrbitTargetHeight(options: OrbitTargetHeightOptions | null): void {
       inertialCameraController?.cancel();
+      navigationAnchors?.retire();
       cameraController?.configureOrbitTargetHeight(options);
       scheduler.requestRender();
     },
@@ -1912,7 +2049,17 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
       return () => { detailAdjustedListeners.delete(listener); };
     },
     setOrbitMode(active: boolean): void {
+      if (orbitModeActive === active) return;
       orbitModeActive = active;
+      if (active) {
+        // The tracked point is the centre of every zoom and rotation now: gestures under way
+        // leave their own anchors, and what they set moving goes on about it.
+        navigationAnchors?.retire();
+        inertialCameraController?.rebaseTo({ orbit: null, zoom: null });
+      }
+      // The tracked point sets the target's height while it is followed; the ground does again after.
+      cameraController?.setCenterFollowsGround(!active);
+      navigationAnchors?.refresh();
     },
     setInputMode(mode: InputModePreference): void {
       inputController?.setMode(mode);
@@ -1974,7 +2121,12 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
     getNavigationState: () => navigation.state(),
     onNavigationChange: listener => navigation.subscribe(listener),
     captureNavigationSnapshot,
-    restoreNavigationSnapshot,
+    restoreNavigationSnapshot(snapshot, lease) {
+      const restored = restoreNavigationSnapshot(snapshot, lease);
+      // The view was replaced: gestures under way no longer act about their points.
+      if (restored) navigationAnchors?.retire();
+      return restored;
+    },
     placeNavigationCamera,
     glideNavigationCamera,
     getCameraHandling(): CameraHandling {
@@ -1982,6 +2134,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
       return { ...(cameraController?.getLimits() ?? cameraLimits()), glideKeepPerFrame: typeof decay === "number" ? decay : DEFAULT_INERTIA_DECAY_PER_FRAME };
     },
     getPresentationView: () => navigation.current()?.getPresentationView() ?? null,
+    navigationAnchors: globeNavigationAnchors,
     setNavigationIntentHandler(lease, handler) {
       if (navigation.current() !== lease || lease.released) return () => {};
       const entry = { lease, handler };

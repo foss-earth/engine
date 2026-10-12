@@ -2,6 +2,8 @@ import type { SettingsRegistry } from "@foss-earth/ui/settings";
 import type { createParameterSection, createSectionsElement, appendHostSections, ParameterSectionOptions, SectionsElementEntry } from "@foss-earth/ui/browser";
 import { INPUT_SENSITIVITY_IDS } from "../settings/catalogue/controls.js";
 import type { InputModeHudHandle } from "./inputModeHud.js";
+import type { GlobeNavigationAnchors } from "../input/navigationAnchors.js";
+import { createNavigationAnchorPinSection } from "./navigationAnchorPinSection.js";
 
 export interface ControlsPanelPorts {
   document: Document;
@@ -9,6 +11,8 @@ export interface ControlsPanelPorts {
   inputMethod?: InputModeHudHandle;
   /** Existing gamepad-tools editor contribution; engine never creates or polls it. */
   controller?: HTMLElement;
+  /** The runtime's pinned point and Pick point (`GlobeRuntime.navigationAnchors`), shown in Controls → Orbit. */
+  navigationAnchors?: GlobeNavigationAnchors;
   ui: {
     createParameterSection: typeof createParameterSection;
     createSectionsElement: typeof createSectionsElement;
@@ -35,10 +39,11 @@ export function createControlsPanel(ports: ControlsPanelPorts) {
   const tiltNote = document.createElement("p");
   tiltNote.className = "settings-line";
   tiltNote.textContent = "Tilt: 0° looks at the horizon, 90° straight down.";
+  const pinSection = ports.navigationAnchors ? createNavigationAnchorPinSection({ document, anchors: ports.navigationAnchors }) : null;
   const entries: SectionsElementEntry[] = [
     ...(ports.inputMethod ? [{ id: "controls.input-method", title: "Input method", element: sectionOf("input-method", { main: inputMethod, covers: ["input.mode", ...INPUT_SENSITIVITY_IDS] }), defaultOpen: true }] : []),
     { id: "controls.camera", title: settings.getSectionTitle("controls", "camera"), element: sectionOf("camera", { footer: tiltNote }), defaultOpen: false },
-    { id: "controls.orbit", title: settings.getSectionTitle("controls", "orbit"), element: sectionOf("orbit"), defaultOpen: false },
+    { id: "controls.orbit", title: settings.getSectionTitle("controls", "orbit"), element: sectionOf("orbit", pinSection ? { footer: pinSection.element } : {}), defaultOpen: false },
     { id: "controls.mouse", title: settings.getSectionTitle("controls", "mouse"), element: sectionOf("mouse"), defaultOpen: false },
     { id: "controls.touch", title: settings.getSectionTitle("controls", "touch"), element: sectionOf("touch"), defaultOpen: false },
     { id: "controls.controller", title: settings.getSectionTitle("controls", "controller"), element: sectionOf("controller", { main: ports.controller }), defaultOpen: false },
@@ -49,6 +54,7 @@ export function createControlsPanel(ports: ControlsPanelPorts) {
     element: sections.element,
     destroy(): void {
       unmountInput?.();
+      pinSection?.destroy();
       for (const handle of handles) handle.destroy();
       hostSections.destroy();
       sections.destroy();

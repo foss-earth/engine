@@ -46,15 +46,24 @@ export function createGlobeGamepadAdapter(
   options: GlobeGamepadAdapterOptions = {},
 ): HostInputAdapter {
   let captureActive = false;
+  // Whether the last frame moved the globe: the frame after it says the sticks are back at rest.
+  let navigating = false;
+  const rest = (dt: number): void => {
+    if (!navigating) return;
+    navigating = false;
+    target.applyGlobeNavigationIntents({ dt, intents: [] });
+  };
   return {
     namespace: "foss-earth",
     actions: [...GLOBE_GAMEPAD_ACTIONS, ...(options.featureActions ?? [])],
     getContext: () => options.getContext?.() ?? "globe",
     applyIntents(frame: ActionIntentFrame): void {
       if (captureActive) {
+        rest(frame.dt);
         return;
       }
       if ((options.getContext?.() ?? "globe") !== "globe") {
+        rest(frame.dt);
         const intents = frame.intents.filter((intent) => !intent.actionId.startsWith("globe."));
         if (intents.length > 0) target.applyNavigationIntents?.({ ...frame, intents });
         return;
@@ -79,7 +88,11 @@ export function createGlobeGamepadAdapter(
         }
       }
       if (intents.length > 0) {
+        navigating = true;
         target.applyGlobeNavigationIntents({ dt: frame.dt, intents });
+      } else {
+        // One empty frame, which moves nothing: the end of this run of input. A glide follows its own rules.
+        rest(frame.dt);
       }
     },
     setBindingCapture(active: boolean): void {

@@ -10,6 +10,7 @@ import { createTerrainImageDecodeLimits, loadGlobeAnchorRotationPreference, save
 import { createBoundedMapTextureLoader } from "../babylon/imagery/boundedMapTextureLoader.js";
 import { createManagedImageryAtlasResources } from "../babylon/managedImageryAtlas.js";
 import { hasPickablePointAt } from "../sprites/picking.js";
+import { attachNavigationAnchorMarkers } from "./navigationAnchorMarkers.js";
 import type { createTerrainLightingAdapter } from "../babylon/imagery/terrainLightPlugin.js";
 import type { GlobeMapPorts, GlobeRuntimeClock, GlobeRuntimePlatform } from "../babylon/globeRuntimePorts.js";
 import { createTerrainImageDecoder } from "./terrainImageDecoder.js";
@@ -184,6 +185,7 @@ export function createBrowserGlobeBindings(options: BrowserGlobeBindingOptions) 
       hasPickablePointAt,
       navigation: { focusReturn: () => realm.document.activeElement, createAbortController: () => new realm.AbortController(),
         abortReason: reason => new realm.DOMException(reason, "AbortError") },
+      navigationAnchorMarkers: attachNavigationAnchorMarkers,
     };
     options.signal?.addEventListener("abort", abort, { once: true });
     if (options.signal?.aborted) abort();

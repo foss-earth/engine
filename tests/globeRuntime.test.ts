@@ -7,6 +7,18 @@ import { createTerrainPerformanceCapture } from "../src/terrain/terrainPerforman
 import { TransformNode, Color3, MeshBuilder, StandardMaterial, type Scene } from "@babylonjs/core";
 import type { GlobeRuntimeOptions } from "../src/babylon/globeRuntimePorts.js";
 import { createParameterControl } from "@foss-earth/ui/browser";
+import { ANCHOR_FALLBACK_MESSAGES, NAVIGATION_ANCHOR_SETTING_IDS, SHOW_NAVIGATION_ANCHORS_ID } from "../src/input/navigationAnchors.js";
+import type { NavigationAnchorService } from "../src/babylon/navigationAnchorService.js";
+import type { NavigationAnchorMarkers } from "../src/browser/navigationAnchorMarkers.js";
+
+/** Each runtime's own anchor service, passed through unchanged, so a test can see what the runtime asks of it. */
+const anchorServices = vi.hoisted(() => [] as NavigationAnchorService[]);
+vi.mock("../src/babylon/navigationAnchorService.js", async importOriginal => {
+  const actual = await importOriginal<typeof import("../src/babylon/navigationAnchorService.js")>();
+  return { ...actual, createNavigationAnchorService(...args: Parameters<typeof actual.createNavigationAnchorService>) {
+    const service = actual.createNavigationAnchorService(...args); anchorServices.push(service); return service;
+  } };
+});
 
 /** The supplied traversal leaf never downloads; the actual globe and Google
  * adapter still own frame, preparation, camera, listeners and hold lifetime. */
@@ -483,5 +495,291 @@ describe("owned globe cleanup and ordinary host preparation", () => {
       expect(materialDispose).toHaveBeenCalled(); expect(host.scene.getMaterialByName("fallback-globe-material")).toBeNull();
       expect(host.scene.getLightByName("fallback-light")).toBeNull(); expect(host.camera.isDisposed()).toBe(false); expect(host.holdCount()).toBe(1);
     } finally { vi.restoreAllMocks(); partial?.dispose(); host.disposeHost(); }
+  });
+});
+
+/** An ordinary (not simulation) runtime, which owns its camera and input, with the anchor service it made. */
+function createAnchorHost(markers: NavigationAnchorMarkers | null = null) {
+  const made = anchorServices.length;
+  const host = createGlobeHostFixture(document, defaults => ({ external: undefined,
+    platform: markers ? { ...defaults.platform, navigationAnchorMarkers: () => markers } : defaults.platform }));
+  const service = anchorServices[made];
+  if (!service || anchorServices.length !== made + 1) throw new Error("The runtime did not make exactly one anchor service.");
+  return { ...host, anchors: host.runtime.navigationAnchors, service };
+}
+const noGlide = { orbit: null, zoom: null };
+const nonPointerZoom = { family: "nonPointer", operations: ["zoom"], client: null } as const;
+const noteOf = (host: { settings: { inspect(id: string): { note: string | null } } }, id: string) => host.settings.inspect(id).note;
+
+describe("runtime navigation anchors", () => {
+  it("reports Pick point, Pin compass target and Clear pin through status and subscribers", () => {
+    const host = createAnchorHost(), changed = vi.fn();
+    try {
+      expect(host.anchors.status()).toEqual({ pin: null, selection: "off", pinningBlocked: null, tracking: false,
+        last: { mouse: {}, trackpad: {}, touch: {}, nonPointer: {} } });
+      const unsubscribe = host.anchors.subscribe(changed);
+      expect(host.anchors.togglePick()).toBe(true);
+      expect(host.anchors.status().selection).toBe("armed"); expect(changed).toHaveBeenCalledOnce();
+      expect(host.anchors.togglePick()).toBe(false);
+      expect(host.anchors.status().selection).toBe("off"); expect(changed).toHaveBeenCalledTimes(2);
+      expect(host.anchors.armPick()).toBe(true); host.anchors.cancelPick();
+      expect(host.anchors.status().selection).toBe("off"); expect(changed).toHaveBeenCalledTimes(4);
+      host.anchors.cancelPick(); expect(changed).toHaveBeenCalledTimes(4);
+
+      // Pinning the compass target disarms Pick point and copies the camera's centre as it is.
+      host.anchors.armPick(); changed.mockClear();
+      const center = host.runtime.geospatialCamera!.center.clone();
+      expect(host.anchors.pinTarget()).toBe(true);
+      const pin = host.anchors.status().pin!;
+      expect(pin).toMatchObject({ source: "target", surfaceRevision: null, point: { x: center.x, y: center.y, z: center.z } });
+      expect([pin.latDeg, pin.lonDeg, pin.heightMeters].every(Number.isFinite)).toBe(true);
+      expect(host.anchors.status().selection).toBe("off"); expect(changed).toHaveBeenCalledOnce();
+      host.runtime.geospatialCamera!.center.x += 1000;
+      expect(host.anchors.status().pin!.point.x).toBe(center.x);
+
+      host.anchors.clearPin();
+      expect(host.anchors.status().pin).toBeNull(); expect(changed).toHaveBeenCalledTimes(2);
+      host.anchors.clearPin(); expect(changed).toHaveBeenCalledTimes(2);
+      unsubscribe(); host.anchors.pinTarget(); expect(changed).toHaveBeenCalledTimes(2);
+    } finally { host.disposeHost(); }
+  });
+
+  it("explains that a simulation owning the camera blocks picking and pinning", () => {
+    const host = createGlobeHostFixture(document);
+    try {
+      expect(host.runtime.navigationAnchors.status().pinningBlocked).toBe("A simulation owns the camera.");
+      expect(host.runtime.navigationAnchors.pinTarget()).toBe(false);
+      expect(host.runtime.navigationAnchors.togglePick()).toBe(false);
+      expect(host.runtime.navigationAnchors.status()).toMatchObject({ pin: null, selection: "off" });
+    } finally { host.disposeHost(); }
+  });
+
+  it("blocks Pick point and Pin compass target while a navigation lease holds the camera, keeping the pin and Clear pin", () => {
+    const host = createAnchorHost(), changed = vi.fn();
+    const reset = vi.spyOn(host.service, "reset"), refresh = vi.spyOn(host.service, "refresh");
+    try {
+      host.anchors.subscribe(changed);
+      expect(host.anchors.pinTarget()).toBe(true);
+      const pin = host.anchors.status().pin;
+      expect(host.anchors.armPick()).toBe(true);
+      const beforeLease = host.service.acquire(nonPointerZoom);
+      expect(beforeLease.zoom!.owner).toBe("globe");
+      changed.mockClear();
+
+      const acquired = host.runtime.acquireNavigation({ owner: "fixture.scenes", inputContext: "viewer" });
+      if (!acquired.ok) throw new Error(acquired.message);
+      const lease = acquired.lease;
+      // The lease resets gesture contexts and Pick point, and says pinning is now blocked.
+      expect(reset).toHaveBeenCalledOnce(); expect(changed).toHaveBeenCalled();
+      expect(host.service.isCurrent(beforeLease.zoom!)).toBe(false);
+      const blocked = host.anchors.status();
+      expect(blocked).toMatchObject({ pin, selection: "off" });
+      expect(blocked.pinningBlocked).toContain("holds the camera");
+      expect(host.anchors.armPick()).toBe(false); expect(host.anchors.togglePick()).toBe(false);
+      expect(host.anchors.status().selection).toBe("off");
+      host.runtime.geospatialCamera!.center.x += 1000;
+      expect(host.anchors.pinTarget()).toBe(false);
+      expect(host.anchors.status().pin).toBe(pin);
+      expect(host.service.acquire(nonPointerZoom).zoom!.owner).toBe("fixture.scenes");
+
+      changed.mockClear();
+      lease.release("exit");
+      expect(refresh).toHaveBeenCalledOnce(); expect(changed).toHaveBeenCalled();
+      expect(host.anchors.status()).toMatchObject({ pin, pinningBlocked: null });
+      expect(host.anchors.armPick()).toBe(true); host.anchors.cancelPick();
+
+      // Clear pin stays available under a lease.
+      const second = host.runtime.acquireNavigation({ owner: "fixture.scenes", inputContext: "viewer" });
+      if (!second.ok) throw new Error(second.message);
+      changed.mockClear();
+      host.anchors.clearPin();
+      expect(host.anchors.status().pin).toBeNull(); expect(changed).toHaveBeenCalledOnce();
+      expect(host.anchors.status().pinningBlocked).not.toBeNull();
+      second.lease.release("exit");
+      expect(host.anchors.status()).toMatchObject({ pin: null, pinningBlocked: null });
+    } finally { host.disposeHost(); }
+  });
+
+  it("retires gesture contexts when a snapshot restores, and not when it is refused", () => {
+    const host = createAnchorHost(), retire = vi.spyOn(host.service, "retire");
+    try {
+      const snapshot = host.runtime.captureNavigationSnapshot()!;
+      let anchor = host.service.acquire(nonPointerZoom).zoom!;
+      expect(host.runtime.restoreNavigationSnapshot(snapshot)).toBe(true);
+      expect(retire).toHaveBeenCalledOnce(); expect(host.service.isCurrent(anchor)).toBe(false);
+
+      const acquired = host.runtime.acquireNavigation({ owner: "fixture.scenes", inputContext: "viewer" });
+      if (!acquired.ok) throw new Error(acquired.message);
+      retire.mockClear();
+      anchor = host.service.acquire(nonPointerZoom).zoom!;
+      // Another holder's lease refuses a restore without it.
+      expect(host.runtime.restoreNavigationSnapshot(snapshot)).toBe(false);
+      expect(retire).not.toHaveBeenCalled(); expect(host.service.isCurrent(anchor)).toBe(true);
+      expect(host.runtime.restoreNavigationSnapshot(snapshot, acquired.lease)).toBe(true);
+      expect(retire).toHaveBeenCalledOnce(); expect(host.service.isCurrent(anchor)).toBe(false);
+      acquired.lease.release("exit");
+    } finally { host.disposeHost(); }
+  });
+
+  it("retires held anchors on setViewState and configureOrbitTargetHeight, keeping the pin", () => {
+    const host = createAnchorHost(), changed = vi.fn(), retire = vi.spyOn(host.service, "retire");
+    try {
+      expect(host.anchors.pinTarget()).toBe(true);
+      const pin = host.anchors.status().pin!;
+      host.settings.set("input.nonPointer.zoomAnchor", "pinned");
+      const held = host.service.acquire({ ...nonPointerZoom, hold: true }).zoom!;
+      expect(held).toMatchObject({ source: "pinned", fallback: null, point: pin.point });
+      expect(host.service.markerPoints(noGlide)).toEqual([{ point: pin.point, zoom: true, orbit: false, pinned: true }]);
+      host.anchors.subscribe(changed);
+
+      host.runtime.setViewState(host.runtime.getViewState()!);
+      expect(retire).toHaveBeenCalledOnce(); expect(changed).toHaveBeenCalledOnce();
+      expect(host.service.isCurrent(held)).toBe(false);
+      expect(host.service.markerPoints(noGlide)).toEqual([{ point: pin.point, zoom: false, orbit: false, pinned: true }]);
+      expect(host.anchors.status().pin).toBe(pin);
+
+      const next = host.service.acquire(nonPointerZoom).zoom!;
+      host.runtime.configureOrbitTargetHeight(null);
+      expect(retire).toHaveBeenCalledTimes(2); expect(host.service.isCurrent(next)).toBe(false);
+      expect(host.anchors.status().pin).toBe(pin);
+    } finally { host.disposeHost(); }
+  });
+
+  it("keeps navigation snapshots at version 1 with no anchor or pin fields", () => {
+    const host = createAnchorHost();
+    try {
+      expect(host.anchors.pinTarget()).toBe(true);
+      host.service.acquire({ ...nonPointerZoom, hold: true });
+      const snapshot = host.runtime.captureNavigationSnapshot()!;
+      expect(snapshot.version).toBe(1);
+      expect(Object.keys(snapshot).sort()).toEqual(["camera", "version", "view"]);
+      expect(Object.keys(snapshot.camera).sort()).toEqual(["center", "fov", "pitch", "radius", "yaw"]);
+      expect(JSON.stringify(snapshot)).not.toMatch(/pin|anchor|selection/i);
+      const pin = host.anchors.status().pin;
+      expect(host.runtime.restoreNavigationSnapshot(JSON.parse(JSON.stringify(snapshot)))).toBe(true);
+      expect(host.anchors.status().pin).toBe(pin);
+    } finally { host.disposeHost(); }
+  });
+
+  it("says beside each of the eight anchor choices what it last did, following every choice's changes", () => {
+    const host = createAnchorHost(), noPin = `${ANCHOR_FALLBACK_MESSAGES["no-pin"]}.`;
+    try {
+      expect(NAVIGATION_ANCHOR_SETTING_IDS).toHaveLength(8);
+      for (const id of NAVIGATION_ANCHOR_SETTING_IDS) expect(noteOf(host, id)).toBeNull();
+      // Each choice set to Pinned point without a pin is noted at once: its own watcher ran.
+      for (const id of NAVIGATION_ANCHOR_SETTING_IDS) {
+        expect(host.settings.set(id, "pinned").ok).toBe(true);
+        expect(noteOf(host, id)).toBe(noPin);
+      }
+      host.settings.set("input.mouse.zoomAnchor", "pointer");
+      expect(noteOf(host, "input.mouse.zoomAnchor")).toBeNull(); expect(noteOf(host, "input.mouse.orbitPivot")).toBe(noPin);
+
+      // Pinning and clearing update the notes too.
+      expect(host.anchors.pinTarget()).toBe(true);
+      for (const id of NAVIGATION_ANCHOR_SETTING_IDS) expect(noteOf(host, id)).toBeNull();
+      host.service.acquire(nonPointerZoom);
+      expect(noteOf(host, "input.nonPointer.zoomAnchor")).toBe("Last used the pinned point.");
+      host.settings.set("input.nonPointer.zoomAnchor", "target");
+      expect(noteOf(host, "input.nonPointer.zoomAnchor")).toBeNull();
+      host.anchors.clearPin();
+      expect(noteOf(host, "input.nonPointer.orbitPivot")).toBe(noPin); expect(noteOf(host, "input.nonPointer.zoomAnchor")).toBeNull();
+    } finally { host.disposeHost(); }
+  });
+
+  it("makes a tracked point every gesture's centre, retiring gesture contexts and noting the override", () => {
+    const host = createAnchorHost(), changed = vi.fn(), retire = vi.spyOn(host.service, "retire");
+    const tracking = `${ANCHOR_FALLBACK_MESSAGES.tracking}.`;
+    try {
+      host.anchors.subscribe(changed);
+      const before = host.service.acquire(nonPointerZoom).zoom!;
+      changed.mockClear();
+      host.runtime.setOrbitMode(true);
+      expect(retire).toHaveBeenCalledOnce(); expect(host.service.isCurrent(before)).toBe(false);
+      expect(changed).toHaveBeenCalled(); expect(host.anchors.status().tracking).toBe(true);
+      for (const id of NAVIGATION_ANCHOR_SETTING_IDS) expect(noteOf(host, id)).toBe(tracking);
+      expect(host.service.acquire({ family: "mouse", operations: ["zoom", "orbit"], client: { x: 400, y: 300 } }))
+        .toMatchObject({ zoom: { source: "target", fallback: "tracking" }, orbit: { source: "target", fallback: "tracking" } });
+      expect(host.settings.get("input.mouse.zoomAnchor")).toBe("pointer");
+
+      host.runtime.setOrbitMode(true);
+      expect(retire).toHaveBeenCalledOnce();
+      host.runtime.setOrbitMode(false);
+      expect(retire).toHaveBeenCalledOnce(); expect(host.anchors.status().tracking).toBe(false);
+      // Families with no gesture while tracking are noted as before.
+      for (const id of NAVIGATION_ANCHOR_SETTING_IDS.filter(id => !id.startsWith("input.mouse."))) expect(noteOf(host, id)).toBeNull();
+      // Leaving tracking restores the preferences for the next gesture.
+      const next = host.service.acquire({ family: "mouse", operations: ["zoom"], client: { x: 400, y: 300 } }).zoom!;
+      expect(next.fallback).not.toBe("tracking"); expect(next.requested).toBe("pointer");
+      expect(noteOf(host, "input.mouse.zoomAnchor")).not.toBe(tracking);
+    } finally { host.disposeHost(); }
+  });
+
+  // Spec (POI tracking): "Explain the temporary override in Controls ... Leaving tracking
+  // restores those preferences for the next gesture." A family whose last gesture ran while
+  // tracking does not keep describing the override.
+  it("stops describing the tracking override once tracking ends", () => {
+    const host = createAnchorHost(), tracking = `${ANCHOR_FALLBACK_MESSAGES.tracking}.`;
+    try {
+      host.runtime.setOrbitMode(true);
+      host.service.acquire({ family: "mouse", operations: ["zoom"], client: { x: 400, y: 300 } });
+      host.runtime.setOrbitMode(false);
+      expect(host.anchors.status().tracking).toBe(false);
+      expect(noteOf(host, "input.mouse.zoomAnchor")).not.toBe(tracking);
+    } finally { host.disposeHost(); }
+  });
+
+  it("requests a render when the marker switch changes, and shows the markers it allows on drawn frames", () => {
+    const markers = { show: vi.fn<NavigationAnchorMarkers["show"]>(), destroy: vi.fn() };
+    const host = createAnchorHost(markers);
+    const frame = (at: number) => { host.runtime.prepareFrame(at); host.runtime.afterFrame(at); return markers.show.mock.lastCall?.[0]; };
+    try {
+      expect(host.settings.get(SHOW_NAVIGATION_ANCHORS_ID)).toBe(true);
+      expect(frame(10)).toEqual([]);
+      expect(host.anchors.pinTarget()).toBe(true);
+      expect(frame(20)).toEqual([expect.objectContaining({ pinned: true, zoom: false, orbit: false })]);
+
+      const requests = host.requestCount();
+      host.settings.set(SHOW_NAVIGATION_ANCHORS_ID, false);
+      expect(host.requestCount()).toBeGreaterThan(requests);
+      expect(frame(30)).toEqual([]);
+      const again = host.requestCount();
+      host.settings.set(SHOW_NAVIGATION_ANCHORS_ID, true);
+      expect(host.requestCount()).toBeGreaterThan(again);
+      expect(frame(40)).toHaveLength(1);
+
+      // A lease's view is not the globe's: no markers over it.
+      const acquired = host.runtime.acquireNavigation({ owner: "fixture.scenes", inputContext: "viewer" });
+      if (!acquired.ok) throw new Error(acquired.message);
+      expect(frame(50)).toEqual([]);
+      acquired.lease.release("exit");
+      expect(frame(60)).toHaveLength(1);
+
+      host.runtime.destroy();
+      expect(markers.destroy).toHaveBeenCalledOnce();
+    } finally { host.disposeHost(); }
+  });
+
+  it("disposes the anchor service with the runtime: no more notifications, notes or pinning", () => {
+    const host = createAnchorHost(), changed = vi.fn(), dispose = vi.spyOn(host.service, "dispose");
+    try {
+      host.settings.set("input.mouse.zoomAnchor", "pinned");
+      expect(noteOf(host, "input.mouse.zoomAnchor")).not.toBeNull();
+      host.anchors.subscribe(changed);
+      expect(host.anchors.pinTarget()).toBe(true); host.anchors.armPick();
+      changed.mockClear();
+
+      expect(() => host.runtime.destroy()).not.toThrow();
+      expect(dispose).toHaveBeenCalledOnce(); expect(changed).not.toHaveBeenCalled();
+      expect(host.anchors.status()).toEqual({ pin: null, selection: "off", pinningBlocked: "The globe has closed.", tracking: false,
+        last: { mouse: {}, trackpad: {}, touch: {}, nonPointer: {} } });
+      for (const id of NAVIGATION_ANCHOR_SETTING_IDS) expect(noteOf(host, id)).toBeNull();
+      expect(host.anchors.pinTarget()).toBe(false); expect(host.anchors.armPick()).toBe(false);
+      host.anchors.clearPin(); host.anchors.cancelPick();
+      const late = vi.fn(); host.anchors.subscribe(late)();
+      host.settings.set("input.mouse.orbitPivot", "pinned");
+      expect(noteOf(host, "input.mouse.orbitPivot")).toBeNull();
+      expect(changed).not.toHaveBeenCalled(); expect(late).not.toHaveBeenCalled();
+      expect(() => host.runtime.destroy()).not.toThrow(); expect(dispose).toHaveBeenCalledOnce();
+    } finally { host.disposeHost(); }
   });
 });

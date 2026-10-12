@@ -11,6 +11,7 @@ export * from "./input/orbitInvertSettings.js";
 export * from "./input/wheelGesture.js";
 export * from "./input/touchDiagnostics.js";
 export * from "./input/inertialCameraController.js";
+export * from "./input/navigationAnchors.js";
 export * from "./navigation/navigationLease.js";
 export * from "./surface/contracts.js";
 export * from "./surface/access.js";

@@ -61,11 +61,12 @@ describe("host-supplied navigation camera handover", () => {
       expect(f.adapter.placeNavigationCamera(f.lease, view)).toBe(true);
       expect(f.camera.checkCollisions).toBe(false);
       const press = { pointerId: 1, button: 0, clientX: 120, clientY: 200 };
+      const touches = [{ identifier: 3, clientX: 100, clientY: 210 }, { identifier: 4, clientX: 180, clientY: 230 }];
       expect(f.adapter.glideNavigationCamera(f.lease, view, pivot, {
-        velocity: { x: 0, y: 10, z: 0 }, turn: { x: 0, y: 0, z: 0 }, fovRad: 0.8, inputSince: 900, press,
+        velocity: { x: 0, y: 10, z: 0 }, turn: { x: 0, y: 0, z: 0 }, fovRad: 0.8, inputSince: 900, press, touches,
       })).toBe(true);
       expect(f.camera.checkCollisions).toBe(true);
-      expect(f.adapter.takeInputHandback()).toEqual({ keepWheelSince: 900, press });
+      expect(f.adapter.takeInputHandback()).toEqual({ keepWheelSince: 900, press, touches });
       expect(f.adapter.takeInputHandback()).toBeNull();
       expect(f.inertia.isActive()).toBe(true);
       f.lease.release("cancelled");

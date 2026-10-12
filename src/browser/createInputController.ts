@@ -1,8 +1,8 @@
 import type { CameraInputTarget } from "../input/inertialCameraController.js";
 import { attachWheelController, watchWheelGestures } from "./wheelController.js";
 import { attachSafariGestures, isSafariGestureSupported } from "./safariGestures.js";
-import { attachTouchController } from "./touchController.js";
-import { attachMouseController, type HeldPress } from "./mouseController.js";
+import { attachTouchController, type HeldTouch } from "./touchController.js";
+import { attachMouseController, type HeldPress, type PointSelection } from "./mouseController.js";
 import {
   DEFAULT_INPUT_RATES,
   DEFAULT_INPUT_SETTINGS,
@@ -28,6 +28,8 @@ export interface InputControllerOptions {
   isOrbitMode?: () => boolean;
   attachAnchorPanDebugOverlay?: NonNullable<Parameters<typeof attachMouseController>[2]>["attachAnchorPanDebugOverlay"];
   attachTouchDebugOverlay?: NonNullable<Parameters<typeof attachTouchController>[2]>["attachTouchDebugOverlay"];
+  /** Pick point: while it is armed, a click or tap on the globe picks a point and does nothing else, and Escape cancels it. */
+  pointSelection?: (PointSelection & { cancel(): void }) | null;
 }
 
 export interface InputController {
@@ -61,6 +63,8 @@ export interface InputHandback {
   keepWheelSince?: number;
   /** A mouse press held since before the handback, which goes on as a drag from where the pointer is. */
   press?: HeldPress | null;
+  /** Fingers held since before the handback, where they are now: two go on as a pinch and turn from here. */
+  touches?: readonly HeldTouch[] | null;
 }
 
 /**
@@ -123,12 +127,21 @@ export function createInputController(
     const detachers = [
       attachWheelController(canvas, camera, { nowMs: options.realm.nowMs, isSafariWithGestures: hasSafariGestures, isOrbitMode: options.isOrbitMode, getSettings: () => settings, ...(keepWheel ? {} : { precedingWheelMs: wheels.lastEventMs() }) }),
       hasSafariGestures ? attachSafariGestures(canvas, camera, { getSettings: () => settings }) : (): void => undefined,
-      attachTouchController(canvas, camera, { attachTouchDebugOverlay: options.attachTouchDebugOverlay, isOrbitMode: options.isOrbitMode, getSettings: () => settings }),
-      attachMouseController(canvas, camera, { attachAnchorPanDebugOverlay: options.attachAnchorPanDebugOverlay, isOrbitMode: options.isOrbitMode, getSettings: () => settings, heldPress: handback?.press ?? null }),
+      attachTouchController(canvas, camera, { attachTouchDebugOverlay: options.attachTouchDebugOverlay, isOrbitMode: options.isOrbitMode, getSettings: () => settings, heldTouches: handback?.touches ?? null }),
+      attachMouseController(canvas, camera, { attachAnchorPanDebugOverlay: options.attachAnchorPanDebugOverlay, isOrbitMode: options.isOrbitMode, getSettings: () => settings, heldPress: handback?.press ?? null, pointSelection: options.pointSelection ?? null }),
     ];
     return () => { for (const detach of detachers) detach(); };
   };
   let detachControllers: (() => void) | null = attachControllers();
+
+  // Escape cancels Pick point, unless something else, such as a menu, took it first.
+  const selection = options.pointSelection;
+  const onSelectionKey = (e: KeyboardEvent): void => {
+    if (e.key !== "Escape" || e.defaultPrevented || !selection?.armed()) return;
+    e.preventDefault();
+    selection.cancel();
+  };
+  if (selection) document.addEventListener("keydown", onSelectionKey);
 
   return {
     setMode(mode: InputModePreference): void {
@@ -171,6 +184,7 @@ export function createInputController(
       detachControllers?.();
       detachControllers = null;
       document.removeEventListener("wheel", docWheelHandler);
+      document.removeEventListener("keydown", onSelectionKey);
       wheels.dispose();
       for (const cleanup of docGestureCleanup) cleanup();
     },

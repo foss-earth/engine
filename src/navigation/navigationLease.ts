@@ -70,6 +70,8 @@ export interface NavigationGlide {
   readonly inputSince: number;
   /** A mouse press that took the camera over and is still held, which goes on as a drag. */
   readonly press?: { readonly pointerId: number; readonly button: number; readonly clientX: number; readonly clientY: number } | null;
+  /** Fingers that took the camera over and are still down, where they are now: two go on as a pinch from where they are. */
+  readonly touches?: readonly { readonly identifier: number; readonly clientX: number; readonly clientY: number }[] | null;
 }
 
 /** Structural cancellation contract: importing core needs no DOM declarations. */

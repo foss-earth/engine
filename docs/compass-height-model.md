@@ -1,10 +1,26 @@
 # Compass height model
 
-The orbit compass resolves anchor height through a small quantized cache backed by a deterministic
-smooth global elevation model. The default height provider is continuous over the globe and
-intentionally ignores buildings, trees, and tile LOD geometry, so camera anchors do not jump when
-moving over dense city geometry. Layers can still provide cheap precomputed `anchorHeightSamples`
-as part of their layer state:
+The compass target, the point the globe camera orbits and the orbit compass marks, sits at the
+height of the ground under it plus `visualization.compass.heightOffset`. Two pieces keep it there:
+
+- `createAnchorHeightResolver` (`src/babylon/anchorHeight.ts`) gives the height under a latitude
+  and longitude (cells of 0.002° by default key its cache and retries), and moves the compass toward
+  a new height no faster than `camera.surfaceFollowSpeed`, so the compass does not snap between street level and rooftops.
+  Where the provider has no height yet, the cell reads as the WGS84 ellipsoid (height 0) until it
+  is asked again after `camera.surfaceRetry`; the compass moves toward that at the same bounded
+  speed.
+- `CameraController` (`src/babylon/cameraState.ts`) moves the orbit target to that height as a pan
+  or an orbit carries it across the ground, at the same bounded speed. While a tracked point is the
+  centre, it does not follow the ground: the tracked point's own height is the target's.
+
+## Where the height comes from
+
+The FOSS Earth app's provider is the displayed surface: `options.getSurfaceHeightMeters` when a
+host supplies one, otherwise `runtime.surface.sample(lat, lon)`, the streamed terrain or 3D tiles
+on screen. Because that geometry changes with its level of detail, the app creates the resolver
+with `cacheProviderSamples: false`, so a cell is read again rather than kept from coarser tiles.
+Layers can give precomputed `anchorHeightSamples` in their layer state. A resolver that caches
+uses them in place of its provider; the app's does not cache, so in the app they are not read:
 
 ```ts
 return {
@@ -14,13 +30,30 @@ return {
 };
 ```
 
-Tracked POIs keep their exact mesh position. Normal camera anchors use layer samples when
-available; otherwise the app uses `smoothSurfaceHeightMeters(lat, lon)` and falls back to the WGS84
-ellipsoid only for invalid inputs. `smoothSurfaceEcef(lat, lon, offsetMeters)` is exported for
-marker layers that need to place sprites or meshes above the same smooth ground model.
+An earlier version of this page described a continuous smooth global elevation model as the
+default provider. That model, `smoothSurfaceHeightMeters(lat, lon)` and
+`smoothSurfaceEcef(lat, lon, offsetMeters)` in `src/terrain/smoothElevation.ts`, is still exported
+for hosts and for marker layers that place sprites above the same smooth ground, but the app's
+compass no longer reads it. A host can pass it as the provider to get the old behaviour back.
 
-Resolved compass height is also vertically smoothed, so moving the anchor across city geometry does
-not instantly snap the compass between street level and rooftops.
+Tracked POIs keep their exact mesh position. When tracking starts, the camera centre eases onto
+the POI at the pace a glide slows by (`camera.inertiaDecay`) instead of jumping to it.
+
+## Compass target and picked points
+
+Zoom and rotation can act about a point other than the compass target (`input.*.zoomAnchor`,
+`input.*.orbitPivot`; see `docs/proposals/navigation-anchors.md` in foss-earth/research). Those
+points follow different rules from the compass target:
+
+| | Compass target | Picked or pinned point |
+| --- | --- | --- |
+| Height | Ground under it from the provider, smoothed, plus the compass height offset | Exactly where the ray met the displayed surface or the ellipsoid, copied when picked |
+| Follows the ground | Yes, at `camera.surfaceFollowSpeed` | No: terrain loading later moves none of them |
+| Zoom limits | Measured to the target; the legacy zoom that lowers a raised target at the nearest distance applies | Measured from the eye to the point; a point picked nearer or farther than they allow may be left toward them, not further away |
+
+During and after an anchored move the camera's centre stays the compass target: the point where
+the line of sight comes down to the orbit target's height. From there it follows the ground at the
+bounded speed as before, so an anchored move never makes the compass jump.
 
 See also the [Smooth elevation height model proposal](proposals/smooth-elevation-height-model.md)
-for the design rationale.
+for the design rationale of the smooth model.

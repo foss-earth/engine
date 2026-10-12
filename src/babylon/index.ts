@@ -17,6 +17,7 @@ export * from "./createRasterTilesRuntime.js";
 export * from "./createTilesRuntime.js";
 export * from "./globeCamera.js";
 export * from "./globeInertia.js";
+export * from "./navigationAnchorService.js";
 export * from "./cameraClipping.js";
 export * from "../layers/index.js";
 export * from "../sprites/index.js";

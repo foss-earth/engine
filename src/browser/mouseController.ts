@@ -1,4 +1,5 @@
-import type { CameraInputTarget } from "../input/inertialCameraController.js";
+import { orbitWith, type CameraInputTarget } from "../input/inertialCameraController.js";
+import type { AnchorAcquisition } from "../input/navigationAnchors.js";
 import type { AnchorPanDebugOverlay } from "./anchorPanDebugOverlay.js";
 import { DEFAULT_INPUT_RATES, type InputSettings } from "../input/inputSettings.js";
 
@@ -9,6 +10,19 @@ export interface HeldPress {
   clientX: number;
   clientY: number;
 }
+
+/**
+ * Pick point, as the pointer sees it: while it is armed, a primary click or
+ * tap on the globe picks a point, and nothing else sees that press.
+ */
+export interface PointSelection {
+  armed(): boolean;
+  /** Picks the point under a client position. False when no surface is there: it stays armed. */
+  pickAt(client: { readonly x: number; readonly y: number }): boolean;
+}
+
+/** How long after a consumed click its double click is still the selection's, ms. */
+const SELECTION_DOUBLE_CLICK_MS = 800;
 
 /**
  * Attach a mouse-button drag handler to the canvas.
@@ -27,12 +41,19 @@ export interface HeldPress {
  * interrupting orbit. A `heldPress`, such as one that took the camera over
  * from a lease's owner, goes on as if pressed where the pointer is now.
  *
+ * An orbit drag turns about the pivot `input.mouse.orbitPivot` chooses,
+ * picked where the button went down, and used once the press becomes a
+ * drag. While Pick point is armed (`pointSelection`), a primary press of
+ * any pointer is kept from everything else from pointer-down on: released
+ * as a click or tap, it picks the point and its clicks go nowhere; dragged,
+ * it goes on navigating, and Pick point stays armed.
+ *
  * @returns Cleanup function that removes all registered listeners.
  */
 export function attachMouseController(
   canvas: HTMLCanvasElement,
   camera: CameraInputTarget<HTMLCanvasElement>,
-  options: { isOrbitMode?: () => boolean; getSettings?: () => InputSettings; heldPress?: HeldPress | null; attachAnchorPanDebugOverlay?: (canvas: HTMLCanvasElement) => AnchorPanDebugOverlay } = {},
+  options: { isOrbitMode?: () => boolean; getSettings?: () => InputSettings; heldPress?: HeldPress | null; attachAnchorPanDebugOverlay?: (canvas: HTMLCanvasElement) => AnchorPanDebugOverlay; pointSelection?: PointSelection | null } = {},
 ): () => void {
   // Below the drag threshold a press is a click, and events pass through to
   // Babylon so picking and sphere-click handlers still fire.
@@ -46,6 +67,15 @@ export function attachMouseController(
   let prevY = 0;
   let anchorDownClientX = 0;
   let anchorDownClientY = 0;
+  let pressPointerId: number | null = null;
+  // Where an orbit drag from this press turns: picked at the press, held once it is a drag.
+  let orbitAnchors: AnchorAcquisition | null = null;
+  let orbitAnchorsHeld = false;
+  // A press Pick point keeps from everything else, and whether it is still a click.
+  let selectionPress: { pointerId: number; x: number; y: number; click: boolean } | null = null;
+  // The clicks a consumed selection press makes.
+  let selectionClickPending = false;
+  let selectionDoubleClickUntil = Number.NEGATIVE_INFINITY;
   const anchorPanDebugOverlay: AnchorPanDebugOverlay = options.attachAnchorPanDebugOverlay?.(canvas) ?? { update() {}, hide() {}, destroy() {} };
 
   function stopInertial(): void {
@@ -77,7 +107,48 @@ export function attachMouseController(
     anchorPanDebugOverlay.update(anchorX, anchorY, clientX, clientY);
   }
 
+  function releaseOrbitAnchors(): void {
+    if (orbitAnchors) camera.releaseAnchors?.(orbitAnchors);
+    orbitAnchors = null;
+    orbitAnchorsHeld = false;
+  }
+
+  /** A press that becomes a drag, or a second contact, is no click: it navigates, and Pick point stays armed. */
+  function updateSelectionPress(e: PointerEvent): void {
+    if (!selectionPress) return;
+    if (e.pointerId !== selectionPress.pointerId) {
+      if (e.type === "pointerdown") selectionPress.click = false;
+      return;
+    }
+    if (Math.hypot(e.clientX - selectionPress.x, e.clientY - selectionPress.y) >= rates().mouseDragThresholdPx) selectionPress.click = false;
+  }
+
+  /** The release of a press Pick point kept: a click picks the point, and its clicks are the selection's too. */
+  function endSelectionPress(e: PointerEvent): void {
+    if (!selectionPress || e.pointerId !== selectionPress.pointerId) return;
+    const press = selectionPress;
+    selectionPress = null;
+    e.stopImmediatePropagation();
+    updateSelectionPress(e);
+    if (e.type === "pointerup" && press.click && options.pointSelection?.armed()) {
+      options.pointSelection.pickAt({ x: e.clientX, y: e.clientY });
+    }
+    selectionClickPending = true;
+    selectionDoubleClickUntil = e.timeStamp + SELECTION_DOUBLE_CLICK_MS;
+  }
+
   function onPointerDown(e: PointerEvent): void {
+    // The click a consumed press would make comes before any later press.
+    selectionClickPending = false;
+    if (selectionPress) updateSelectionPress(e);
+    else if (options.pointSelection?.armed() && e.isPrimary && (e.pointerType !== "mouse" || e.button === 0)) {
+      // From pointer-down on, nothing else sees a press that may pick a point:
+      // no point of interest, scene or double click acts on it.
+      selectionPress = { pointerId: e.pointerId, x: e.clientX, y: e.clientY, click: true };
+      e.stopImmediatePropagation();
+      // A tap's mouse events, which a browser makes up after it, are kept too.
+      if (e.pointerType !== "mouse") e.preventDefault();
+    }
     if (e.pointerType !== "mouse") return;
     // Do NOT stop propagation here — let Babylon's picking system see the event.
     beginPress(e);
@@ -85,12 +156,18 @@ export function attachMouseController(
 
   function beginPress(e: HeldPress): void {
     if (e.button !== 0 && e.button !== 2) return;
+    releaseOrbitAnchors();
     activeButton = e.button as 0 | 2;
+    pressPointerId = e.pointerId;
     isDragging = false;
     anchorPanActive = false;
     startX = prevX = e.clientX;
     startY = prevY = e.clientY;
     try { canvas.setPointerCapture(e.pointerId); } catch { /* a held press's pointer may be gone */ }
+    // An orbit drag turns about the point under the press, picked now, as the camera is.
+    if (e.button === 2 || (options.isOrbitMode?.() ?? false)) {
+      orbitAnchors = camera.acquireAnchors?.({ family: "mouse", operations: ["orbit"], client: { x: e.clientX, y: e.clientY }, canvas, candidate: true }) ?? null;
+    }
 
     if (shouldUseAnchorPan(e.button) && camera.beginAnchorPan) {
       anchorPanActive = camera.beginAnchorPan({
@@ -107,6 +184,7 @@ export function attachMouseController(
   }
 
   function onPointerMove(e: PointerEvent): void {
+    updateSelectionPress(e);
     if (e.pointerType !== "mouse" || activeButton === null) return;
 
     const dx = e.clientX - prevX;
@@ -153,31 +231,64 @@ export function attachMouseController(
       const rate = rates().mousePanRate * sensitivity;
       camera.panBy(-dx * rate, -dy * rate, canvas.clientHeight);
     } else {
+      // The press is a drag now: its pivot is in use, and shows.
+      if (orbitAnchors && !orbitAnchorsHeld) {
+        orbitAnchorsHeld = true;
+        camera.holdAnchors?.(orbitAnchors);
+      }
       const sensitivity = options.getSettings?.().sensitivity.mouse.orbit ?? 1;
       const pitchSign = options.isOrbitMode?.() ? -1 : 1;
-      camera.orbitBy(
+      orbitWith(
+        camera,
         pitchSign * dy * rates().mouseOrbitDegPerPx * sensitivity,
         dx * rates().mouseOrbitDegPerPx * sensitivity,
+        orbitAnchors?.orbit,
       );
     }
   }
 
   function onPointerUp(e: PointerEvent): void {
+    endSelectionPress(e);
     if (e.pointerType !== "mouse" || activeButton === null) return;
     if (isDragging) {
       e.preventDefault();
       e.stopImmediatePropagation();
     }
+    endPress();
+    if (canvas.hasPointerCapture(e.pointerId)) {
+      canvas.releasePointerCapture(e.pointerId);
+    }
+  }
+
+  /** Direct input ends; motion it set going glides on about its pivot. */
+  function endPress(): void {
     if (anchorPanActive) {
       camera.endAnchorPan?.();
       anchorPanActive = false;
       anchorPanDebugOverlay.hide();
     }
+    releaseOrbitAnchors();
     isDragging = false;
     activeButton = null;
-    if (canvas.hasPointerCapture(e.pointerId)) {
-      canvas.releasePointerCapture(e.pointerId);
-    }
+    pressPointerId = null;
+  }
+
+  /** Capture lost without a release, as when the canvas leaves the page: the press ends. */
+  function onLostPointerCapture(e: PointerEvent): void {
+    // A pick press whose capture is lost picks nothing: its release may never come here.
+    if (selectionPress?.pointerId === e.pointerId) selectionPress = null;
+    if (activeButton === null || e.pointerId !== pressPointerId) return;
+    endPress();
+  }
+
+  /** A consumed selection's click and double click go nowhere. */
+  function onClick(e: MouseEvent): void {
+    const target = e.target as Node | null;
+    if (target !== canvas && !(target && canvas.contains(target))) return;
+    if (e.type === "click" ? !selectionClickPending : e.timeStamp > selectionDoubleClickUntil) return;
+    if (e.type === "click") selectionClickPending = false;
+    e.preventDefault();
+    e.stopImmediatePropagation();
   }
 
   function onContextMenu(e: Event): void {
@@ -185,19 +296,28 @@ export function attachMouseController(
   }
 
   const opts = { capture: true, passive: false } as AddEventListenerOptions;
+  const doc = canvas.ownerDocument;
   canvas.addEventListener("pointerdown", onPointerDown, opts);
   canvas.addEventListener("pointermove", onPointerMove, opts);
   canvas.addEventListener("pointerup", onPointerUp, opts);
   canvas.addEventListener("pointercancel", onPointerUp, opts as EventListenerOptions);
+  canvas.addEventListener("lostpointercapture", onLostPointerCapture, opts as EventListenerOptions);
   canvas.addEventListener("contextmenu", onContextMenu, opts as EventListenerOptions);
+  // Before anything on the page can act on them.
+  doc.addEventListener("click", onClick, opts);
+  doc.addEventListener("dblclick", onClick, opts);
   if (options.heldPress) beginPress(options.heldPress);
 
   return (): void => {
     anchorPanDebugOverlay.destroy();
+    releaseOrbitAnchors();
     canvas.removeEventListener("pointerdown", onPointerDown, opts as EventListenerOptions);
     canvas.removeEventListener("pointermove", onPointerMove, opts as EventListenerOptions);
     canvas.removeEventListener("pointerup", onPointerUp, opts as EventListenerOptions);
     canvas.removeEventListener("pointercancel", onPointerUp, opts as EventListenerOptions);
+    canvas.removeEventListener("lostpointercapture", onLostPointerCapture, opts as EventListenerOptions);
     canvas.removeEventListener("contextmenu", onContextMenu, opts as EventListenerOptions);
+    doc.removeEventListener("click", onClick, opts as EventListenerOptions);
+    doc.removeEventListener("dblclick", onClick, opts as EventListenerOptions);
   };
 }

@@ -3,7 +3,11 @@ import { DEFAULT_INERTIA_DECAY_PER_FRAME } from "../../input/inertialCameraContr
 import { DEFAULT_INPUT_RATES, type InputRates } from "../../input/inputRates.js";
 import { DEFAULT_GLOBE_INTENT_RATES } from "../../input/globeIntentMotion.js";
 import { DEFAULT_GLOBE_STICK_DEADZONE } from "../../input/gamepadDefaults.js";
-import type { ParameterSpec, ParameterUnit } from "@foss-earth/ui/settings";
+import {
+  DEFAULT_NAVIGATION_ANCHORS, NAVIGATION_ANCHOR_CHOICES, NAVIGATION_ANCHOR_PRESET_VALUES, SHOW_NAVIGATION_ANCHORS_ID,
+  navigationAnchorSettingId, type AnchorChoice, type AnchorFamily, type AnchorOperation,
+} from "../../input/navigationAnchors.js";
+import type { ParameterSpec, ParameterUnit, SettingsPreset } from "@foss-earth/ui/settings";
 
 export const CONTROLS_TAB = "controls";
 
@@ -255,10 +259,91 @@ export const GLOBE_INTENT_PARAMETERS: readonly ParameterSpec[] = [
     "per-s", DEFAULT_GLOBE_INTENT_RATES.zoomLogPerSecond, { min: 0.01, max: 10 }, "controller", "src/input/globeIntentMotion.ts"),
 ].map(spec => ({ ...spec, defaultReason: "Retained committed globe runtime value; not measured or qualified across devices." }));
 
+const ANCHOR_CHOICE_LABELS: { readonly [C in AnchorChoice]: string } = {
+  pointer: "Under pointer",
+  gesture: "Gesture start",
+  target: "Compass target",
+  pinned: "Pinned point",
+};
+const PINNED_HELP = "Pinned point is the point pinned in Controls → Orbit; without one, the compass target.";
+const POINTING_REASON = "Operate on the place the person indicates without requiring a preliminary pan.";
+const NON_POINTER_REASON = "There is no pointing position, so use the current compass target.";
+
+/** Each family's two choices: label, section and help. */
+const ANCHOR_PARAMETER_TEXT: ReadonlyArray<{ family: AnchorFamily; operation: AnchorOperation; label: string; section: string; description: string }> = [
+  { family: "mouse", operation: "zoom", label: "Wheel zoom anchor", section: "mouse",
+    description: `Where a mouse wheel zooms toward or away from. Under pointer is the point under the pointer when the wheel turns; moving the pointer and turning it again picks a new one. ${PINNED_HELP}` },
+  { family: "mouse", operation: "orbit", label: "Mouse rotation pivot", section: "mouse",
+    description: `What a right-button drag turns and tilts the view about. Under pointer is the point under the pointer where the button was pressed, held for the whole drag and its glide. ${PINNED_HELP}` },
+  { family: "trackpad", operation: "zoom", label: "Trackpad zoom anchor", section: "mouse",
+    description: `Where a trackpad pinch zooms toward or away from. Under pointer uses the browser's pointer location, since where the fingers are on the trackpad is not generally available. ${PINNED_HELP}` },
+  { family: "trackpad", operation: "orbit", label: "Trackpad rotation pivot", section: "mouse",
+    description: `What a trackpad rotate, or a scroll that orbits, turns the view about. Under pointer uses the browser's pointer location, since where the fingers are on the trackpad is not generally available. ${PINNED_HELP}` },
+  { family: "touch", operation: "zoom", label: "Pinch zoom anchor", section: "touch",
+    description: `Where a two-finger pinch zooms toward or away from. Gesture start is the point under the initial two-finger midpoint, held while those fingers stay down. ${PINNED_HELP}` },
+  { family: "touch", operation: "orbit", label: "Touch rotation pivot", section: "touch",
+    description: `What a two-finger drag turns and tilts the view about. Gesture start is the point under the initial two-finger midpoint, held while those fingers stay down. ${PINNED_HELP}` },
+  { family: "nonPointer", operation: "zoom", label: "Key, controller and button zoom anchor", section: "orbit",
+    description: `Where keys, a controller and on-screen buttons zoom toward or away from. They have no pointing position: the compass target, or the pinned point. ${PINNED_HELP}` },
+  { family: "nonPointer", operation: "orbit", label: "Key, controller and button rotation pivot", section: "orbit",
+    description: `What keys, a controller and on-screen buttons turn and tilt the view about: the compass target, or the pinned point. ${PINNED_HELP}` },
+];
+
+/** `input.<family>.zoomAnchor` and `input.<family>.orbitPivot`, and whether their points are marked. */
+export const NAVIGATION_ANCHOR_PARAMETERS: readonly ParameterSpec[] = [
+  ...ANCHOR_PARAMETER_TEXT.map(({ family, operation, label, section, description }): ParameterSpec => ({
+    id: navigationAnchorSettingId(family, operation),
+    label,
+    description,
+    unit: "none",
+    kind: "choice",
+    choices: NAVIGATION_ANCHOR_CHOICES[family].map(id => ({ id, label: ANCHOR_CHOICE_LABELS[id] })),
+    default: DEFAULT_NAVIGATION_ANCHORS[family][operation],
+    defaultReason: family === "nonPointer" ? NON_POINTER_REASON : POINTING_REASON,
+    persistDefault: true,
+    home: { tab: CONTROLS_TAB, section, level: "main" },
+    appliesLive: true,
+    source: "src/input/navigationAnchors.ts",
+  })),
+  {
+    id: SHOW_NAVIGATION_ANCHORS_ID,
+    label: "Show zoom and rotation points",
+    description: "A small marker shows the point a zoom or rotation acts about while it moves, and the pinned point while there is one. The compass is shown or hidden on its own.",
+    unit: "none",
+    kind: "boolean",
+    default: true,
+    defaultReason: "Seeing where a zoom or turn acts makes an off-centre point predictable.",
+    home: { tab: CONTROLS_TAB, section: "orbit", level: "main" },
+    appliesLive: true,
+    source: "src/browser/navigationAnchorMarkers.ts",
+  },
+];
+
+/**
+ * The anchor choices' two named sets, for a host's preset list: each sets the
+ * eight choices and nothing else. The FOSS Earth app registers these beside
+ * its own presets; a standalone host registers the same values.
+ */
+export const NAVIGATION_ANCHOR_PRESETS: readonly SettingsPreset[] = Object.freeze([
+  {
+    id: "pointer-and-touch-anchors",
+    name: "Pointer and touch anchors",
+    description: "Zoom and rotation act where you point: under the mouse or trackpad pointer, or where two fingers land; keys and controllers act about the compass target.",
+    values: NAVIGATION_ANCHOR_PRESET_VALUES.pointerAndTouch,
+  },
+  {
+    id: "compass-centered",
+    name: "Compass-centered",
+    description: "Every zoom and rotation acts about the compass target at the centre of the view, whatever the input.",
+    values: NAVIGATION_ANCHOR_PRESET_VALUES.compassCentered,
+  },
+]);
+
 export const CONTROLS_PARAMETERS: readonly ParameterSpec[] = [
   ...GLOBE_INTENT_PARAMETERS,
   ...CAMERA_PARAMETERS,
   ...INPUT_RATE_PARAMETERS,
+  ...NAVIGATION_ANCHOR_PARAMETERS,
   {
     id: "input.mode",
     label: "Mouse or trackpad",

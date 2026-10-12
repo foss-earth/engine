@@ -121,3 +121,104 @@ describe("the globe's input controller", () => {
     expect(controller.getMode()).toBe("mouse");
   });
 });
+
+describe("Pick point", () => {
+  function armedSetup(armed = true) {
+    const canvas = document.createElement("canvas");
+    Object.defineProperty(canvas, "clientHeight", { value: 800 });
+    Object.assign(canvas, { setPointerCapture: vi.fn(), releasePointerCapture: vi.fn(), hasPointerCapture: () => false });
+    document.body.append(canvas);
+    const camera = { panBy: vi.fn(), orbitBy: vi.fn(), zoomBy: vi.fn(), cancel: vi.fn(), cancelInertial: vi.fn(), endAnchorPan: vi.fn() };
+    const selection = { armed: vi.fn(() => armed), pickAt: vi.fn<(client: { readonly x: number; readonly y: number }) => boolean>(() => true), cancel: vi.fn() };
+    const controller = createInputController(canvas, camera, { realm: { document, window, userAgent: navigator.userAgent, hasGestureEvent: "GestureEvent" in window, nowMs: () => performance.now() },
+      loadGlobeAnchorRotationPreference: () => false, saveGlobeAnchorRotationPreference() {}, pointSelection: selection });
+    return { canvas, camera, selection, controller };
+  }
+  const press = (type: string, x: number, buttons: number) =>
+    new PointerEvent(type, { pointerId: 1, pointerType: "mouse", isPrimary: true, button: 0, buttons, clientX: x, clientY: 400, bubbles: true, cancelable: true });
+  const escape = (key = "Escape") => new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+
+  it("cancels with Escape while armed, taking the key", () => {
+    const { selection, controller } = armedSetup();
+    const key = escape();
+    document.dispatchEvent(key);
+    expect(selection.cancel).toHaveBeenCalledOnce();
+    expect(key.defaultPrevented).toBe(true);
+    controller.destroy();
+  });
+
+  it("leaves Escape alone when not armed", () => {
+    const { selection, controller } = armedSetup(false);
+    const key = escape();
+    document.dispatchEvent(key);
+    expect(selection.cancel).not.toHaveBeenCalled();
+    expect(key.defaultPrevented).toBe(false);
+    controller.destroy();
+  });
+
+  it("leaves an Escape something else took first, such as a menu", () => {
+    const { selection, controller } = armedSetup();
+    const menu = document.createElement("button");
+    document.body.append(menu);
+    menu.addEventListener("keydown", e => e.preventDefault());
+    menu.dispatchEvent(escape());
+    expect(selection.cancel).not.toHaveBeenCalled();
+    controller.destroy();
+  });
+
+  it("ignores other keys", () => {
+    const { selection, controller } = armedSetup();
+    for (const key of ["Enter", " ", "Esc", "q"]) document.dispatchEvent(escape(key));
+    expect(selection.cancel).not.toHaveBeenCalled();
+    controller.destroy();
+  });
+
+  it("stops listening for Escape once destroyed", () => {
+    const { selection, controller } = armedSetup();
+    controller.destroy();
+    const key = escape();
+    document.dispatchEvent(key);
+    expect(selection.cancel).not.toHaveBeenCalled();
+    expect(key.defaultPrevented).toBe(false);
+  });
+
+  it("picks the point a primary click lands on, without panning or letting the scene see the press", () => {
+    const { canvas, camera, selection, controller } = armedSetup();
+    const later = vi.fn();
+    canvas.addEventListener("pointerdown", later);
+    canvas.addEventListener("pointerup", later);
+    canvas.dispatchEvent(press("pointerdown", 100, 1));
+    canvas.dispatchEvent(press("pointermove", 102, 1));
+    canvas.dispatchEvent(press("pointerup", 102, 0));
+    expect(selection.pickAt).toHaveBeenCalledExactlyOnceWith({ x: 102, y: 400 });
+    expect(camera.panBy).not.toHaveBeenCalled();
+    expect(later).not.toHaveBeenCalled();
+    controller.destroy();
+  });
+
+  it("pans a drag past the threshold and stays armed, picking nothing", () => {
+    const { canvas, camera, selection, controller } = armedSetup();
+    canvas.dispatchEvent(press("pointerdown", 100, 1));
+    canvas.dispatchEvent(press("pointermove", 160, 1));
+    canvas.dispatchEvent(press("pointerup", 160, 0));
+    expect(camera.panBy).toHaveBeenCalled();
+    expect(selection.pickAt).not.toHaveBeenCalled();
+    expect(selection.cancel).not.toHaveBeenCalled();
+    // Still armed: the next click picks.
+    canvas.dispatchEvent(press("pointerdown", 200, 1));
+    canvas.dispatchEvent(press("pointerup", 200, 0));
+    expect(selection.pickAt).toHaveBeenCalledExactlyOnceWith({ x: 200, y: 400 });
+    controller.destroy();
+  });
+
+  it("leaves a click to the scene when not armed", () => {
+    const { canvas, selection, controller } = armedSetup(false);
+    const later = vi.fn();
+    canvas.addEventListener("pointerdown", later);
+    canvas.dispatchEvent(press("pointerdown", 100, 1));
+    canvas.dispatchEvent(press("pointerup", 100, 0));
+    expect(later).toHaveBeenCalledOnce();
+    expect(selection.pickAt).not.toHaveBeenCalled();
+    controller.destroy();
+  });
+});

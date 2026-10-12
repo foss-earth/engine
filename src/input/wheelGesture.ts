@@ -63,13 +63,7 @@ function classifyWheelGestureMode(
   return isOrbitMode ? "orbit" : "pan";
 }
 
-/**
- * Reads each wheel event as one gesture's: the first event after a pause
- * decides whether the gesture pans, orbits, zooms or is ignored, and the rest
- * of it follows, so a swipe that picks up a modifier or a stray delta partway
- * keeps its meaning. The globe and a panorama's look input read wheels alike.
- */
-export function createWheelGestureClassifier(options: {
+export interface WheelGestureClassifierOptions {
   nowMs(): number;
   isSafariWithGestures: boolean;
   isOrbitMode?: () => boolean;
@@ -80,7 +74,22 @@ export function createWheelGestureClassifier(options: {
    * was another reader's, and is ignored to its end.
    */
   precedingWheelMs?: number;
-}): (e: WheelGestureEvent) => WheelGestureMode {
+}
+
+/** A wheel event's gesture: what it does, and whether this event began it. */
+export interface WheelGestureReading {
+  readonly mode: WheelGestureMode;
+  readonly begins: boolean;
+}
+
+/**
+ * Reads each wheel event as one gesture's: the first event after a pause
+ * decides whether the gesture pans, orbits, zooms or is ignored, and the rest
+ * of it follows, so a swipe that picks up a modifier or a stray delta partway
+ * keeps its meaning. Says too whether an event began its gesture, for what
+ * is decided once a gesture, such as where it zooms.
+ */
+export function createWheelGestureReader(options: WheelGestureClassifierOptions): (e: WheelGestureEvent) => WheelGestureReading {
   let session: WheelGestureSession | null = options.precedingWheelMs === undefined ? null : { mode: "ignore", lastEventTimeMs: options.precedingWheelMs };
   return (e) => {
     const now = options.nowMs();
@@ -89,10 +98,16 @@ export function createWheelGestureClassifier(options: {
         mode: classifyWheelGestureMode(e, options.isSafariWithGestures, options.isOrbitMode?.() ?? false, options.mode()),
         lastEventTimeMs: now,
       };
-    } else {
-      session.lastEventTimeMs = now;
+      return { mode: session.mode, begins: true };
     }
-    return session.mode;
+    session.lastEventTimeMs = now;
+    return { mode: session.mode, begins: false };
   };
+}
+
+/** What each wheel event's gesture does, as `createWheelGestureReader` reads it. The globe and a panorama's look input read wheels alike. */
+export function createWheelGestureClassifier(options: WheelGestureClassifierOptions): (e: WheelGestureEvent) => WheelGestureMode {
+  const read = createWheelGestureReader(options);
+  return (e) => read(e).mode;
 }
 

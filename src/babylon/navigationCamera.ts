@@ -151,7 +151,7 @@ export function createNavigationCameraAdapter(ports: NavigationCameraPorts) {
     controller.followGroundFromHere();
     restoreCameraLimits();
     fovReturn = motion.fovRad !== view.verticalFovRad ? { target: motion.fovRad, lastMs: null } : null;
-    pendingHandback = { keepWheelSince: motion.inputSince, press: motion.press ?? null };
+    pendingHandback = { keepWheelSince: motion.inputSince, press: motion.press ?? null, touches: motion.touches ?? null };
     ports.getInertia()?.panBy(rates.panPx.x * frame, rates.panPx.y * frame, canvasHeightPx);
     ports.getInertia()?.orbitBy(rates.orbitDeg.pitch * frame, rates.orbitDeg.heading * frame);
     ports.getInertia()?.zoomBy(Math.exp(rates.zoomLog * frame));

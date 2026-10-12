@@ -8,6 +8,7 @@ export * from "./browser/mouseController.js";
 export * from "./browser/touchController.js";
 export * from "./browser/safariGestures.js";
 export * from "./browser/anchorPanDebugOverlay.js";
+export * from "./browser/navigationAnchorMarkers.js";
 
 export type BrowserNavigationHost = Omit<NavigationHost<Element, AbortSignal>, "focusReturn" | "createAbortController" | "abortReason">;
 export interface BrowserNavigationPorts {

@@ -1,6 +1,14 @@
-import type { CameraInputTarget } from "../input/inertialCameraController.js";
+import { orbitWith, zoomWith, type CameraInputTarget } from "../input/inertialCameraController.js";
 import { DEFAULT_INPUT_RATES, type InputSettings } from "../input/inputSettings.js";
+import type { AnchorAcquisition } from "../input/navigationAnchors.js";
 import type { TouchDebugEvent, TouchDebugOverlayHandle } from "../input/touchDiagnostics.js";
+
+/** A contact already down when the handler attaches, such as one that took the camera over from a lease's owner, and where it is. */
+export interface HeldTouch {
+  identifier: number;
+  clientX: number;
+  clientY: number;
+}
 
 // ─── Gesture recognition ─────────────────────────────────────────────
 // These filter noise out of the touch stream; they decide nothing about how
@@ -57,9 +65,15 @@ interface TransformSession {
   accumulatedAbsLogScale: number;
   orbitActive: boolean;
   zoomActive: boolean;
+  /** Where this pair zooms and turns: picked under its first midpoint, and held once it moves. */
+  anchors: AnchorAcquisition | null;
+  anchorsHeld: boolean;
 }
 
 type Session = PanSession | TransformSession | null;
+
+/** What the controller reads of a touch: a Touch, or a contact handed back. */
+type Contact = Pick<Touch, "identifier" | "clientX" | "clientY">;
 
 // ─── Pure geometry helpers ───────────────────────────────────────────
 
@@ -95,12 +109,17 @@ function distance(a: Point2D, b: Point2D): number {
  * model unreliable.  TouchEvent always reports the full active TouchList per
  * event, so each frame has both finger positions.
  *
+ * A pair zooms and turns about the anchors `input.touch.*` choose, picked
+ * under its midpoint when it lands and kept until it lifts: the midpoint
+ * moving turns the view, it does not move the anchor. `heldTouches`, down
+ * before the handler attached, go on as the gesture they were.
+ *
  * @returns Cleanup function that removes all registered listeners.
  */
 export function attachTouchController(
   canvas: HTMLCanvasElement,
   camera: CameraInputTarget<HTMLCanvasElement>,
-  options: { isOrbitMode?: () => boolean; getSettings?: () => InputSettings; onDebug?: (event: TouchDebugEvent) => void; attachTouchDebugOverlay?: () => TouchDebugOverlayHandle } = {},
+  options: { isOrbitMode?: () => boolean; getSettings?: () => InputSettings; onDebug?: (event: TouchDebugEvent) => void; attachTouchDebugOverlay?: () => TouchDebugOverlayHandle; heldTouches?: readonly HeldTouch[] | null } = {},
 ): () => void {
   // Pan, orbit and pinch rates at sensitivity 1: `input.touch.*`.
   const rates = () => options.getSettings?.().rates ?? DEFAULT_INPUT_RATES;
@@ -119,6 +138,14 @@ export function attachTouchController(
 
   let session: Session = null;
   const touchMoveCount = new Map<number, number>();
+  // Contacts handed back, down before this handler: their touchstart, if it comes now, is not a new touch.
+  const handedBack = new Set((options.heldTouches ?? []).map(t => t.identifier));
+
+  /** Replaces the session; a pair that ends lets go of its anchors, and what it set moving glides on about them. */
+  function setSession(next: Session): void {
+    if (session?.kind === "transform" && session !== next && session.anchors) camera.releaseAnchors?.(session.anchors);
+    session = next;
+  }
 
   function activeIds(touches: TouchList): number[] {
     return Array.from(touches, (t) => t.identifier).sort((a, b) => a - b);
@@ -145,20 +172,20 @@ export function attachTouchController(
     });
   }
 
-  function pointFromTouch(t: Touch): Point2D {
+  function pointFromTouch(t: Contact): Point2D {
     return { x: t.clientX, y: t.clientY };
   }
 
-  function firstTwo(touches: TouchList): [Touch, Touch] | null {
+  function firstTwo(touches: ArrayLike<Contact>): [Contact, Contact] | null {
     if (touches.length < 2) return null;
     return [touches[0], touches[1]];
   }
 
   // ── Session transitions ─────────────────────────────────────────
 
-  function startPanSession(touches: TouchList): void {
+  function startPanSession(touches: ArrayLike<Contact>): void {
     if (touches.length < 1) {
-      session = null;
+      setSession(null);
       return;
     }
     const t = touches[0];
@@ -170,34 +197,40 @@ export function attachTouchController(
         canvas,
       });
     }
-    session = { kind: "pan", identifier: t.identifier, previous: pointFromTouch(t), anchorPanActive };
+    setSession({ kind: "pan", identifier: t.identifier, previous: pointFromTouch(t), anchorPanActive });
   }
 
-  function startTransformSession(touches: TouchList): void {
+  function startTransformSession(touches: ArrayLike<Contact>): void {
     const pair = firstTwo(touches);
     if (!pair) {
-      session = null;
+      setSession(null);
       return;
     }
     const [a, b] = pair;
     const pa = pointFromTouch(a);
     const pb = pointFromTouch(b);
-    session = {
+    const midpoint = centroid(pa, pb);
+    // A new pair lets go of the last one's anchors before picking its own, from the pose as it is now.
+    setSession(null);
+    setSession({
       kind: "transform",
       identifierA: a.identifier,
       identifierB: b.identifier,
-      previousCentroid: centroid(pa, pb),
+      previousCentroid: midpoint,
       previousDistance: distance(pa, pb),
       accumulatedCentroidTravelPx: 0,
       accumulatedAbsLogScale: 0,
       orbitActive: false,
       zoomActive: false,
-    };
+      // One pick under the first midpoint, for zoom and rotation both when both ask for it.
+      anchors: camera.acquireAnchors?.({ family: "touch", operations: ["zoom", "orbit"], client: midpoint, canvas, candidate: true }) ?? null,
+      anchorsHeld: false,
+    });
   }
 
-  function reconcileSession(touches: TouchList): void {
+  function reconcileSession(touches: ArrayLike<Contact>): void {
     if (touches.length === 0) {
-      session = null;
+      setSession(null);
       return;
     }
     if (touches.length === 1) {
@@ -320,13 +353,20 @@ export function attachTouchController(
     if (!session.zoomActive && session.accumulatedAbsLogScale >= ZOOM_ACTIVATION_LOG) {
       session.zoomActive = true;
     }
+    // The pair is moving the camera now: its anchors are in use, and show.
+    if ((session.orbitActive || session.zoomActive) && session.anchors && !session.anchorsHeld) {
+      session.anchorsHeld = true;
+      camera.holdAnchors?.(session.anchors);
+    }
 
     if (session.orbitActive) {
       const sensitivity = options.getSettings?.().sensitivity.touch.orbit ?? 1;
       const pitchSign = options.isOrbitMode?.() ? -1 : 1;
-      camera.orbitBy(
+      orbitWith(
+        camera,
         pitchSign * dCy * rates().touchOrbitDegPerPx * sensitivity,
         dCx * rates().touchOrbitDegPerPx * sensitivity,
+        session.anchors?.orbit,
       );
     }
     if (session.zoomActive && Math.abs(clampedLogScaleStep) > 0.0001) {
@@ -335,7 +375,7 @@ export function attachTouchController(
       // so factor = previousDistance / clampedD = 1 / clampedScaleStep.
       const sensitivity = options.getSettings?.().sensitivity.touch.zoom ?? 1;
       const factor = 1 / clampedScaleStep;
-      camera.zoomBy(Math.pow(factor, sensitivity * rates().touchZoomExponent));
+      zoomWith(camera, Math.pow(factor, sensitivity * rates().touchZoomExponent), session.anchors?.zoom);
     }
 
     session.previousCentroid = c;
@@ -374,7 +414,9 @@ export function attachTouchController(
 
   function onTouchStart(e: TouchEvent): void {
     stop(e);
-    camera.cancel?.();
+    // A finger landing stops the glide, unless it is one handed back, already moving the camera.
+    const fresh = Array.from(e.changedTouches).filter(t => !handedBack.delete(t.identifier));
+    if (fresh.length > 0 || e.changedTouches.length === 0) camera.cancel?.();
     for (const t of Array.from(e.changedTouches)) {
       touchMoveCount.set(t.identifier, 0);
       emitDebug({
@@ -416,6 +458,7 @@ export function attachTouchController(
       camera.endAnchorPan?.();
     }
     for (const t of Array.from(e.changedTouches)) {
+      handedBack.delete(t.identifier);
       touchMoveCount.delete(t.identifier);
       emitDebug({
         type: e.type === "touchcancel" ? "cancel" : "up",
@@ -430,12 +473,15 @@ export function attachTouchController(
   canvas.addEventListener("touchmove", onTouchMove, { passive: false });
   canvas.addEventListener("touchend", onTouchEnd, { passive: false });
   canvas.addEventListener("touchcancel", onTouchEnd, { passive: false });
+  // Contacts that took the camera over go on from where they are, from the pose handed back.
+  if (options.heldTouches?.length) reconcileSession(options.heldTouches);
 
   return () => {
     canvas.removeEventListener("touchstart", onTouchStart);
     canvas.removeEventListener("touchmove", onTouchMove);
     canvas.removeEventListener("touchend", onTouchEnd);
     canvas.removeEventListener("touchcancel", onTouchEnd);
+    setSession(null);
     debugOverlayDestroy?.();
   };
 }
