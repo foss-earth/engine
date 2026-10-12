@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { NullEngine, Scene, Vector3, type Mesh } from "@babylonjs/core";
 import { createCanvasTextureDevicePorts } from "@foss-earth/renderer/babylon";
-import { makeCircularMarkerAtlas, createPointSpriteManager, createPointSprite, disposeSpriteManagers, pickPointMetadata } from "../src/sprites/index.js";
+import { makeCircularMarkerAtlas, createPointSpriteManager, createPointSprite, disposeSpriteManagers, hasPickablePointAt, pickPointMetadata } from "../src/sprites/index.js";
 import { createOrbitCompass } from "../src/visualization/orbitCompass.js";
 import { canvasRealm } from "../fixtures/composition/canvasRealm.js";
 
@@ -29,5 +29,26 @@ describe("supplied canvas and scene visualization",()=>{
       vi.spyOn(scene,"pickSprite").mockReturnValue({hit:true,pickedSprite:sprite} as never);expect(pickPointMetadata(scene,0,0)).toEqual({id:"authored"});
       disposeSpriteManagers([manager]);expect(manager.sprites).toHaveLength(0);
     } finally {scene.dispose();engine.dispose();}
+  });
+  it("treats a point of interest as pickable and the ground's own metadata as the ground", () => {
+    const engine = new NullEngine(), scene = new Scene(engine);
+    const ground = { metadata: { mapSurface: true, terrainZoom: 6, segments: 32, heightBounds: { min: 0, max: 1 } } };
+    const tile = { metadata: { googleGeometricErrorMeters: 12 } };
+    const point = { metadata: { id: "authored" } };
+    try {
+      vi.spyOn(scene, "pickSprite").mockReturnValue({ hit: false } as never);
+      const pick = vi.spyOn(scene, "pick").mockImplementation((_x, _y, predicate) => {
+        const mesh = [point, ground, tile].find(candidate => predicate?.(candidate as never, 0));
+        return { hit: Boolean(mesh), pickedMesh: mesh } as never;
+      });
+      expect(pickPointMetadata(scene, 10, 20)).toEqual({ id: "authored" });
+      expect(hasPickablePointAt(scene, 10, 20)).toBe(true);
+      pick.mockImplementation((_x, _y, predicate) => {
+        const mesh = [ground, tile].find(candidate => predicate?.(candidate as never, 0));
+        return { hit: Boolean(mesh), pickedMesh: mesh } as never;
+      });
+      expect(pickPointMetadata(scene, 10, 20)).toBeNull();
+      expect(hasPickablePointAt(scene, 10, 20)).toBe(false);
+    } finally { scene.dispose(); engine.dispose(); }
   });
 });

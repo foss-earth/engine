@@ -1,3 +1,4 @@
+import type { EcefCoord } from "../camera/cameraMath.js";
 import {
   sameAnchorPoint,
   type AnchorAcquisition,
@@ -25,6 +26,11 @@ export interface AnchorPanScreenError {
 export interface GlideAnchors {
   readonly orbit: NavigationAnchor | null;
   readonly zoom: NavigationAnchor | null;
+  /**
+   * The ground a grab holds, ECEF metres, while the grab is down and while
+   * the pan it set going still glides. Absent when nothing is grabbed.
+   */
+  readonly pan?: Readonly<EcefCoord> | null;
 }
 
 export interface CameraInputTarget<TCanvas = unknown> {
@@ -93,6 +99,10 @@ export function zoomWith<TCanvas>(target: CameraInputTarget<TCanvas>, factor: nu
 const FRAME_MS = 1000 / 60;
 /** How much velocity a 60 Hz frame keeps: `camera.inertiaDecay`'s default. */
 export const DEFAULT_INERTIA_DECAY_PER_FRAME = 0.82;
+/** `camera.grabFollowMs`: how long a grabbed point takes to catch up with the pointer, as a spring's time constant. */
+export const GRAB_FOLLOW_ID = "camera.grabFollowMs";
+/** Its default, ms. 0 holds the ground on the pointer; a longer time is the spring that trails it. */
+export const DEFAULT_GRAB_FOLLOW_MS = 0;
 const STOP_EPSILON_PX = 0.01;
 const STOP_EPSILON_DEG = 0.002;
 const STOP_EPSILON_ZOOM_LOG = 0.00005;

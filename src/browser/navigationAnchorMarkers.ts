@@ -1,9 +1,10 @@
 /**
- * Markers for the points zoom and rotation act about, over the globe canvas
- * (`input.showNavigationAnchors`): a reticle where a zoom acts, turning
- * arrows where a rotation does, both where they share a point, and a pin
- * above the pinned point. Shapes and labels tell them apart, not colour. They
- * take no pointer input. The runtime says where they are, each frame drawn.
+ * Markers for the points navigation acts about, over the globe canvas
+ * (`input.showNavigationAnchors`): outward arrows where a drag grabs the
+ * ground, a reticle where a zoom acts, turning arrows where a rotation does,
+ * and a pin above the pinned point. Shapes and labels tell them apart, not
+ * colour. They take no pointer input. The runtime says where they are, each
+ * frame drawn.
  */
 
 /** One marker: where it is, in client CSS pixels, and what acts there. */
@@ -12,6 +13,8 @@ export interface NavigationAnchorMarkerView {
   readonly y: number;
   readonly zoom: boolean;
   readonly orbit: boolean;
+  /** A grab holds this ground, or is still gliding from having held it. */
+  readonly grab: boolean;
   readonly pinned: boolean;
   /** Ground or a building nearer the eye hides the point: the marker is drawn faint. */
   readonly occluded: boolean;
@@ -28,19 +31,36 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 const HALF = 22;
 const RETICLE = "M -7 0 A 7 7 0 1 0 7 0 A 7 7 0 1 0 -7 0 M 0 -9 V -13 M 9 0 H 13 M 0 9 V 13 M -9 0 H -13";
 const TURN = "M -9.5 -4 A 10.3 10.3 0 0 1 4 -9.5 M 9.5 4 A 10.3 10.3 0 0 1 -4 9.5 M 1 -12.5 L 4 -9.5 L 0.5 -6.8 M -1 12.5 L -4 9.5 L -0.5 6.8";
+/** Four outward arrows around the centre: the ground a drag has grabbed. */
+const GRAB = "M 0 -6 V -13 M -3 -10 L 0 -13 L 3 -10 M 0 6 V 13 M -3 10 L 0 13 L 3 10 M -6 0 H -13 M -10 -3 L -13 0 L -10 3 M 6 0 H 13 M 10 -3 L 13 0 L 10 3";
 const DOT = "M -2.5 0 A 2.5 2.5 0 1 0 2.5 0 A 2.5 2.5 0 1 0 -2.5 0 Z";
 const PIN = "M 0 -1 C -2 -7 -7 -10 -7 -15 A 7 7 0 1 1 7 -15 C 7 -10 2 -7 0 -1 Z M -2.4 -15 A 2.4 2.4 0 1 0 2.4 -15 A 2.4 2.4 0 1 0 -2.4 -15 Z";
 
+function joinActs(parts: readonly string[]): string {
+  if (parts.length <= 1) return parts[0] ?? "";
+  if (parts.length === 2) return `${parts[0]} and ${parts[1]}`;
+  return `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
+}
+
 /** What a marker says to assistive technology: "Pinned point, where zoom and rotation act". */
-export function describeNavigationAnchorMarker(marker: Pick<NavigationAnchorMarkerView, "zoom" | "orbit" | "pinned" | "occluded">): string {
-  const acts = marker.zoom && marker.orbit ? "zoom and rotation act" : marker.zoom ? "zoom acts" : marker.orbit ? "rotation acts" : "";
-  const what = marker.pinned ? (acts ? `Pinned point, where ${acts}` : "Pinned point")
-    : marker.zoom && marker.orbit ? "Zoom and rotation point" : marker.zoom ? "Zoom point" : "Rotation point";
+export function describeNavigationAnchorMarker(marker: Pick<NavigationAnchorMarkerView, "zoom" | "orbit" | "grab" | "pinned" | "occluded">): string {
+  const motions = [marker.zoom ? "zoom" : "", marker.orbit ? "rotation" : ""].filter(Boolean);
+  const motion = motions.length === 2 ? "zoom and rotation" : motions[0] ?? "";
+  let what: string;
+  if (marker.pinned) {
+    const acts = [motion, marker.grab ? "the grab" : ""].filter(Boolean);
+    const plural = acts.length > 1 || motion === "zoom and rotation";
+    what = acts.length > 0 ? `Pinned point, where ${joinActs(acts)} ${plural ? "act" : "acts"}` : "Pinned point";
+  } else if (marker.grab && !motion) what = "Grabbed point";
+  else if (marker.grab) what = motion === "zoom and rotation" ? "Grabbed point, where zoom and rotation act" : `Grabbed point, where ${motion} acts`;
+  else if (motion === "zoom and rotation") what = "Zoom and rotation point";
+  else if (marker.zoom) what = "Zoom point";
+  else what = "Rotation point";
   return marker.occluded ? `${what}, hidden behind the ground` : what;
 }
 
 function kindOf(marker: NavigationAnchorMarkerView): string {
-  return `${marker.zoom ? "z" : ""}${marker.orbit ? "o" : ""}${marker.pinned ? "p" : ""}${marker.occluded ? "-" : ""}`;
+  return `${marker.zoom ? "z" : ""}${marker.orbit ? "o" : ""}${marker.grab ? "g" : ""}${marker.pinned ? "p" : ""}${marker.occluded ? "-" : ""}`;
 }
 
 export function attachNavigationAnchorMarkers(canvas: HTMLCanvasElement): NavigationAnchorMarkers {
@@ -49,7 +69,7 @@ export function attachNavigationAnchorMarkers(canvas: HTMLCanvasElement): Naviga
   const root = doc.createElement("div");
   root.setAttribute("data-foss-earth-navigation-anchors", "");
   root.setAttribute("role", "group");
-  root.setAttribute("aria-label", "Zoom and rotation points");
+  root.setAttribute("aria-label", "Navigation points");
   root.style.cssText = [
     "position:absolute",
     "inset:0",
@@ -78,8 +98,9 @@ export function attachNavigationAnchorMarkers(canvas: HTMLCanvasElement): Naviga
     const shapes: { d: string; fill: boolean }[] = [];
     if (marker.zoom) shapes.push({ d: RETICLE, fill: false });
     if (marker.orbit) shapes.push({ d: TURN, fill: false });
+    if (marker.grab) shapes.push({ d: GRAB, fill: false });
     if (marker.pinned) shapes.push({ d: PIN, fill: true });
-    if (!marker.pinned || marker.zoom || marker.orbit) shapes.push({ d: DOT, fill: true });
+    if (!marker.pinned || marker.zoom || marker.orbit || marker.grab) shapes.push({ d: DOT, fill: true });
     const halo = shapes.map(shape => path(shape.d, "rgba(15, 23, 42, 0.7)", 3.5, shape.fill ? "rgba(15, 23, 42, 0.7)" : "none"));
     const line = shapes.map(shape => path(shape.d, "currentColor", 1.75, shape.fill ? "currentColor" : "none"));
     if (marker.occluded) for (const element of line) element.setAttribute("stroke-dasharray", "2.5 2.5");

@@ -1,5 +1,16 @@
 import type { AbstractMesh, Scene, Sprite } from "@babylonjs/core";
 
+/**
+ * What the ground and its tiles record on a mesh. A point of interest has
+ * something else: the displayed surface is not one, so a drag can grab it.
+ */
+const GROUND_METADATA_KEYS = new Set(["mapSurface", "terrainZoom", "segments", "heightBounds", "googleGeometricErrorMeters"]);
+
+function isWorldPointMetadata(metadata: unknown): boolean {
+  if (metadata == null || typeof metadata !== "object") return false;
+  return Object.keys(metadata).some(key => !GROUND_METADATA_KEYS.has(key));
+}
+
 export interface PickPointMetadataOptions {
   /** Optional predicate to filter sprites considered for picking. */
   spritePredicate?: (sprite: Sprite) => boolean;
@@ -35,7 +46,7 @@ export function pickPointMetadata<T = unknown>(
   if (options.meshFallback === false) return null;
 
   const meshPredicate = options.meshPredicate
-    ?? ((m: AbstractMesh) => m.metadata !== null && m.metadata !== undefined);
+    ?? ((m: AbstractMesh) => isWorldPointMetadata(m.metadata));
   const mr = scene.pick(x, y, meshPredicate);
   if (mr?.hit && mr.pickedMesh?.metadata !== undefined && mr.pickedMesh?.metadata !== null) {
     return mr.pickedMesh.metadata as T;
@@ -43,7 +54,7 @@ export function pickPointMetadata<T = unknown>(
   return null;
 }
 
-/** True when a pickable sprite or mesh with metadata sits under the viewport point. */
+/** True when a point of interest sits under the viewport point. The ground's own metadata is not one. */
 export function hasPickablePointAt(
   scene: Scene,
   x: number,

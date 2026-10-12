@@ -1,5 +1,5 @@
 import { DEFAULT_CAMERA_LIMITS, DEFAULT_GROUND_FOLLOW } from "../../camera/cameraLimits.js";
-import { DEFAULT_INERTIA_DECAY_PER_FRAME } from "../../input/inertialCameraController.js";
+import { DEFAULT_GRAB_FOLLOW_MS, DEFAULT_INERTIA_DECAY_PER_FRAME, GRAB_FOLLOW_ID } from "../../input/inertialCameraController.js";
 import { DEFAULT_INPUT_RATES, type InputRates } from "../../input/inputRates.js";
 import { DEFAULT_GLOBE_INTENT_RATES } from "../../input/globeIntentMotion.js";
 import { DEFAULT_GLOBE_STICK_DEADZONE } from "../../input/gamepadDefaults.js";
@@ -117,6 +117,21 @@ export const CAMERA_PARAMETERS: readonly ParameterSpec[] = [
     home: { tab: CONTROLS_TAB, section: "camera", level: "main" },
     appliesLive: true,
     source: "src/input/inertialCameraController.ts",
+  },
+  {
+    id: GRAB_FOLLOW_ID,
+    label: "Grab follow time",
+    description: "With Grab the globe, how long the grabbed ground takes to catch up with the pointer or finger: the camera moves like a mass pulled to it, and carries on gliding when you let go. 0 keeps the ground exactly under the pointer.",
+    unit: "ms",
+    kind: "number",
+    bounds: () => ({ min: 0, max: 250 }),
+    step: 5,
+    scale: "linear",
+    default: DEFAULT_GRAB_FOLLOW_MS,
+    defaultReason: "The grabbed ground stays under the pointer. A longer time lets it trail, like a mass being pulled.",
+    home: { tab: CONTROLS_TAB, section: "camera", level: "main" },
+    appliesLive: true,
+    source: "src/babylon/cameraState.ts",
   },
   {
     id: "camera.surfaceFollowSpeed",
@@ -307,12 +322,12 @@ export const NAVIGATION_ANCHOR_PARAMETERS: readonly ParameterSpec[] = [
   })),
   {
     id: SHOW_NAVIGATION_ANCHORS_ID,
-    label: "Show zoom and rotation points",
-    description: "A small marker shows the point a zoom or rotation acts about while it moves, and the pinned point while there is one. The compass is shown or hidden on its own.",
+    label: "Show grab, zoom and rotation points",
+    description: "A small marker shows the ground a drag grabs, while it is held and while the camera glides on, the point a zoom or rotation acts about while it moves, and the pinned point while there is one. The compass is shown or hidden on its own.",
     unit: "none",
     kind: "boolean",
     default: true,
-    defaultReason: "Seeing where a zoom or turn acts makes an off-centre point predictable.",
+    defaultReason: "Seeing the grabbed ground, and where a zoom or turn acts, makes the motion predictable.",
     home: { tab: CONTROLS_TAB, section: "orbit", level: "main" },
     appliesLive: true,
     source: "src/browser/navigationAnchorMarkers.ts",

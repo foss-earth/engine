@@ -17,14 +17,14 @@ function mount() {
 }
 
 const marker = (extra: Partial<NavigationAnchorMarkerView> = {}): NavigationAnchorMarkerView =>
-  ({ x: 300, y: 200, zoom: true, orbit: false, pinned: false, occluded: false, ...extra });
+  ({ x: 300, y: 200, zoom: true, orbit: false, grab: false, pinned: false, occluded: false, ...extra });
 
 describe("navigation anchor markers", () => {
   it("adds a hidden group beside the canvas that takes no pointer input", () => {
     const { parent, root } = mount();
     expect(root.parentElement).toBe(parent);
     expect(root.getAttribute("role")).toBe("group");
-    expect(root.getAttribute("aria-label")).toBe("Zoom and rotation points");
+    expect(root.getAttribute("aria-label")).toBe("Navigation points");
     expect(root.style.pointerEvents).toBe("none");
     expect(root.hidden).toBe(true);
   });
@@ -78,6 +78,9 @@ describe("navigation anchor markers", () => {
     expect(count({ zoom: true, orbit: true })).toBe(6);
     expect(count({ zoom: false, pinned: true })).toBe(2);
     expect(count({ zoom: true, orbit: true, pinned: true })).toBe(8);
+    expect(count({ zoom: false, grab: true })).toBe(4);
+    const paths = svgs()[0]!.querySelectorAll("path");
+    expect(Array.from(paths).some(path => path.getAttribute("d")?.startsWith("M 0 -6 V -13"))).toBe(true);
   });
 
   it("reuses its elements, hides surplus ones, and redraws only when a marker's kind changes", () => {
@@ -96,6 +99,11 @@ describe("navigation anchor markers", () => {
     expect(first!.getAttribute("aria-label")).toBe("Zoom and rotation point");
     expect(second!.style.display).toBe("");
     expect(second!.getAttribute("aria-label")).toBe("Pinned point");
+    const redrawn = first!.firstChild;
+    markers.show([marker({ zoom: false, grab: true })]);
+    expect(first!.firstChild).not.toBe(redrawn);
+    expect(first!.getAttribute("aria-label")).toBe("Grabbed point");
+    expect(second!.style.display).toBe("none");
   });
 
   it("removes its group on destroy", () => {
@@ -117,18 +125,23 @@ describe("navigation anchor markers", () => {
 
 describe("describeNavigationAnchorMarker", () => {
   it("names what acts at the point, the pin, and whether the ground hides it", () => {
-    const cases: [zoom: boolean, orbit: boolean, pinned: boolean, label: string][] = [
-      [true, false, false, "Zoom point"],
-      [false, true, false, "Rotation point"],
-      [true, true, false, "Zoom and rotation point"],
-      [false, false, true, "Pinned point"],
-      [true, false, true, "Pinned point, where zoom acts"],
-      [false, true, true, "Pinned point, where rotation acts"],
-      [true, true, true, "Pinned point, where zoom and rotation act"],
+    const cases: [zoom: boolean, orbit: boolean, grab: boolean, pinned: boolean, label: string][] = [
+      [true, false, false, false, "Zoom point"],
+      [false, true, false, false, "Rotation point"],
+      [true, true, false, false, "Zoom and rotation point"],
+      [false, false, false, true, "Pinned point"],
+      [true, false, false, true, "Pinned point, where zoom acts"],
+      [false, true, false, true, "Pinned point, where rotation acts"],
+      [true, true, false, true, "Pinned point, where zoom and rotation act"],
+      [false, false, true, false, "Grabbed point"],
+      [true, false, true, false, "Grabbed point, where zoom acts"],
+      [false, true, true, false, "Grabbed point, where rotation acts"],
+      [true, true, true, false, "Grabbed point, where zoom and rotation act"],
+      [false, false, true, true, "Pinned point, where the grab acts"],
     ];
-    for (const [zoom, orbit, pinned, label] of cases) {
-      expect(describeNavigationAnchorMarker({ zoom, orbit, pinned, occluded: false })).toBe(label);
-      expect(describeNavigationAnchorMarker({ zoom, orbit, pinned, occluded: true })).toBe(`${label}, hidden behind the ground`);
+    for (const [zoom, orbit, grab, pinned, label] of cases) {
+      expect(describeNavigationAnchorMarker({ zoom, orbit, grab, pinned, occluded: false })).toBe(label);
+      expect(describeNavigationAnchorMarker({ zoom, orbit, grab, pinned, occluded: true })).toBe(`${label}, hidden behind the ground`);
     }
   });
 });

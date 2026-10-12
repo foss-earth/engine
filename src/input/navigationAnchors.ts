@@ -13,7 +13,7 @@ import type { EcefCoord } from "../camera/cameraMath.js";
 
 /** The input families that choose their own anchors. Keys, controllers and on-screen buttons are `nonPointer`. */
 export type AnchorFamily = "mouse" | "trackpad" | "touch" | "nonPointer";
-/** The two operations that act about a point. Pan has no anchor of this kind. */
+/** The two operations that act about a point. A grab pan's ground point is marked on its own, not as one of these. */
 export type AnchorOperation = "zoom" | "orbit";
 
 /** Mouse and trackpad: the point under the pointer, the compass target or the pinned point. */

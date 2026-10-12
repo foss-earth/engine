@@ -2,7 +2,7 @@ import { ComputeLookAtFromYawPitchToRef, ComputeYawPitchFromLookAtToRef, Vector2
 import type { GeospatialCamera } from "@babylonjs/core";
 import type { GlobeViewState } from "../view.js";
 import {
-  ANCHOR_PAN_CHASE,
+  clientRay,
   clientToViewportCoords,
   computeScreenAnchorError,
   pickEllipsoidFromScreen,
@@ -20,8 +20,8 @@ import {
   WGS84_A,
   type EcefCoord,
 } from "../camera/cameraMath.js";
-import { add, dot, length, normalize, scale, sub, type Vec3 } from "../camera/geographicFrames.js";
-import { cameraAxes, lineOfSightTarget, orbitAbout, tiltAt, zoomAbout, type CameraPose } from "../camera/anchoredMotion.js";
+import { add, cross, dot, length, normalize, scale, sub, type Vec3 } from "../camera/geographicFrames.js";
+import { cameraAxes, lineOfSightTarget, orbitAbout, tiltAt, viewDirection, zoomAbout, type CameraPose, type ViewDirection } from "../camera/anchoredMotion.js";
 import type { AnchoredMotionConstraint, AnchoredMotionResult, GlideMotion, NavigationAnchor } from "../input/navigationAnchors.js";
 import type { GlideAnchors } from "../input/inertialCameraController.js";
 
@@ -96,6 +96,37 @@ interface AnchoredPlan {
 
 type SetOrientation = (yaw: number, pitch: number, radius: number, center: Vector3) => void;
 
+interface GrabPan {
+  /** The ground point held, ECEF metres, copied when grabbed. */
+  readonly point: Vec3;
+  readonly down: { x: number; y: number };
+  client: { x: number; y: number };
+  canvas: HTMLCanvasElement;
+  /** The orbit target's velocity over the ground, ECEF metres a second. */
+  velocity: Vec3;
+  moving: boolean;
+}
+
+/** The longest frame a grab pan steps at once, ms: a stall does not fling the camera. */
+const MAX_GRAB_STEP_MS = 100;
+/** With no follow time, how long the velocity a release glides with is averaged over, ms. */
+const GRAB_VELOCITY_SMOOTHING_MS = 40;
+/** A grab pan is at rest within this many pixels of the pointer, moving slower than the next per second. */
+const GRAB_REST_PX = 0.01;
+const GRAB_REST_PX_PER_S = 0.5;
+/** Newton steps for a grab, and the miss on screen it stops at, as a share of the distance ahead: far below a pixel. */
+const GRAB_SOLVE_ITERATIONS = 8;
+const GRAB_SOLVE_TOLERANCE = 1e-10;
+
+function vector3ToEcefOrNull(point: Vector3 | null): EcefCoord | null {
+  return point ? { x: point.x, y: point.y, z: point.z } : null;
+}
+
+/** The WGS84 ellipsoid's outward normal at a latitude and longitude, radians. */
+function geodeticUp(latRad: number, lonRad: number): Vec3 {
+  return [Math.cos(latRad) * Math.cos(lonRad), Math.cos(latRad) * Math.sin(lonRad), Math.sin(latRad)];
+}
+
 // ─── Camera Controller ───────────────────────────────────────────────
 
 /**
@@ -115,6 +146,11 @@ export interface CameraControllerPorts {
   nowMs(): number;
   /** Host feature prevents globe grabbing over a pickable world point. */
   hasPickablePointAt(scene: ReturnType<GeospatialCamera["getScene"]>, x: number, y: number): boolean;
+  /**
+   * The ground under a client point a grab pan holds: the displayed surface,
+   * else the ellipsoid; null for sky. Without it, the ellipsoid alone.
+   */
+  groundAt?(client: { readonly x: number; readonly y: number }): Readonly<EcefCoord> | null;
 }
 
 export class CameraController {
@@ -123,10 +159,8 @@ export class CameraController {
   private orbitTargetOffsetMeters = 0;
   private smoothedSurfaceHeightMeters: number | null = null;
   private lastSurfaceHeightResolveMs: number | null = null;
-  /** Fixed ellipsoid grab point from pointer down — the screen error segment starts here. */
-  private anchorPanPoint: Vector3 | null = null;
-  /** Client coords at pointer down — visual fallback when projection is stale. */
-  private anchorPanDownClient: { x: number; y: number } | null = null;
+  /** A grab pan under way: the ground point held, where it was grabbed and where the pointer is, and the centre's velocity. */
+  private grab: GrabPan | null = null;
 
   private limits: CameraLimits = DEFAULT_CAMERA_LIMITS;
   private groundFollow: GroundFollow = DEFAULT_GROUND_FOLLOW;
@@ -427,100 +461,206 @@ export class CameraController {
   }
 
   /**
-   * Begin an anchor-based pan gesture by picking the globe point under the pointer.
-   * Returns false when the ray misses the ellipsoid (sky / off-globe).
+   * Grab the ground under the pointer for a pan: the displayed surface there,
+   * or else the ellipsoid (`CameraControllerPorts.groundAt`), copied once.
+   * From here `stepAnchorPan` brings that point to the pointer. False, and no
+   * grab, over a point of interest or where there is no ground (sky). The
+   * displayed ground is not a point of interest.
    */
   beginAnchorPan(pick: ScreenPickInput): boolean {
+    this.grab = null;
     const scene = this.camera.getScene();
-    if (!scene) {
-      this.anchorPanPoint = null;
-      this.anchorPanDownClient = null;
-      return false;
-    }
+    if (!scene) return false;
     const { x, y } = clientToViewportCoords(pick.canvas, scene, pick.clientX, pick.clientY);
-    if (this.ports.hasPickablePointAt(scene, x, y)) {
-      this.anchorPanPoint = null;
-      this.anchorPanDownClient = null;
-      return false;
-    }
-    const hit = pickEllipsoidFromScreen(scene, this.camera, pick.canvas, pick.clientX, pick.clientY);
-    if (!hit) {
-      this.anchorPanPoint = null;
-      this.anchorPanDownClient = null;
-      return false;
-    }
-    this.anchorPanPoint = hit.clone();
-    this.anchorPanDownClient = { x: pick.clientX, y: pick.clientY };
+    if (this.ports.hasPickablePointAt(scene, x, y)) return false;
+    const client = { x: pick.clientX, y: pick.clientY };
+    const ground = this.ports.groundAt
+      ? this.ports.groundAt(client)
+      : vector3ToEcefOrNull(pickEllipsoidFromScreen(scene, this.camera, pick.canvas, pick.clientX, pick.clientY));
+    if (!ground || ![ground.x, ground.y, ground.z].every(Number.isFinite)) return false;
+    this.grab = { point: [ground.x, ground.y, ground.z], down: client, client, canvas: pick.canvas, velocity: [0, 0, 0], moving: false };
     return true;
   }
 
   /**
-   * Continue an anchor-based pan: move orbit center lat/lon only (heading/pitch/zoom
-   * unchanged) to shrink the screen-space line from the grab point to the cursor.
+   * The pointer of a grab pan has moved to `pick`. The camera does not move
+   * here: each frame's `stepAnchorPan` carries the grabbed point toward it.
    */
-  panAnchorTo(pick: ScreenPickInput, sensitivity = 1): boolean {
-    if (!this.anchorPanPoint) {
-      return false;
-    }
-
-    const scene = this.camera.getScene();
-    if (!scene) {
-      return false;
-    }
-
-    const error = computeScreenAnchorError(
-      this.anchorPanPoint,
-      pick.clientX,
-      pick.clientY,
-      scene,
-      this.camera,
-      pick.canvas,
-      this.anchorPanDownClient ?? undefined,
-    );
-    if (!error || error.lengthPx < ANCHOR_PAN_CHASE.donePx) {
-      return error !== null;
-    }
-
-    // Screen error is already in CSS pixels — apply directly to panBy (not the
-    // legacy 0.1 movement gain used for inertial frame deltas).
-    const chase = Math.min(
-      ANCHOR_PAN_CHASE.maxFactor,
-      Math.max(ANCHOR_PAN_CHASE.minFactor, error.lengthPx / ANCHOR_PAN_CHASE.fullChasePx),
-    );
-    const factor = sensitivity * chase;
-    this.panBy(-error.dx * factor, -error.dy * factor, pick.canvas.clientHeight);
+  panAnchorTo(pick: ScreenPickInput): boolean {
+    if (!this.grab) return false;
+    this.grab.client = { x: pick.clientX, y: pick.clientY };
+    this.grab.canvas = pick.canvas;
+    this.grab.moving = true;
     return true;
   }
 
-  /** End an anchor-based pan gesture. */
-  endAnchorPan(): void {
-    this.anchorPanPoint = null;
-    this.anchorPanDownClient = null;
+  /**
+   * One frame of a grab pan, `dtMs` long: the centre moves over the ground,
+   * heading, tilt and distance kept, toward where the grabbed point is under
+   * the pointer. With `followMs` 0 it is there each frame; otherwise it gets
+   * there as a critically damped spring with that time constant, a mass
+   * pulled to the pointer that neither overshoots nor stops dead. True while
+   * it is still moving.
+   */
+  stepAnchorPan(dtMs: number, followMs: number): boolean {
+    const grab = this.grab;
+    if (!grab) return false;
+    const dt = Math.max(0, Math.min(MAX_GRAB_STEP_MS, dtMs)) / 1000;
+    if (!(dt > 0)) return grab.moving;
+    const fields = this.currentFieldsSettled();
+    const at = fields.center;
+    const wanted = this.clientViewDirection(grab.client, grab.canvas);
+    // Where nothing puts the point under the pointer, the centre is left to come to rest.
+    const goal = (wanted && this.grabbedCenter(fields, grab.point, wanted)) ?? at;
+    const up = normalize(at);
+    let next: Vec3;
+    if (!(followMs > 0)) {
+      next = goal;
+      const measured = scale(sub(goal, at), 1 / dt);
+      grab.velocity = add(grab.velocity, scale(sub(measured, grab.velocity), 1 - Math.exp(-dt * 1000 / GRAB_VELOCITY_SMOOTHING_MS)));
+    } else {
+      const omega = 1000 / followMs;
+      const offset = sub(at, goal);
+      const k = add(grab.velocity, scale(offset, omega));
+      const decay = Math.exp(-omega * dt);
+      next = add(goal, scale(add(offset, scale(k, dt)), decay));
+      grab.velocity = scale(sub(grab.velocity, scale(k, omega * dt)), decay);
+    }
+    // The centre moves over the ground: what it gains in height the ground following decides.
+    grab.velocity = sub(grab.velocity, scale(up, dot(grab.velocity, up)));
+    const stepMeters = length(sub(next, at));
+    if (stepMeters > 0) {
+      const place = ecefToGeodetic(next[0], next[1], next[2]);
+      const latDeg = place.latRad * RAD_TO_DEG, lonDeg = place.lonRad * RAD_TO_DEG;
+      this.applyViewState({ ...this.viewStateOf(fields), latDeg, lonDeg }, this.movedOrbitTargetHeightMeters(latDeg, lonDeg));
+    }
+    const metersPerPixel = this.metersPerPixel(fields.radius, grab.canvas.clientHeight);
+    grab.moving = stepMeters > GRAB_REST_PX * metersPerPixel || length(grab.velocity) > GRAB_REST_PX_PER_S * metersPerPixel;
+    return grab.moving;
   }
 
-  /** True while an anchor pan gesture is active. */
+  /**
+   * End a grab pan. What the camera was doing as it let go comes back as a
+   * pan glide, one 60 Hz frame of it in the glide's screen pixels, for the
+   * glide to carry on; null when it was at rest, or for no grab.
+   */
+  endAnchorPan(): { screenDxPx: number; screenDyPx: number; canvasHeight: number } | null {
+    const grab = this.grab;
+    this.grab = null;
+    if (!grab) return null;
+    const state = this.syncFromCamera();
+    const lat = state.latDeg * DEG_TO_RAD, lon = state.lonDeg * DEG_TO_RAD, heading = state.headingDeg * DEG_TO_RAD;
+    const east: Vec3 = [-Math.sin(lon), Math.cos(lon), 0];
+    const north: Vec3 = [-Math.sin(lat) * Math.cos(lon), -Math.sin(lat) * Math.sin(lon), Math.cos(lat)];
+    const perFrame = scale(grab.velocity, 1 / 60);
+    const eastM = dot(perFrame, east), northM = dot(perFrame, north);
+    // pannedViewState's ground directions, turned back into the screen's.
+    const forwardM = northM * Math.cos(heading) + eastM * Math.sin(heading);
+    const rightM = -northM * Math.sin(heading) + eastM * Math.cos(heading);
+    const canvasHeight = Math.max(1, grab.canvas.clientHeight);
+    const metersPerPixel = this.metersPerPixel(state.zoomMeters, canvasHeight);
+    const screenDxPx = rightM / metersPerPixel, screenDyPx = -forwardM / metersPerPixel;
+    if (!Number.isFinite(screenDxPx) || !Number.isFinite(screenDyPx) || Math.hypot(screenDxPx, screenDyPx) < GRAB_REST_PX) return null;
+    return { screenDxPx, screenDyPx, canvasHeight };
+  }
+
+  /** Drop a grab pan without a glide: the view was replaced, or input cancelled. */
+  cancelAnchorPan(): void {
+    this.grab = null;
+  }
+
+  /** True while a grab pan holds a point. */
   isAnchorPanActive(): boolean {
-    return this.anchorPanPoint !== null;
+    return this.grab !== null;
   }
 
-  /** Screen-space error segment for the active grab point (debug / HUD). */
+  /** The ground a grab pan holds, ECEF metres, copied; null when none is held. */
+  grabbedPoint(): Readonly<EcefCoord> | null {
+    const point = this.grab?.point;
+    return point ? Object.freeze({ x: point[0], y: point[1], z: point[2] }) : null;
+  }
+
+  /** True while a grab pan's camera is still on its way to the pointer, or moving. */
+  isAnchorPanMoving(): boolean {
+    return this.grab?.moving ?? false;
+  }
+
+  /** Screen-space segment from the grabbed point to `pick` (debug / HUD). */
   getAnchorPanScreenError(pick: ScreenPickInput): ScreenAnchorError | null {
-    if (!this.anchorPanPoint) {
-      return null;
-    }
+    const grab = this.grab;
     const scene = this.camera.getScene();
-    if (!scene) {
-      return null;
+    if (!grab || !scene) return null;
+    return computeScreenAnchorError(new Vector3(...grab.point), pick.clientX, pick.clientY, scene, this.camera, pick.canvas, grab.down);
+  }
+
+  /** The ground a pixel spans at the orbit target, metres: as `pannedViewState` measures a pan. */
+  private metersPerPixel(radius: number, canvasHeight: number): number {
+    const fovY = (this.camera as unknown as { fov: number }).fov ?? 0.8;
+    return (2 * radius * Math.tan(fovY * 0.5)) / Math.max(canvasHeight, 1);
+  }
+
+  /** Where a client point is on screen, as `viewDirection` writes it; null outside the view ahead. */
+  private clientViewDirection(client: { x: number; y: number }, canvas: HTMLCanvasElement): ViewDirection | null {
+    const scene = this.camera.getScene();
+    const ray = scene && clientRay(scene, this.camera, canvas, client.x, client.y);
+    const axes = cameraAxes(this.getPose());
+    if (!ray || !axes) return null;
+    const direction: Vec3 = [ray.direction.x, ray.direction.y, ray.direction.z];
+    const ahead = dot(direction, axes.forward);
+    if (!(ahead > 0)) return null;
+    return { x: dot(direction, axes.right) / ahead, y: dot(direction, axes.up) / ahead };
+  }
+
+  /**
+   * The centre, at the height it has now, that puts `point` at `wanted` on
+   * screen with this heading, tilt and distance: Newton's method over the
+   * ground's east and north, each step halved until it brings the point
+   * nearer. Where no centre puts it there exactly, as past the horizon, the
+   * nearest one found; null when the point is not in view at all.
+   */
+  private grabbedCenter(fields: OrbitFields, point: Vec3, wanted: ViewDirection): Vec3 | null {
+    const start = fields.center;
+    const place = ecefToGeodetic(start[0], start[1], start[2]);
+    const up = geodeticUp(place.latRad, place.lonRad);
+    const across = cross([0, 0, 1], up);
+    const east = length(across) > 1e-9 ? normalize(across) : [0, 1, 0] as Vec3;
+    const north = cross(up, east);
+    const centerAt = (a: number, b: number): Vec3 => {
+      const moved = add(start, add(scale(east, a), scale(north, b)));
+      const there = ecefToGeodetic(moved[0], moved[1], moved[2]);
+      const { x, y, z } = geodeticToEcef(there.latRad, there.lonRad, place.altMeters);
+      return [x, y, z];
+    };
+    const miss = (a: number, b: number): [number, number] | null => {
+      const seen = viewDirection(this.poseOf({ ...fields, center: centerAt(a, b) }), point);
+      return seen ? [seen.x - wanted.x, seen.y - wanted.y] : null;
+    };
+    let a = 0, b = 0;
+    let residual = miss(0, 0);
+    if (!residual) return null;
+    const size = (r: readonly number[]): number => Math.hypot(r[0], r[1]);
+    // Central differences over a micrometre per metre of distance: far below a pixel, far above rounding.
+    const delta = Math.max(0.01, fields.radius * 1e-6);
+    for (let iteration = 0; iteration < GRAB_SOLVE_ITERATIONS && size(residual) > GRAB_SOLVE_TOLERANCE; iteration += 1) {
+      const ahead = miss(a + delta, b), behind = miss(a - delta, b), left = miss(a, b + delta), right = miss(a, b - delta);
+      if (!ahead || !behind || !left || !right) break;
+      const j00 = (ahead[0] - behind[0]) / (2 * delta), j10 = (ahead[1] - behind[1]) / (2 * delta);
+      const j01 = (left[0] - right[0]) / (2 * delta), j11 = (left[1] - right[1]) / (2 * delta);
+      const det = j00 * j11 - j01 * j10;
+      if (!(Math.abs(det) > 0) || !Number.isFinite(det)) break;
+      const da = -(j11 * residual[0] - j01 * residual[1]) / det;
+      const db = -(-j10 * residual[0] + j00 * residual[1]) / det;
+      let improved = false;
+      for (let share = 1; share >= 1 / 256; share /= 2) {
+        const tried = miss(a + share * da, b + share * db);
+        if (tried && size(tried) < size(residual)) {
+          a += share * da; b += share * db; residual = tried; improved = true;
+          break;
+        }
+      }
+      if (!improved) break;
     }
-    return computeScreenAnchorError(
-      this.anchorPanPoint,
-      pick.clientX,
-      pick.clientY,
-      scene,
-      this.camera,
-      pick.canvas,
-      this.anchorPanDownClient ?? undefined,
-    );
+    return centerAt(a, b);
   }
 
   /**

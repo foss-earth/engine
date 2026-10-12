@@ -141,9 +141,13 @@ export function attachTouchController(
   // Contacts handed back, down before this handler: their touchstart, if it comes now, is not a new touch.
   const handedBack = new Set((options.heldTouches ?? []).map(t => t.identifier));
 
-  /** Replaces the session; a pair that ends lets go of its anchors, and what it set moving glides on about them. */
+  /**
+   * Replaces the session; a pair that ends lets go of its anchors, and what it set moving glides on about them.
+   * A one-finger pan that ends lets go of the ground it grabbed, as a pair lands or the finger lifts.
+   */
   function setSession(next: Session): void {
     if (session?.kind === "transform" && session !== next && session.anchors) camera.releaseAnchors?.(session.anchors);
+    if (session?.kind === "pan" && session !== next && session.anchorPanActive) camera.endAnchorPan?.();
     session = next;
   }
 
@@ -189,6 +193,8 @@ export function attachTouchController(
       return;
     }
     const t = touches[0];
+    // The last session lets go first: its grab is not the one this finger takes.
+    setSession(null);
     let anchorPanActive = false;
     if ((options.getSettings?.().globeAnchorRotation ?? false) && camera.beginAnchorPan) {
       anchorPanActive = camera.beginAnchorPan({
@@ -454,9 +460,6 @@ export function attachTouchController(
 
   function onTouchEnd(e: TouchEvent): void {
     stop(e);
-    if (session?.kind === "pan" && session.anchorPanActive) {
-      camera.endAnchorPan?.();
-    }
     for (const t of Array.from(e.changedTouches)) {
       handedBack.delete(t.identifier);
       touchMoveCount.delete(t.identifier);

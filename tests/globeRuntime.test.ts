@@ -629,13 +629,13 @@ describe("runtime navigation anchors", () => {
       host.settings.set("input.nonPointer.zoomAnchor", "pinned");
       const held = host.service.acquire({ ...nonPointerZoom, hold: true }).zoom!;
       expect(held).toMatchObject({ source: "pinned", fallback: null, point: pin.point });
-      expect(host.service.markerPoints(noGlide)).toEqual([{ point: pin.point, zoom: true, orbit: false, pinned: true }]);
+      expect(host.service.markerPoints(noGlide)).toEqual([{ point: pin.point, zoom: true, orbit: false, grab: false, pinned: true }]);
       host.anchors.subscribe(changed);
 
       host.runtime.setViewState(host.runtime.getViewState()!);
       expect(retire).toHaveBeenCalledOnce(); expect(changed).toHaveBeenCalledOnce();
       expect(host.service.isCurrent(held)).toBe(false);
-      expect(host.service.markerPoints(noGlide)).toEqual([{ point: pin.point, zoom: false, orbit: false, pinned: true }]);
+      expect(host.service.markerPoints(noGlide)).toEqual([{ point: pin.point, zoom: false, orbit: false, grab: false, pinned: true }]);
       expect(host.anchors.status().pin).toBe(pin);
 
       const next = host.service.acquire(nonPointerZoom).zoom!;
@@ -756,6 +756,36 @@ describe("runtime navigation anchors", () => {
 
       host.runtime.destroy();
       expect(markers.destroy).toHaveBeenCalledOnce();
+    } finally { host.disposeHost(); }
+  });
+
+  it("shows the grabbed ground from the press, and drops it when the press is released without moving", () => {
+    const markers = { show: vi.fn<NavigationAnchorMarkers["show"]>(), destroy: vi.fn() };
+    const host = createAnchorHost(markers);
+    const canvas = host.canvas;
+    Object.defineProperty(canvas, "clientWidth", { configurable: true, value: 800 });
+    Object.defineProperty(canvas, "clientHeight", { configurable: true, value: 600 });
+    Object.assign(canvas, { setPointerCapture() {}, releasePointerCapture() {}, hasPointerCapture: () => false });
+    canvas.getBoundingClientRect = () => ({ left: 0, top: 0, width: 800, height: 600, right: 800, bottom: 600, x: 0, y: 0, toJSON: () => ({}) });
+    const frame = (at: number) => { host.setTime(at); host.runtime.prepareFrame(at); host.runtime.afterFrame(at); return markers.show.mock.lastCall?.[0] ?? []; };
+    const pointer = (type: string, x: number, y: number) => canvas.dispatchEvent(new PointerEvent(type, {
+      pointerId: 1, pointerType: "mouse", isPrimary: true, button: 0, buttons: type === "pointerup" ? 0 : 1, clientX: x, clientY: y, bubbles: true, cancelable: true,
+    }));
+    try {
+      const before = host.runtime.getViewState()!;
+      expect(frame(10).some(marker => marker.grab)).toBe(false);
+      pointer("pointerdown", 400, 360);
+      const held = frame(30);
+      const grab = held.find(marker => marker.grab && !marker.zoom && !marker.orbit);
+      expect(grab).toEqual(expect.objectContaining({ grab: true, pinned: false }));
+      expect(Math.hypot(grab!.x - 400, grab!.y - 360)).toBeLessThan(2);
+      pointer("pointerup", 400, 360);
+      for (let at = 50; at < 8000 && frame(at).some(marker => marker.grab); at += 20) { /* the glide, if a still press left any */ }
+      expect(frame(8100).some(marker => marker.grab)).toBe(false);
+      const settled = host.runtime.getViewState()!;
+      expect(settled.headingDeg).toBeCloseTo(before.headingDeg, 6);
+      expect(settled.pitchDeg).toBeCloseTo(before.pitchDeg, 6);
+      expect(settled.zoomMeters).toBeCloseTo(before.zoomMeters, 6);
     } finally { host.disposeHost(); }
   });
 

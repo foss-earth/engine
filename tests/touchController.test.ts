@@ -2,7 +2,7 @@
 
 import { describe, it, expect, vi, type Mock } from "vitest";
 import { attachTouchController } from "../src/browser/touchController.js";
-import { DEFAULT_INPUT_RATES } from "../src/input/inputSettings.js";
+import { DEFAULT_INPUT_RATES, DEFAULT_INPUT_SETTINGS } from "../src/input/inputSettings.js";
 import type { AnchorAcquisition, AnchorFamily, AnchorOperation, AnchorRequest, NavigationAnchor } from "../src/input/navigationAnchors.js";
 
 interface TouchLike {
@@ -409,6 +409,57 @@ describe("attachTouchController: a pair's zoom anchor and orbit pivot", () => {
     expect(camera.panBy).toHaveBeenCalledWith(expect.closeTo(-4.8, 9), expect.closeTo(0, 9), 800);
     expect(camera.acquireAnchors).not.toHaveBeenCalled();
     expect(camera.cancel).not.toHaveBeenCalled();
+    cleanup();
+  });
+});
+
+describe("attachTouchController: a finger's grab of the ground", () => {
+  const f1 = { identifier: 1, clientX: 100, clientY: 200 };
+  const f2 = { identifier: 2, clientX: 100, clientY: 300 };
+
+  function grabbingCamera() {
+    return {
+      ...makeCamera(),
+      beginAnchorPan: vi.fn(() => true),
+      panAnchorTo: vi.fn<(pick: unknown, sensitivity?: number) => boolean>(() => true),
+      endAnchorPan: vi.fn(),
+    };
+  }
+  const options = { getSettings: () => ({ ...DEFAULT_INPUT_SETTINGS, globeAnchorRotation: true }) };
+
+  it("grabs under the finger, follows it, and lets go when it lifts", () => {
+    const canvas = createCanvas();
+    const camera = grabbingCamera();
+    const cleanup = attachTouchController(canvas, camera, options);
+
+    dispatchTouch(canvas, "touchstart", [f1], [f1], 0);
+    expect(camera.beginAnchorPan).toHaveBeenCalledTimes(1);
+    expect(camera.beginAnchorPan).toHaveBeenCalledWith(expect.objectContaining({ clientX: 100, clientY: 200 }));
+    dispatchTouch(canvas, "touchmove", [{ ...f1, clientX: 130 }], [{ ...f1, clientX: 130 }], 16);
+    expect(camera.panAnchorTo.mock.lastCall?.[0]).toEqual(expect.objectContaining({ clientX: 130, clientY: 200 }));
+    expect(camera.panBy).not.toHaveBeenCalled();
+    dispatchTouch(canvas, "touchend", [], [{ ...f1, clientX: 130 }], 32);
+    expect(camera.endAnchorPan).toHaveBeenCalledTimes(1);
+    cleanup();
+  });
+
+  it("lets go of the ground when a second finger lands, and grabs afresh under the finger left", () => {
+    const canvas = createCanvas();
+    const camera = grabbingCamera();
+    const cleanup = attachTouchController(canvas, camera, options);
+
+    dispatchTouch(canvas, "touchstart", [f1], [f1], 0);
+    dispatchTouch(canvas, "touchstart", [f1, f2], [f2], 10);
+    // A pair zooms and turns: the one finger's grab is over.
+    expect(camera.endAnchorPan).toHaveBeenCalledTimes(1);
+
+    dispatchTouch(canvas, "touchend", [f2], [f1], 20);
+    expect(camera.endAnchorPan).toHaveBeenCalledTimes(1);
+    // The finger left takes its own grab, which this one does not end.
+    expect(camera.beginAnchorPan).toHaveBeenCalledTimes(2);
+    expect(camera.beginAnchorPan).toHaveBeenLastCalledWith(expect.objectContaining({ clientX: 100, clientY: 300 }));
+    dispatchTouch(canvas, "touchend", [], [f2], 30);
+    expect(camera.endAnchorPan).toHaveBeenCalledTimes(2);
     cleanup();
   });
 });

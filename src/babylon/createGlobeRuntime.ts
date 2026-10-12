@@ -21,7 +21,7 @@ import { geodeticToEcef, DEG_TO_RAD } from "../camera/cameraMath.js";
 import { CameraController, type OrbitTargetHeightOptions } from "./cameraState.js";
 import { createInputController, type InputController } from "../browser/createInputController.js";
 import { passUnusedInputToWorld } from "../browser/passToWorld.js";
-import { DEFAULT_INERTIA_DECAY_PER_FRAME, type InertialCameraController } from "../input/inertialCameraController.js";
+import { DEFAULT_GRAB_FOLLOW_MS, DEFAULT_INERTIA_DECAY_PER_FRAME, GRAB_FOLLOW_ID, type InertialCameraController } from "../input/inertialCameraController.js";
 import type { CameraHandling } from "../camera/cameraLimits.js";
 import type { GlobeNavigationIntentFrame } from "../input/globeNavigationTypes.js";
 import type { InputModePreference, InputSensitivitySettings } from "../input/inputSettings.js";
@@ -790,7 +790,11 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
     geospatialCamera.fov = cameraFieldOfViewRad();
     applyClipping();
     if (!simMode || !scene.activeCamera) scene.activeCamera = geospatialCamera;
-    cameraController = new CameraController(geospatialCamera, { nowMs: clock.nowMs, hasPickablePointAt: platform.hasPickablePointAt });
+    cameraController = new CameraController(geospatialCamera, {
+      nowMs: clock.nowMs, hasPickablePointAt: platform.hasPickablePointAt,
+      // A grab pan holds the ground drawn under the pointer, as Pick point does; made below, before any input.
+      groundAt: client => navigationAnchors?.groundAt(client)?.point ?? null,
+    });
     cameraController.setLimits(cameraLimits());
     cameraController.setGroundFollow(groundFollow());
     const anchors = navigationAnchors = createNavigationAnchorService({
@@ -804,7 +808,8 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
       changed: navigationAnchorsChanged,
     });
     anchorMarkers = simMode ? null : platform.navigationAnchorMarkers?.(canvas) ?? null;
-    inertialCameraController = createGlobeInertia(cameraController, { nowMs: clock.nowMs, decayPerFrame: () => settings.get<number>("camera.inertiaDecay"), renderer: scheduler, anchors });
+    inertialCameraController = createGlobeInertia(cameraController, { nowMs: clock.nowMs, decayPerFrame: () => settings.get<number>("camera.inertiaDecay"), renderer: scheduler, anchors,
+      grabFollowMs: () => (settings.has(GRAB_FOLLOW_ID) ? settings.get<number>(GRAB_FOLLOW_ID) : DEFAULT_GRAB_FOLLOW_MS) });
     inputController = simMode
       ? null
       : createInputController(canvas, inertialCameraController, { ...platform.input, isOrbitMode: () => orbitModeActive, pointSelection: anchors.selection });
@@ -876,9 +881,9 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
   };
 
   /**
-   * Shows the points zoom and rotation act about where the frame just drawn
-   * has them: none behind the eye or past the horizon, and faint where the
-   * map surface is nearer the eye.
+   * Shows the grabbed ground and the points zoom and rotation act about where
+   * the frame just drawn has them: none behind the eye or past the horizon,
+   * and faint where the map surface is nearer the eye.
    */
   function showAnchorMarkers(): void {
     if (!anchorMarkers) return;
@@ -897,7 +902,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
         const reach = distance * ANCHOR_OCCLUSION_REACH - 1;
         const occluded = reach > 0 && surface.raycast({ x: pose.eye[0], y: pose.eye[1], z: pose.eye[2] },
           { x: toPoint[0] / distance, y: toPoint[1] / distance, z: toPoint[2] / distance }, reach) !== null;
-        markers.push({ x: at.x, y: at.y, zoom: marker.zoom, orbit: marker.orbit, pinned: marker.pinned, occluded });
+        markers.push({ x: at.x, y: at.y, zoom: marker.zoom, orbit: marker.orbit, grab: marker.grab, pinned: marker.pinned, occluded });
       }
     }
     anchorMarkers.show(markers);

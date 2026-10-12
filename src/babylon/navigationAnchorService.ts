@@ -37,6 +37,8 @@ export interface AnchorMarkerPoint {
   readonly point: Readonly<EcefCoord>;
   readonly zoom: boolean;
   readonly orbit: boolean;
+  /** A grab pan holds this ground, or is still gliding from having held it. */
+  readonly grab: boolean;
   readonly pinned: boolean;
 }
 
@@ -80,7 +82,13 @@ export interface NavigationAnchorService extends GlobeNavigationAnchors {
   /** True for an anchor acquired since the last `reset`: one from before is a cleared context. */
   isCurrent(anchor: NavigationAnchor): boolean;
   readonly selection: PointSelectionPort;
-  /** The points markers show: those held by gestures, those gliding, and the pin. */
+  /**
+   * The ground under a client point, whatever the anchor choices say: the
+   * displayed surface the camera's ray meets, else the ellipsoid. A copy,
+   * frozen. Null for sky, or once disposed. What a grab pan holds on to.
+   */
+  groundAt(client: { readonly x: number; readonly y: number }): { readonly point: Readonly<EcefCoord>; readonly source: "surface" | "ellipsoid" } | null;
+  /** The points markers show: those held by gestures, those gliding, a grab's ground, and the pin. */
   markerPoints(gliding: GlideAnchors): AnchorMarkerPoint[];
   /** Clears gesture contexts: the view was replaced. Pick point and the pin stay. */
   retire(): void;
@@ -258,6 +266,11 @@ export function createNavigationAnchorService(ports: NavigationAnchorServicePort
     release,
     isCurrent: anchor => anchor.session >= firstCurrentSession,
     selection: selectionPort,
+    groundAt(client) {
+      if (disposed) return null;
+      const found = pointUnder(client);
+      return found ? { point: found.point, source: found.source } : null;
+    },
     togglePick() {
       if (selection !== "off") { cancelPick(); return false; }
       return armPick();
@@ -287,11 +300,11 @@ export function createNavigationAnchorService(ports: NavigationAnchorServicePort
       return () => { listeners.delete(listener); };
     },
     markerPoints(gliding) {
-      const points: { point: Readonly<EcefCoord>; zoom: boolean; orbit: boolean; pinned: boolean }[] = [];
+      const points: { point: Readonly<EcefCoord>; zoom: boolean; orbit: boolean; grab: boolean; pinned: boolean }[] = [];
       const add = (anchor: NavigationAnchor | null | undefined): void => {
         if (!anchor?.point || anchor.session < firstCurrentSession) return;
         const same = points.find(entry => samePoint(entry.point, anchor.point));
-        const entry = same ?? { point: anchor.point, zoom: false, orbit: false, pinned: false };
+        const entry = same ?? { point: anchor.point, zoom: false, orbit: false, grab: false, pinned: false };
         if (!same) points.push(entry);
         if (anchor.operation === "zoom") entry.zoom = true; else entry.orbit = true;
         if (anchor.source === "pinned") entry.pinned = true;
@@ -299,10 +312,15 @@ export function createNavigationAnchorService(ports: NavigationAnchorServicePort
       for (const anchor of held) add(anchor);
       add(gliding.orbit);
       add(gliding.zoom);
+      if (gliding.pan) {
+        const at = points.find(entry => samePoint(entry.point, gliding.pan));
+        if (at) at.grab = true;
+        else points.push({ point: gliding.pan, zoom: false, orbit: false, grab: true, pinned: false });
+      }
       if (pin) {
         const at = points.find(entry => samePoint(entry.point, pin!.point));
         if (at) at.pinned = true;
-        else points.push({ point: pin.point, zoom: false, orbit: false, pinned: true });
+        else points.push({ point: pin.point, zoom: false, orbit: false, grab: false, pinned: true });
       }
       return points;
     },

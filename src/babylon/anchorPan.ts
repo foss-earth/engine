@@ -266,15 +266,3 @@ export function rotationFromTo(from: Vector3, to: Vector3): { axis: Vector3; ang
   axis.scaleInPlace(1 / axisLen);
   return { axis, angleRad: Math.acos(Math.max(-1, Math.min(1, dot))) };
 }
-
-/** How aggressively each pointer move closes the anchor→cursor screen gap. */
-export const ANCHOR_PAN_CHASE = {
-  /** Stop correcting once the gap is below this (px). */
-  donePx: 0.5,
-  /** Minimum fraction of screen error applied per move (smooth tail). */
-  minFactor: 0.72,
-  /** Maximum fraction — large gaps close in one step. */
-  maxFactor: 1,
-  /** Error length (px) at which chase reaches maxFactor. */
-  fullChasePx: 48,
-} as const;

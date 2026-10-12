@@ -61,7 +61,7 @@ export function createGlobeHostFixture(document: Document, configure: GlobeHostC
   Object.assign(options, typeof configure === "function" ? configure({ ...options }) : configure);
   const runtime = createGlobeRuntime(canvas,options);
   state.runtime = runtime;
-  return { runtime,options,engine,scene,camera,worldRoot,settings,lifecycle,frameProfile,clock,
+  return { runtime,options,engine,scene,camera,canvas,worldRoot,settings,lifecycle,frameProfile,clock,
     setTime: (value: number) => { now = value; },holdCount: () => holds,requestCount: () => requests,skyUpdates: () => skyUpdates,skyDetached: () => skyDetached,timers,
     disposeHost() { runtime?.destroy(); lifecycle.dispose(); frameProfile.dispose(); scene.dispose(); engine.dispose(); } };
 }

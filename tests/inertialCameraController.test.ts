@@ -489,7 +489,7 @@ describe("createInertialCameraController: rebaseTo", () => {
 
 describe("createGlobeInertia: anchors", () => {
   function globe() {
-    const camera = { ...anchoredTarget(), endAnchorPan: vi.fn() };
+    const camera = { ...anchoredTarget(), endAnchorPan: vi.fn(() => null), cancelAnchorPan: vi.fn(), isAnchorPanActive: () => false, isAnchorPanMoving: () => false };
     let current = true;
     const anchors = {
       acquire: vi.fn<(request: AnchorRequest<HTMLCanvasElement>) => AnchorAcquisition>(() => ({})),
