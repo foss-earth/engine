@@ -228,7 +228,7 @@ export function attachTouchController(
       accumulatedAbsLogScale: 0,
       orbitActive: false,
       zoomActive: false,
-      // One pick under the first midpoint, for zoom and rotation both when both ask for it.
+      // Zoom's point is picked under the first midpoint; rotation's is the compass target.
       anchors: camera.acquireAnchors?.({ family: "touch", operations: ["zoom", "orbit"], client: midpoint, canvas, candidate: true }) ?? null,
       anchorsHeld: false,
     });

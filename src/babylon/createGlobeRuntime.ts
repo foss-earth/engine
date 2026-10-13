@@ -36,7 +36,7 @@ import { createCameraClipping } from "./cameraClipping.js";
 import { createNavigationCameraAdapter } from "./navigationCamera.js";
 import { createGlobeIntentMotion } from "../input/globeIntentMotion.js";
 import { createNavigationAnchorService, type GlobeNavigationAnchors, type NavigationAnchorService, type NavigationAnchorStatus } from "./navigationAnchorService.js";
-import { ANCHOR_FALLBACK_MESSAGES, ANCHOR_FAMILIES, ANCHOR_OPERATIONS, NAVIGATION_ANCHOR_SETTING_IDS, SHOW_NAVIGATION_ANCHORS_ID, navigationAnchorSettingId, navigationAnchorsFromSettings, type AnchorFamily, type AnchorOperation } from "../input/navigationAnchors.js";
+import { ANCHOR_FALLBACK_MESSAGES, ANCHOR_FAMILIES, NAVIGATION_ANCHOR_SETTING_IDS, SHOW_NAVIGATION_ANCHORS_ID, navigationAnchorSettingId, navigationAnchorsFromSettings, type AnchorFamily } from "../input/navigationAnchors.js";
 import { pointInViewProblem } from "../camera/anchoredMotion.js";
 import { ecefToVector3, projectEcefToClient } from "./anchorPan.js";
 import type { NavigationAnchorMarkers, NavigationAnchorMarkerView } from "../browser/navigationAnchorMarkers.js";
@@ -298,9 +298,10 @@ export interface GlobeRuntime {
   /** The current lease's presented view, or null while the globe camera's view is drawn. */
   getPresentationView(): NavigationPresentation | null;
   /**
-   * The points zoom and rotation act about (`input.*.zoomAnchor`,
-   * `input.*.orbitPivot`): what each kind of input last used and why, and the
-   * session's pinned point, with Pick point, Pin compass target and Clear pin.
+   * The points zoom acts about (`input.*.zoomAnchor`): what each kind of
+   * input last used and why, and the session's pinned point, with Pick point,
+   * Pin compass target and Clear pin. Rotation always turns about the compass
+   * target.
    */
   readonly navigationAnchors: GlobeNavigationAnchors;
   /**
@@ -454,7 +455,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
   let inertialCameraController: InertialCameraController<HTMLCanvasElement> | null = null;
   let inputController: InputController | null = null;
   let orbitModeActive = false;
-  // Where zoom and rotation act, the pin and Pick point (navigationAnchorService.ts), made with the camera, and their markers.
+  // Where zoom acts, the pin and Pick point (navigationAnchorService.ts), made with the camera, and their markers.
   let navigationAnchors: NavigationAnchorService | null = null;
   let anchorMarkers: NavigationAnchorMarkers | null = null;
   const anchorListeners = new Set<() => void>();
@@ -826,11 +827,11 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
     return geospatialCamera ? null : "The globe camera is not ready.";
   }
 
-  /** What Controls says beside an anchor choice: what the last gesture used, and why when that was not what was asked. */
-  function anchorNote(status: NavigationAnchorStatus, family: AnchorFamily, operation: AnchorOperation, requested: unknown): string | null {
+  /** What Controls says beside a zoom choice: what the last zoom used, and why when that was not what was asked. */
+  function anchorNote(status: NavigationAnchorStatus, family: AnchorFamily, requested: unknown): string | null {
     if (status.tracking) return `${ANCHOR_FALLBACK_MESSAGES.tracking}.`;
     if (requested === "pinned" && !status.pin) return `${ANCHOR_FALLBACK_MESSAGES["no-pin"]}.`;
-    const last = status.last[family][operation];
+    const last = status.last[family].zoom;
     if (!last || last.requested !== requested) return null;
     // Tracking has ended: the next gesture uses the choice again.
     if (last.fallback === "tracking") return null;
@@ -842,16 +843,16 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
     return `Last used ${where}.`;
   }
 
-  function setAnchorNotes(note: (family: AnchorFamily, operation: AnchorOperation, requested: unknown) => string | null): void {
-    for (const family of ANCHOR_FAMILIES) for (const operation of ANCHOR_OPERATIONS) {
-      const id = navigationAnchorSettingId(family, operation);
-      if (settings.has(id)) settings.setNote(id, note(family, operation, settings.get(id)));
+  function setAnchorNotes(note: (family: AnchorFamily, requested: unknown) => string | null): void {
+    for (const family of ANCHOR_FAMILIES) {
+      const id = navigationAnchorSettingId(family);
+      if (settings.has(id)) settings.setNote(id, note(family, settings.get(id)));
     }
   }
 
   function updateAnchorNotes(): void {
     const status = globeNavigationAnchors.status();
-    setAnchorNotes((family, operation, requested) => anchorNote(status, family, operation, requested));
+    setAnchorNotes((family, requested) => anchorNote(status, family, requested));
   }
 
   function navigationAnchorsChanged(): void {
@@ -881,9 +882,9 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
   };
 
   /**
-   * Shows the grabbed ground and the points zoom and rotation act about where
-   * the frame just drawn has them: none behind the eye or past the horizon,
-   * and faint where the map surface is nearer the eye.
+   * Shows the grabbed ground and the points zoom acts about where the frame
+   * just drawn has them: none behind the eye or past the horizon, and faint
+   * where the map surface is nearer the eye.
    */
   function showAnchorMarkers(): void {
     if (!anchorMarkers) return;

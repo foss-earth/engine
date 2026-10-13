@@ -38,7 +38,7 @@ export function navigationAnchorPinMessage(status: NavigationAnchorStatus): stri
  * Controls → Orbit's pinned point: whether one is pinned and where, and Pick
  * point, Pin compass target and Clear pin. The pin is this globe session's:
  * never saved, exported or put in the URL. Pinning and clearing move no
- * camera and change none of the zoom and rotation choices.
+ * camera and change none of the zoom choices.
  */
 export function createNavigationAnchorPinSection(ports: NavigationAnchorPinSectionPorts): NavigationAnchorPinSectionHandle {
   const { document, anchors } = ports;

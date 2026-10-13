@@ -41,9 +41,9 @@ const SELECTION_DOUBLE_CLICK_MS = 800;
  * interrupting orbit. A `heldPress`, such as one that took the camera over
  * from a lease's owner, goes on as if pressed where the pointer is now.
  *
- * An orbit drag turns about the pivot `input.mouse.orbitPivot` chooses,
- * picked where the button went down, and used once the press becomes a
- * drag. While Pick point is armed (`pointSelection`), a primary press of
+ * An orbit drag turns about the compass target, resolved where the button
+ * went down and used once the press becomes a drag. While Pick point is
+ * armed (`pointSelection`), a primary press of
  * any pointer is kept from everything else from pointer-down on: released
  * as a click or tap, it picks the point and its clicks go nowhere; dragged,
  * it goes on navigating, and Pick point stays armed.
@@ -164,7 +164,7 @@ export function attachMouseController(
     startX = prevX = e.clientX;
     startY = prevY = e.clientY;
     try { canvas.setPointerCapture(e.pointerId); } catch { /* a held press's pointer may be gone */ }
-    // An orbit drag turns about the point under the press, picked now, as the camera is.
+    // An orbit drag's anchor is resolved now, as the camera is.
     if (e.button === 2 || (options.isOrbitMode?.() ?? false)) {
       orbitAnchors = camera.acquireAnchors?.({ family: "mouse", operations: ["orbit"], client: { x: e.clientX, y: e.clientY }, canvas, candidate: true }) ?? null;
     }
@@ -231,7 +231,7 @@ export function attachMouseController(
       const rate = rates().mousePanRate * sensitivity;
       camera.panBy(-dx * rate, -dy * rate, canvas.clientHeight);
     } else {
-      // The press is a drag now: its pivot is in use, and shows.
+      // The press is a drag now: its anchor is in use.
       if (orbitAnchors && !orbitAnchorsHeld) {
         orbitAnchorsHeld = true;
         camera.holdAnchors?.(orbitAnchors);

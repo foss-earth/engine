@@ -1,7 +1,10 @@
 /**
- * Where zoom and rotation act: the point under the pointer, the start of a
- * two-finger gesture, the compass target or a pinned point, chosen per input
- * family (`input.<family>.zoomAnchor`, `input.<family>.orbitPivot`).
+ * Where zoom acts: the point under the pointer, the start of a two-finger
+ * gesture, the compass target or a pinned point, chosen per input family
+ * (`input.<family>.zoomAnchor`). Rotation always turns about the compass
+ * target, which stays where it is on the ground: turning about another point
+ * moved the compass to wherever the new line of sight met the ground, and
+ * near the horizon that ran out to the horizon and jumped with the terrain.
  *
  * A gesture resolves its anchors once, when it starts, and keeps them, copied,
  * through its glide. These are the browser-neutral parts: the preferences,
@@ -13,7 +16,11 @@ import type { EcefCoord } from "../camera/cameraMath.js";
 
 /** The input families that choose their own anchors. Keys, controllers and on-screen buttons are `nonPointer`. */
 export type AnchorFamily = "mouse" | "trackpad" | "touch" | "nonPointer";
-/** The two operations that act about a point. A grab pan's ground point is marked on its own, not as one of these. */
+/**
+ * The two operations that act about a point: zoom about its chosen one, and
+ * rotation about the compass target. A grab pan's ground point is marked on
+ * its own, not as one of these.
+ */
 export type AnchorOperation = "zoom" | "orbit";
 
 /** Mouse and trackpad: the point under the pointer, the compass target or the pinned point. */
@@ -24,11 +31,12 @@ export type GestureAnchorChoice = "gesture" | "target" | "pinned";
 export type NonPointerAnchorChoice = "target" | "pinned";
 export type AnchorChoice = PointerAnchorChoice | GestureAnchorChoice | NonPointerAnchorChoice;
 
+/** Each family's zoom choice. Rotation has none: it is always about the compass target. */
 export interface NavigationAnchorPreferences {
-  readonly mouse: { readonly zoom: PointerAnchorChoice; readonly orbit: PointerAnchorChoice };
-  readonly trackpad: { readonly zoom: PointerAnchorChoice; readonly orbit: PointerAnchorChoice };
-  readonly touch: { readonly zoom: GestureAnchorChoice; readonly orbit: GestureAnchorChoice };
-  readonly nonPointer: { readonly zoom: NonPointerAnchorChoice; readonly orbit: NonPointerAnchorChoice };
+  readonly mouse: { readonly zoom: PointerAnchorChoice };
+  readonly trackpad: { readonly zoom: PointerAnchorChoice };
+  readonly touch: { readonly zoom: GestureAnchorChoice };
+  readonly nonPointer: { readonly zoom: NonPointerAnchorChoice };
 }
 
 export const ANCHOR_FAMILIES: readonly AnchorFamily[] = ["mouse", "trackpad", "touch", "nonPointer"];
@@ -44,50 +52,48 @@ export const NAVIGATION_ANCHOR_CHOICES: { readonly [F in AnchorFamily]: readonly
 
 /**
  * The defaults, with one source: the settings catalogue reads them, and so
- * does an input controller given no preferences. Pointing devices act where
- * the person points; keys and controllers about the compass target.
+ * does an input controller given no preferences. Pointing devices zoom where
+ * the person points; keys and controllers toward the compass target.
  */
 export const DEFAULT_NAVIGATION_ANCHORS: NavigationAnchorPreferences = Object.freeze({
-  mouse: Object.freeze({ zoom: "pointer", orbit: "pointer" }),
-  trackpad: Object.freeze({ zoom: "pointer", orbit: "pointer" }),
-  touch: Object.freeze({ zoom: "gesture", orbit: "gesture" }),
-  nonPointer: Object.freeze({ zoom: "target", orbit: "target" }),
+  mouse: Object.freeze({ zoom: "pointer" }),
+  trackpad: Object.freeze({ zoom: "pointer" }),
+  touch: Object.freeze({ zoom: "gesture" }),
+  nonPointer: Object.freeze({ zoom: "target" }),
 });
 
-/** The parameter holding a family's choice for an operation: `input.mouse.zoomAnchor`, `input.touch.orbitPivot`. */
-export function navigationAnchorSettingId(family: AnchorFamily, operation: AnchorOperation): string {
-  return `input.${family}.${operation === "zoom" ? "zoomAnchor" : "orbitPivot"}`;
+/** The parameter holding a family's zoom choice: `input.mouse.zoomAnchor`. */
+export function navigationAnchorSettingId(family: AnchorFamily): string {
+  return `input.${family}.zoomAnchor`;
 }
 
-/** The eight parameters, family by family, zoom before rotation. */
-export const NAVIGATION_ANCHOR_SETTING_IDS: readonly string[] = ANCHOR_FAMILIES.flatMap(family => ANCHOR_OPERATIONS.map(operation => navigationAnchorSettingId(family, operation)));
+/** The four parameters, family by family. */
+export const NAVIGATION_ANCHOR_SETTING_IDS: readonly string[] = ANCHOR_FAMILIES.map(navigationAnchorSettingId);
 
-/** Whether markers show the points zoom and rotation act about. */
+/** Whether markers show the grabbed ground and the points zoom acts about. */
 export const SHOW_NAVIGATION_ANCHORS_ID = "input.showNavigationAnchors";
 
-export type NavigationAnchorPreferencesInput = { readonly [F in AnchorFamily]?: { readonly zoom?: unknown; readonly orbit?: unknown } };
+export type NavigationAnchorPreferencesInput = { readonly [F in AnchorFamily]?: { readonly zoom?: unknown } };
 
-/** Preferences with every family and operation present; a missing or unknown choice is the default. */
+/** Preferences with every family present; a missing or unknown choice is the default. */
 export function normalizeNavigationAnchors(input?: NavigationAnchorPreferencesInput | null): NavigationAnchorPreferences {
-  const pick = <F extends AnchorFamily>(family: F, operation: AnchorOperation): NavigationAnchorPreferences[F]["zoom"] => {
-    const value = input?.[family]?.[operation];
+  const pick = <F extends AnchorFamily>(family: F): NavigationAnchorPreferences[F]["zoom"] => {
+    const value = input?.[family]?.zoom;
     const allowed = NAVIGATION_ANCHOR_CHOICES[family] as readonly unknown[];
-    return (allowed.includes(value) ? value : DEFAULT_NAVIGATION_ANCHORS[family][operation]) as NavigationAnchorPreferences[F]["zoom"];
+    return (allowed.includes(value) ? value : DEFAULT_NAVIGATION_ANCHORS[family].zoom) as NavigationAnchorPreferences[F]["zoom"];
   };
   return {
-    mouse: { zoom: pick("mouse", "zoom"), orbit: pick("mouse", "orbit") },
-    trackpad: { zoom: pick("trackpad", "zoom"), orbit: pick("trackpad", "orbit") },
-    touch: { zoom: pick("touch", "zoom"), orbit: pick("touch", "orbit") },
-    nonPointer: { zoom: pick("nonPointer", "zoom"), orbit: pick("nonPointer", "orbit") },
+    mouse: { zoom: pick("mouse") },
+    trackpad: { zoom: pick("trackpad") },
+    touch: { zoom: pick("touch") },
+    nonPointer: { zoom: pick("nonPointer") },
   };
 }
 
 /** Preferences from setting values by id, such as a registry's: `read(id)` may return anything. */
 export function navigationAnchorsFromSettings(read: (id: string) => unknown): NavigationAnchorPreferences {
-  const input: Record<string, { zoom?: unknown; orbit?: unknown }> = {};
-  for (const family of ANCHOR_FAMILIES) {
-    input[family] = { zoom: read(navigationAnchorSettingId(family, "zoom")), orbit: read(navigationAnchorSettingId(family, "orbit")) };
-  }
+  const input: Record<string, { zoom?: unknown }> = {};
+  for (const family of ANCHOR_FAMILIES) input[family] = { zoom: read(navigationAnchorSettingId(family)) };
   return normalizeNavigationAnchors(input);
 }
 
@@ -166,11 +172,11 @@ export interface AnchorRequest<TCanvas = unknown> {
    */
   readonly candidate?: boolean;
   /**
-   * The choices the gesture latched when it began, used instead of the
-   * current ones: a wheel gesture that picks again where the pointer has
+   * The zoom choice the gesture latched when it began, used instead of the
+   * current one: a wheel gesture that picks again where the pointer has
    * moved keeps what it began with.
    */
-  readonly prefer?: { readonly [O in AnchorOperation]?: AnchorChoice };
+  readonly prefer?: { readonly zoom?: AnchorChoice };
 }
 
 /** The anchors a gesture acquired, by operation. */
@@ -212,10 +218,9 @@ export function sameAnchorPoint(a: NavigationAnchor | null | undefined, b: Navig
   return samePoint(a?.point, b?.point);
 }
 
-/** The two named sets of choices: the defaults, and everything about the compass target. Each sets the eight choices and nothing else. */
+/** The two named sets of choices: the defaults, and every zoom toward the compass target. Each sets the four choices and nothing else. */
 export const NAVIGATION_ANCHOR_PRESET_VALUES: Readonly<{ pointerAndTouch: Readonly<Record<string, string>>; compassCentered: Readonly<Record<string, string>> }> = Object.freeze({
-  pointerAndTouch: Object.freeze(Object.fromEntries(ANCHOR_FAMILIES.flatMap(family => ANCHOR_OPERATIONS.map(operation =>
-    [navigationAnchorSettingId(family, operation), DEFAULT_NAVIGATION_ANCHORS[family][operation]])))),
+  pointerAndTouch: Object.freeze(Object.fromEntries(ANCHOR_FAMILIES.map(family => [navigationAnchorSettingId(family), DEFAULT_NAVIGATION_ANCHORS[family].zoom]))),
   compassCentered: Object.freeze(Object.fromEntries(NAVIGATION_ANCHOR_SETTING_IDS.map(id => [id, "target"]))),
 });
 

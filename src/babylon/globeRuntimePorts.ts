@@ -36,7 +36,7 @@ export interface GlobeRuntimePlatform {
   passToWorld: PassToWorldOptions;
   hasPickablePointAt: NonNullable<import("./cameraState.js").CameraControllerPorts>["hasPickablePointAt"];
   navigation: Pick<NavigationHost, "focusReturn" | "createAbortController" | "abortReason">;
-  /** Markers for the grabbed ground and the points zoom and rotation act about, over the canvas (`input.showNavigationAnchors`); none without it. */
+  /** Markers for the grabbed ground and the points zoom acts about, over the canvas (`input.showNavigationAnchors`); none without it. */
   navigationAnchorMarkers?(canvas: HTMLCanvasElement): NavigationAnchorMarkers;
 }
 export type GlobeRasterPorts = Pick<RasterTilesRuntimeOptions, "loadMapTexture" | "asyncMapTextures" | "attachTerrainLighting" | "createTerrainLoader" | "imageryPorts" | "meshRebuildCpuMs" | "log">;

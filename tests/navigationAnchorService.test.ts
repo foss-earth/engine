@@ -69,7 +69,7 @@ function pin(f: ReturnType<typeof fixture>, point: EcefCoord): void {
 const distance = (p: EcefCoord, q: EcefCoord): number => Math.hypot(p.x - q.x, p.y - q.y, p.z - q.z);
 
 describe("navigation anchor acquisition", () => {
-  it("takes the displayed-surface hit under the pointer, copied and frozen, for both operations with one pick", () => {
+  it("takes the displayed-surface hit under the pointer for zoom, copied and frozen, and turns about the compass target", () => {
     const f = fixture();
     const surface = geodeticToEcef(44 * DEG_TO_RAD, -93 * DEG_TO_RAD, 250);
     const hit = hitAt(surface, 12);
@@ -77,9 +77,8 @@ describe("navigation anchor acquisition", () => {
     const { zoom, orbit } = f.service.acquire(mouse());
     expect(f.raycast).toHaveBeenCalledTimes(1);
     expect(zoom).toMatchObject({ family: "mouse", operation: "zoom", requested: "pointer", source: "surface", surfaceRevision: 12, fallback: null, owner: "globe" });
-    expect(orbit).toMatchObject({ operation: "orbit", source: "surface", fallback: null });
+    expect(orbit).toMatchObject({ operation: "orbit", requested: "target", source: "target", point: null, fallback: null });
     expect(zoom!.point).toEqual(surface);
-    expect(orbit!.point).toBe(zoom!.point);
     expect(zoom!.session).toBe(orbit!.session);
     expect(Object.isFrozen(zoom!.point)).toBe(true);
     expect(Object.isFrozen(zoom)).toBe(true);
@@ -113,7 +112,7 @@ describe("navigation anchor acquisition", () => {
     const f = fixture(true);
     const { zoom, orbit } = f.service.acquire(mouse({ client: SKY }));
     expect(zoom).toMatchObject({ source: "target", point: null, fallback: "missed", requested: "pointer" });
-    expect(orbit).toMatchObject({ source: "target", point: null, fallback: "missed" });
+    expect(orbit).toMatchObject({ source: "target", point: null, fallback: null });
     expect(ANCHOR_FALLBACK_MESSAGES.missed).toBe("Nothing under the pointer; using compass target");
   });
 
@@ -133,12 +132,22 @@ describe("navigation anchor acquisition", () => {
 
   it("gives the compass target without a raycast when target is chosen", () => {
     const f = fixture();
-    f.prefer({ mouse: { zoom: "target", orbit: "pointer" } });
+    f.prefer({ mouse: { zoom: "target" } });
     const { zoom, orbit } = f.service.acquire(mouse());
     expect(zoom).toMatchObject({ requested: "target", source: "target", point: null, fallback: null });
-    expect(orbit?.source).toBe("ellipsoid");
+    expect(orbit).toMatchObject({ requested: "target", source: "target", point: null, fallback: null });
     f.service.acquire(mouse({ operations: ["zoom"] }));
-    expect(f.raycast).toHaveBeenCalledTimes(1);
+    expect(f.raycast).not.toHaveBeenCalled();
+  });
+
+  it("turns every input about the compass target, without a raycast", () => {
+    const f = fixture();
+    f.setHit(hitAt(geodeticToEcef(44 * DEG_TO_RAD, -93 * DEG_TO_RAD, 250)));
+    for (const family of ["mouse", "trackpad", "touch", "nonPointer"] as const) {
+      const { orbit } = f.service.acquire({ family, operations: ["orbit"], client: family === "nonPointer" ? null : CENTRE });
+      expect(orbit, family).toMatchObject({ family, requested: "target", source: "target", point: null, fallback: null });
+    }
+    expect(f.raycast).not.toHaveBeenCalled();
   });
 
   it("uses a latched choice over the current one, and ignores one the family does not offer", () => {
@@ -149,7 +158,7 @@ describe("navigation anchor acquisition", () => {
 
   it("uses the compass target with no pinned point, keeping Pinned point requested", () => {
     const f = fixture();
-    f.prefer({ mouse: { zoom: "pinned", orbit: "pinned" } });
+    f.prefer({ mouse: { zoom: "pinned" } });
     const { zoom } = f.service.acquire(mouse());
     expect(zoom).toMatchObject({ requested: "pinned", source: "target", point: null, fallback: "no-pin" });
     expect(ANCHOR_FALLBACK_MESSAGES[zoom!.fallback!]).toBe("No pinned point; using compass target");
@@ -160,7 +169,7 @@ describe("navigation anchor acquisition", () => {
     const f = fixture();
     const point = geodeticToEcef(44.001 * DEG_TO_RAD, -93 * DEG_TO_RAD, 100);
     pin(f, point);
-    f.prefer({ nonPointer: { zoom: "pinned", orbit: "target" } });
+    f.prefer({ nonPointer: { zoom: "pinned" } });
     const { zoom, orbit } = f.service.acquire({ family: "nonPointer", operations: ["zoom", "orbit"], client: null });
     expect(zoom).toMatchObject({ source: "pinned", point, surfaceRevision: 7, fallback: null });
     expect(orbit).toMatchObject({ source: "target", fallback: null });
@@ -171,7 +180,7 @@ describe("navigation anchor acquisition", () => {
     const eye = f.eye(); const centre = f.centre();
     const behind = { x: 2 * eye.x - centre.x, y: 2 * eye.y - centre.y, z: 2 * eye.z - centre.z };
     pin(f, behind);
-    f.prefer({ mouse: { zoom: "pinned", orbit: "pinned" } });
+    f.prefer({ mouse: { zoom: "pinned" } });
     const { zoom } = f.service.acquire(mouse());
     expect(zoom).toMatchObject({ requested: "pinned", source: "target", point: null, fallback: "pin-behind" });
     expect(ANCHOR_FALLBACK_MESSAGES["pin-behind"]).toBe("Pinned point behind camera");
@@ -182,8 +191,8 @@ describe("navigation anchor acquisition", () => {
     const f = fixture();
     const antipode = geodeticToEcef(-44 * DEG_TO_RAD, 87 * DEG_TO_RAD, 0);
     pin(f, antipode);
-    f.prefer({ mouse: { zoom: "pinned", orbit: "pinned" } });
-    expect(f.service.acquire(mouse()).orbit).toMatchObject({ source: "target", fallback: "pin-beyond-horizon" });
+    f.prefer({ mouse: { zoom: "pinned" } });
+    expect(f.service.acquire(mouse()).zoom).toMatchObject({ source: "target", fallback: "pin-beyond-horizon" });
     expect(ANCHOR_FALLBACK_MESSAGES["pin-beyond-horizon"]).toBe("Pinned point beyond horizon");
     expect(f.service.status().pin?.point).toEqual(antipode);
   });
@@ -191,7 +200,7 @@ describe("navigation anchor acquisition", () => {
   it("refuses a pin at the eye, and any pin without a pose", () => {
     const f = fixture();
     pin(f, f.eye());
-    f.prefer({ mouse: { zoom: "pinned", orbit: "pinned" } });
+    f.prefer({ mouse: { zoom: "pinned" } });
     expect(f.service.acquire(mouse()).zoom?.fallback).toBe("pin-too-near");
     f.setPose(() => null);
     expect(f.service.acquire(mouse()).zoom?.fallback).toBe("pin-invalid");
@@ -201,10 +210,10 @@ describe("navigation anchor acquisition", () => {
     const f = fixture();
     pin(f, geodeticToEcef(44.001 * DEG_TO_RAD, -93 * DEG_TO_RAD, 0));
     f.setTracking(true);
-    f.prefer({ mouse: { zoom: "pinned", orbit: "pointer" } });
+    f.prefer({ mouse: { zoom: "pinned" } });
     const { zoom, orbit } = f.service.acquire(mouse());
     expect(zoom).toMatchObject({ requested: "pinned", source: "target", point: null, fallback: "tracking" });
-    expect(orbit).toMatchObject({ requested: "pointer", source: "target", point: null, fallback: "tracking" });
+    expect(orbit).toMatchObject({ requested: "target", source: "target", point: null, fallback: "tracking" });
     expect(f.raycast).toHaveBeenCalledTimes(1); // only the pin's own pick
     expect(f.service.status().tracking).toBe(true);
   });
@@ -221,7 +230,7 @@ describe("candidate, held and released anchors", () => {
     f.service.hold(acquisition);
     expect(f.service.status().last.mouse).toEqual({ zoom: acquisition.zoom, orbit: acquisition.orbit });
     expect(f.changed).toHaveBeenCalledTimes(1);
-    expect(f.service.markerPoints(NO_GLIDE)).toEqual([{ point: acquisition.zoom!.point, zoom: true, orbit: true, grab: false, pinned: false }]);
+    expect(f.service.markerPoints(NO_GLIDE)).toEqual([{ point: acquisition.zoom!.point, zoom: true, orbit: false, grab: false, pinned: false }]);
     f.service.release(acquisition);
     expect(f.changed).toHaveBeenCalledTimes(2);
     expect(f.service.markerPoints(NO_GLIDE)).toEqual([]);
@@ -242,9 +251,13 @@ describe("candidate, held and released anchors", () => {
 
   it("holds an acquisition that asks to, and holds no compass target", () => {
     const f = fixture();
-    f.prefer({ mouse: { zoom: "target", orbit: "pointer" } });
     const acquisition = f.service.acquire(mouse({ hold: true }));
-    expect(f.service.markerPoints(NO_GLIDE)).toEqual([{ point: acquisition.orbit!.point, zoom: false, orbit: true, grab: false, pinned: false }]);
+    expect(acquisition.orbit).toMatchObject({ source: "target", point: null });
+    expect(f.service.markerPoints(NO_GLIDE)).toEqual([{ point: acquisition.zoom!.point, zoom: true, orbit: false, grab: false, pinned: false }]);
+    f.prefer({ mouse: { zoom: "target" } });
+    f.service.release(acquisition);
+    f.service.acquire(mouse({ hold: true }));
+    expect(f.service.markerPoints(NO_GLIDE)).toEqual([]);
   });
 
   it("returns a copy of the last acquisitions from status", () => {
@@ -254,7 +267,7 @@ describe("candidate, held and released anchors", () => {
     f.service.acquire(mouse({ operations: ["zoom"], client: null }));
     expect(status.last.mouse.zoom?.source).toBe("ellipsoid");
     expect(f.service.status().last.mouse.zoom?.fallback).toBe("no-pointer");
-    expect(f.service.status().last.mouse.orbit?.source).toBe("ellipsoid");
+    expect(f.service.status().last.mouse.orbit?.source).toBe("target");
   });
 });
 
@@ -409,27 +422,26 @@ describe("Pick point and the pin", () => {
 });
 
 describe("marker points", () => {
-  it("merges zoom and rotation at one point into one marker, and marks the pin there", () => {
+  it("marks a zoom about the pin as one marker at the pin", () => {
     const f = fixture();
     const point = geodeticToEcef(44.001 * DEG_TO_RAD, -93 * DEG_TO_RAD, 0);
     pin(f, point);
-    f.prefer({ mouse: { zoom: "pinned", orbit: "pinned" } });
+    f.prefer({ mouse: { zoom: "pinned" } });
     f.service.acquire(mouse({ hold: true }));
-    expect(f.service.markerPoints(NO_GLIDE)).toEqual([{ point, zoom: true, orbit: true, grab: false, pinned: true }]);
+    expect(f.service.markerPoints(NO_GLIDE)).toEqual([{ point, zoom: true, orbit: false, grab: false, pinned: true }]);
   });
 
   it("shows separate points, gliding ones, and the pin apart from them", () => {
     const f = fixture();
     const pinPoint = geodeticToEcef(44.002 * DEG_TO_RAD, -93 * DEG_TO_RAD, 0);
     pin(f, pinPoint);
-    f.prefer({ mouse: { zoom: "pointer", orbit: "pinned" } });
     const held: AnchorAcquisition = f.service.acquire(mouse({ hold: true }));
     const gliding = f.service.acquire({ family: "trackpad", operations: ["zoom"], client: { x: 100, y: 500 } });
-    const points = f.service.markerPoints({ orbit: null, zoom: gliding.zoom! });
+    const points = f.service.markerPoints({ orbit: held.orbit!, zoom: gliding.zoom! });
     expect(points).toEqual([
       { point: held.zoom!.point, zoom: true, orbit: false, grab: false, pinned: false },
-      { point: pinPoint, zoom: false, orbit: true, grab: false, pinned: true },
       { point: gliding.zoom!.point, zoom: true, orbit: false, grab: false, pinned: false },
+      { point: pinPoint, zoom: false, orbit: false, grab: false, pinned: true },
     ]);
   });
 

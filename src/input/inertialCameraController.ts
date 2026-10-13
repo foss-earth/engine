@@ -47,7 +47,7 @@ export interface CameraInputTarget<TCanvas = unknown> {
   orbitZoomBy?(pitchDeltaDeg: number, headingDeltaDeg: number, factor: number, anchor: NavigationAnchor): void | AnchoredMotionResult;
   /**
    * Resolves where a gesture's zoom and rotation act, once, when it starts
-   * (`input.*.zoomAnchor`, `input.*.orbitPivot`). A target without it moves
+   * (`input.*.zoomAnchor`; rotation's is the compass target). A target without it moves
    * about its orbit target: the gesture's anchors are then unsupported, not missed.
    */
   acquireAnchors?(request: AnchorRequest<TCanvas>): AnchorAcquisition;

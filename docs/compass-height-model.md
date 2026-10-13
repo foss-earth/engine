@@ -41,9 +41,10 @@ the POI at the pace a glide slows by (`camera.inertiaDecay`) instead of jumping 
 
 ## Compass target and picked points
 
-Zoom and rotation can act about a point other than the compass target (`input.*.zoomAnchor`,
-`input.*.orbitPivot`; see `docs/proposals/navigation-anchors.md` in foss-earth/research). Those
-points follow different rules from the compass target:
+Zoom can act about a point other than the compass target (`input.*.zoomAnchor`; see
+`docs/proposals/navigation-anchors.md` in foss-earth/research). Rotation always turns about the
+compass target, which keeps its latitude and longitude while the view turns and tilts around it.
+Picked points follow different rules from the compass target:
 
 | | Compass target | Picked or pinned point |
 | --- | --- | --- |
@@ -51,9 +52,9 @@ points follow different rules from the compass target:
 | Follows the ground | Yes, at `camera.surfaceFollowSpeed` | No: terrain loading later moves none of them |
 | Zoom limits | Measured to the target; the legacy zoom that lowers a raised target at the nearest distance applies | Measured from the eye to the point; a point picked nearer or farther than they allow may be left toward them, not further away |
 
-During and after an anchored move the camera's centre stays the compass target: the point where
+During and after an anchored zoom the camera's centre stays the compass target: the point where
 the line of sight comes down to the orbit target's height. From there it follows the ground at the
-bounded speed as before, so an anchored move never makes the compass jump.
+bounded speed as before, so an anchored zoom never makes the compass jump.
 
 See also the [Smooth elevation height model proposal](proposals/smooth-elevation-height-model.md)
 for the design rationale of the smooth model.

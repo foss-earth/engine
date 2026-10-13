@@ -280,7 +280,7 @@ function anchoredCamera(requested: AnchorChoice = "pointer") {
   const acquireAnchors = vi.fn((request: AnchorRequest<HTMLCanvasElement>): AnchorAcquisition => {
     session += 1;
     const acquired: { zoom?: NavigationAnchor; orbit?: NavigationAnchor } = {};
-    for (const operation of request.operations) acquired[operation] = anchorOf(session, request.family, operation, request.prefer?.[operation] ?? requested);
+    for (const operation of request.operations) acquired[operation] = anchorOf(session, request.family, operation, (operation === "zoom" ? request.prefer?.zoom : undefined) ?? requested);
     return acquired;
   });
   return {

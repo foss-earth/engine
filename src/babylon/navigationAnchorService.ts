@@ -1,9 +1,9 @@
 /**
- * Resolving where zoom and rotation act, for the globe runtime: the point
- * under a client position on the displayed surface or the WGS84 ellipsoid,
- * the pinned point, or the compass target; the pin itself, which is session
- * state; and a one-shot Pick point selection. Every point is copied: loading
- * terrain later moves none of them.
+ * Resolving where zoom acts, for the globe runtime: the point under a client
+ * position on the displayed surface or the WGS84 ellipsoid, the pinned point,
+ * or the compass target; the pin itself, which is session state; and a
+ * one-shot Pick point selection. Every point is copied: loading terrain later
+ * moves none of them. Rotation always resolves to the compass target.
  */
 import type { GeospatialCamera, Scene } from "@babylonjs/core";
 import { clientRay } from "./anchorPan.js";
@@ -17,6 +17,7 @@ import {
   NAVIGATION_ANCHOR_CHOICES,
   samePoint,
   type AnchorAcquisition,
+  type AnchorChoice,
   type AnchorFallback,
   type AnchorFamily,
   type AnchorOperation,
@@ -61,7 +62,7 @@ export interface NavigationAnchorServicePorts {
   getPose(): CameraPose | null;
   /** The displayed map surface: terrain and 3D buildings, never sprites, markers, overlays or helpers. */
   surface: Pick<SurfaceQuery, "raycast" | "revision">;
-  /** The eight choices, read when a gesture starts. */
+  /** The four zoom choices, read when a gesture starts. */
   preferences(): NavigationAnchorPreferences;
   /** True while a tracked point is the camera's centre: it is then every gesture's anchor. */
   tracking(): boolean;
@@ -179,12 +180,11 @@ export function createNavigationAnchorService(ports: NavigationAnchorServicePort
     const choices = ports.preferences()[request.family];
     const offered = NAVIGATION_ANCHOR_CHOICES[request.family] as readonly string[];
     const tracking = ports.tracking();
-    // Both operations asking for the pointer share one pick.
-    let picked: ReturnType<typeof pointUnder> | undefined;
     const acquired: Partial<Record<AnchorOperation, NavigationAnchor>> = {};
     for (const operation of request.operations) {
-      const latched = request.prefer?.[operation];
-      const requested = latched !== undefined && offered.includes(latched) ? latched : choices[operation];
+      const latched = request.prefer?.zoom;
+      const requested: AnchorChoice = operation === "orbit" ? "target"
+        : latched !== undefined && offered.includes(latched) ? latched : choices.zoom;
       const anchor = (source: AnchorSource, point: Readonly<EcefCoord> | null, revision: number | null, fallback: AnchorFallback | null): NavigationAnchor => Object.freeze({
         session, owner, family: request.family, operation, requested, source, point, surfaceRevision: revision, fallback,
       });
@@ -199,7 +199,7 @@ export function createNavigationAnchorService(ports: NavigationAnchorServicePort
       } else if (!request.client) {
         resolved = anchor("target", null, null, "no-pointer");
       } else {
-        if (picked === undefined) picked = pointUnder(request.client);
+        const picked = pointUnder(request.client);
         resolved = picked ? anchor(picked.source, picked.point, picked.revision, null) : anchor("target", null, null, "missed");
       }
       acquired[operation] = resolved;

@@ -14,8 +14,8 @@ export interface GlobeIntentMotionPorts<TCanvas = unknown> {
 const clampValue = (value: number): number => Number.isFinite(value) ? Math.max(-1, Math.min(1, value)) : 0;
 /**
  * Source finite/clamped dt and intent mapping, using the host's existing inertia/render authority.
- * Zoom and rotation act about the key, controller and button choices (`input.nonPointer.*`),
- * resolved without the pointer when a run of such input starts and kept until it stops: a frame
+ * Zoom acts about the key, controller and button choice (`input.nonPointer.zoomAnchor`), and rotation
+ * about the compass target, resolved without the pointer when a run of such input starts and kept until it stops: a frame
  * without zoom or rotation, such as the one a controller sends when its sticks come back to rest,
  * ends it. Any glide after that keeps the same anchors.
  */

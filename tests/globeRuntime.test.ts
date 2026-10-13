@@ -8,6 +8,7 @@ import { TransformNode, Color3, MeshBuilder, StandardMaterial, type Scene } from
 import type { GlobeRuntimeOptions } from "../src/babylon/globeRuntimePorts.js";
 import { createParameterControl } from "@foss-earth/ui/browser";
 import { ANCHOR_FALLBACK_MESSAGES, NAVIGATION_ANCHOR_SETTING_IDS, SHOW_NAVIGATION_ANCHORS_ID } from "../src/input/navigationAnchors.js";
+import { ecefToGeodetic } from "../src/camera/cameraMath.js";
 import type { NavigationAnchorService } from "../src/babylon/navigationAnchorService.js";
 import type { NavigationAnchorMarkers } from "../src/browser/navigationAnchorMarkers.js";
 
@@ -661,10 +662,11 @@ describe("runtime navigation anchors", () => {
     } finally { host.disposeHost(); }
   });
 
-  it("says beside each of the eight anchor choices what it last did, following every choice's changes", () => {
+  it("says beside each of the four zoom choices what it last did, following every choice's changes", () => {
     const host = createAnchorHost(), noPin = `${ANCHOR_FALLBACK_MESSAGES["no-pin"]}.`;
     try {
-      expect(NAVIGATION_ANCHOR_SETTING_IDS).toHaveLength(8);
+      expect(NAVIGATION_ANCHOR_SETTING_IDS).toEqual(["input.mouse.zoomAnchor", "input.trackpad.zoomAnchor", "input.touch.zoomAnchor", "input.nonPointer.zoomAnchor"]);
+      expect(host.settings.has("input.mouse.orbitPivot")).toBe(false);
       for (const id of NAVIGATION_ANCHOR_SETTING_IDS) expect(noteOf(host, id)).toBeNull();
       // Each choice set to Pinned point without a pin is noted at once: its own watcher ran.
       for (const id of NAVIGATION_ANCHOR_SETTING_IDS) {
@@ -672,7 +674,7 @@ describe("runtime navigation anchors", () => {
         expect(noteOf(host, id)).toBe(noPin);
       }
       host.settings.set("input.mouse.zoomAnchor", "pointer");
-      expect(noteOf(host, "input.mouse.zoomAnchor")).toBeNull(); expect(noteOf(host, "input.mouse.orbitPivot")).toBe(noPin);
+      expect(noteOf(host, "input.mouse.zoomAnchor")).toBeNull(); expect(noteOf(host, "input.trackpad.zoomAnchor")).toBe(noPin);
 
       // Pinning and clearing update the notes too.
       expect(host.anchors.pinTarget()).toBe(true);
@@ -682,7 +684,7 @@ describe("runtime navigation anchors", () => {
       host.settings.set("input.nonPointer.zoomAnchor", "target");
       expect(noteOf(host, "input.nonPointer.zoomAnchor")).toBeNull();
       host.anchors.clearPin();
-      expect(noteOf(host, "input.nonPointer.orbitPivot")).toBe(noPin); expect(noteOf(host, "input.nonPointer.zoomAnchor")).toBeNull();
+      expect(noteOf(host, "input.touch.zoomAnchor")).toBe(noPin); expect(noteOf(host, "input.nonPointer.zoomAnchor")).toBeNull();
     } finally { host.disposeHost(); }
   });
 
@@ -789,6 +791,37 @@ describe("runtime navigation anchors", () => {
     } finally { host.disposeHost(); }
   });
 
+  it("turns and tilts about the compass down to the horizon, leaving it on its ground wherever the drag starts", () => {
+    const host = createAnchorHost();
+    const canvas = host.canvas;
+    Object.defineProperty(canvas, "clientWidth", { configurable: true, value: 800 });
+    Object.defineProperty(canvas, "clientHeight", { configurable: true, value: 600 });
+    Object.assign(canvas, { setPointerCapture() {}, releasePointerCapture() {}, hasPointerCapture: () => false });
+    canvas.getBoundingClientRect = () => ({ left: 0, top: 0, width: 800, height: 600, right: 800, bottom: 600, x: 0, y: 0, toJSON: () => ({}) });
+    let at = 0;
+    const frame = () => { at += 16; host.setTime(at); host.runtime.prepareFrame(at); host.runtime.afterFrame(at); };
+    const pointer = (type: string, x: number, y: number) => canvas.dispatchEvent(new PointerEvent(type, {
+      pointerId: 1, pointerType: "mouse", isPrimary: true, button: 2, buttons: type === "pointerup" ? 0 : 2, clientX: x, clientY: y, bubbles: true, cancelable: true,
+    }));
+    const centre = () => { const c = host.runtime.geospatialCamera!.center; return ecefToGeodetic(c.x, c.y, c.z); };
+    try {
+      host.runtime.setViewState({ latDeg: 44, lonDeg: -93, headingDeg: 0, pitchDeg: 30, zoomMeters: 3000 });
+      const before = centre();
+      // Low on the screen and off to the side: turning about the ground there would carry the compass off.
+      let x = 650, y = 520;
+      pointer("pointerdown", x, y);
+      for (let step = 0; step < 40; step += 1) { x += 5; y -= 10; pointer("pointermove", x, y); frame(); }
+      pointer("pointerup", x, y);
+      for (let step = 0; step < 600; step += 1) frame();
+      const view = host.runtime.getViewState()!;
+      expect(view.pitchDeg).toBeLessThan(10);
+      expect(Math.abs(view.headingDeg)).toBeGreaterThan(1);
+      const after = centre();
+      const north = (after.latRad - before.latRad) * 6_378_137, east = (after.lonRad - before.lonRad) * 6_378_137 * Math.cos(before.latRad);
+      expect(Math.hypot(north, east)).toBeLessThan(0.01);
+    } finally { host.disposeHost(); }
+  });
+
   it("disposes the anchor service with the runtime: no more notifications, notes or pinning", () => {
     const host = createAnchorHost(), changed = vi.fn(), dispose = vi.spyOn(host.service, "dispose");
     try {
@@ -806,8 +839,8 @@ describe("runtime navigation anchors", () => {
       expect(host.anchors.pinTarget()).toBe(false); expect(host.anchors.armPick()).toBe(false);
       host.anchors.clearPin(); host.anchors.cancelPick();
       const late = vi.fn(); host.anchors.subscribe(late)();
-      host.settings.set("input.mouse.orbitPivot", "pinned");
-      expect(noteOf(host, "input.mouse.orbitPivot")).toBeNull();
+      host.settings.set("input.trackpad.zoomAnchor", "pinned");
+      expect(noteOf(host, "input.trackpad.zoomAnchor")).toBeNull();
       expect(changed).not.toHaveBeenCalled(); expect(late).not.toHaveBeenCalled();
       expect(() => host.runtime.destroy()).not.toThrow(); expect(dispose).toHaveBeenCalledOnce();
     } finally { host.disposeHost(); }
