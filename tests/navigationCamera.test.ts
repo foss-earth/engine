@@ -36,6 +36,22 @@ function fixture() {
 }
 
 describe("host-supplied navigation camera handover", () => {
+  it("can place a view without asking for another frame", () => {
+    const f = fixture();
+    try {
+      const pivot = f.lease.overview.camera.center;
+      const position = { x: pivot.x + 40, y: pivot.y, z: pivot.z + 30 };
+      const d = { x: pivot.x - position.x, y: pivot.y - position.y, z: pivot.z - position.z };
+      const length = Math.hypot(d.x, d.y, d.z);
+      const view = { position, forward: { x: d.x / length, y: d.y / length, z: d.z / length },
+        up: { x: 0, y: 0, z: 1 }, verticalFovRad: 1 };
+      f.requestRender.mockClear();
+      expect(f.adapter.placeNavigationCamera(f.lease, view, { render: false })).toBe(true);
+      expect(f.requestRender).not.toHaveBeenCalled();
+      expect(f.adapter.placeNavigationCamera(f.lease, view)).toBe(true);
+      expect(f.requestRender).toHaveBeenCalled();
+    } finally { f.owner.dispose(); f.engine.dispose(); }
+  });
   it("restores the exact saved ECEF center and refuses a foreign lease", () => {
     const f = fixture();
     try {

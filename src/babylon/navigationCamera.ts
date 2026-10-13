@@ -71,7 +71,7 @@ export function createNavigationCameraAdapter(ports: NavigationCameraPorts) {
   const GLIDE_FRAME_MS = 1000 / 60;
   /** A field of view within this of the globe's, radians, has returned to it. */
   const FOV_RETURNED_RAD = 1e-4;
-  const placeNavigationCamera = (lease: NavigationLease, view: NavigationPresentation): boolean => {
+  const placeNavigationCamera = (lease: NavigationLease, view: NavigationPresentation, options?: { render?: boolean }): boolean => {
     const camera = ports.getCamera();
     if (ports.currentLease() !== lease || lease.released || !camera || ports.unavailable()) return false;
     ports.getInertia()?.cancel();
@@ -96,7 +96,7 @@ export function createNavigationCameraAdapter(ports: NavigationCameraPorts) {
     camera.upVector.set(view.up.x, view.up.y, view.up.z);
     // A collision offset left from before could alias Babylon's scratch vectors; placed, there is none.
     camera.perFrameCollisionOffset = new Vector3();
-    ports.renderer.requestRender();
+    if (options?.render !== false) ports.renderer.requestRender();
     return true;
   };
   // A handed-back camera's field of view easing to the globe's, at the glide's rate.

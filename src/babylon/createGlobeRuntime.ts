@@ -274,7 +274,7 @@ export interface GlobeRuntime {
    * a panorama's orb needs. The camera's limits and collisions return when a
    * snapshot is restored or the lease ends. Refused (false) otherwise.
    */
-  placeNavigationCamera(lease: NavigationLease, view: NavigationPresentation): boolean;
+  placeNavigationCamera(lease: NavigationLease, view: NavigationPresentation, options?: { render?: boolean }): boolean;
   /**
    * What the globe camera holds to on its own: its tilt and distance limits
    * (`camera.pitchLimits`, `camera.zoomLimits`) and how much speed a glide
@@ -297,6 +297,16 @@ export interface GlobeRuntime {
   glideNavigationCamera(lease: NavigationLease, view: NavigationPresentation, pivot: EcefVector, motion: NavigationGlide): boolean;
   /** The current lease's presented view, or null while the globe camera's view is drawn. */
   getPresentationView(): NavigationPresentation | null;
+  /**
+   * While a panorama presents its own view, also draw the globe behind it.
+   * The presented photograph can then be made translucent and lined up with the map.
+   */
+  setPresentedWorldVisible(visible: boolean): void;
+  /**
+   * Puts the globe camera on the current presented eye and look without asking
+   * for another frame. No-op unless a lease is presenting.
+   */
+  syncPresentedCamera(): boolean;
   /**
    * The points zoom acts about (`input.*.zoomAnchor`): what each kind of
    * input last used and why, and the session's pinned point, with Pick point,
@@ -1347,6 +1357,18 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
   });
   const { captureNavigationSnapshot, restoreNavigationSnapshot, placeNavigationCamera, glideNavigationCamera, restoreCameraLimits } = navigationCamera;
   let presentationMaskBefore: number | null = null;
+  let presentedWorldVisible = false;
+  const applyPresentedMask = (view: NavigationPresentation | null): void => {
+    const camera = geospatialCamera;
+    if (!camera) return;
+    if (view) {
+      if (presentationMaskBefore === null) presentationMaskBefore = camera.layerMask;
+      camera.layerMask = presentedWorldVisible ? (presentationMaskBefore | NAVIGATION_PRESENTATION_LAYER) : NAVIGATION_PRESENTATION_LAYER;
+    } else if (presentationMaskBefore !== null) {
+      camera.layerMask = presentationMaskBefore;
+      presentationMaskBefore = null;
+    }
+  };
   let streamingBeforeSuspension = false;
   let startupHoldBeforeSuspension = false;
   let intentHandler: { lease: NavigationLease; handler: (frame: ActionIntentFrame) => void } | null = null;
@@ -1389,17 +1411,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
       startupHoldBeforeSuspension = false;
       refreshCurrentSurface();
     },
-    present(view) {
-      const camera = geospatialCamera;
-      if (!camera) return;
-      if (view) {
-        if (presentationMaskBefore === null) presentationMaskBefore = camera.layerMask;
-        camera.layerMask = NAVIGATION_PRESENTATION_LAYER;
-      } else if (presentationMaskBefore !== null) {
-        camera.layerMask = presentationMaskBefore;
-        presentationMaskBefore = null;
-      }
-    },
+    present(view) { applyPresentedMask(view); },
     requestRender: () => scheduler.requestRender(),
     beginContinuous: () => scheduler.beginContinuous(),
     endContinuous: () => scheduler.endContinuous(),
@@ -2161,6 +2173,19 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
       return { ...(cameraController?.getLimits() ?? cameraLimits()), glideKeepPerFrame: typeof decay === "number" ? decay : DEFAULT_INERTIA_DECAY_PER_FRAME };
     },
     getPresentationView: () => navigation.current()?.getPresentationView() ?? null,
+    setPresentedWorldVisible(visible: boolean): void {
+      if (disposed) return;
+      presentedWorldVisible = visible;
+      applyPresentedMask(navigation.current()?.getPresentationView() ?? null);
+      scheduler.requestRender();
+    },
+    syncPresentedCamera(): boolean {
+      if (disposed) return false;
+      const lease = navigation.current();
+      const view = lease?.getPresentationView() ?? null;
+      if (!lease || !view) return false;
+      return placeNavigationCamera(lease, view, { render: false });
+    },
     navigationAnchors: globeNavigationAnchors,
     setNavigationIntentHandler(lease, handler) {
       if (navigation.current() !== lease || lease.released) return () => {};
