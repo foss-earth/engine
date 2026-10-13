@@ -40,10 +40,23 @@ export interface TerrainFocus {
   horizonCull: boolean;
 }
 
+/**
+ * A point the tiles the camera sees are measured from, never nearer than the
+ * camera is to it: turning or tilting the camera around it changes no tile.
+ */
+export interface TerrainRefinePoint {
+  /** ECEF metres. */
+  position: Vec3;
+  /** The camera's distance to the point. */
+  minDistanceMeters: number;
+}
+
 export interface TerrainSelectionInput {
   /** The camera. Null when there is none: then only the root level is kept. */
   view: ImageryView | null;
   focus: TerrainFocus | null;
+  /** Where the tiles the camera sees are measured from: `map.focus.refineBasemapFrom`. Null: the camera. */
+  refineFrom?: TerrainRefinePoint | null;
   /** The screen-space error the mesh may show, in physical px. */
   targetPx: number;
   /** A tile's geometric error as a share of its vertex spacing: `map.terrain.errorPerSpacing`. */
@@ -67,7 +80,7 @@ export interface TerrainLeaf {
   key: string;
   /** Seen by the camera, or within the focus region. */
   needed: boolean;
-  /** From the camera, or the focus point, whichever measured it; for load order. */
+  /** From the camera, the refine point or the focus point, whichever measured it; for load order. */
   distanceMeters: number;
   /** Its projected geometric error, px. */
   errorPx: number;
@@ -131,10 +144,11 @@ function distance(a: Vec3, b: Vec3): number {
  * Chooses the terrain tiles to show: from the root level, a tile splits while
  * its geometric error, projected from the camera, exceeds the target. Tiles
  * the camera cannot see (outside the view or below the horizon) stay as they
- * are. Around a focus point, tiles within the radius are measured from the
- * point instead, in every direction and never nearer than the camera is to it,
- * so turning the camera changes nothing there; with the view as well, a tile
- * takes the finer of the two.
+ * are. With a refine point, the tiles the camera sees are measured from it,
+ * never nearer than the camera is to it. Around a focus point, tiles within
+ * the radius are measured from the point instead, in every direction and
+ * never nearer than the camera is to it, so turning the camera changes nothing
+ * there; with the view as well, a tile takes the finer of the two.
  */
 export function selectTerrain(input: TerrainSelectionInput): TerrainSelection {
   const { view, focus } = input;
@@ -147,6 +161,18 @@ export function selectTerrain(input: TerrainSelectionInput): TerrainSelection {
     const lift = 1 + focus.minDistanceMeters / (Math.hypot(focus.position.x, focus.position.y, focus.position.z) || 1);
     return { x: focus.position.x * lift, y: focus.position.y * lift, z: focus.position.z * lift };
   })();
+  const refine = input.refineFrom ?? null;
+  const refineGeo = refine ? ecefToGeodetic(refine.position.x, refine.position.y, refine.position.z) : null;
+  const refineLonLat = refineGeo && { lonDeg: (refineGeo.lonRad * 180) / Math.PI, latDeg: (refineGeo.latRad * 180) / Math.PI };
+  /** The refine point's distance to a tile's ground, taken at the point's own height within the tile's bounds. */
+  const refineDistance = (tile: TileId, bounds: { min: number; max: number }, points: ReadonlyArray<{ u: number; v: number }>): number => {
+    const height = Math.min(bounds.max, Math.max(lowestGround(bounds, refineGeo!.altMeters), refineGeo!.altMeters));
+    let nearest = Infinity;
+    for (const point of [...points, nearestLocal(tile, refineLonLat!.lonDeg, refineLonLat!.latDeg)]) {
+      nearest = Math.min(nearest, distance(sampleTileSurface(tile, point.u, point.v, height).position, refine!.position));
+    }
+    return nearest;
+  };
   let nodes = 0;
 
   function measure(tile: TileId): Measured {
@@ -184,7 +210,13 @@ export function selectTerrain(input: TerrainSelectionInput): TerrainSelection {
       const hidden = allOutside !== 0
         || (!anyAboveHorizon && span < TERRAIN_SELECTION_CONSTANTS.horizonTileSpan)
         || isSphereBelowHorizon(view.camera, center, radius);
-      if (!hidden) {
+      if (!hidden && refine) {
+        // Seen by the camera, measured from the point: its distance alone sets the level.
+        const nearest = refineDistance(tile, bounds, points);
+        result.needed = true;
+        result.distanceMeters = nearest;
+        result.errorPx = error / (Math.max(1, nearest, refine.minDistanceMeters) * pixelAngle);
+      } else if (!hidden) {
         result.needed = true;
         result.distanceMeters = nearestDistance;
         result.errorPx = error / (Math.max(1, nearestDistance) * pixelAngle);

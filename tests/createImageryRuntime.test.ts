@@ -142,6 +142,26 @@ describe("imagery runtime recovery", () => {
     } finally { test.dispose(); }
   });
 
+  it("gives a finite priority to the source's finest tiles that measure around a low camera before terrain loads", async () => {
+    // Unknown heights sample the surface at the 9 km fallback bound, above a camera
+    // a few hundred metres up, so the tiles under it measure as surrounding it.
+    const requests: Array<{ level: number; priority: number | undefined }> = [];
+    const test = harness({
+      async load(url, { width, height }, _signal, priority) {
+        requests.push({ level: Number(new URL(url).pathname.split("/")[1]), priority });
+        return { width, height, compressedBytes: 1, pages: [[new Uint8Array(4)]] };
+      },
+    }, 1, { surface: { heightAt: () => null, boundsFor: () => ({ min: -500, max: 9000 }), maxLevelFor: () => Infinity, getRevision: () => 0 } });
+    try {
+      test.controller.applyViewState({ latDeg: 44.977753, lonDeg: -93.265011, zoomMeters: 600, pitchDeg: 23.1, headingDeg: 345.6 });
+      test.attach("current-view", VIEW_ROOT);
+      await test.settle();
+      expect(test.runtime.getDiagnostics().plan!.regions.some(region => region.footprintPx === Infinity && region.limit === "source")).toBe(true);
+      expect(requests.some(request => request.level === 14)).toBe(true);
+      expect(requests.filter(request => !Number.isFinite(request.priority))).toEqual([]);
+    } finally { test.dispose(); }
+  });
+
   it("publishes the active target immediately while finer delivery remains pending", () => {
     const test = harness();
     try {

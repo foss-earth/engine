@@ -12,13 +12,14 @@ function harness() {
   new HostCameraController(camera, () => 0).applyViewState({ latDeg: 36.1, lonDeg: -112.14, zoomMeters: 30_000, pitchDeg: 0, headingDeg: 0 });
   let frame = true, now = 0, nativeIndex = 0;
   const timers: { at: number; callback(): void }[] = [];
+  const errors: string[] = [];
   const source = { id: "old", version: "1", label: "Old", provider: "Fixture", attribution: "Fixture", protocol: "xyz" as const, kind: "cartographic" as const, urlTemplate: "https://fixture.invalid/old/{z}/{x}/{y}", maxZoom: 14 };
   const runtime = createImageryRuntime({ scene, source, loader: { load: async (_url, expected) => host.image(expected.width, expected.height) },
     device: host.device, managedAtlas: host.resources, createAbortController: () => new AbortController(), capabilities: { backend: "webgpu", maxTextureSize: 8192, explicitGradients: true },
     surface: { heightAt: () => 0, boundsFor: () => ({ min: 0, max: 0 }), maxLevelFor: () => 8, getRevision: () => 0 },
     limits: { gpuBytes: OWNED_ATLAS_GPU_BUDGET, stagingBytes: 16 * 2 ** 20, concurrentRequests: 2, queuedRequests: 128, uploadBytesPerUpdate: 8 * 2 ** 20, cpuMsPerUpdate: 2, missingRetryMs: 1000, retryDelayMs: { min: 2000, max: 30000 } },
     tuning: { reselectWhileMovingMs: 0, anisotropy: 4, fallbackGap: 4, fallbackStep: 3, tablePatches: 1, maxNodes: 12_000, hysteresis: { refineAbove: 1.2, coarsenBelow: 0.8, coarsenAfterMs: 500, pinMs: 1000 } },
-    requestRender: () => { frame = true; }, now: () => now, log: { warn() {} },
+    requestRender: () => { frame = true; }, now: () => now, log: { warn() {} }, onError: error => { errors.push(error.message); },
     after(callback, delay) { const timer = { at: now + delay, callback }; timers.push(timer); return () => { const index = timers.indexOf(timer); if (index >= 0) timers.splice(index,1); }; },
   });
   const material = new StandardMaterial("patch", scene); runtime.attachPatch("patch", { z: 2, x: 0, y: 1 }, material); runtime.setPatchVisible("patch", true);
@@ -37,7 +38,7 @@ function harness() {
     }
     throw new Error("Managed host frame failed to settle.");
   };
-  return { host, runtime, binding, pump, source, gpuBudget: OWNED_ATLAS_GPU_BUDGET, switchSource() { runtime.setSource({ ...source, id: "new", label: "New", urlTemplate: "https://fixture.invalid/new/{z}/{x}/{y}" }); },
+  return { host, runtime, binding, pump, source, errors, gpuBudget: OWNED_ATLAS_GPU_BUDGET, switchSource() { runtime.setSource({ ...source, id: "new", label: "New", urlTemplate: "https://fixture.invalid/new/{z}/{x}/{y}" }); },
     completeTable() { host.native[nativeIndex++].resolve(); }, failTable(error: unknown) { host.native[nativeIndex++].reject(error); },
     advance(ms: number) { now += ms; for (const timer of [...timers]) if (timer.at <= now) { timers.splice(timers.indexOf(timer),1); timer.callback(); } },
     dispose() { runtime.dispose(); host.dispose(); scene.dispose(); engine.dispose(); } };
@@ -70,6 +71,19 @@ describe("managed actual runtime table acknowledgement", () => {
       h.switchSource(); expect((await h.pump(true))?.table).toBe(true); h.completeTable(); await flushOwnedAtlas(); await h.pump();
       expect(h.binding()).toEqual(before); expect(h.runtime.getDisplayedSourceId()).toBe("old"); h.host.onWrite(() => {}); h.advance(2000); await h.pump(); expect(h.runtime.getDisplayedSourceId()).toBe("new");
     } finally { h.dispose(); }
+  });
+  it("withdraws a table its patch no longer shows without reporting a failure, and reports one that fails", async () => {
+    const h = harness();
+    try { await h.pump(); h.switchSource(); expect((await h.pump(true))?.table).toBe(true);
+      // Hidden while its table uploads: the runtime cancels it, which is no load failure.
+      h.runtime.setPatchVisible("patch", false); await h.pump(true); h.completeTable(); await flushOwnedAtlas(); await h.pump();
+      expect(h.errors).toEqual([]);
+    } finally { h.dispose(); }
+    const failing = harness();
+    try { await failing.pump(); failing.host.onWrite(() => { if (failing.host.writes.at(-1)?.width === 64) throw new Error("partial native table failure"); });
+      failing.switchSource(); expect((await failing.pump(true))?.table).toBe(true); failing.completeTable(); await flushOwnedAtlas(); await failing.pump();
+      expect(failing.errors.join(" ")).toContain("partial native table failure");
+    } finally { failing.dispose(); }
   });
   it("uses two physical table blocks per logical patch inside the same named GPU budget", async () => {
     const h = harness();

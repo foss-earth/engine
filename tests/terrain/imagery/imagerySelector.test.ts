@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { ecefToGeodetic, geodeticToEcef } from "../../../src/camera/cameraMath.js";
 import { childTiles, tileContains, tileKey, type TileId } from "../../../src/terrain/imagery/imageryGeometry.js";
 import {
   createImagerySelector,
@@ -685,6 +686,69 @@ describe("imagery around a focus point", () => {
     const farther = select(input(OBLIQUE, { focus: focus("around", { minDistanceMeters: 15_000 }) }));
     expect(coarser.leaves.length).toBeLessThan(normal.leaves.length);
     expect(farther.leaves.length).toBeLessThan(normal.leaves.length);
+  });
+});
+
+describe("imagery measured from a point", () => {
+  // The globe camera turns and tilts around its target, at a fixed distance from it.
+  const lat = (36.1 * Math.PI) / 180, lon = (-112.1 * Math.PI) / 180;
+  const target = geodeticToEcef(lat, lon, 0);
+  const orbit = (headingDeg: number, pitchDeg: number, distanceMeters = 1500): TestViewOptions => {
+    const up = { x: Math.cos(lat) * Math.cos(lon), y: Math.cos(lat) * Math.sin(lon), z: Math.sin(lat) };
+    const east = { x: -Math.sin(lon), y: Math.cos(lon), z: 0 };
+    const north = { x: up.y * east.z - up.z * east.y, y: up.z * east.x - up.x * east.z, z: up.x * east.y - up.y * east.x };
+    const h = (headingDeg * Math.PI) / 180, p = (pitchDeg * Math.PI) / 180;
+    const toTarget = (axis: "x" | "y" | "z") => -up[axis] * Math.cos(p) + (north[axis] * Math.cos(h) + east[axis] * Math.sin(h)) * Math.sin(p);
+    const eye = ecefToGeodetic(target.x - distanceMeters * toTarget("x"), target.y - distanceMeters * toTarget("y"), target.z - distanceMeters * toTarget("z"));
+    return { latDeg: (eye.latRad * 180) / Math.PI, lonDeg: (eye.lonRad * 180) / Math.PI, altitudeMeters: eye.altMeters, pitchDeg, headingDeg };
+  };
+  const refineFrom = (distanceMeters = 1500) => ({ position: target, minDistanceMeters: distanceMeters, pixelAngle: (2 * Math.tan(Math.PI / 6)) / 720 });
+  /**
+   * Leaves on screen in both plans that overlap, and how many of them are not
+   * the same region. A leaf with no footprint has nothing on screen: its
+   * bounds reached the view, none of its children did.
+   */
+  const compare = (a: ImageryPlan, b: ImageryPlan) => {
+    let overlapping = 0, different = 0;
+    const shown = (plan: ImageryPlan) => plan.leaves.filter(leaf => leaf.footprintPx > 0);
+    for (const leaf of shown(a)) for (const other of shown(b)) {
+      if (!tileContains(leaf.tile, other.tile) && !tileContains(other.tile, leaf.tile)) continue;
+      overlapping += 1;
+      if (leaf.key !== other.key) different += 1;
+    }
+    return { overlapping, different };
+  };
+  const VIEWS = [[0, 60], [90, 60], [200, 75], [310, 40], [45, 0]].map(([headingDeg, pitchDeg]) => orbit(headingDeg, pitchDeg));
+
+  it("keeps every region's level whichever way the camera turns or tilts around the point", () => {
+    const plans = VIEWS.map(view => select(input(view, { refineFrom: refineFrom() })));
+    for (const a of plans) for (const b of plans) {
+      if (a === b) continue;
+      const { overlapping, different } = compare(a, b);
+      expect(overlapping).toBeGreaterThan(20);
+      expect(different).toBe(0);
+    }
+    // Measured by projected size, the same turns change the level of ground both views see.
+    const projected = VIEWS.map(view => select(input(view)));
+    expect(compare(projected[0], projected[1]).different).toBeGreaterThan(0);
+  });
+
+  it("asks at the point for what the view asks there, and no more for ground nearer the camera", () => {
+    const overhead = orbit(0, 0);
+    expect(levelUnder(select(input(overhead, { refineFrom: refineFrom() })), 36.1, -112.1))
+      .toBe(levelUnder(select(input(overhead)), 36.1, -112.1));
+    const low = orbit(30, 75);
+    const finest = (plan: ImageryPlan) => Math.max(...plan.leaves.map(leaf => leaf.tile.z));
+    const measured = select(input(low, { refineFrom: refineFrom() }));
+    expect(finest(measured)).toBeLessThan(finest(select(input(low))));
+    expect(finest(measured)).toBe(levelUnder(measured, 36.1, -112.1));
+  });
+
+  it("takes unknown ground to lie at the point's height, not at the highest it may be", () => {
+    const overhead = orbit(0, 0);
+    const unknown = { heightAt: () => null, boundsFor: () => ({ min: -500, max: 9000 }) };
+    expect(levelUnder(select(input(overhead, { refineFrom: refineFrom(), surface: unknown })), 36.1, -112.1))
+      .toBe(levelUnder(select(input(overhead, { refineFrom: refineFrom() })), 36.1, -112.1));
   });
 });
 

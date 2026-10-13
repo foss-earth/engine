@@ -102,7 +102,7 @@ function formatLevels(levels: number): string {
   return `${rounded} level${rounded === 1 ? "" : "s"}`;
 }
 
-/** The parameters that decide the focus region, read by both maps each frame. */
+/** The parameters that decide the focus region, and what 2D basemaps measure from, read by the maps each frame. */
 const FOCUS_PARAMETER_IDS = [
   "map.focus.mode",
   "map.focus.point",
@@ -110,6 +110,7 @@ const FOCUS_PARAMETER_IDS = [
   "map.focus.horizonCull",
   "map.focus.detailBelow.imagery",
   "map.focus.detailBelow.google",
+  "map.focus.refineBasemapFrom",
 ] as const;
 
 interface MapDebugEvent {
@@ -308,10 +309,9 @@ export interface GlobeRuntime {
    */
   syncPresentedCamera(): boolean;
   /**
-   * The points zoom acts about (`input.*.zoomAnchor`): what each kind of
-   * input last used and why, and the session's pinned point, with Pick point,
-   * Pin compass target and Clear pin. Rotation always turns about the compass
-   * target.
+   * The points zoom acts about (`input.*.zoomAnchor`, and `input.zoomCenter`):
+   * what each kind of input last used and why, and the session's pinned point,
+   * with Pick point, Pin compass target and Clear pin. Rotation is the compass.
    */
   readonly navigationAnchors: GlobeNavigationAnchors;
   /**
@@ -748,7 +748,24 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
     for (const listener of [...statusListeners]) listener({ ...status });
   };
   const knownRasterBaseMaps = new Map<string, RasterBaseMapSource>();
+  /** The 2D map's latest tile failure while it is the status's error: it ends once nothing the view needs is failed or loading. */
+  let rasterTileError: string | null = null;
+  /**
+   * Once no tile the view needs is loading or waiting to retry, and imagery
+   * has nothing queued, loading or waiting to retry, every failed tile has
+   * loaded since, given way to a coarser one, or is no longer needed.
+   */
+  const clearSettledRasterError = (): void => {
+    if (rasterTileError === null || status.lastError !== rasterTileError || status.mode !== "raster-basemap" || !rasterTilesRuntime) return;
+    const tiles = rasterTilesRuntime.getLoadingDiagnostics?.();
+    if (!tiles || tiles.pendingTiles > 0 || tiles.failedTiles > 0 || rasterTilesRuntime.getDetailFeedback().pending) return;
+    rasterTileError = null;
+    status.lastError = null;
+    status.message = `${activeRasterBaseMap?.label ?? "Raster"} raster basemap active.`;
+    emitStatus();
+  };
   const emitRasterDetailFeedback = (): void => {
+    clearSettledRasterError();
     const displayedId = rasterTilesRuntime?.getDisplayedSourceId() ?? null;
     const displayed = displayedId ? knownRasterBaseMaps.get(displayedId) ?? status.rasterBaseMap : null;
     if (status.mode === "raster-basemap" && displayed && status.displayedRasterBaseMap?.id !== displayed.id) {
@@ -1145,6 +1162,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
           const finest = settings.get("map.focus.detailBelow.imagery");
           return { ...request, offsetCap: typeof finest === "number" ? finest : null };
         },
+        getRefinePoint: () => (settings.get("map.focus.refineBasemapFrom") === "camera" ? null : focusPosition()),
         worldRoot: worldRoot ?? undefined,
         getSurfaceHeightMeters: options.getSurfaceHeightMeters,
         terrainSource: activeTerrainSource,
@@ -1181,7 +1199,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
         },
         onLoadError: (error, url) => {
           recordMapDebugEvent("raster-load-error", { error: error.message, url });
-          status.lastError = `${error.message} (${url})`;
+          status.lastError = rasterTileError = `${error.message} (${url})`;
           status.message = `${activeRasterBaseMap?.label ?? "Raster"} reported tile load errors.`;
           emitStatus();
         },
@@ -1781,7 +1799,8 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
       return (tilesRuntime?.tiles.visibleTiles.size ?? 0) > 0 ? undefined : null;
     });
   const displayedSurface = createCurrentDisplayedSurface(surface, readCurrentSurfaceState);
-  refreshCurrentSurface = () => { readCurrentSurfaceState(); displayedSurface.refresh(); };
+  // A tile failure that has ended is gone from the state the surface reports.
+  refreshCurrentSurface = () => { clearSettledRasterError(); readCurrentSurfaceState(); displayedSurface.refresh(); };
   authority.own(() => { refreshCurrentSurface = () => {}; displayedSurface.dispose(); });
 
   function prepareTerrain(request: TerrainPreparationOptions): Promise<TerrainPreparationResult> {

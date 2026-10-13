@@ -117,6 +117,44 @@ describe("public GlobeRuntime current displayed surface wiring", () => {
       }
     } finally { host.disposeHost(); }
   });
+  it("reports a 2D tile failure while a tile the view needs waits to retry, and drops it once the retry loads", async () => {
+    const host = createLocalSurfaceHost(document);
+    // Tiles settle in promise callbacks; the fixture clock runs only when told.
+    const settle = async (now: number) => {
+      for (let turn = 0; turn < 20; turn++) await Promise.resolve();
+      host.flushTimers(); host.frame(now);
+      for (let turn = 0; turn < 20; turn++) await Promise.resolve();
+    };
+    try {
+      // The fewest tiles the selection allows keeps each round small.
+      host.settings.set("map.terrain.maxTiles", 64);
+      const observation = host.runtime.displayedSurface.observe(center);
+      host.runtime.setMapSource(RASTER_BASE_MAP_SOURCES[0]);
+      await settle(1);
+      let now = 1;
+      for (let round = 0; round < 6 && host.imageFailures.length > 0; round++) {
+        host.imageFailures.splice(0).forEach(fail => fail(new Error("Synthetic failure")));
+        host.images.splice(0);
+        await settle(now += 1);
+      }
+      // Nothing loads now, but the failed tiles are still needed: the failure holds.
+      expect(host.runtime.isStreamingTiles()).toBe(false);
+      expect(host.runtime.status.lastError).toContain("Synthetic failure");
+      expect(observation.read().state).toBe("failed");
+      // Past the retry delay the tiles are asked again, and this time they load.
+      for (let round = 0; round < 12; round++) {
+        host.setTime(now += 120_000);
+        await settle(now);
+        host.images.splice(0).forEach(load => load());
+        host.imageFailures.splice(0);
+        await settle(now += 1);
+        if (!host.runtime.isStreamingTiles() && host.images.length === 0) break;
+      }
+      expect(host.runtime.isStreamingTiles()).toBe(false);
+      expect(host.runtime.status.lastError).toBeNull();
+      expect(observation.read().state).not.toBe("failed");
+    } finally { host.disposeHost(); }
+  });
   it("retires synchronous supplied settlement handles and permits the next loading notification", () => {
     const host = createLocalSurfaceHost(document, true);
     try {

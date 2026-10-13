@@ -9,6 +9,7 @@ import {
   measureImageryView,
   type ImageryFocus,
   type ImageryHysteresis,
+  type ImageryRefinePoint,
   type ImageryPlan,
   type ImagerySelectionInput,
   type ImagerySourceCapabilities,
@@ -136,6 +137,11 @@ export interface ImageryRuntimeOptions {
   requestRender(): void;
   /** The focus region to load as well as, or instead of, the view; null or omitted: the view only. */
   getFocus?(): ImageryFocusRequest | null;
+  /**
+   * The point the regions the view sees are measured from, in ECEF metres:
+   * `map.focus.refineBasemapFrom`. Null or omitted: their projected size.
+   */
+  getRefinePoint?(): { x: number; y: number; z: number } | null;
   onDownloadBytes?(bytes: number): void;
   onError?(error: Error, url: string): void;
   /** Delivery or support changed. */
@@ -210,6 +216,8 @@ interface PendingTable {
   signature: string; source: SourceState; plan: ImageryPlan; revision: number; display: ImageryDisplay; slots: Set<number>;
   job: OwnedImageryTableJob; outcome: TextureTransferOutcome | null; retirement: TextureTransferRetirement | null;
   closed: boolean; cancelled: boolean; backedOff: boolean;
+  /** Why the runtime withdrew the table itself; the outcome that reason fails it with is no error. */
+  withdrawn?: unknown;
 }
 
 interface SourceState {
@@ -329,14 +337,16 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
   let lastMergeResidency = -1;
   let lastTraversalStart = -Infinity;
   let lastFocus: ImageryFocus | null = null;
+  let lastRefine: ImageryRefinePoint | null = null;
   // What the running traversal measured; a traversal can span several frames.
-  let traversalInputs: { view: NonNullable<ReturnType<typeof readImageryView>>; surfaceRevision: number; missingRevision: number; focus: ImageryFocus | null } | null = null;
+  let traversalInputs: { view: NonNullable<ReturnType<typeof readImageryView>>; surfaceRevision: number; missingRevision: number; focus: ImageryFocus | null; refine: ImageryRefinePoint | null } | null = null;
   let lastPublishedResidency = -1;
   let planChangedSincePublish = true;
   let patchesChanged = true;
   let display: ImageryDisplay | null = null;
   let acceptedCoverage = new Set<string>();
-  let shownPlan: { plan: ImageryPlan; source: SourceState; focus: boolean } | null = null;
+  /** `viewFootprints`: the plan measured its regions by their size in the view, so they need no measuring again. */
+  let shownPlan: { plan: ImageryPlan; source: SourceState; viewFootprints: boolean } | null = null;
   let latestView: ReturnType<typeof readImageryView> = null;
   let measuredView: ReturnType<typeof readImageryView> = null;
   let measuredPlan: ImageryPlan | null = null;
@@ -413,6 +423,24 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
     };
   }
 
+  /** The point regions the view sees are measured from, from this view: no nearer than the camera is to it. */
+  function currentRefine(view: NonNullable<ReturnType<typeof readImageryView>>): ImageryRefinePoint | null {
+    const position = options.getRefinePoint?.();
+    if (!position) return null;
+    return {
+      position: { ...position },
+      minDistanceMeters: Math.hypot(view.camera.x - position.x, view.camera.y - position.y, view.camera.z - position.z),
+      pixelAngle: view.pixelAngle ?? 1 / view.renderHeight,
+    };
+  }
+
+  /** A change in the refine point worth a new selection: it moved, or the camera's distance to it changed. */
+  function refineChanged(a: ImageryRefinePoint | null, b: ImageryRefinePoint | null): boolean {
+    if (!a || !b) return a !== b;
+    const moved = Math.hypot(a.position.x - b.position.x, a.position.y - b.position.y, a.position.z - b.position.z);
+    return moved > 0.5 || Math.abs(a.minDistanceMeters - b.minDistanceMeters) > 0.02 * Math.max(1, a.minDistanceMeters) || a.pixelAngle !== b.pixelAngle;
+  }
+
   /** A change in the focus region worth a new selection: the point moved, or what it asks for changed. */
   function focusChanged(a: ImageryFocus | null, b: ImageryFocus | null): boolean {
     if (!a || !b) return a !== b;
@@ -430,7 +458,7 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
     return { pages, estimatedPages: Math.round(estimateFocusPages(focus)) };
   }
 
-  function selectionInput(view: NonNullable<ReturnType<typeof readImageryView>>, source: SourceState, focus: ImageryFocus | null): ImagerySelectionInput {
+  function selectionInput(view: NonNullable<ReturnType<typeof readImageryView>>, source: SourceState, focus: ImageryFocus | null, refineFrom: ImageryRefinePoint | null): ImagerySelectionInput {
     return {
       view,
       source: source.capabilities,
@@ -442,6 +470,7 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
       maxNodes: tuning.maxNodes,
       hysteresis: tuning.hysteresis,
       focus,
+      refineFrom,
       now: now(),
     };
   }
@@ -479,8 +508,11 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
         if (z === 0) break;
         z -= 1; x >>= 1; y >>= 1;
       }
-      const before = leaf.footprintPx * 2 ** Math.max(0, pageLevel - shownLevel);
-      const benefit = leaf.screenArea * (exceed(before) - exceed(leaf.footprintPx)) + leaf.screenArea * 1e-3 + 1e-6;
+      // A tile around the camera measures Infinity so that it splits. At the
+      // source's finest level it cannot, so its page counts as reaching the target.
+      const footprint = Number.isFinite(leaf.footprintPx) ? leaf.footprintPx : target;
+      const before = footprint * 2 ** Math.max(0, pageLevel - shownLevel);
+      const benefit = leaf.screenArea * (exceed(before) - exceed(footprint)) + leaf.screenArea * 1e-3 + 1e-6;
       const priority = benefit / (pages * slotBytes());
       requests.push(request(leaf.tile, leaf.variant, priority, false));
       const stepUp = Math.min(tuning.fallbackStep, leaf.tile.z - source.capabilities.minLevel);
@@ -503,13 +535,14 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
     const surfaceRevision = options.surface.getRevision();
     const missingRevision = residency.getMissingRevision();
     const focus = currentFocus(view);
+    const refine = currentRefine(view);
     const due = plan?.wakeAt !== null && plan?.wakeAt !== undefined && now() >= plan.wakeAt;
     const mergeReady = (plan?.mergeCandidates.length ?? 0) > 0 && residency.getRevision() !== lastMergeResidency;
     // Around a focus point the view decides nothing: turning the camera selects nothing again.
     const viewMatters = focus?.mode !== "around";
     const wanted = restartSelection || selector.isRunning() || !plan
       || (viewMatters && imageryViewChanged(lastView, view)) || focusChanged(lastFocus, focus)
-      || surfaceRevision !== lastSurfaceRevision
+      || refineChanged(lastRefine, refine) || surfaceRevision !== lastSurfaceRevision
       || missingRevision !== lastMissingRevision || due || mergeReady;
     if (!wanted) return;
     // During continuous motion, start a traversal at most every 100 ms and
@@ -522,9 +555,9 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
     const started = now();
     if (!selector.isRunning() || restartSelection) {
       lastTraversalStart = started;
-      traversalInputs = { view, surfaceRevision, missingRevision, focus };
+      traversalInputs = { view, surfaceRevision, missingRevision, focus, refine };
     }
-    const step = selector.step(selectionInput(view, requested, traversalInputs?.focus ?? focus), started + limits.cpuMsPerUpdate, now, restartSelection);
+    const step = selector.step(selectionInput(view, requested, traversalInputs?.focus ?? focus, traversalInputs?.refine ?? refine), started + limits.cpuMsPerUpdate, now, restartSelection);
     counters.selectionCpuMs += now() - started;
     restartSelection = false;
     if (step.running) {
@@ -535,6 +568,7 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
     // Anything that changed while the traversal ran is selected next time.
     lastView = traversalInputs?.view ?? view;
     lastFocus = traversalInputs?.focus ?? focus;
+    lastRefine = traversalInputs?.refine ?? refine;
     lastSurfaceRevision = traversalInputs?.surfaceRevision ?? surfaceRevision;
     lastMissingRevision = traversalInputs?.missingRevision ?? missingRevision;
     traversalInputs = null;
@@ -598,8 +632,11 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
     try { pending.job.release(); } catch (error) { errors.push(error); }
     if (errors.length) reportManaged(errors.length === 1 ? errors[0] : new AggregateError(errors, "Managed table cancellation cleanup failed."));
   }
+  /** Withdraws a table this runtime no longer wants: a cancellation, not a failure. */
   function cancelPendingTable(patch: PatchState, reason: unknown): void {
-    if (patch.pendingTable) cancelManagedTable(patch.pendingTable, reason);
+    if (!patch.pendingTable) return;
+    patch.pendingTable.withdrawn = reason;
+    cancelManagedTable(patch.pendingTable, reason);
   }
   function tableSlots(table: HeldPatchTable): Set<number> {
     const slots = new Set<number>(), data = table.data, side = 2 ** table.cellsLog2;
@@ -615,7 +652,7 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
     const revision = residency.getRevision();
     if (visible.some(patch => patch.atlas !== atlas || patch.boundSource !== source || patch.boundPlan !== selected || patch.boundRevision !== revision || patch.pendingTable)) return;
     const sourceChanged = displayed !== source, firstDisplay = display === null;
-    display = candidate; displayed = source; acceptedCoverage = new Set(selected.coverage.map(tile => `${tile.z}/${tile.x}/${tile.y}`)); shownPlan = { plan: selected, source, focus: lastFocus !== null };
+    display = candidate; displayed = source; acceptedCoverage = new Set(selected.coverage.map(tile => `${tile.z}/${tile.x}/${tile.y}`)); shownPlan = { plan: selected, source, viewFootprints: lastFocus === null && lastRefine === null };
     lastPublishedResidency = residency.getRevision(); planChangedSincePublish = false; patchesChanged = false;
     if (sourceChanged || firstDisplay) try { options.onCoverageChange?.(); } catch (error) { reportManaged(error); }
     retireUnusedManagedAtlases();
@@ -651,7 +688,7 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
     if (!current || pending.outcome.status !== "uploaded" || pending.retirement.status !== "completed" || pending.retirement.cleanupError !== undefined) {
       if (patch.pendingTable === pending) patch.pendingTable = null;
       const errors: unknown[] = [];
-      if (pending.outcome.status === "failed") errors.push(pending.outcome.error);
+      if (pending.outcome.status === "failed" && pending.outcome.error !== pending.withdrawn) errors.push(pending.outcome.error);
       if (pending.retirement.cleanupError !== undefined) errors.push(pending.retirement.cleanupError);
       closePendingTable(pending, errors);
       try { pending.job.release(); } catch (error) { errors.push(error); }
@@ -782,7 +819,7 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
         standardKey: tile => standardKey(source, tile),
         isMissing: residency.isMissing,
       });
-      shownPlan = { plan, source, focus: lastFocus !== null };
+      shownPlan = { plan, source, viewFootprints: lastFocus === null && lastRefine === null };
       if (!wasComplete) options.onCoverageChange?.();
     }
     lastPublishedResidency = residencyRevision;
@@ -930,10 +967,10 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
     if ((moved || planChanged) && measureNow) {
       const current = shownPlan.plan;
       const source = shownPlan.source.capabilities;
-      // Ordinary view selection already measured these regions. Focus
-      // footprints describe loading around a point, so measure its leaves
-      // from the actual view without choosing or requesting more imagery.
-      const reusable = !shownPlan.focus && !imageryViewChanged(lastView, latestView) && surfaceRevision === lastSurfaceRevision && current === plan;
+      // Ordinary view selection already measured these regions. Footprints
+      // measured from a point describe loading around it, so measure its
+      // leaves from the actual view without choosing or requesting more imagery.
+      const reusable = shownPlan.viewFootprints && !imageryViewChanged(lastView, latestView) && surfaceRevision === lastSurfaceRevision && current === plan;
       loadedRegions = reusable ? current.leaves.map(leaf => ({
         tile: leaf.tile,
         referenceLevel: leaf.tile.z + Math.log2((leaf.variant === null ? source.tileWidth : source.variants.find(variant => variant.id === leaf.variant)!.width) / 256),

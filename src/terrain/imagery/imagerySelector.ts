@@ -99,7 +99,26 @@ export interface ImagerySelectionInput {
   hysteresis: ImageryHysteresis;
   /** What else to load around a focus point: `map.focus.*`. Null: only the view. */
   focus?: ImageryFocus | null;
+  /**
+   * Where the regions the view sees are measured from:
+   * `map.focus.refineBasemapFrom`. Null: their projected size in the view.
+   */
+  refineFrom?: ImageryRefinePoint | null;
   now: number;
+}
+
+/**
+ * A point detail is measured from: a region's footprint is its image pixels'
+ * size seen from the point, facing it, and never nearer than the camera is to
+ * it. Turning or tilting the camera around the point changes no region's level.
+ */
+export interface ImageryRefinePoint {
+  /** ECEF metres. */
+  position: Vec3;
+  /** No region is measured nearer than this, the camera's distance to the point. */
+  minDistanceMeters: number;
+  /** Radians one physical pixel spans at the centre of the view. */
+  pixelAngle: number;
 }
 
 /**
@@ -107,16 +126,10 @@ export interface ImagerySelectionInput {
  * distance from that point rather than by the view, so turning the camera
  * around the point loads nothing new.
  */
-export interface ImageryFocus {
+export interface ImageryFocus extends ImageryRefinePoint {
   /** "around": only the region loads. "both": it loads as well as the view. */
   mode: "around" | "both";
-  /** ECEF metres. */
-  position: Vec3;
   radiusMeters: number;
-  /** The region is never measured nearer than this, the camera's distance to the point. */
-  minDistanceMeters: number;
-  /** Radians one physical pixel spans at the centre of the view. */
-  pixelAngle: number;
   /** The region's offset: never finer than the view's. */
   offset: number;
   /** Skip regions below the horizon of a viewer `minDistanceMeters` above the point. */
@@ -294,6 +307,7 @@ interface Job {
   focusLonLat: { lonDeg: number; latDeg: number };
   /** Where the focus region's horizon is seen from. */
   focusViewer: Vec3;
+  refine: RefineContext | null;
   heap: Evaluated[];
   leaves: Evaluated[];
   coverage: TileId[];
@@ -414,6 +428,46 @@ function surfaceSample(input: Pick<ImagerySelectionInput, "surface">, tile: Tile
   return sampleTileSurface(tile, u, v, h, slopeU, slopeV);
 }
 
+/** A refine point and where it lies, worked out once per traversal. */
+interface RefineContext {
+  point: ImageryRefinePoint;
+  lonLat: { lonDeg: number; latDeg: number };
+  altitudeMeters: number;
+}
+
+function refineContext(point: ImageryRefinePoint): RefineContext {
+  const geo = ecefToGeodetic(point.position.x, point.position.y, point.position.z);
+  return { point, lonLat: { lonDeg: (geo.lonRad * 180) / Math.PI, latDeg: (geo.latRad * 180) / Math.PI }, altitudeMeters: geo.altMeters };
+}
+
+/**
+ * A tile's nearest distance to a point and its worst footprint seen from
+ * there, facing it, never nearer than `point.minDistanceMeters`: physical
+ * pixels per image pixel. Where a height is unknown the surface is taken at
+ * `fallbackHeight`.
+ */
+function footprintFrom(
+  input: Pick<ImagerySelectionInput, "surface" | "source">,
+  tile: TileId,
+  points: ReadonlyArray<{ u: number; v: number }>,
+  point: ImageryRefinePoint,
+  fallbackHeight: number,
+): { nearest: number; worst: number } {
+  let nearest = Infinity;
+  let worst = 0;
+  for (const { u, v } of points) {
+    const sample = surfaceSample(input, tile, u, v, fallbackHeight);
+    const d = Math.hypot(sample.position.x - point.position.x, sample.position.y - point.position.y, sample.position.z - point.position.z);
+    nearest = Math.min(nearest, d);
+    const pixelMeters = Math.max(
+      Math.hypot(sample.du.x, sample.du.y, sample.du.z) / input.source.tileWidth,
+      Math.hypot(sample.dv.x, sample.dv.y, sample.dv.z) / input.source.tileHeight,
+    );
+    worst = Math.max(worst, pixelMeters / Math.max(1, d, point.minDistanceMeters) / point.pixelAngle);
+  }
+  return { nearest, worst };
+}
+
 /**
  * How the focus region needs a tile: whether any of it lies within the radius
  * (and above the viewer's horizon), and its worst footprint as seen from the
@@ -426,18 +480,7 @@ function measureFocus(job: Job, tile: TileId): { within: boolean; footprint: num
   const points: Array<{ u: number; v: number }> = [];
   for (const v of GRID) for (const u of GRID) points.push({ u, v });
   points.push(nearestLocal(tile, job.focusLonLat));
-  let nearest = Infinity;
-  let worst = 0;
-  for (const point of points) {
-    const sample = surfaceSample(input, tile, point.u, point.v, bounds.max);
-    const d = Math.hypot(sample.position.x - focus.position.x, sample.position.y - focus.position.y, sample.position.z - focus.position.z);
-    nearest = Math.min(nearest, d);
-    const pixelMeters = Math.max(
-      Math.hypot(sample.du.x, sample.du.y, sample.du.z) / input.source.tileWidth,
-      Math.hypot(sample.dv.x, sample.dv.y, sample.dv.z) / input.source.tileHeight,
-    );
-    worst = Math.max(worst, pixelMeters / Math.max(1, d, focus.minDistanceMeters) / focus.pixelAngle);
-  }
+  const { nearest, worst } = footprintFrom(input, tile, points, focus, bounds.max);
   let within = nearest <= focus.radiusMeters;
   if (within && focus.horizonCull) {
     const span = tileAngularSpan(tile);
@@ -507,7 +550,7 @@ function evaluate(job: Job, tile: TileId): Evaluated {
   return result;
 }
 
-type ViewMeasurementContext = Pick<Job, "cartographic" | "camera" | "screenGround" | "nodes"> & {
+type ViewMeasurementContext = Pick<Job, "cartographic" | "camera" | "screenGround" | "nodes"> & Partial<Pick<Job, "refine">> & {
   input: Pick<ImagerySelectionInput, "view" | "source" | "surface">;
 };
 
@@ -603,7 +646,9 @@ function evaluateView(job: ViewMeasurementContext, tile: TileId): Evaluated {
   // Bisect from an inside sample toward outside ones to measure where the
   // surface meets the view's edge or the near plane.
   const from = measured.find(sample => sample.inside);
-  if (from) {
+  // Measured from a point, the view only has to show the tile is seen.
+  const refine = job.refine ?? null;
+  if (from && !refine) {
     for (const outside of measured.filter(sample => !sample.inside).slice(0, 4)) {
       let lo = 0, hi = 1;
       for (let i = 0; i < 5; i++) {
@@ -639,31 +684,42 @@ function evaluateView(job: ViewMeasurementContext, tile: TileId): Evaluated {
     }
     // A tile around the view is measured where screen rays meet it; one just
     // past the view's edge measures like its visible neighbours.
-    for (const point of raysWithin()) {
-      const at = lonLatToTileXY(point.lonDeg, point.latDeg, tile.z);
-      measure.push(surfaceSample(input, tile, at.x - tile.x, at.y - tile.y, bounds.max));
-    }
-    if (measure.length === 0) {
-      for (const sample of measured) {
-        if ((outcode(view, sample.clip) & 16) === 0) measure.push(sample.surface);
+    if (!refine) {
+      for (const point of raysWithin()) {
+        const at = lonLatToTileXY(point.lonDeg, point.latDeg, tile.z);
+        measure.push(surfaceSample(input, tile, at.x - tile.x, at.y - tile.y, bounds.max));
+      }
+      if (measure.length === 0) {
+        for (const sample of measured) {
+          if ((outcode(view, sample.clip) & 16) === 0) measure.push(sample.surface);
+        }
       }
     }
   }
-  if (measure.length === 0) {
-    // Every sample is behind the near plane: the tile surrounds the camera,
-    // so it is large on screen and has to be split before it can be measured.
-    result.footprint = Infinity;
-    result.physicalFootprint = Infinity;
-    result.screenArea = view.renderWidth * view.renderHeight;
-    return result;
-  }
-  for (const sample of measure) {
-    const selection = projectedPixelFootprint(view, sample, source.tileWidth, source.tileHeight, selectionWidth, selectionHeight);
-    const physical = job.cartographic
-      ? projectedPixelFootprint(view, sample, source.tileWidth, source.tileHeight, view.renderWidth, view.renderHeight)
-      : selection;
-    if (selection !== null) result.footprint = Math.max(result.footprint, selection);
-    if (physical !== null) result.physicalFootprint = Math.max(result.physicalFootprint, physical);
+  if (refine) {
+    // Where heights are unknown, the ground is taken at the point's own
+    // height within the tile's bounds: the nearest it may be.
+    const fallback = Math.max(bounds.min, Math.min(bounds.max, refine.altitudeMeters));
+    const { worst } = footprintFrom(input, tile, [...hullPoints.slice(0, 9), nearestLocal(tile, refine.lonLat)], refine.point, fallback);
+    result.physicalFootprint = worst;
+    result.footprint = job.cartographic ? worst * (view.logicalHeight / view.renderHeight) : worst;
+  } else {
+    if (measure.length === 0) {
+      // Every sample is behind the near plane: the tile surrounds the camera,
+      // so it is large on screen and has to be split before it can be measured.
+      result.footprint = Infinity;
+      result.physicalFootprint = Infinity;
+      result.screenArea = view.renderWidth * view.renderHeight;
+      return result;
+    }
+    for (const sample of measure) {
+      const selection = projectedPixelFootprint(view, sample, source.tileWidth, source.tileHeight, selectionWidth, selectionHeight);
+      const physical = job.cartographic
+        ? projectedPixelFootprint(view, sample, source.tileWidth, source.tileHeight, view.renderWidth, view.renderHeight)
+        : selection;
+      if (selection !== null) result.footprint = Math.max(result.footprint, selection);
+      if (physical !== null) result.physicalFootprint = Math.max(result.physicalFootprint, physical);
+    }
   }
 
   // Screen area from the grid's four quads with vertices kept in the viewport.
@@ -797,6 +853,7 @@ export function createImagerySelector(clockPort: () => number): ImagerySelector 
       focus,
       focusLonLat: { lonDeg: (focusGeo.lonRad * 180) / Math.PI, latDeg: (focusGeo.latRad * 180) / Math.PI },
       focusViewer: { x: focusPosition.x * (1 + lift), y: focusPosition.y * (1 + lift), z: focusPosition.z * (1 + lift) },
+      refine: input.refineFrom ? refineContext(input.refineFrom) : null,
       heap: [], leaves: [], coverage: [], mergeCandidates: [], leafCount: 0, nodes: 0, limits: new Set(),
       nextMemory: new Map(), wakeAt: null, truncated: false, cpuMs: 0,
       evidence: null, barred: [], refinedPastMissing: 0,

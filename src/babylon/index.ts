@@ -25,5 +25,7 @@ export * from "../visualization/orbitCompass.js";
 export * from "./imagery/boundedMapTextureLoader.js";
 export * from "./managedImageryAtlas.js";
 export * from "./createGlobeRuntime.js";
+export { cssRectToClip, intersectBoxes, type ClipRect, type CssBox } from "./uiCover.js";
+export { attachWorldOcclusion, coveredWorldClips } from "./uiOcclusion.js";
 export { NativeMapStartupError } from "./nativeMapSettlement.js";
 export type * from "./globeRuntimePorts.js";

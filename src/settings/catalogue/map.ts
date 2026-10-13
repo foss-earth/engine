@@ -314,4 +314,20 @@ export const MAP_DETAIL_PARAMETERS: readonly ParameterSpec[] = [
     appliesLive: true,
     source: "src/babylon/createTilesRuntime.ts",
   },
+  {
+    id: "map.focus.refineBasemapFrom",
+    label: "Refine 2D basemaps from",
+    description: "What 2D imagery and terrain measure detail from for what the camera sees: the focus point, so turning or tilting the camera around it changes no detail and loads nothing again, or the camera.",
+    unit: "none",
+    kind: "choice",
+    choices: [
+      { id: "focus", label: "Focus point", description: "Detail falls off with distance from the focus point, as seen from the camera's distance to it. Turning or tilting around the point keeps what is loaded." },
+      { id: "camera", label: "Camera", description: "Detail follows how large the ground looks from the camera: ground nearer the camera than the focus point gets more, and turning or tilting changes what loads." },
+    ],
+    default: "focus",
+    defaultReason: "Turning or tilting the camera around the point it looks at should not reload the map.",
+    home: { tab: MAP_TAB, section: "detail", level: "main" },
+    appliesLive: true,
+    source: "src/terrain/imagery/imagerySelector.ts",
+  },
 ];

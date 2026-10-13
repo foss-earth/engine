@@ -34,7 +34,7 @@ import type { SettingsRegistry } from "@foss-earth/ui/settings";
 import { IMAGERY_LIMIT_IDS, IMAGERY_TUNING_IDS, imageryLimitsFrom, imageryTuningFrom } from "../settings/imageryParameters.js";
 import { readImageryView, imageryViewChanged } from "./imagery/imageryView.js";
 import type { ImageryView } from "../terrain/imagery/imageryGeometry.js";
-import { selectTerrain, type TerrainFocus, type TerrainSelection } from "../terrain/terrainSelector.js";
+import { selectTerrain, type TerrainFocus, type TerrainRefinePoint, type TerrainSelection } from "../terrain/terrainSelector.js";
 import { createAutoDetailController, type AutoDetailDecision } from "../terrain/autoDetail.js";
 
 /** Reviewed provider dimensions supplied by the host. An omitted MIME is
@@ -122,6 +122,11 @@ export interface RasterTilesRuntimeOptions {
   log: { warn(...values: unknown[]): void };
   /** A region of terrain and imagery to load around a focus point, beyond or instead of the view. */
   getFocus?: () => ImageryFocusRequest | null;
+  /**
+   * The point terrain and imagery the camera sees are measured from, in ECEF
+   * metres: `map.focus.refineBasemapFrom`. Null or omitted: the camera's view.
+   */
+  getRefinePoint?: () => { x: number; y: number; z: number } | null;
   /** Called when automatic adjustment moves detail, for the host's log. */
   onDetailAdjusted?: (decision: AutoDetailDecision) => void;
   /** Texture samples for per-tile imagery; read when a texture is created. */
@@ -145,6 +150,8 @@ export interface RasterTilesRuntime {
     activeElevationRequests: number;
     queuedElevationRequests: number;
     pendingTiles: number;
+    /** Tiles the current selection needs whose last load, or terrain detail, failed and waits to be asked again. */
+    failedTiles: number;
   };
   /** Replace imagery in-place; elevation grids and displayed terrain stay put. */
   setSource(source: RasterBaseMapSource): void;
@@ -623,6 +630,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
   let selectionDirty = true;
   let selectedView: ImageryView | null = null;
   let selectedFocus: TerrainFocus | null = null;
+  let selectedRefine: TerrainRefinePoint | null = null;
   let selectedAt = -Infinity;
   let selection: TerrainSelection | null = null;
   let selectedTarget = Number.NaN;
@@ -697,6 +705,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
       limits: imageryLimitsFrom(settings),
       tuning: imageryTuningFrom(settings),
       getFocus: options.getFocus,
+      getRefinePoint: options.getRefinePoint,
       surface: imagerySurface,
       loader: options.imageryLoader ?? options.imageryPorts.loader,
       requestRender: () => options.requestRender?.(),
@@ -1045,6 +1054,20 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
     };
   }
 
+  /** The point terrain the camera sees is measured from: no nearer than the camera is to it. */
+  function terrainRefine(view: ImageryView | null): TerrainRefinePoint | null {
+    const position = options.getRefinePoint?.();
+    if (!position || !view) return null;
+    return { position: { ...position }, minDistanceMeters: Math.hypot(view.camera.x - position.x, view.camera.y - position.y, view.camera.z - position.z) };
+  }
+
+  /** A change in the refine point worth a new selection: it moved, or the camera's distance to it changed. */
+  function refineChanged(a: TerrainRefinePoint | null, b: TerrainRefinePoint | null): boolean {
+    if (!a || !b) return a !== b;
+    const moved = Math.hypot(a.position.x - b.position.x, a.position.y - b.position.y, a.position.z - b.position.z);
+    return moved > 0.5 || Math.abs(a.minDistanceMeters - b.minDistanceMeters) > 0.02 * Math.max(1, a.minDistanceMeters);
+  }
+
   /** A change in the focus region worth a new selection: the point moved, or what it asks for changed. */
   function focusChanged(a: TerrainFocus | null, b: TerrainFocus | null): boolean {
     if (!a || !b) return a !== b;
@@ -1145,11 +1168,12 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
     if (meshRebuildQueue.size > 0) options.requestRender?.();
   }
 
-  function selectTiles(view: ImageryView | null, focus: TerrainFocus | null): void {
+  function selectTiles(view: ImageryView | null, focus: TerrainFocus | null, refine: TerrainRefinePoint | null): void {
     selectionDirty = false;
     heightsArrived = false;
     selectedView = view;
     selectedFocus = focus;
+    selectedRefine = refine;
     selectedAt = options.nowMs();
     selectedTarget = terrainTarget();
     tick += 1;
@@ -1159,6 +1183,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
     selection = selectTerrain({
       view,
       focus,
+      refineFrom: refine,
       targetPx: selectedTarget,
       errorPerSpacing: setting("map.terrain.errorPerSpacing"),
       segments: meshOptions.segments ?? DEFAULT_TILE_SEGMENTS,
@@ -1226,10 +1251,17 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
     get source(): RasterBaseMapSource { return imagerySource; },
     getLoadingDiagnostics() {
       const requests = terrain.getMetrics();
+      let failedTiles = 0;
+      for (const key of neededKeys) {
+        const record = cache.get(key);
+        // A failed tile leaves the cache until it is asked again; failed detail keeps the coarse surface.
+        if (record ? record.terrainRetryAt !== Infinity : imageryFailures.has(key)) failedTiles += 1;
+      }
       return {
         activeElevationRequests: requests.active,
         queuedElevationRequests: requests.queued,
         pendingTiles: loadingCount,
+        failedTiles,
       };
     },
     update(): void {
@@ -1238,6 +1270,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
       const previousPreparation = capture?.counters.preparationCpuMs ?? 0;
       const view = readImageryView(options.scene, options.worldRoot ?? null);
       const focus = terrainFocus(view);
+      const refine = terrainRefine(view);
       const now = options.nowMs();
       const retryDue = nextRetryAt !== Infinity && now >= nextRetryAt;
       // A still camera and focus point have no new coverage to select unless
@@ -1245,15 +1278,16 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
       // better: a still view settles on what it would choose again. Around a
       // focus point the view decides nothing, so turning the camera selects
       // nothing.
-      const moved = (focus?.mode !== "around" && imageryViewChanged(selectedView, view)) || focusChanged(selectedFocus, focus);
+      const moved = (focus?.mode !== "around" && imageryViewChanged(selectedView, view)) || focusChanged(selectedFocus, focus)
+        || refineChanged(selectedRefine, refine);
       if (selectionDirty || retryDue || terrainTarget() !== selectedTarget) {
         nextRetryAt = Infinity;
-        selectTiles(view, focus);
+        selectTiles(view, focus, refine);
       } else if (moved || heightsArrived) {
         // While the view moves or heights arrive, select at most every
         // interval; the view it stops at, and the last heights, are always
         // selected for.
-        if (now - selectedAt >= setting("map.terrain.reselectWhileMoving")) selectTiles(view, focus);
+        if (now - selectedAt >= setting("map.terrain.reselectWhileMoving")) selectTiles(view, focus, refine);
         else options.requestRender?.();
       }
       prepareHiddenTerrain();

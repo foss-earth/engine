@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { geodeticToEcef } from "../../src/camera/cameraMath.js";
+import { ecefToGeodetic, geodeticToEcef } from "../../src/camera/cameraMath.js";
 import { tileContains, type TileId } from "../../src/terrain/imagery/imageryGeometry.js";
 import { createTestView, type TestViewOptions } from "../../src/terrain/imagery/imageryTestViews.js";
 import { selectTerrain, terrainTileErrorMeters, type TerrainSelection, type TerrainSelectionInput } from "../../src/terrain/terrainSelector.js";
@@ -120,5 +120,54 @@ describe("terrain around a focus point", () => {
     expect(both.leaves.length).toBeGreaterThan(view.leaves.length);
     // Behind the camera, within the radius, the region is refined.
     expect(levelAt(both, 36.15, -112.15)).toBeGreaterThan(levelAt(view, 36.15, -112.15));
+  });
+});
+
+describe("terrain measured from a point", () => {
+  // The globe camera turns and tilts around its target, at a fixed distance from it.
+  const lat = (36.1 * Math.PI) / 180, lon = (-112.1 * Math.PI) / 180;
+  const target = geodeticToEcef(lat, lon, 0);
+  const orbit = (headingDeg: number, pitchDeg: number, distanceMeters = 1500): TestViewOptions => {
+    const up = { x: Math.cos(lat) * Math.cos(lon), y: Math.cos(lat) * Math.sin(lon), z: Math.sin(lat) };
+    const east = { x: -Math.sin(lon), y: Math.cos(lon), z: 0 };
+    const north = { x: up.y * east.z - up.z * east.y, y: up.z * east.x - up.x * east.z, z: up.x * east.y - up.y * east.x };
+    const h = (headingDeg * Math.PI) / 180, p = (pitchDeg * Math.PI) / 180;
+    const toTarget = (axis: "x" | "y" | "z") => -up[axis] * Math.cos(p) + (north[axis] * Math.cos(h) + east[axis] * Math.sin(h)) * Math.sin(p);
+    const eye = ecefToGeodetic(target.x - distanceMeters * toTarget("x"), target.y - distanceMeters * toTarget("y"), target.z - distanceMeters * toTarget("z"));
+    return { latDeg: (eye.latRad * 180) / Math.PI, lonDeg: (eye.lonRad * 180) / Math.PI, altitudeMeters: eye.altMeters, pitchDeg, headingDeg };
+  };
+  /** Needed leaves of two selections that overlap, and how many of them are not the same tile. */
+  const compare = (a: TerrainSelection, b: TerrainSelection) => {
+    let overlapping = 0, different = 0;
+    for (const leaf of a.leaves) for (const other of b.leaves) {
+      if (!leaf.needed || !other.needed || (!tileContains(leaf.tile, other.tile) && !tileContains(other.tile, leaf.tile))) continue;
+      overlapping += 1;
+      if (leaf.key !== other.key) different += 1;
+    }
+    return { overlapping, different };
+  };
+  const VIEWS = [[0, 60], [90, 60], [200, 75], [310, 40], [45, 0]].map(([headingDeg, pitchDeg]) => orbit(headingDeg, pitchDeg));
+  const refineFrom = { position: target, minDistanceMeters: 1500 };
+
+  it("keeps every tile whichever way the camera turns or tilts around the point", () => {
+    const selections = VIEWS.map(view => selectTerrain(input(view, { refineFrom })));
+    for (const a of selections) for (const b of selections) {
+      if (a === b) continue;
+      const { overlapping, different } = compare(a, b);
+      expect(overlapping).toBeGreaterThan(4);
+      expect(different).toBe(0);
+    }
+    // Measured from the camera, the same turns change tiles both views see.
+    const fromCamera = VIEWS.map(view => selectTerrain(input(view)));
+    expect(compare(fromCamera[0], fromCamera[1]).different).toBeGreaterThan(0);
+  });
+
+  it("refines ground nearer the camera than the point no further than the point", () => {
+    const low = orbit(30, 75);
+    const measured = selectTerrain(input(low, { refineFrom }));
+    const finest = (selection: TerrainSelection) => Math.max(...selection.leaves.map(leaf => leaf.tile.z));
+    expect(finest(measured)).toBeLessThan(finest(selectTerrain(input(low))));
+    expect(finest(measured)).toBe(levelAt(measured, 36.1, -112.1));
+    expectCover(measured);
   });
 });
