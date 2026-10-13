@@ -36,19 +36,18 @@ export interface GlideAnchors {
 export interface CameraInputTarget<TCanvas = unknown> {
   panBy(screenDxPx: number, screenDyPx: number, canvasHeight: number): void;
   /**
-   * Turn and tilt the view. With an `anchor` that has a point, about that
-   * point, which keeps its place on screen; without one, about the orbit
-   * target, as before anchors. A target may say what the step did.
+   * Turn and tilt the view about the compass. An anchor rides with the gesture;
+   * its point is not the pivot. A target may say what the step did.
    */
   orbitBy(pitchDeltaDeg: number, headingDeltaDeg: number, anchor?: NavigationAnchor | null): void | AnchoredMotionResult;
-  /** Zoom by `factor` of the distance: toward or away from the anchor's point, or the orbit target without one. */
+  /** Zoom by `factor` of the distance: toward the anchor's point, or the compass when zoom is centred on the view or there is no point. */
   zoomBy(factor: number, anchor?: NavigationAnchor | null): void | AnchoredMotionResult;
-  /** Orbit and zoom about one point in one step, so both keep it in place. Without it, orbit then zoom. */
+  /** Turn about the compass and zoom about the anchor's point in one step. Without a point, both about the compass. */
   orbitZoomBy?(pitchDeltaDeg: number, headingDeltaDeg: number, factor: number, anchor: NavigationAnchor): void | AnchoredMotionResult;
   /**
-   * Resolves where a gesture's zoom and rotation act, once, when it starts
-   * (`input.*.zoomAnchor`; rotation's is the compass target). A target without it moves
-   * about its orbit target: the gesture's anchors are then unsupported, not missed.
+   * Resolves where a gesture's zoom acts, once, when it starts
+   * (`input.*.zoomAnchor`). Rotation is about the compass. A target without
+   * this moves about its orbit target: the gesture's anchors are then unsupported, not missed.
    */
   acquireAnchors?(request: AnchorRequest<TCanvas>): AnchorAcquisition;
   /** A candidate gesture's anchors are in use now: a press has become a drag, or fingers have begun to move. */

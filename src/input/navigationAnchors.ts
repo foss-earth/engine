@@ -73,6 +73,9 @@ export const NAVIGATION_ANCHOR_SETTING_IDS: readonly string[] = ANCHOR_FAMILIES.
 /** Whether markers show the grabbed ground and the points zoom acts about. */
 export const SHOW_NAVIGATION_ANCHORS_ID = "input.showNavigationAnchors";
 
+/** Zoom toward the ground anchor (`anchor`) or the compass at the centre of the view (`view`). */
+export const ZOOM_CENTER_ID = "input.zoomCenter";
+
 export type NavigationAnchorPreferencesInput = { readonly [F in AnchorFamily]?: { readonly zoom?: unknown } };
 
 /** Preferences with every family present; a missing or unknown choice is the default. */
@@ -218,10 +221,16 @@ export function sameAnchorPoint(a: NavigationAnchor | null | undefined, b: Navig
   return samePoint(a?.point, b?.point);
 }
 
-/** The two named sets of choices: the defaults, and every zoom toward the compass target. Each sets the four choices and nothing else. */
+/** The two named sets: zoom where you point, and zoom about the compass. Each also sets where zoom is centred. */
 export const NAVIGATION_ANCHOR_PRESET_VALUES: Readonly<{ pointerAndTouch: Readonly<Record<string, string>>; compassCentered: Readonly<Record<string, string>> }> = Object.freeze({
-  pointerAndTouch: Object.freeze(Object.fromEntries(ANCHOR_FAMILIES.map(family => [navigationAnchorSettingId(family), DEFAULT_NAVIGATION_ANCHORS[family].zoom]))),
-  compassCentered: Object.freeze(Object.fromEntries(NAVIGATION_ANCHOR_SETTING_IDS.map(id => [id, "target"]))),
+  pointerAndTouch: Object.freeze({
+    ...Object.fromEntries(ANCHOR_FAMILIES.map(family => [navigationAnchorSettingId(family), DEFAULT_NAVIGATION_ANCHORS[family].zoom])),
+    [ZOOM_CENTER_ID]: "anchor",
+  }),
+  compassCentered: Object.freeze({
+    ...Object.fromEntries(NAVIGATION_ANCHOR_SETTING_IDS.map(id => [id, "target"])),
+    [ZOOM_CENTER_ID]: "view",
+  }),
 });
 
 /** A point pinned for this globe session: never exported, never in the URL, gone with the runtime. */

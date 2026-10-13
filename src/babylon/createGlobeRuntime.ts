@@ -36,7 +36,7 @@ import { createCameraClipping } from "./cameraClipping.js";
 import { createNavigationCameraAdapter } from "./navigationCamera.js";
 import { createGlobeIntentMotion } from "../input/globeIntentMotion.js";
 import { createNavigationAnchorService, type GlobeNavigationAnchors, type NavigationAnchorService, type NavigationAnchorStatus } from "./navigationAnchorService.js";
-import { ANCHOR_FALLBACK_MESSAGES, ANCHOR_FAMILIES, NAVIGATION_ANCHOR_SETTING_IDS, SHOW_NAVIGATION_ANCHORS_ID, navigationAnchorSettingId, navigationAnchorsFromSettings, type AnchorFamily } from "../input/navigationAnchors.js";
+import { ANCHOR_FALLBACK_MESSAGES, ANCHOR_FAMILIES, NAVIGATION_ANCHOR_SETTING_IDS, SHOW_NAVIGATION_ANCHORS_ID, ZOOM_CENTER_ID, navigationAnchorSettingId, navigationAnchorsFromSettings, type AnchorFamily, type NavigationAnchorPreferences } from "../input/navigationAnchors.js";
 import { pointInViewProblem } from "../camera/anchoredMotion.js";
 import { ecefToVector3, projectEcefToClient } from "./anchorPan.js";
 import type { NavigationAnchorMarkers, NavigationAnchorMarkerView } from "../browser/navigationAnchorMarkers.js";
@@ -776,6 +776,19 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
   };
 
   function applyClipping(): void { clipping?.apply(); }
+  const zoomAboutViewCenter = (): boolean => settings.has(ZOOM_CENTER_ID) && settings.get(ZOOM_CENTER_ID) === "view";
+
+  function navigationPreferences(): NavigationAnchorPreferences {
+    const chosen = navigationAnchorsFromSettings(id => (settings.has(id) ? settings.get(id) : undefined));
+    if (!zoomAboutViewCenter()) return chosen;
+    return {
+      mouse: { zoom: "target" },
+      trackpad: { zoom: "target" },
+      touch: { zoom: "target" },
+      nonPointer: { zoom: "target" },
+    };
+  }
+
   function ensureGeospatialCamera(): GeospatialCamera {
     if (geospatialCamera) {
       // A host external-camera mode owns scene.activeCamera.
@@ -798,11 +811,12 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
     });
     cameraController.setLimits(cameraLimits());
     cameraController.setGroundFollow(groundFollow());
+    cameraController.setZoomAboutViewCenter(zoomAboutViewCenter());
     const anchors = navigationAnchors = createNavigationAnchorService({
       scene, canvas, getCamera: () => geospatialCamera, getPose: () => cameraController?.getPose() ?? null,
       // Read when a gesture starts, once the runtime is built.
       surface: { raycast: (origin, direction, lengthMeters) => surface.raycast(origin, direction, lengthMeters), revision: () => surface.revision?.() ?? 0 },
-      preferences: () => navigationAnchorsFromSettings(id => (settings.has(id) ? settings.get(id) : undefined)),
+      preferences: navigationPreferences,
       tracking: () => orbitModeActive,
       pinningBlocked: anchorPinningBlocked,
       owner: () => navigation.state()?.owner ?? "globe",
@@ -882,9 +896,9 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
   };
 
   /**
-   * Shows the grabbed ground and the points zoom acts about where the frame
-   * just drawn has them: none behind the eye or past the horizon, and faint
-   * where the map surface is nearer the eye.
+   * Shows the grabbed ground and the point a zoom acts about where
+   * the frame just drawn has them: none behind the eye or past the horizon,
+   * and faint where the map surface is nearer the eye.
    */
   function showAnchorMarkers(): void {
     if (!anchorMarkers) return;
@@ -903,7 +917,10 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
         const reach = distance * ANCHOR_OCCLUSION_REACH - 1;
         const occluded = reach > 0 && surface.raycast({ x: pose.eye[0], y: pose.eye[1], z: pose.eye[2] },
           { x: toPoint[0] / distance, y: toPoint[1] / distance, z: toPoint[2] / distance }, reach) !== null;
-        markers.push({ x: at.x, y: at.y, zoom: marker.zoom, orbit: marker.orbit, grab: marker.grab, pinned: marker.pinned, occluded });
+        // Rotation is the compass, already drawn. A view-centred zoom has no separate point.
+        const zoom = zoomAboutViewCenter() ? false : marker.zoom;
+        if (!zoom && !marker.grab && !marker.pinned) continue;
+        markers.push({ x: at.x, y: at.y, zoom, orbit: false, grab: marker.grab, pinned: marker.pinned, occluded });
       }
     }
     anchorMarkers.show(markers);
@@ -1520,6 +1537,10 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
     ...Object.values(INPUT_RATE_IDS).map(id => watch(id, () => inputController?.setRates(inputRates()))),
     // The notes under the anchor choices say what each choice last did; the markers follow the switch.
     ...NAVIGATION_ANCHOR_SETTING_IDS.filter(id => settings.has(id)).map(id => watch(id, updateAnchorNotes)),
+    ...(settings.has(ZOOM_CENTER_ID) ? [watch(ZOOM_CENTER_ID, () => {
+      cameraController?.setZoomAboutViewCenter(zoomAboutViewCenter());
+      scheduler.requestRender();
+    })] : []),
     ...(settings.has(SHOW_NAVIGATION_ANCHORS_ID) ? [watch(SHOW_NAVIGATION_ANCHORS_ID, () => scheduler.requestRender())] : []),
   ];
   updateAnchorNotes();

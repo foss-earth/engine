@@ -136,10 +136,10 @@ function geodeticUp(latRad: number, lonRad: number): Vec3 {
  * and provides two-way sync with the underlying Babylon camera so that all
  * input handlers can work on the canonical state rather than raw pointer deltas.
  *
- * Zoom and orbit can also act about a picked or pinned point anywhere in view
- * (`zoomAbout`, `orbitAbout`). The camera's centre then stays its orbit
- * target: the point where its line of sight comes down to the orbit target's
- * height, so the compass stays at the centre of the view.
+ * A turn is about the compass, the camera's centre, so tilting does not carry
+ * it out to the horizon. Zoom moves toward a picked or pinned point
+ * (`zoomAbout`) and the centre stays where the look meets the orbit target's
+ * height, or toward the compass when zoom is centred on the view.
  */
 export interface CameraControllerPorts {
   /** Shared monotonic host clock, milliseconds. */
@@ -164,6 +164,8 @@ export class CameraController {
 
   private limits: CameraLimits = DEFAULT_CAMERA_LIMITS;
   private groundFollow: GroundFollow = DEFAULT_GROUND_FOLLOW;
+  /** Zoom toward the compass, the centre of the view, instead of the ground anchor. */
+  private zoomAboutViewCenter = false;
   /**
    * The nearest the camera may orbit after a view was handed back nearer
    * than the zoom limit, until it is out past the limit; null otherwise.
@@ -249,6 +251,11 @@ export class CameraController {
 
   getGroundFollow(): GroundFollow {
     return this.groundFollow;
+  }
+
+  /** Zoom toward the compass instead of the ground point a gesture picked. Turning is unaffected. */
+  setZoomAboutViewCenter(enabled: boolean): void {
+    this.zoomAboutViewCenter = enabled;
   }
 
   private clampPitchDeg(pitchDeg: number): number {
@@ -689,7 +696,8 @@ export class CameraController {
   /**
    * Zoom by multiplying the orbit radius by `factor`.
    * factor < 1 = zoom in (move closer), factor > 1 = zoom out (move farther).
-   * With an `anchor` that has a point, toward or away from that point instead.
+   * With an `anchor` that has a point, toward or away from that point, unless
+   * zoom is centred on the view: then toward the compass, as without a point.
    */
   zoomBy(factor: number, anchor?: NavigationAnchor | null): void | AnchoredMotionResult {
     if (!Number.isFinite(factor) || factor <= 0) {
@@ -747,17 +755,19 @@ export class CameraController {
    * point to `factor` of its distance, and the point keeps its place on
    * screen. Within the zoom limits, which here measure the distance to the
    * point; a point picked nearer or farther than they allow may be left
-   * toward them but not further away from them.
+   * toward them but not further away from them. When zoom is centred on the
+   * view, the compass is that point and it stays where it is.
    */
   zoomAbout(point: EcefCoord, factor: number): AnchoredMotionResult {
     return this.commitPlan(this.planAnchored(this.currentFieldsSettled(), point, { pitchDeltaDeg: 0, headingDeltaDeg: 0, factor }));
   }
 
   /**
-   * Orbit a picked or pinned point: heading about its WGS84 vertical, tilt
-   * about the camera's right, keeping the eye's distance to it and its place
-   * on screen. The tilt limits hold at the centre of the view, as for the
-   * globe's own orbit.
+   * Turn about the compass. Heading about its vertical, tilt about the
+   * camera's right, keeping the eye's distance to it. `point` is the gesture's
+   * anchor and is not the pivot, so a tilt leaves the compass where it is
+   * instead of carrying it out to the horizon. The tilt limits hold at the
+   * centre of the view. A non-finite point is refused.
    */
   orbitAbout(point: EcefCoord, pitchDeltaDeg: number, headingDeltaDeg: number): AnchoredMotionResult {
     const ep = Math.abs(pitchDeltaDeg) >= ORBIT_DEADZONE_DEG ? pitchDeltaDeg : 0;
@@ -766,7 +776,7 @@ export class CameraController {
     return this.commitPlan(this.planAnchored(this.currentFieldsSettled(), point, { pitchDeltaDeg: ep, headingDeltaDeg: eh, factor: 1 }));
   }
 
-  /** Orbit and zoom about one point in one step, so both keep it where it is. */
+  /** Turn about the compass and zoom about `point` in one step. */
   orbitZoomAbout(point: EcefCoord, pitchDeltaDeg: number, headingDeltaDeg: number, factor: number): AnchoredMotionResult {
     const ep = Math.abs(pitchDeltaDeg) >= ORBIT_DEADZONE_DEG ? pitchDeltaDeg : 0;
     const eh = Math.abs(headingDeltaDeg) >= ORBIT_DEADZONE_DEG ? headingDeltaDeg : 0;
@@ -884,25 +894,33 @@ export class CameraController {
   }
 
   /**
-   * One anchored step from `fields`: orbit, then zoom, about `point`, written
-   * as the camera's fields with its centre on the new line of sight. A step a
-   * limit or the pole would not allow is shortened to the most it allows.
+   * One step from `fields`: turn about the compass, then zoom about the ground
+   * point, or about the compass when zoom is centred on the view. A turn leaves
+   * the centre where it is. A zoom about a ground point puts the centre where
+   * the new look meets the orbit target's height, so that point stays on
+   * screen. A step a limit or the pole would not allow is shortened to the
+   * most it allows.
    */
   private planAnchored(fields: OrbitFields, point: EcefCoord, step: { pitchDeltaDeg: number; headingDeltaDeg: number; factor: number }): AnchoredPlan {
-    const anchor: Vec3 = [point.x, point.y, point.z];
-    if (!anchor.every(Number.isFinite) || !(step.factor > 0) || !Number.isFinite(step.factor)
+    const orbitPivot: Vec3 = fields.center;
+    const ground: Vec3 = [point.x, point.y, point.z];
+    if (!orbitPivot.every(Number.isFinite) || !ground.every(Number.isFinite) || !(step.factor > 0) || !Number.isFinite(step.factor)
       || !Number.isFinite(step.pitchDeltaDeg) || !Number.isFinite(step.headingDeltaDeg)) {
       return { fields: null, constrained: "invalid" };
     }
+    const zoomPivot: Vec3 = this.zoomAboutViewCenter ? orbitPivot : ground;
     const before = this.poseOf(fields);
-    const distance = length(sub(anchor, before.eye));
-    // The zoom limits, measured to the point: never further outside them than the eye is now.
+    // The zoom limits, measured to the point zoom moves toward: never further outside them than the eye is now.
+    const distance = length(sub(step.factor === 1 ? orbitPivot : zoomPivot, before.eye));
     const nearest = Math.min(this.limits.zoomMeters.min, distance);
     const farthest = Math.max(this.limits.zoomMeters.max, distance);
     const wanted = distance * step.factor;
     const allowed = Math.max(nearest, Math.min(farthest, wanted));
     let constrained: AnchoredMotionConstraint | null = allowed !== wanted ? "distance-limit" : null;
     const factor = distance > 0 ? allowed / distance : 1;
+    // A zoom that the limits reduced to nothing is a turn: the compass stays.
+    const keepCenter = factor === 1 || this.zoomAboutViewCenter;
+    const correctionPivot: Vec3 = keepCenter ? orbitPivot : zoomPivot;
     // The tilt limits at the centre of the view, bent to where the tilt is now.
     const tiltNow = tiltAt(fields.center, before.forward);
     // A tilt past straight down or up at the eye would turn the view over the
@@ -913,11 +931,11 @@ export class CameraController {
     const attempt = (share: number): AnchoredPlan => {
       let pose: CameraPose | null = before;
       if (pitchDeltaDeg !== 0 || step.headingDeltaDeg !== 0) {
-        pose = orbitAbout(pose, anchor, pitchDeltaDeg * share, step.headingDeltaDeg * share);
+        pose = orbitAbout(pose, orbitPivot, pitchDeltaDeg * share, step.headingDeltaDeg * share);
       }
-      if (pose && factor !== 1) pose = zoomAbout(pose, anchor, Math.pow(factor, share));
+      if (pose && factor !== 1) pose = zoomAbout(pose, zoomPivot, Math.pow(factor, share));
       if (!pose) return { fields: null, constrained: "not-ahead" };
-      return this.settle(pose, anchor, fields, tiltNow);
+      return this.settle(pose, correctionPivot, fields, tiltNow, keepCenter);
     };
     const full = attempt(1);
     if (full.fields) return { fields: full.fields, constrained: full.constrained ?? constrained };
@@ -935,16 +953,16 @@ export class CameraController {
   }
 
   /**
-   * The camera's fields for a pose: the centre where the line of sight comes
-   * down to the orbit target's height, with the tilt there inside its limits.
-   * A tilt past them, beyond where it was (`tiltBefore`), turns back about the
-   * anchor, which keeps its place on screen. Null where the pole stops it.
+   * The camera's fields for a pose. A turn keeps the centre where it was.
+   * A zoom about a ground point puts it where the line of sight comes down to
+   * the orbit target's height. A tilt past the limits, beyond where it was
+   * (`tiltBefore`), turns back about `anchor`. Null where the pole stops it.
    */
-  private settle(pose: CameraPose, anchor: Vec3, before: OrbitFields, tiltBefore: number): AnchoredPlan {
+  private settle(pose: CameraPose, anchor: Vec3, before: OrbitFields, tiltBefore: number, keepCenter: boolean): AnchoredPlan {
     let current = pose;
     let constrained: AnchoredMotionConstraint | null = null;
     for (let attempt = 0; attempt < 6; attempt += 1) {
-      const center = this.centerOnSight(current, anchor, before);
+      const center = keepCenter ? before.center : this.sightCenter(current, anchor, before);
       const radius = length(sub(center, current.eye));
       const tilt = tiltAt(center, current.forward);
       const { soft, hard } = this.tiltLimitsAt(radius);
@@ -969,13 +987,7 @@ export class CameraController {
     return { fields: null, constrained };
   }
 
-  /**
-   * Where the camera's centre goes on a pose's line of sight: where it comes
-   * down to the orbit target's height, the ground and the target's offset
-   * there. When it never does, as when the eye is below a raised target, the
-   * ground itself, or failing that the anchor's distance along the look.
-   */
-  private centerOnSight(pose: CameraPose, anchor: Vec3, before: OrbitFields): Vec3 {
+  private sightCenter(pose: CameraPose, anchor: Vec3, before: OrbitFields): Vec3 {
     const startHeight = ecefToGeodetic(...before.center).altMeters;
     const target = lineOfSightTarget(pose, (latDeg, lonDeg) => this.orbitTargetHeightAt(latDeg, lonDeg), startHeight);
     if (target) return target.point;

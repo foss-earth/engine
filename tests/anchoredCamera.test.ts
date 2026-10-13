@@ -10,9 +10,8 @@ import type { GlobeViewState } from "../src/view.js";
 import type { AnchoredMotionResult, NavigationAnchor } from "../src/input/navigationAnchors.js";
 
 // The CameraController's anchored zoom and orbit, on the real globe camera's
-// high-precision view and projection: proof that the rendered view keeps the
-// point in place, not that some property moved (proposal: navigation-anchors.md,
-// "Acceptance and verification").
+// high-precision view and projection. Zoom toward a ground point keeps that
+// point on screen. A turn stays on the compass, whatever point the gesture picked.
 
 const WIDTH = 1280, HEIGHT = 720;
 const CENTRE = { x: WIDTH / 2, y: HEIGHT / 2 };
@@ -89,7 +88,6 @@ function rig(view: View, limits: CameraLimits = DEFAULT_CAMERA_LIMITS, depth: De
 
 const ecef = (point: Vec3): EcefCoord => ({ x: point[0], y: point[1], z: point[2] });
 const gap = (a: { x: number; y: number }, b: { x: number; y: number }): number => Math.hypot(a.x - b.x, a.y - b.y);
-const orbitTolerance = (distance: number): number => Math.max(0.001, distance * 1e-6);
 
 function anchorAt(point: Vec3 | null, operation: "zoom" | "orbit"): NavigationAnchor {
   return { session: 1, owner: "globe", family: "mouse", operation, requested: point ? "pointer" : "target",
@@ -192,57 +190,56 @@ describe("CameraController anchored zoom on the real globe camera", () => {
 });
 
 describe("CameraController anchored orbit on the real globe camera", () => {
-  it("keeps an off-centre pivot within 1 CSS px and its distance through a drag", () => {
+  it("turns about the compass, so the centre stays and an off-centre point is not the pivot", () => {
     for (const view of VIEWS) {
-      for (const [x, y] of PIXELS) {
-        const f = rig(view);
-        try {
-          const point = f.groundUnder(x, y);
-          const start = f.pixel(point);
-          const distance0 = f.eyeTo(point);
-          // Tilt away from the nearer limit, turning clockwise.
-          const pitchStep = view.state.pitchDeg > 45 ? -1 : 1;
-          for (let i = 0; i < 12; i += 1) {
-            const before = f.pixel(point), distance = f.eyeTo(point);
-            const result = f.controller.orbitAbout(ecef(point), pitchStep, 4);
-            expect(result, `${view.name} @${x},${y} step ${i}`).toEqual({ moved: true, constrained: null });
-            expect(gap(f.pixel(point), before), `${view.name} @${x},${y}: per step`).toBeLessThan(1);
-            expect(gap(f.pixel(point), start), `${view.name} @${x},${y}: across the drag`).toBeLessThan(1);
-            expect(Math.abs(f.eyeTo(point) - distance), `${view.name} @${x},${y}: eye-to-pivot per step`).toBeLessThanOrEqual(orbitTolerance(distance));
-            expect(Math.abs(f.centreHeight() - view.heightMeters), `${view.name} @${x},${y}: centre height`).toBeLessThan(0.01);
-            expect(gap(f.pixel(f.centre()), CENTRE), `${view.name} @${x},${y}: centre drawn at the middle`).toBeLessThan(1);
-          }
-          expect(Math.abs(f.eyeTo(point) - distance0), `${view.name} @${x},${y}: eye-to-pivot across the drag`).toBeLessThanOrEqual(orbitTolerance(distance0));
-        } finally { f.dispose(); }
-      }
+      const f = rig(view);
+      try {
+        const point = f.groundUnder(...PIXELS[0]);
+        const start = f.centre();
+        const radius = f.camera.radius;
+        const heading0 = f.controller.getViewState().headingDeg;
+        const pitchStep = view.state.pitchDeg > 45 ? -1 : 1;
+        for (let i = 0; i < 12; i += 1) {
+          expect(f.controller.orbitAbout(ecef(point), pitchStep, 4), `${view.name} step ${i}`).toEqual({ moved: true, constrained: null });
+          expect(length(sub(f.centre(), start)), `${view.name}: compass stays`).toBeLessThan(1);
+          expect(Math.abs(f.centreHeight() - view.heightMeters), `${view.name}: centre height`).toBeLessThan(0.01);
+          expect(gap(f.pixel(f.centre()), CENTRE), `${view.name}: centre drawn at the middle`).toBeLessThan(1);
+        }
+        const heading = f.controller.getViewState().headingDeg;
+        const turned = ((heading - heading0 + 540) % 360) - 180;
+        expect(Math.abs(turned), `${view.name}: the view did turn`).toBeGreaterThan(20);
+        expect(Math.abs(f.camera.radius - radius), `${view.name}: distance to the compass`).toBeLessThan(1);
+      } finally { f.dispose(); }
     }
   });
 
-  it("turns the heading about the pivot's vertical as the centred orbit turns it", () => {
+  it("turns the heading about the compass as the centred orbit turns it", () => {
     const view = VIEWS[0];
     const anchored = rig(view), centred = rig(view);
     try {
       const point = anchored.groundUnder(...PIXELS[3]);
+      const start = anchored.centre();
       anchored.controller.orbitAbout(ecef(point), 0, 10);
       centred.controller.orbitBy(0, 10);
-      // Both turn the look clockwise by about the same heading; only the anchored one keeps the off-centre point.
       const turned = (state: GlobeViewState) => ((state.headingDeg - view.state.headingDeg + 540) % 360) - 180;
       expect(turned(anchored.controller.getViewState())).toBeCloseTo(turned(centred.controller.getViewState()), 0);
       expect(turned(centred.controller.getViewState())).toBeCloseTo(10, 6);
+      expect(length(sub(anchored.centre(), start))).toBeLessThan(1);
     } finally { anchored.dispose(); centred.dispose(); }
   });
 
-  it("orbits and zooms about one shared point in one step, keeping it in place", () => {
+  it("turns about the compass and zooms about the point in one step", () => {
     const f = rig(VIEWS[0]);
     try {
       const point = f.groundUnder(...PIXELS[1]);
-      const start = f.pixel(point);
-      for (let i = 0; i < 10; i += 1) {
-        const distance = f.eyeTo(point);
+      const turned = rig(VIEWS[0]);
+      try {
+        const same = turned.groundUnder(...PIXELS[1]);
         expect(f.controller.orbitZoomAbout(ecef(point), 1, 3, 0.95)).toEqual({ moved: true, constrained: null });
-        expect(gap(f.pixel(point), start)).toBeLessThan(1);
-        expect(f.eyeTo(point) / distance).toBeCloseTo(0.95, 6);
-      }
+        turned.controller.orbitAbout(ecef(same), 1, 3);
+        // The turn is the compass's. The zoom then comes in toward the ground point, closer than the turn alone.
+        expect(f.eyeTo(point)).toBeLessThan(turned.eyeTo(same) * 0.97);
+      } finally { turned.dispose(); }
       // The anchor-port spelling is the same step.
       const g = rig(VIEWS[0]);
       try {
@@ -254,6 +251,27 @@ describe("CameraController anchored orbit on the real globe camera", () => {
         } finally { h.dispose(); }
       } finally { g.dispose(); }
     } finally { f.dispose(); }
+  });
+
+  it("zooms about the compass when asked, and about the ground point by default", () => {
+    const view = VIEWS[0];
+    const aboutPoint = rig(view), aboutView = rig(view);
+    try {
+      const point = aboutPoint.groundUnder(...PIXELS[1]);
+      const start = aboutPoint.centre();
+      const pixel = aboutPoint.pixel(point);
+      expect(aboutPoint.controller.zoomAbout(ecef(point), 0.7)).toEqual({ moved: true, constrained: null });
+      expect(length(sub(aboutPoint.centre(), start))).toBeGreaterThan(1);
+      expect(gap(aboutPoint.pixel(point), pixel)).toBeLessThan(1);
+
+      const picked = aboutView.groundUnder(...PIXELS[1]);
+      const before = aboutView.pixel(picked);
+      const center0 = aboutView.centre();
+      aboutView.controller.setZoomAboutViewCenter(true);
+      expect(aboutView.controller.zoomAbout(ecef(picked), 0.7)).toEqual({ moved: true, constrained: null });
+      expect(length(sub(aboutView.centre(), center0))).toBeLessThan(1);
+      expect(gap(aboutView.pixel(picked), before)).toBeGreaterThan(1);
+    } finally { aboutPoint.dispose(); aboutView.dispose(); }
   });
 });
 
@@ -333,14 +351,15 @@ describe("CameraController anchored motion at limits and with bad input", () => 
       const f = rig(view);
       try {
         const point = f.groundUnder(...PIXELS[2]);
-        const start = f.pixel(point);
+        const start = f.centre();
         const result: AnchoredMotionResult = f.controller.orbitAbout(ecef(point), pitch, 0);
         expect(result, `tilt ${pitch}`).toEqual({ moved: true, constrained: "tilt-limit" });
         if (pitch > 0) expect(f.tilt()).toBeLessThanOrEqual(bound + 1e-6);
         else expect(f.tilt()).toBeGreaterThanOrEqual(bound - 1e-6);
         expect(Math.abs(f.tilt() - bound), `tilt ${pitch} reaches its limit`).toBeLessThan(0.5);
-        // The limit turns back about the pivot, which keeps its place.
-        expect(gap(f.pixel(point), start), `tilt ${pitch}`).toBeLessThan(1);
+        // The limit turns back about the compass, which stays where it is.
+        expect(length(sub(f.centre(), start)), `tilt ${pitch}`).toBeLessThan(1);
+        expect(gap(f.pixel(f.centre()), CENTRE), `tilt ${pitch}`).toBeLessThan(1);
       } finally { f.dispose(); }
     }
   });
@@ -360,11 +379,14 @@ describe("CameraController anchored motion at limits and with bad input", () => 
       const pose: CameraPose = f.controller.getPose();
       const behind: Vec3 = sub(pose.eye, scale(pose.forward, 1000));
       expect(f.controller.zoomAbout(ecef(behind), 0.9)).toEqual({ moved: false, constrained: "not-ahead" });
-      expect(f.controller.orbitAbout(ecef(behind), 2, 2)).toEqual({ moved: false, constrained: "not-ahead" });
       expect(cameraFields(f.camera)).toEqual(fields);
       // The port's legacy signature: a factor it cannot use does nothing, as before anchors.
       expect(f.controller.zoomBy(Number.NaN, anchorAt([point.x, point.y, point.z], "zoom"))).toBeUndefined();
       expect(cameraFields(f.camera)).toEqual(fields);
+      // A turn ignores a point behind the eye and stays on the compass.
+      const compass = f.centre();
+      expect(f.controller.orbitAbout(ecef(behind), 2, 2).moved).toBe(true);
+      expect(length(sub(f.centre(), compass))).toBeLessThan(1);
     } finally { f.dispose(); }
   });
 });
