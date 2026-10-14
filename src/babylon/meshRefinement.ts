@@ -5,7 +5,15 @@ export interface TerrainPatch { mesh: Mesh; tile: TerrainTile }
 export interface MeshRefinement { from: number[]; to: number[]; started: number; duration: number }
 export interface GeometryWriteCounters { geometryWrites: number; seamPasses: number }
 const order = (a: TerrainPatch, b: TerrainPatch) => a.tile.z - b.tile.z || a.tile.x - b.tile.x || a.tile.y - b.tile.y;
-export function meshPositions(mesh: Mesh): number[] { return Array.from(mesh.getVerticesData(VertexBuffer.PositionKind)!); }
+export function meshPositions(mesh: Mesh): number[] {
+  const data = mesh.getVerticesData(VertexBuffer.PositionKind)!;
+  // A new mesh holds a Float32Array and an updated one the number[] it was
+  // given. Array.from is slow on the first; a copy loop gives the same numbers.
+  if (Array.isArray(data)) return data.slice();
+  const positions = new Array<number>(data.length);
+  for (let index = 0; index < data.length; index++) positions[index] = data[index];
+  return positions;
+}
 export function updateTerrainPositions(mesh: Mesh, positions: number[]): void {
   mesh.updateVerticesData(VertexBuffer.PositionKind, positions, true);
   // Babylon rebuilds the bounds in local space on a position upload. Frozen

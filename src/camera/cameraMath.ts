@@ -48,6 +48,25 @@ export function geodeticToEcef(latRad: number, lonRad: number, altMeters: number
   };
 }
 
+/** The part of geodeticToEcef that depends only on latitude. */
+export interface GeodeticParallel { sinLat: number; cosLat: number; n: number; polarN: number }
+export function geodeticParallel(latRad: number): GeodeticParallel {
+  const sinLat = Math.sin(latRad);
+  const n = WGS84_A / Math.sqrt(1 - WGS84_E2 * sinLat * sinLat);
+  return { sinLat, cosLat: Math.cos(latRad), n, polarN: n * (1 - WGS84_E2) };
+}
+/**
+ * geodeticToEcef for a point on a parallel whose longitude's sine and cosine
+ * are known, into `out`: the same bits, with the trigonometry done once per
+ * latitude and once per longitude of a grid.
+ */
+export function ecefOnParallel(parallel: GeodeticParallel, sinLon: number, cosLon: number, altMeters: number, out: EcefCoord): EcefCoord {
+  out.x = (parallel.n + altMeters) * parallel.cosLat * cosLon;
+  out.y = (parallel.n + altMeters) * parallel.cosLat * sinLon;
+  out.z = (parallel.polarN + altMeters) * parallel.sinLat;
+  return out;
+}
+
 /**
  * Convert ECEF Cartesian coordinates to geodetic (WGS84).
  * Uses Bowring's non-iterative closed-form method, accurate to ~1 mm.
