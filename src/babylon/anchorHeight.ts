@@ -75,6 +75,8 @@ export function createAnchorHeightResolver(options: AnchorHeightResolverOptions)
   const heightCache = new Map<string, number>();
   const missRetryAtByCell = new Map<string, number>();
   let smoothedHeightMeters: number | null = null;
+  // Whether the smoothed height has followed a known height (a sample or the provider's), not only the fallback.
+  let smoothedKnown = false;
   let lastResolveMs: number | null = null;
 
   function setSample(sample: AnchorHeightSample): void {
@@ -91,7 +93,8 @@ export function createAnchorHeightResolver(options: AnchorHeightResolverOptions)
     return heightCache.get(getCellKey(latDeg, lonDeg, cellSizeDeg)) ?? null;
   }
 
-  function resolveBaseHeight(latDeg: number, lonDeg: number): number {
+  /** The known height of the cell, or null where only the fallback is. */
+  function lookUpHeight(latDeg: number, lonDeg: number): number | null {
     const key = getCellKey(latDeg, lonDeg, cellSizeDeg);
     const cached = heightCache.get(key);
     if (cached !== undefined && options.cacheProviderSamples !== false) {
@@ -99,12 +102,12 @@ export function createAnchorHeightResolver(options: AnchorHeightResolverOptions)
     }
 
     if (!options.provider) {
-      return fallbackHeightMeters;
+      return null;
     }
 
     const retryAt = missRetryAtByCell.get(key) ?? 0;
     if (nowMs() < retryAt) {
-      return fallbackHeightMeters;
+      return null;
     }
 
     const provided = options.provider(latDeg, lonDeg);
@@ -115,13 +118,20 @@ export function createAnchorHeightResolver(options: AnchorHeightResolverOptions)
     }
 
     missRetryAtByCell.set(key, nowMs() + providerMissRetryMs);
-    return fallbackHeightMeters;
+    return null;
   }
 
-  function smoothHeight(targetHeightMeters: number): number {
+  function resolveBaseHeight(latDeg: number, lonDeg: number): number {
+    return lookUpHeight(latDeg, lonDeg) ?? fallbackHeightMeters;
+  }
+
+  function smoothHeight(targetHeightMeters: number, known: boolean): number {
     const now = nowMs();
-    if (smoothedHeightMeters === null || lastResolveMs === null) {
+    // The fallback stands in until a height is known; the first known height is taken at once, not glided to. On the
+    // tour's first view the compass otherwise rose 245 m from it, keeping the renderer awake after the terrain had loaded.
+    if (smoothedHeightMeters === null || lastResolveMs === null || (known && !smoothedKnown)) {
       smoothedHeightMeters = targetHeightMeters;
+      smoothedKnown = known;
       lastResolveMs = now;
       return smoothedHeightMeters;
     }
@@ -145,7 +155,8 @@ export function createAnchorHeightResolver(options: AnchorHeightResolverOptions)
       return null;
     }
     const { latRad, lonRad } = ecefToGeodetic(anchor.x, anchor.y, anchor.z);
-    const heightMeters = smoothHeight(resolveBaseHeight(latRad * RAD_TO_DEG, lonRad * RAD_TO_DEG) + heightOffsetMeters);
+    const known = lookUpHeight(latRad * RAD_TO_DEG, lonRad * RAD_TO_DEG);
+    const heightMeters = smoothHeight((known ?? fallbackHeightMeters) + heightOffsetMeters, known !== null);
     return createAnchorAtHeight(anchor, heightMeters);
   }
 
