@@ -12,6 +12,30 @@ describe("streamed terrain", () => {
     expect([...decodeTerrarium(new Uint8ClampedArray([127, 255, 128, 255]), 1)]).toEqual([-0.5]);
     expect([...decodeTerrarium(new Uint8ClampedArray([129, 0, 64, 255]), 1)]).toEqual([256.25]);
     expect(() => decodeTerrarium(new Uint8ClampedArray([0, 0, 0, 0]), 1)).toThrow("missing");
+    expect(() => decodeTerrarium(new Uint8ClampedArray([129, 0, 64, 255, 0, 0, 0, 255, 0, 0, 0, 255, 1, 2, 3, 0]), 2)).toThrow("missing");
+    const aligned = new Uint8ClampedArray(8);
+    aligned.set([129, 0, 64, 255], 4);
+    expect([...decodeTerrarium(new Uint8ClampedArray(aligned.buffer, 4, 4), 1)]).toEqual([256.25]);
+    const unaligned = new Uint8ClampedArray(8);
+    unaligned.set([129, 0, 64, 255], 1);
+    expect([...decodeTerrarium(new Uint8ClampedArray(unaligned.buffer, 1, 4), 1)]).toEqual([256.25]);
+  });
+  it("stores the same float32 height as the byte formula for every colour", () => {
+    const shipped = new Float32Array(1), fast = new Float32Array(1);
+    for (let red = 0; red < 256; red++) for (let green = 0; green < 256; green++) for (let blue = 0; blue < 256; blue++) {
+      shipped[0] = red * 256 + green + blue / 256 - 32768;
+      const word = (red | (green << 8) | (blue << 16)) + 0xff000000;
+      fast[0] = ((((word & 0xff) << 16) | (word & 0xff00) | ((word >>> 16) & 0xff)) - 8388608) / 256;
+      if (!Object.is(shipped[0], fast[0])) expect.fail(`rgb ${red},${green},${blue}: ${fast[0]} is not ${shipped[0]}`);
+    }
+    const size = 32, data = new Uint8ClampedArray(size * size * 4);
+    for (let i = 0; i < data.length; i += 4) { data[i] = (i * 3) & 255; data[i + 1] = (i * 7) & 255; data[i + 2] = (i * 11) & 255; data[i + 3] = 255; }
+    const heights = decodeTerrarium(data, size), one = new Float32Array(1);
+    for (let i = 0; i < heights.length; i++) {
+      const offset = i * 4;
+      one[0] = data[offset] * 256 + data[offset + 1] + data[offset + 2] / 256 - 32768;
+      if (!Object.is(heights[i], one[0])) expect.fail(`pixel ${i}: ${heights[i]} is not ${one[0]}`);
+    }
   });
   it("samples pixel centers and interpolates a parent tile for a missing child", () => {
     const grid = { z: 0, x: 0, y: 0, size: 2, heights: new Float32Array([0, 10, 20, 30]) };
