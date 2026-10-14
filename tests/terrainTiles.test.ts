@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTerrainTileLoader, DEFAULT_TERRAIN_LOADER_LIMITS } from "../src/terrain/terrainLoader.js";
-import { decodeTerrarium, sampleTerrainGrid } from "../src/terrain/terrainGrid.js";
+import { decodeTerrarium, sampleTerrainGrid, sampleTerrainGridRow, terrainGridColumns, type TerrainGrid } from "../src/terrain/terrainGrid.js";
 
 afterEach(() => vi.unstubAllGlobals());
 const ports = { createAbortController: () => new AbortController(), requestSignal: (signal: AbortSignal, timeoutMs: number) => AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]),
@@ -55,6 +55,35 @@ describe("streamed terrain", () => {
     expect(loader.getMetrics().decodedBytes).toBe(4); // shared parent array is counted once
     loader.dispose();
     expect(loader.getMetrics().decodedBytes).toBe(0);
+  });
+  it("samples a row of shared columns with sampleTerrainGrid's bits, inside the grid, at its edges and beyond", () => {
+    let state = 7;
+    const random = () => (state = (state * 1103515245 + 12345) >>> 0) / 2 ** 32;
+    const grid = (z: number, x: number, y: number, size: number): TerrainGrid => ({ z, x, y, size,
+      heights: Float32Array.from({ length: size * size }, () => Math.round(random() * 2_000_000) / 256 - 3000) });
+    let edgeSamples = 0, ownSamples = 0;
+    for (const size of [1, 2, 3, 16, 512]) for (const neighbors of [undefined, [] as TerrainGrid[], "around"] as const) {
+      const center = grid(12, 985, 1471, size);
+      if (neighbors === "around") center.neighbors = [grid(12, 984, 1471, size), grid(12, 985, 1470, size), grid(11, 492, 736, size), grid(12, 986, 1472, size)];
+      else if (neighbors) center.neighbors = neighbors;
+      // In the grid's own tile coordinates: the columns of its own tile's mesh, a
+      // child tile's, a parent tile's, and columns overhanging both edges.
+      for (const [from, to, count] of [[985, 986, 65], [985.5, 986, 65], [984, 986, 33], [984.9, 986.1, 50]] as const) {
+        const xs = Float64Array.from({ length: count }, (_, col) => from + (col / (count - 1)) * (to - from));
+        const columns = terrainGridColumns(center, xs), out = new Float64Array(count);
+        for (const y of [1471, 1471 + 0.5 / size, 1471 + 1e-9, 1471.37, 1472 - 0.5 / size, 1472, 1470.9, 1472.2, 1471 + random()]) {
+          out.fill(Number.NaN);
+          sampleTerrainGridRow(center, columns, y, out);
+          for (let col = 0; col < count; col++) {
+            const expected = sampleTerrainGrid(center, xs[col], y);
+            if (!Object.is(out[col], expected)) expect.fail(`size ${size} ${String(neighbors)} x ${xs[col]} y ${y}: ${out[col]} is not ${expected}`);
+            if (center.neighbors && (columns.edge[col] || y - center.y < 0.5 / size || y - center.y > 1 - 0.5 / size)) edgeSamples++; else ownSamples++;
+          }
+        }
+      }
+    }
+    expect(edgeSamples).toBeGreaterThan(1000);
+    expect(ownSamples).toBeGreaterThan(1000);
   });
   it("uses both tiles at a shared edge instead of producing a half-pixel height step", () => {
     const left = { z: 1, x: 0, y: 0, size: 2, heights: new Float32Array([0, 10, 0, 10]) };

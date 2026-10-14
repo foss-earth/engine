@@ -1,6 +1,6 @@
 import { Mesh, VertexData, Vector3, type Scene, type TransformNode } from "@babylonjs/core";
 import { DEG_TO_RAD, ecefOnParallel, geodeticParallel, geodeticToEcef, type EcefCoord } from "../camera/cameraMath.js";
-import { sampleTerrainGrid, type TerrainGrid, type TerrainTile } from "../terrain/terrainGrid.js";
+import { sampleTerrainGridRow, terrainGridColumns, type TerrainGrid, type TerrainTile } from "../terrain/terrainGrid.js";
 export interface TerrainMeshOptions {
   scene: Scene;
   source: { id: string };
@@ -44,6 +44,10 @@ function terrainSurface(options: Pick<TerrainMeshOptions, "segments" | "getSurfa
     lonDegs[col] = lonDeg; sinLons[col] = Math.sin(lonDeg * DEG_TO_RAD); cosLons[col] = Math.cos(lonDeg * DEG_TO_RAD);
   }
   const scale = grid ? 2 ** (grid.z - tile.z) : 1;
+  // Grid samples: what depends on the column alone is worked out once per
+  // tile and the rest once per row, with sampleTerrainGrid's bits.
+  const columns = grid ? terrainGridColumns(grid, Float64Array.from({ length: stride }, (_, col) => (tile.x + col / segments) * scale)) : null;
+  const rowHeights = new Float64Array(stride);
   const ecef = { x: 0, y: 0, z: 0 };
   let positionIndex = 0, uvIndex = 0;
 
@@ -52,12 +56,12 @@ function terrainSurface(options: Pick<TerrainMeshOptions, "segments" | "getSurfa
     const mercatorY = tile.y + v;
     const latDeg = tileYToLat(mercatorY, tile.z);
     const parallel = geodeticParallel(latDeg * DEG_TO_RAD);
+    if (grid && columns) sampleTerrainGridRow(grid, columns, mercatorY * scale, rowHeights);
 
     for (let col = 0; col <= segments; col += 1) {
       const u = col / segments;
-      const mercatorX = tile.x + u;
-      const altitudeMeters = grid
-        ? sampleTerrainGrid(grid, mercatorX * scale, mercatorY * scale)
+      const altitudeMeters = columns
+        ? rowHeights[col]
         : options.getSurfaceHeightMeters?.(latDeg, lonDegs[col]) ?? 0;
       if (altitudeMeters < minHeight) minHeight = altitudeMeters;
       if (altitudeMeters > maxHeight) maxHeight = altitudeMeters;

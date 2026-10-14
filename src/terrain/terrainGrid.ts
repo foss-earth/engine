@@ -77,6 +77,51 @@ export function sampleTerrainGrid(grid: TerrainGrid, x: number, y: number): numb
   return sampleOwnGrid(grid, x, y);
 }
 
+/**
+ * What sampleTerrainGrid works out from x alone, for points that share their
+ * x row after row, as a mesh's columns do.
+ */
+export interface TerrainGridColumns {
+  xs: Float64Array;
+  /** 1 where x lies within half a pixel of the grid's edge and neighbours may be read. */
+  edge: Uint8Array;
+  left: Float64Array;
+  right: Float64Array;
+  weight: Float64Array;
+  rest: Float64Array;
+}
+
+export function terrainGridColumns(grid: TerrainGrid, xs: Float64Array): TerrainGridColumns {
+  const count = xs.length, edge = new Uint8Array(count);
+  const left = new Float64Array(count), right = new Float64Array(count), weight = new Float64Array(count), rest = new Float64Array(count);
+  for (let col = 0; col < count; col++) {
+    const x = xs[col];
+    edge[col] = grid.neighbors && (x - grid.x < 0.5 / grid.size || x - grid.x > 1 - 0.5 / grid.size) ? 1 : 0;
+    // sampleOwnGrid's expressions, in its order.
+    const px = Math.max(0, Math.min(grid.size - 1, (x - grid.x) * grid.size - 0.5));
+    const ix = Math.floor(px), u = px - ix;
+    left[col] = ix; right[col] = Math.min(ix + 1, grid.size - 1); weight[col] = u; rest[col] = 1 - u;
+  }
+  return { xs, edge, left, right, weight, rest };
+}
+
+/** sampleTerrainGrid(grid, columns.xs[col], y) into out[col] for every column, with its bits. */
+export function sampleTerrainGridRow(grid: TerrainGrid, columns: TerrainGridColumns, y: number, out: Float64Array): void {
+  const { size, heights } = grid;
+  const edgeRow = !!grid.neighbors && (y - grid.y < 0.5 / size || y - grid.y > 1 - 0.5 / size);
+  const py = Math.max(0, Math.min(size - 1, (y - grid.y) * size - 0.5));
+  const iy = Math.floor(py), jy = Math.min(iy + 1, size - 1), v = py - iy, restV = 1 - v;
+  const top = iy * size, bottom = jy * size;
+  const { xs, edge, left, right, weight, rest } = columns;
+  for (let col = 0; col < out.length; col++) {
+    if (edgeRow || edge[col]) { out[col] = sampleTerrainGrid(grid, xs[col], y); continue; }
+    const ix = left[col], jx = right[col], u = weight[col], restU = rest[col];
+    const a = heights[top + ix] * restU + heights[top + jx] * u;
+    const b = heights[bottom + ix] * restU + heights[bottom + jx] * u;
+    out[col] = a * restV + b * v;
+  }
+}
+
 /** A pixel of the grid's tile or, past its edge, of the first neighbour that covers it; the grid's own when none does. */
 function samplePixel(grid: TerrainGrid, neighbors: readonly TerrainGrid[], col: number, row: number): number {
   const n = 2 ** grid.z;
