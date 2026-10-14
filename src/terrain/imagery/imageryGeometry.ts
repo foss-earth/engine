@@ -122,6 +122,29 @@ export function sampleTileSurface(
   };
 }
 
+/**
+ * The ECEF position `sampleTileSurface` returns, and not its tangents.
+ * Selection reads only the position: the tangents are there for imagery
+ * footprints. `out` is filled and returned when the caller does not keep it.
+ * The expressions are the position half of `sampleTileSurface`, in its order.
+ */
+export function tileSurfacePosition(tile: TileId, u: number, v: number, height: number, out?: Vec3): Vec3 {
+  const n = 2 ** tile.z;
+  const lonDeg = ((tile.x + u) / n) * 360 - 180;
+  const s = Math.PI * (1 - (2 * (tile.y + v)) / n);
+  const lat = Math.atan(Math.sinh(s));
+  const lon = lonDeg * DEG;
+  const sinLat = Math.sin(lat), cosLat = Math.cos(lat);
+  const sinLon = Math.sin(lon), cosLon = Math.cos(lon);
+  const w = Math.sqrt(1 - WGS84_E2 * sinLat * sinLat);
+  const primeVertical = WGS84_A / w;
+  const position = out ?? { x: 0, y: 0, z: 0 };
+  position.x = (primeVertical + height) * cosLat * cosLon;
+  position.y = (primeVertical + height) * cosLat * sinLon;
+  position.z = (primeVertical * (1 - WGS84_E2) + height) * sinLat;
+  return position;
+}
+
 /** Geographic span of a tile in radians, for curvature bounds. */
 export function tileAngularSpan(tile: TileId): number {
   const n = 2 ** tile.z;
