@@ -278,6 +278,41 @@ describe("raster imagery and terrain lifecycle", () => {
       runtime.dispose(); expect(changes).toHaveBeenLastCalledWith("disposed"); expect(runtime.sample(0.1, 0.1)).toBeNull();
     } finally { runtime.dispose(); engine.dispose(); }
   });
+  it("settles tiles whose first elevation a provider switch supersedes once the replacement arrives", async () => {
+    const engine = new NullEngine(), scene = new Scene(engine), loadEnd = vi.fn();
+    const runtime = createRasterTilesRuntime({ scene, source: RASTER_BASE_MAP_SOURCES[0], getViewState: () => view, onLoadEnd: loadEnd });
+    const resolveAll = async () => { for (const load of pending.terrain.splice(0)) load.resolve({ ...load.tile, size: 2, heights: new Float32Array([100, 100, 100, 100]) }); await flush(); };
+    try {
+      runtime.update(); pending.imagery.splice(0).forEach(loaded => loaded()); runtime.update();
+      const superseded = pending.terrain.splice(0);
+      expect(superseded.length).toBeGreaterThan(0);
+      runtime.setTerrainSource({ id: "test-elevation", label: "Test elevation", provider: "test", urlTemplate: "https://example.test/{z}/{x}/{y}.png", maxZoom: 15, attribution: "https://example.test" });
+      for (const load of superseded) load.resolve({ ...load.tile, size: 2, heights: new Float32Array([500, 500, 500, 500]) });
+      await flush(); runtime.update();
+      expect(runtime.getLoadingDiagnostics!().pendingTiles).toBeGreaterThan(0);
+      for (let round = 0; round < 4; round++) { await resolveAll(); pending.imagery.splice(0).forEach(loaded => loaded()); runtime.update(); }
+      expect(pending.terrain).toHaveLength(0);
+      expect(runtime.getLoadingDiagnostics!().pendingTiles).toBe(0);
+      expect(loadEnd).toHaveBeenCalled();
+    } finally { runtime.dispose(); engine.dispose(); }
+  });
+  it("settles tiles whose elevation fails, before or after a provider switch", async () => {
+    const engine = new NullEngine(), scene = new Scene(engine), loadEnd = vi.fn(), errors = vi.fn();
+    const runtime = createRasterTilesRuntime({ scene, source: RASTER_BASE_MAP_SOURCES[0], getViewState: () => view, onLoadEnd: loadEnd, onLoadError: errors, nowMs: () => 0 });
+    const failAll = async () => { for (const load of pending.terrain.splice(0)) load.reject(new Error("Synthetic elevation failure")); await flush(); };
+    try {
+      runtime.update(); pending.imagery.splice(0).forEach(loaded => loaded()); runtime.update();
+      const superseded = pending.terrain.splice(0);
+      runtime.setTerrainSource({ id: "test-elevation", label: "Test elevation", provider: "test", urlTemplate: "https://example.test/{z}/{x}/{y}.png", maxZoom: 15, attribution: "https://example.test" });
+      for (const load of superseded) load.reject(new Error("Superseded elevation failure"));
+      await failAll(); runtime.update();
+      for (let round = 0; round < 4; round++) { await failAll(); pending.imagery.splice(0).forEach(loaded => loaded()); runtime.update(); }
+      expect(errors).toHaveBeenCalled();
+      expect(errors.mock.calls.every(([error]) => error.message === "Synthetic elevation failure")).toBe(true);
+      expect(runtime.getLoadingDiagnostics!().pendingTiles).toBe(0);
+      expect(loadEnd).toHaveBeenCalled();
+    } finally { runtime.dispose(); engine.dispose(); }
+  });
   it("keeps the displayed terrain alive while an elevation provider switches", async () => {
     const engine = new NullEngine(); const scene = new Scene(engine);
     const runtime = createRasterTilesRuntime({ scene, source: RASTER_BASE_MAP_SOURCES[0], getViewState: () => view });

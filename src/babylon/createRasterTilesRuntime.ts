@@ -304,10 +304,17 @@ function createTileRecord(
     if (options.performanceCapture) options.performanceCapture.counters.preparationCpuMs += options.nowMs() - started;
     onChanged(record);
   };
+  // A provider or setting can change before the first elevation arrives,
+  // and its completion is then discarded. The replacement is still
+  // responsible for settling this record once it arrives.
+  const settleTerrain = () => {
+    if (terrainReady) return;
+    terrainReady = true;
+    finish();
+  };
   const requestTerrain = (
     nextLoadTerrain: (tile: TileCoord, progress: (grid: TerrainGrid) => void) => Promise<TerrainGrid>,
     generation: number,
-    settlesInitialRecord: boolean,
   ) => {
     record.terrainGeneration = generation;
     record.terrainRetryAt = Infinity;
@@ -316,10 +323,7 @@ function createTileRecord(
       applyGrid(grid, generation);
       if (record.mesh.isDisposed() || generation !== record.terrainGeneration) return;
       record.terrainFailures = 0;
-      if (settlesInitialRecord) {
-        terrainReady = true;
-        finish();
-      }
+      settleTerrain();
     }).catch(error => {
       if (record.mesh.isDisposed() || generation !== record.terrainGeneration) return;
       options.onLoadError?.(error instanceof Error ? error : new Error(String(error)), `terrain:${key}`);
@@ -328,14 +332,11 @@ function createTileRecord(
       record.terrainFailures += 1;
       record.terrainRetryAt = options.nowMs() + retryDelayMs(record.terrainFailures, options.retryDelay?.());
       onRetryScheduled(record.terrainRetryAt);
-      if (settlesInitialRecord) {
-        terrainReady = true;
-        finish();
-      }
+      settleTerrain();
     }));
   };
-  record.replaceTerrain = (nextLoadTerrain, generation) => requestTerrain(nextLoadTerrain, generation, false);
-  requestTerrain(loadTerrain, 0, true);
+  record.replaceTerrain = requestTerrain;
+  requestTerrain(loadTerrain, 0);
   const loadImagery = (nextSource: RasterBaseMapSource, generation: number) => {
     const url = buildTileUrl(nextSource, tile);
     options.onDebugEvent?.("imagery-request-start", { key, source: nextSource.id, generation, url });
