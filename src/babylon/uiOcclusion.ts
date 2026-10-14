@@ -24,10 +24,11 @@ function boxOf(element: Element): CssBox | null {
   return { x: rect.left, y: rect.top, width: rect.width, height: rect.height };
 }
 
-/** The world's part of the canvas, on the page. */
+/** The world's part of the canvas, on the page. One layout read of the canvas. */
 function worldBoxOf(canvas: HTMLCanvasElement): CssBox | null {
-  if (!boxOf(canvas)) return null;
-  const world = worldViewportClientRect(canvas);
+  const rect = canvas.getBoundingClientRect();
+  if (rect.width < 1 || rect.height < 1) return null;
+  const world = worldViewportClientRect(canvas, rect);
   if (world.width < 1 || world.height < 1) return null;
   return { x: world.left, y: world.top, width: world.width, height: world.height };
 }

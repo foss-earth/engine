@@ -255,4 +255,14 @@ describe("coveredWorldClips", () => {
     document.body.append(panel);
     expect(coveredWorldClips(canvas)).toEqual([]);
   });
+
+  it("reads the canvas layout once", () => {
+    const canvas = canvasAt();
+    setWorldViewportSource(canvas, () => ({ x: 0, y: 200, width: WIDTH, height: 400 }));
+    let reads = 0;
+    const read = canvas.getBoundingClientRect.bind(canvas);
+    canvas.getBoundingClientRect = () => { reads += 1; return read(); };
+    coveredWorldClips(canvas);
+    expect(reads).toBe(1);
+  });
 });

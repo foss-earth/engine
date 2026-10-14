@@ -64,9 +64,9 @@ export function worldViewportHeight(canvas: CanvasBox): number {
   return worldViewportRect(canvas).height;
 }
 
-/** Where the world is on the page, in client pixels, through any CSS transform of the canvas. */
-export function worldViewportClientRect(canvas: HTMLCanvasElement): { left: number; top: number; width: number; height: number } {
-  const box = canvas.getBoundingClientRect();
+/** Where the world is on the page, in client pixels, through any CSS transform of the canvas.
+ * `box` is the canvas's layout when the caller already read it, so a frame does not read it twice. */
+export function worldViewportClientRect(canvas: HTMLCanvasElement, box: { left: number; top: number; width: number; height: number } = canvas.getBoundingClientRect()): { left: number; top: number; width: number; height: number } {
   if (!entries.get(canvas)?.source) return { left: box.left, top: box.top, width: box.width, height: box.height };
   const scaleX = canvas.clientWidth > 0 ? box.width / canvas.clientWidth : 1;
   const scaleY = canvas.clientHeight > 0 ? box.height / canvas.clientHeight : 1;
