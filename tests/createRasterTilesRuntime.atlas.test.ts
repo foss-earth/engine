@@ -317,6 +317,8 @@ describe("raster runtime with atlas imagery", () => {
 
   it("keeps no more terrain tiles than its budget beyond what the view needs", async () => {
     const settings = getAppSettings();
+    // Select the second view at once, however fast the frames run.
+    settings.set("map.terrain.reselectWhileMoving", 0);
     const visit = async (cachedTiles: number) => {
       settings.set("map.terrain.cachedTiles", cachedTiles);
       const { runtime, settle, engine, controller, view } = await setup();
