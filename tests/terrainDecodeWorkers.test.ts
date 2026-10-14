@@ -7,7 +7,7 @@ import type { TerrainDecodeWorkerPort, TerrainDecodeWorkerReply, TerrainDecodeWo
 /** Fake native image realm: each Blob stands for a tile whose RGBA pixels are known. */
 function imageRealm(tiles: Map<Blob, { width: number; height: number; rgba: Uint8ClampedArray }>) {
   const closes = vi.fn(), clears: number[][] = [];
-  let contextAvailable = true;
+  let contextAvailable = true, readbackShift = 0;
   const createImageBitmap = vi.fn(async (blob: Blob) => {
     const tile = tiles.get(blob); if (!tile) throw new Error("The source image could not be decoded.");
     return { width: tile.width, height: tile.height, close: closes, rgba: tile.rgba } as unknown as ImageBitmap;
@@ -21,11 +21,15 @@ function imageRealm(tiles: Map<Blob, { width: number; height: number; rgba: Uint
       drawImage: (bitmap: ImageBitmap & { rgba: Uint8ClampedArray }) => {
         for (let index = 0; index < bitmap.rgba.length; index += 4) if (bitmap.rgba[index + 3]) drawn.set(bitmap.rgba.subarray(index, index + 4), index);
       },
-      getImageData: (_x: number, _y: number, w: number, h: number) => ({ data: drawn.slice(0, w * h * 4) }),
+      getImageData: (_x: number, _y: number, w: number, h: number) => {
+        const data = drawn.slice(0, w * h * 4); data[0] = (data[0] + readbackShift) % 256; return { data };
+      },
     };
     return { width, height, getContext: () => contextAvailable ? context : null } as unknown as OffscreenCanvas;
   });
-  return { createImageBitmap, createCanvas, closes, clears, withoutContext() { contextAvailable = false; } };
+  return { createImageBitmap, createCanvas, closes, clears, withoutContext() { contextAvailable = false; },
+    /** Another color path: the first red byte reads back one higher. */
+    readsOtherBytes() { readbackShift = 1; } };
 }
 function tile(size: number, pixel: (index: number) => [number, number, number, number]) {
   const rgba = new Uint8ClampedArray(size * size * 4);
@@ -78,14 +82,52 @@ describe("terrain decode workers", () => {
       const decoded = await f.workers.decode(blob, f.onPage), expected = await f.reference(blob);
       expect(decoded.size).toBe(expected.size); expect(sameFloats(decoded.heights, expected.heights)).toBe(true);
     }
-    expect(f.onPage).not.toHaveBeenCalled();
+    // Only the first tile, compared against the worker's, is decoded on the page as well.
+    expect(f.onPage.mock.calls.map(([blob]) => blob)).toEqual([blobs[0]]);
     expect(f.requests.map(request => request.blob)).toEqual(blobs);
     expect(f.requests.every(request => request.maxTileSide === 1024)).toBe(true);
     expect(f.transfers.every(transfer => transfer.length === 1 && transfer[0] instanceof ArrayBuffer)).toBe(true);
     expect(f.worker.createCanvas).toHaveBeenCalledOnce();
     expect(f.worker.clears).toEqual([[0, 0, 4, 4], [0, 0, 4, 4], [0, 0, 2, 2], [0, 0, 2, 2]]);
     expect(f.worker.closes).toHaveBeenCalledTimes(4);
-    expect(f.workers.stats()).toMatchObject({ workers: 1, completed: 4, pageDecodes: 0 });
+    expect(f.workers.stats()).toMatchObject({ workers: 1, completed: 4, pageDecodes: 1, parity: "same" });
+  });
+  it("use workers only once the first tile's worker heights match the page's, and give that tile the page's heights", async () => {
+    const f = fixture(); f.setSize(2);
+    const blobs = [0, 1, 2].map(value => f.add(tile(2, index => [value, index, 7, 255])));
+    const pageFirst = f.onPage.getMockImplementation()!;
+    let pageResult: Awaited<ReturnType<typeof pageFirst>> | undefined;
+    f.onPage.mockImplementationOnce(async blob => (pageResult = await pageFirst(blob)));
+    const results = await Promise.all(blobs.map(blob => f.workers.decode(blob, f.onPage)));
+    expect(results[0]).toBe(pageResult);
+    expect(f.onPage).toHaveBeenCalledOnce();
+    // The two tiles that came during the comparison waited for it, then went to workers.
+    expect(f.requests.map(request => request.blob)).toEqual(blobs);
+    for (const [index, blob] of blobs.entries()) expect(sameFloats(results[index].heights, (await f.reference(blob)).heights)).toBe(true);
+    expect(f.workers.stats()).toMatchObject({ pageDecodes: 1, parity: "same" }); expect(f.onError).not.toHaveBeenCalled();
+  });
+  it("decode every tile on the page once a worker reads other bytes than the page", async () => {
+    const f = fixture(); f.worker.readsOtherBytes();
+    const blobs = [[1, 2, 3], [4, 5, 6], [7, 8, 9], [10, 11, 12]].map(([r, g, b]) => f.add(tile(2, () => [r, g, b, 255])));
+    // The second and third tiles come while the first is compared; the fourth after the verdict.
+    const results = await Promise.all(blobs.slice(0, 3).map(blob => f.workers.decode(blob, f.onPage)));
+    results.push(await f.workers.decode(blobs[3], f.onPage));
+    for (const [index, blob] of blobs.entries()) expect(sameFloats(results[index].heights, (await f.reference(blob)).heights)).toBe(true);
+    expect(f.requests).toHaveLength(1); expect(f.onPage).toHaveBeenCalledTimes(4);
+    expect(f.onError).toHaveBeenCalledWith(new Error("A terrain decode worker read different heights than the page; elevation tiles decode on the page."));
+    expect(f.workers.stats()).toMatchObject({ pageDecodes: 4, parity: "different", available: false });
+  });
+  it("compare the next tile when the first cannot be decoded or its loader goes away", async () => {
+    const f = fixture(), bad = f.add(tile(2, index => index ? [1, 2, 3, 255] : [1, 2, 3, 0]));
+    await expect(f.workers.decode(bad, f.onPage)).rejects.toThrow("Terrain image contains missing samples");
+    expect(f.workers.stats().parity).toBe("unchecked");
+    const controller = new AbortController(), good = f.add(tile(2, () => [1, 2, 3, 255]));
+    const leaving = f.workers.decode(good, f.onPage, { signal: controller.signal });
+    controller.abort(new Error("loader disposed"));
+    await expect(leaving).rejects.toThrow("loader disposed");
+    expect(f.workers.stats().parity).toBe("unchecked"); expect(f.onError).not.toHaveBeenCalled();
+    await f.workers.decode(good, f.onPage);
+    expect(f.workers.stats().parity).toBe("same");
   });
   it("does not let the last tile's pixels show through a tile with missing samples", async () => {
     const f = fixture(); f.setSize(1);
@@ -104,7 +146,11 @@ describe("terrain decode workers", () => {
       ["undecodable bytes", () => null, LIMITS],
     ];
     for (const [name, make, limit] of cases) {
-      const f = fixture({ limits: () => limit }), value = make();
+      // A good tile first, so the failing one goes to a worker that has matched the page.
+      let current = LIMITS;
+      const f = fixture({ limits: () => current }), value = make();
+      await f.workers.decode(f.add(tile(2, () => [1, 2, 3, 255])), f.onPage);
+      f.onPage.mockClear(); current = limit;
       const blob = value ? f.add(value) : new Blob(["not an image"]);
       const expected = await failure(f.reference(blob));
       const actual = await failure(f.workers.decode(blob, f.onPage));
@@ -143,9 +189,14 @@ describe("terrain decode workers", () => {
     lost.ports[0].onerror?.({ message: "worker crashed" } as ErrorEvent);
     expect(sameFloats((await decoding).heights, (await lost.reference(blob)).heights)).toBe(true);
     expect(lost.onPage).toHaveBeenCalledOnce(); expect(lost.onError).toHaveBeenCalledOnce();
+    // One lost worker leaves the pool up, so the next tile is compared instead.
+    const next = lost.add(tile(2, () => [6, 5, 4, 255]));
+    expect(sameFloats((await lost.workers.decode(next, lost.onPage)).heights, (await lost.reference(next)).heights)).toBe(true);
+    expect(lost.workers.stats()).toMatchObject({ parity: "same", losses: 1, available: true });
   });
   it("drop an aborted tile without decoding it anywhere", async () => {
     const f = fixture(), blob = f.add(tile(2, () => [1, 1, 1, 255]));
+    await f.workers.decode(f.add(tile(2, () => [2, 2, 2, 255])), f.onPage); f.onPage.mockClear(); f.requests.length = 0;
     await expect(f.workers.decode(blob, f.onPage, { signal: AbortSignal.abort(new Error("gone")) })).rejects.toThrow("gone");
     expect(f.requests).toHaveLength(0);
     const controller = new AbortController(), running = f.workers.decode(blob, f.onPage, { signal: controller.signal });
@@ -153,12 +204,16 @@ describe("terrain decode workers", () => {
     await expect(running).rejects.toThrow("loader disposed");
     expect(f.onPage).not.toHaveBeenCalled();
   });
-  it("rejects malformed heights from a worker", async () => {
+  it("never uses a worker that returns malformed heights", async () => {
     const f = fixture({ bridge: { createWorker: () => {
       const port: TerrainDecodeWorkerPort = { onmessage: null, onerror: null, terminate() {},
         postMessage(request) { queueMicrotask(() => port.onmessage?.({ data: { kind: "decoded-terrain", id: request.id, size: 3, heights: new Float32Array(4) } } as MessageEvent<TerrainDecodeWorkerReply>)); } };
       return port;
     } } });
-    await expect(f.workers.decode(f.add(tile(2, () => [1, 1, 1, 255])), f.onPage)).rejects.toThrow("malformed heights");
+    const blob = f.add(tile(2, () => [1, 1, 1, 255]));
+    expect(sameFloats((await f.workers.decode(blob, f.onPage)).heights, (await f.reference(blob)).heights)).toBe(true);
+    expect(f.onError).toHaveBeenCalledWith(new Error("A terrain decode worker returned malformed heights."));
+    await f.workers.decode(blob, f.onPage);
+    expect(f.workers.stats()).toMatchObject({ parity: "different", pageDecodes: 2, available: false });
   });
 });
