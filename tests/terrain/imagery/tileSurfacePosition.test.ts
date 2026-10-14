@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { sampleTileSurface, tileSurfacePosition, type TileId } from "../../../src/terrain/imagery/imageryGeometry.js";
+import { sampleTileSurface, tileSurfacePosition, positionOnTileBasis, tileSurfaceBasis, type TileId } from "../../../src/terrain/imagery/imageryGeometry.js";
 
 const tiles: TileId[] = [
   { z: 0, x: 0, y: 0 },
@@ -24,6 +24,10 @@ describe("tile surface position", () => {
       expect(out.x).toBe(full.x);
       expect(out.y).toBe(full.y);
       expect(out.z).toBe(full.z);
+      const fromBasis = positionOnTileBasis(tileSurfaceBasis(tile, u, v), height);
+      expect(fromBasis.x).toBe(full.x);
+      expect(fromBasis.y).toBe(full.y);
+      expect(fromBasis.z).toBe(full.z);
     }
   });
 });

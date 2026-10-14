@@ -123,12 +123,19 @@ export function sampleTileSurface(
 }
 
 /**
- * The ECEF position `sampleTileSurface` returns, and not its tangents.
- * Selection reads only the position: the tangents are there for imagery
- * footprints. `out` is filled and returned when the caller does not keep it.
- * The expressions are the position half of `sampleTileSurface`, in its order.
+ * The part of a tile-surface position that does not depend on height: one
+ * latitude and longitude, reused for every height sampled there.
  */
-export function tileSurfacePosition(tile: TileId, u: number, v: number, height: number, out?: Vec3): Vec3 {
+export interface TileSurfaceBasis {
+  primeVertical: number;
+  sinLat: number;
+  cosLat: number;
+  sinLon: number;
+  cosLon: number;
+}
+
+/** The height-independent part of `sampleTileSurface`'s position, in its operation order. */
+export function tileSurfaceBasis(tile: TileId, u: number, v: number): TileSurfaceBasis {
   const n = 2 ** tile.z;
   const lonDeg = ((tile.x + u) / n) * 360 - 180;
   const s = Math.PI * (1 - (2 * (tile.y + v)) / n);
@@ -137,12 +144,29 @@ export function tileSurfacePosition(tile: TileId, u: number, v: number, height: 
   const sinLat = Math.sin(lat), cosLat = Math.cos(lat);
   const sinLon = Math.sin(lon), cosLon = Math.cos(lon);
   const w = Math.sqrt(1 - WGS84_E2 * sinLat * sinLat);
-  const primeVertical = WGS84_A / w;
+  return { primeVertical: WGS84_A / w, sinLat, cosLat, sinLon, cosLon };
+}
+
+/**
+ * Applies a height to a basis with the same multiplies as `sampleTileSurface`.
+ * `out` is filled and returned when the caller does not keep the point.
+ */
+export function positionOnTileBasis(basis: TileSurfaceBasis, height: number, out?: Vec3): Vec3 {
+  const scaled = (basis.primeVertical + height) * basis.cosLat;
   const position = out ?? { x: 0, y: 0, z: 0 };
-  position.x = (primeVertical + height) * cosLat * cosLon;
-  position.y = (primeVertical + height) * cosLat * sinLon;
-  position.z = (primeVertical * (1 - WGS84_E2) + height) * sinLat;
+  position.x = scaled * basis.cosLon;
+  position.y = scaled * basis.sinLon;
+  position.z = (basis.primeVertical * (1 - WGS84_E2) + height) * basis.sinLat;
   return position;
+}
+
+/**
+ * The ECEF position `sampleTileSurface` returns, and not its tangents.
+ * Selection reads only the position: the tangents are there for imagery
+ * footprints. `out` is filled and returned when the caller does not keep it.
+ */
+export function tileSurfacePosition(tile: TileId, u: number, v: number, height: number, out?: Vec3): Vec3 {
+  return positionOnTileBasis(tileSurfaceBasis(tile, u, v), height, out);
 }
 
 /** Geographic span of a tile in radians, for curvature bounds. */
