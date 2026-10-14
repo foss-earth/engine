@@ -225,6 +225,15 @@ describe("streamed terrain", () => {
       expect(fetched().filter(key => key.startsWith("3/0/"))).toEqual([]);
       expect(fetched()).toHaveLength(2 + 7);
     });
+    it("starts tiles moved ahead in the order they were moved, before the rest", async () => {
+      const { loader, fetched } = harness();
+      loader.setPaused(true);
+      const plain = [loader.load({ z: 4, x: 5, y: 0 }), loader.load({ z: 4, x: 6, y: 0 })];
+      const moved = [loader.load({ z: 4, x: 1, y: 0 }, true), loader.load({ z: 4, x: 2, y: 0 }, true), loader.load({ z: 4, x: 6, y: 0 }, true)];
+      loader.setPaused(false);
+      await Promise.all([...plain, ...moved]);
+      expect(fetched()).toEqual(["4/1/0", "4/2/0", "4/6/0", "4/5/0"]);
+    });
   });
 
   describe("decode slots", () => {

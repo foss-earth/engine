@@ -70,9 +70,11 @@ export function createTerrainTileLoader<TBlob, TSignal extends NavigationAbortSi
   // Tiles downloading, and tiles downloaded but not yet decoded.
   let downloading = 0, decoding = 0;
   let paused = false;
-  interface Waiting { key: string; start: () => void; reject: (reason: unknown) => void; withdrawn: boolean }
-  // Withdrawn entries stay in the queue until they reach its front; `waiting` holds the rest, by tile.
-  const queue: Waiting[] = [];
+  interface Waiting { key: string; start: () => void; reject: (reason: unknown) => void; withdrawn: boolean; ahead: boolean }
+  // Tiles moved ahead wait in `ahead`, in the order they were moved, before
+  // the rest. Withdrawn entries stay in either queue until they reach its
+  // front; `waiting` holds the rest, by tile.
+  const ahead: Waiting[] = [], queue: Waiting[] = [];
   const waiting = new Map<string, Waiting>();
   // The claims on each tile not yet loaded; null once it was asked for without one.
   const claims = new Map<string, Set<TerrainInterest> | null>();
@@ -80,10 +82,9 @@ export function createTerrainTileLoader<TBlob, TSignal extends NavigationAbortSi
   const requireCurrent = (): void => { if (controller.signal.aborted) throw disposedError(); };
   async function download(tile: TerrainTile, prioritize: boolean): Promise<TerrainGrid> {
     await new Promise<void>((resolve, reject) => {
-      const entry: Waiting = { key: `${tile.z}/${tile.x}/${tile.y}`, start: resolve, reject, withdrawn: false };
+      const entry: Waiting = { key: `${tile.z}/${tile.x}/${tile.y}`, start: resolve, reject, withdrawn: false, ahead: prioritize };
       waiting.set(entry.key, entry);
-      if (prioritize) queue.unshift(entry);
-      else queue.push(entry);
+      (prioritize ? ahead : queue).push(entry);
       pump();
     });
     let blob: TBlob;
@@ -112,8 +113,8 @@ export function createTerrainTileLoader<TBlob, TSignal extends NavigationAbortSi
   }
   function pump() {
     const { maxConcurrent } = options.limits(), slots = Math.max(0, options.decodeSlots?.() || 0);
-    while (!controller.signal.aborted && !paused && downloading < maxConcurrent && downloading + decoding < maxConcurrent + slots && queue.length) {
-      const entry = queue.shift()!;
+    while (!controller.signal.aborted && !paused && downloading < maxConcurrent && downloading + decoding < maxConcurrent + slots && (ahead.length || queue.length)) {
+      const entry = (ahead.length ? ahead : queue).shift()!;
       if (entry.withdrawn) continue;
       waiting.delete(entry.key);
       downloading++; entry.start();
@@ -148,10 +149,11 @@ export function createTerrainTileLoader<TBlob, TSignal extends NavigationAbortSi
     if (found) {
       // A neighbor may already be queued as another tile's center. Promote
       // that same request rather than issuing a duplicate download.
-      if (prioritize) {
-        const entry = waiting.get(key);
-        const index = entry ? queue.indexOf(entry) : -1;
-        if (index > 0) queue.unshift(queue.splice(index, 1)[0]);
+      const entry = prioritize ? waiting.get(key) : undefined;
+      if (entry && !entry.ahead) {
+        queue.splice(queue.indexOf(entry), 1);
+        entry.ahead = true;
+        ahead.push(entry);
       }
       claim(key, interest);
       cache.delete(key); cache.set(key, found); return found;
@@ -203,7 +205,7 @@ export function createTerrainTileLoader<TBlob, TSignal extends NavigationAbortSi
     dispose() {
       if (controller.signal.aborted) return;
       controller.abort(new Error("Terrain loader disposed"));
-      for (const entry of queue.splice(0)) entry.reject(disposedError());
+      for (const entry of [...ahead.splice(0), ...queue.splice(0)]) entry.reject(disposedError());
       waiting.clear(); claims.clear(); cache.clear(); settled.clear(); decodedArrays?.clear();
     } };
 }
