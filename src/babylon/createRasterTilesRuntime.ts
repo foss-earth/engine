@@ -114,7 +114,7 @@ export interface RasterTilesRuntimeOptions {
   asyncMapTextures?: AsyncRasterMapTextures;
   attachTerrainLighting(material: Material): MaterialPluginBase;
   createTerrainLoader(source: TerrainSource | undefined, onBytes: ((bytes: number) => void) | undefined,
-    trackMemory: boolean, onPreparationMs?: (milliseconds: number) => void): ReturnType<typeof createTerrainTileLoader<Blob, AbortSignal>>;
+    trackMemory: boolean, onPreparationMs?: (milliseconds: number) => void): TerrainLoaderPort;
   /** Actual renderer atlas, shared acquisition loader and cancellation ports. */
   imageryPorts: Pick<ImageryRuntimeOptions, "device" | "managedAtlas" | "restoreManagedDevice" | "capabilities" | "loader" | "releaseOwnedLoader" | "createAbortController">;
   /** Existing source CPU yield budget was 2 ms; host maps its named setting here. */
@@ -225,6 +225,9 @@ interface RasterTileRecord {
 }
 
 type LoadTerrain = (tile: TileCoord, progress: (grid: TerrainGrid) => void, interest: TerrainInterest) => Promise<TerrainGrid>;
+type TerrainTileLoader = ReturnType<typeof createTerrainTileLoader<Blob, AbortSignal>>;
+/** A host's elevation loader. Without holding patches or reporting arrivals, each tile loads its coarse patch, then its own. */
+export type TerrainLoaderPort = Omit<TerrainTileLoader, "holdPatch" | "whenLoaded"> & Partial<Pick<TerrainTileLoader, "holdPatch" | "whenLoaded">>;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -939,13 +942,23 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
   function loadProgressive(tile: TileCoord, progress: (grid: TerrainGrid) => void, interest: TerrainInterest): Promise<TerrainGrid> {
     const requested = elevationTile(tile);
     const coarseZoom = Math.max(0, Math.min(requested.z, requested.z - 4));
+    const scale = 2 ** (requested.z - coarseZoom);
+    const coarse = { z: coarseZoom, x: Math.floor(requested.x / scale), y: Math.floor(requested.y / scale) };
     const loader = terrain;
+    // The coarse patch is wanted only until this tile's own elevation arrives.
+    const coarseInterest = createTerrainInterest();
+    interest.onRelease(() => coarseInterest.release());
+    // Another tile may already wait for these, from earlier in the queue than this one would ask.
+    loader.holdPatch?.(requested, interest);
+    if (coarseZoom < requested.z) loader.holdPatch?.(coarse, coarseInterest);
     return (async () => {
       if (coarseZoom < requested.z) {
         try {
-          const scale = 2 ** (requested.z - coarseZoom);
-          progress(await loader.loadPatch({ z: coarseZoom, x: Math.floor(requested.x / scale), y: Math.floor(requested.y / scale) }, interest));
+          // Another tile can bring this one's own elevation first, as a neighbour of its patch.
+          const shown = await Promise.race([loader.loadPatch(coarse, coarseInterest), ...loader.whenLoaded ? [loader.whenLoaded(requested, coarseInterest).then(() => null)] : []]);
+          if (shown) progress(shown);
         } catch { /* Retain the current displayed surface and still try detail. */ }
+        coarseInterest.release();
       }
       return loader.loadPatch(requested, interest);
     })();

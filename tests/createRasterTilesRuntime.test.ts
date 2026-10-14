@@ -434,6 +434,47 @@ describe("raster imagery and terrain lifecycle", () => {
       expect(loadEnd).toHaveBeenCalled();
     } finally { runtime.dispose(); engine.dispose(); }
   });
+  it("goes on to a tile's own elevation when it arrives before the coarse patch, and drops the coarse patch", async () => {
+    const engine = new NullEngine(), scene = new Scene(engine);
+    const patches: Array<{ tile: TerrainTile; interest?: TerrainInterest; resolve(grid: TerrainGrid): void }> = [];
+    const holds: Array<{ tile: TerrainTile; interest: TerrainInterest }> = [];
+    const arrivals = new Map<string, { arrive(): void; interest: TerrainInterest }>();
+    const key = (tile: TerrainTile) => `${tile.z}/${tile.x}/${tile.y}`;
+    const runtime = createRasterTilesRuntime({ scene, source: RASTER_BASE_MAP_SOURCES[0], getViewState: () => view,
+      createTerrainLoader: () => ({ dispose() {}, setPaused() {}, getMetrics: () => ({ active: 0, decoding: 0, queued: 0, decodedBytes: 0 }),
+        load: () => new Promise<TerrainGrid>(() => {}),
+        loadPatch: (tile: TerrainTile, interest?: TerrainInterest) => new Promise<TerrainGrid>((resolve, reject) => {
+          patches.push({ tile, interest, resolve });
+          interest?.onRelease(() => reject(Object.assign(new Error("Terrain request withdrawn"), { name: "TerrainWithdrawn" })));
+        }),
+        holdPatch: (tile: TerrainTile, interest: TerrainInterest) => { holds.push({ tile, interest }); },
+        whenLoaded: (tile: TerrainTile, interest: TerrainInterest) => new Promise<void>(arrive => { arrivals.set(key(tile), { arrive, interest }); }),
+      }) });
+    const grid = (tile: TerrainTile): TerrainGrid => ({ ...tile, size: 2, heights: new Float32Array([100, 100, 100, 100]) });
+    try {
+      runtime.update(); pending.imagery.splice(0).forEach(loaded => loaded()); runtime.update();
+      // Every tile asks for its coarse patch first, at level 0 here.
+      expect(patches.length).toBeGreaterThan(1);
+      expect(patches.every(patch => patch.tile.z === 0)).toBe(true);
+      const meshOf = (tile: string) => scene.meshes.find(mesh => mesh.name.split("-").at(-1) === tile);
+      const [own, { arrive, interest: coarse }] = [...arrivals].find(([tile]) => meshOf(tile))!;
+      const mesh = meshOf(own)!;
+      // Each tile holds its own patch for itself and its coarse patch for as long as it waits for its own elevation.
+      const coarsePatch = patches.find(patch => patch.interest === coarse)!;
+      expect(holds.some(hold => key(hold.tile) === key(coarsePatch.tile) && hold.interest === coarse)).toBe(true);
+      expect(holds.some(hold => key(hold.tile) === own && hold.interest !== coarse && !hold.interest.released)).toBe(true);
+      arrive(); await flush();
+      expect(coarse.released).toBe(true);
+      const detail = patches.find(patch => key(patch.tile) === own)!;
+      expect(detail).toBeDefined();
+      detail.resolve(grid(detail.tile)); await flush(); runtime.update();
+      expect(mesh.metadata.terrainZoom).toBe(detail.tile.z);
+      // The coarse patch arriving later changes nothing.
+      for (const patch of patches.filter(patch => patch.tile.z === 0)) patch.resolve(grid(patch.tile));
+      await flush(); runtime.update();
+      expect(mesh.metadata.terrainZoom).toBe(detail.tile.z);
+    } finally { runtime.dispose(); engine.dispose(); }
+  });
   it("settles tiles whose elevation fails, before or after a provider switch", async () => {
     const engine = new NullEngine(), scene = new Scene(engine), loadEnd = vi.fn(), errors = vi.fn();
     const runtime = createRasterTilesRuntime({ scene, source: RASTER_BASE_MAP_SOURCES[0], getViewState: () => view, onLoadEnd: loadEnd, onLoadError: errors, nowMs: () => 0 });

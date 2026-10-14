@@ -78,6 +78,10 @@ export function createTerrainTileLoader<TBlob, TSignal extends NavigationAbortSi
   const waiting = new Map<string, Waiting>();
   // The claims on each tile not yet loaded; null once it was asked for without one.
   const claims = new Map<string, Set<TerrainInterest> | null>();
+  // The claims holding a patch with each tile in it, whether or not the tile is asked for yet.
+  const wants = new Map<string, Set<TerrainInterest>>();
+  // Those waiting for a tile to arrive, however it was asked for, by tile.
+  const arrivals = new Map<string, Set<() => void>>();
   const disposedError = (): unknown => controller.signal.reason ?? new Error("Terrain loader disposed");
   const requireCurrent = (): void => { if (controller.signal.aborted) throw disposedError(); };
   async function download(tile: TerrainTile, prioritize: boolean): Promise<TerrainGrid> {
@@ -139,11 +143,14 @@ export function createTerrainTileLoader<TBlob, TSignal extends NavigationAbortSi
     waiting.delete(key); claims.delete(key); cache.delete(key);
     entry.reject(withdrawnError());
   }
+  function sourceTile(tile: TerrainTile): TerrainTile {
+    const shift = Math.max(0, tile.z - source.maxZoom);
+    return { z: tile.z - shift, x: Math.floor(tile.x / 2 ** shift), y: Math.floor(tile.y / 2 ** shift) };
+  }
   function load(tile: TerrainTile, prioritize = false, interest?: TerrainInterest): Promise<TerrainGrid> {
     if (controller.signal.aborted) return Promise.reject(disposedError());
     if (interest?.released) return Promise.reject(withdrawnError());
-    const shift = Math.max(0, tile.z - source.maxZoom);
-    tile = { z: tile.z - shift, x: Math.floor(tile.x / 2 ** shift), y: Math.floor(tile.y / 2 ** shift) };
+    tile = sourceTile(tile);
     const key = `${tile.z}/${tile.x}/${tile.y}`;
     const found = cache.get(key);
     if (found) {
@@ -166,12 +173,16 @@ export function createTerrainTileLoader<TBlob, TSignal extends NavigationAbortSi
     cache.set(key, pending);
     claims.set(key, new Set());
     claim(key, interest);
+    for (const holder of wants.get(key) ?? []) claim(key, holder);
     // Settled arrays are small and bounded; geometry retains its own samples.
     void pending.then(grid => {
       if (cache.get(key) !== pending) return;
       claims.delete(key);
       settled.add(key);
       decodedArrays?.set(key, grid.heights);
+      const waiting = arrivals.get(key);
+      arrivals.delete(key);
+      for (const arrived of waiting ?? []) arrived();
       for (const candidate of cache.keys()) {
         if (cache.size <= options.limits().cacheEntries) break;
         if (settled.has(candidate)) { cache.delete(candidate); settled.delete(candidate); decodedArrays?.delete(candidate); }
@@ -179,8 +190,48 @@ export function createTerrainTileLoader<TBlob, TSignal extends NavigationAbortSi
     }, () => {});
     return pending;
   }
+  /**
+   * Claims the tiles of a patch to be asked for later, asking for none: one
+   * already waiting keeps its place in the queue, and one asked for later is
+   * claimed as it is. A neighbour another patch brings is asked for this
+   * claim if no claim still wants that patch.
+   */
+  function holdPatch(tile: TerrainTile, interest: TerrainInterest): void {
+    if (controller.signal.aborted || interest.released) return;
+    const center = sourceTile(tile), n = 2 ** center.z;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      if (center.y + dy < 0 || center.y + dy >= n) continue;
+      const key = `${center.z}/${(center.x + dx + n) % n}/${center.y + dy}`;
+      claim(key, interest);
+      let holders = wants.get(key);
+      if (!holders) wants.set(key, holders = new Set());
+      if (holders.has(interest)) continue;
+      holders.add(interest);
+      interest.onRelease(() => {
+        const current = wants.get(key);
+        if (current?.delete(interest) && current.size === 0) wants.delete(key);
+      });
+    }
+  }
+  /** Resolves once a tile is loaded, asking for nothing; never, once the claim is released. */
+  function whenLoaded(tile: TerrainTile, interest: TerrainInterest): Promise<void> {
+    tile = sourceTile(tile);
+    const key = `${tile.z}/${tile.x}/${tile.y}`;
+    if (settled.has(key)) return Promise.resolve();
+    return new Promise(resolve => {
+      if (controller.signal.aborted || interest.released) return;
+      let waiting = arrivals.get(key);
+      if (!waiting) arrivals.set(key, waiting = new Set());
+      waiting.add(resolve);
+      interest.onRelease(() => {
+        const current = arrivals.get(key);
+        if (current?.delete(resolve) && current.size === 0) arrivals.delete(key);
+      });
+    });
+  }
   async function loadPatch(tile: TerrainTile, interest?: TerrainInterest): Promise<TerrainGrid> {
     const grid = await load(tile, false, interest);
+    const released = interest?.released ?? false;
     const neighbors: Array<Promise<TerrainGrid>> = [];
     const n = 2 ** grid.z;
     for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
@@ -188,11 +239,18 @@ export function createTerrainTileLoader<TBlob, TSignal extends NavigationAbortSi
       // Finish this already-started patch before downloading unrelated
       // centers. Otherwise a displayed tile can wait behind the whole globe
       // even though its own elevation request completed long ago.
-      neighbors.push(load({ z: grid.z, x: (grid.x + dx + n) % n, y: grid.y + dy }, true, interest));
+      const neighbor = { z: grid.z, x: (grid.x + dx + n) % n, y: grid.y + dy };
+      // Without a claim of its own, a neighbour is asked for one holding it in another patch.
+      const asking = released ? wants.get(`${neighbor.z}/${neighbor.x}/${neighbor.y}`)?.values().next().value : interest;
+      if (!released || asking) neighbors.push(load(neighbor, true, asking));
+    }
+    if (released) {
+      for (const neighbor of neighbors) neighbor.catch(() => {});
+      throw withdrawnError();
     }
     return { ...grid, neighbors: await Promise.all(neighbors) };
   }
-  return { load, loadPatch,
+  return { load, loadPatch, holdPatch, whenLoaded,
     /**
      * Holds the queue: no download starts while paused, and those running
      * finish. Queued tiles wait rather than fail, since their promises are
@@ -206,6 +264,6 @@ export function createTerrainTileLoader<TBlob, TSignal extends NavigationAbortSi
       if (controller.signal.aborted) return;
       controller.abort(new Error("Terrain loader disposed"));
       for (const entry of [...ahead.splice(0), ...queue.splice(0)]) entry.reject(disposedError());
-      waiting.clear(); claims.clear(); cache.clear(); settled.clear(); decodedArrays?.clear();
+      waiting.clear(); claims.clear(); wants.clear(); arrivals.clear(); cache.clear(); settled.clear(); decodedArrays?.clear();
     } };
 }

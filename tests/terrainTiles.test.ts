@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTerrainInterest, createTerrainTileLoader, DEFAULT_TERRAIN_LOADER_LIMITS, isTerrainWithdrawn } from "../src/terrain/terrainLoader.js";
-import { decodeTerrarium, sampleTerrainGrid, sampleTerrainGridRow, terrainGridColumns, type TerrainGrid } from "../src/terrain/terrainGrid.js";
+import { decodeTerrarium, MAPTERHORN, sampleTerrainGrid, sampleTerrainGridRow, terrainGridColumns, type TerrainGrid } from "../src/terrain/terrainGrid.js";
 
 afterEach(() => vi.unstubAllGlobals());
 const ports = { createAbortController: () => new AbortController(), requestSignal: (signal: AbortSignal, timeoutMs: number) => AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]),
@@ -233,6 +233,125 @@ describe("streamed terrain", () => {
       loader.setPaused(false);
       await Promise.all([...plain, ...moved]);
       expect(fetched()).toEqual(["4/1/0", "4/2/0", "4/6/0", "4/5/0"]);
+    });
+    it("keeps a waiting tile's place for a patch that holds it before asking", async () => {
+      const { loader, fetched } = harness();
+      loader.setPaused(true);
+      const first = createTerrainInterest(), second = createTerrainInterest();
+      const kept = loader.load({ z: 3, x: 2, y: 1 }, false, first);
+      const withdrawn = loader.load({ z: 3, x: 6, y: 6 }, false, first);
+      // 3/2/1 is held as a neighbour of 3/1/1, 3/6/6 by nothing else; a hold asks for nothing.
+      loader.holdPatch({ z: 3, x: 1, y: 1 }, second);
+      expect(loader.getMetrics().queued).toBe(2);
+      first.release();
+      await expect(withdrawn).rejects.toSatisfy(isTerrainWithdrawn);
+      expect(loader.getMetrics().queued).toBe(1);
+      loader.setPaused(false);
+      await expect(kept).resolves.toMatchObject({ z: 3, x: 2, y: 1 });
+      await loader.loadPatch({ z: 3, x: 1, y: 1 }, second);
+      // 3/2/1 kept its place ahead of the patch's centre.
+      expect(fetched().slice(0, 2)).toEqual(["3/2/1", "3/1/1"]);
+      expect(fetched()).toHaveLength(9);
+    });
+    it("asks for a held patch's neighbours when the tile that asked for its centre no longer wants it", async () => {
+      let release!: () => void;
+      const gate = new Promise<void>(resolve => { release = resolve; });
+      const { loader, fetchTile, fetched } = harness();
+      fetchTile.mockImplementationOnce(async () => { await gate; return new Response("tile"); });
+      const first = createTerrainInterest(), gone = createTerrainInterest(), second = createTerrainInterest(), third = createTerrainInterest();
+      const patch = loader.loadPatch({ z: 3, x: 1, y: 1 }, first);
+      await flush();
+      loader.setPaused(true);
+      for (const hold of [gone, second, third]) loader.holdPatch({ z: 3, x: 1, y: 1 }, hold);
+      gone.release(); first.release();
+      release();
+      await expect(patch).rejects.toSatisfy(isTerrainWithdrawn);
+      expect(loader.getMetrics().queued).toBe(8);
+      // Asked for the second and claimed for the third: either one keeps them.
+      second.release();
+      expect(loader.getMetrics().queued).toBe(8);
+      loader.setPaused(false);
+      await expect(loader.loadPatch({ z: 3, x: 1, y: 1 }, third)).resolves.toMatchObject({ z: 3, x: 1, y: 1 });
+      expect(fetched()).toHaveLength(9);
+      expect(fetched().slice(1).every(key => key.startsWith("3/"))).toBe(true);
+    });
+    it("asks for none of a patch's neighbours when every claim holding it is released", async () => {
+      let release!: () => void;
+      const gate = new Promise<void>(resolve => { release = resolve; });
+      const { loader, fetchTile, fetched } = harness();
+      fetchTile.mockImplementationOnce(async () => { await gate; return new Response("tile"); });
+      const first = createTerrainInterest(), second = createTerrainInterest();
+      const patch = loader.loadPatch({ z: 3, x: 1, y: 1 }, first);
+      await flush();
+      loader.holdPatch({ z: 3, x: 1, y: 1 }, second);
+      second.release(); first.release();
+      release();
+      await expect(patch).rejects.toSatisfy(isTerrainWithdrawn);
+      await flush();
+      expect(fetched()).toEqual(["3/1/1"]);
+      expect(loader.getMetrics()).toMatchObject({ active: 0, queued: 0 });
+    });
+    it("asks for a neighbour another patch holds when the tile that asked for the centre no longer wants it", async () => {
+      let release!: () => void;
+      const gate = new Promise<void>(resolve => { release = resolve; });
+      const { loader, fetchTile, fetched } = harness();
+      fetchTile.mockImplementationOnce(async () => { await gate; return new Response("tile"); });
+      const first = createTerrainInterest(), second = createTerrainInterest();
+      const patch = loader.loadPatch({ z: 3, x: 1, y: 1 }, first);
+      await flush();
+      loader.setPaused(true);
+      // 3/2/1's patch takes in five of 3/1/1's neighbours, those from x 1 to 2.
+      loader.holdPatch({ z: 3, x: 2, y: 1 }, second);
+      first.release();
+      release();
+      await expect(patch).rejects.toSatisfy(isTerrainWithdrawn);
+      expect(loader.getMetrics().queued).toBe(5);
+      loader.setPaused(false);
+      await expect(loader.loadPatch({ z: 3, x: 2, y: 1 }, second)).resolves.toMatchObject({ z: 3, x: 2, y: 1 });
+      expect(fetched().filter(key => key.startsWith("3/0/"))).toEqual([]);
+      expect(fetched()).toHaveLength(1 + 5 + 3);
+    });
+    it("claims a held tile for its holder as it is asked for", async () => {
+      const { loader, fetched } = harness();
+      loader.setPaused(true);
+      const first = createTerrainInterest(), second = createTerrainInterest();
+      loader.holdPatch({ z: 3, x: 1, y: 1 }, second);
+      expect(loader.getMetrics().queued).toBe(0);
+      const asked = loader.load({ z: 3, x: 2, y: 1 }, false, first);
+      first.release();
+      expect(loader.getMetrics().queued).toBe(1);
+      second.release();
+      await expect(asked).rejects.toSatisfy(isTerrainWithdrawn);
+      loader.setPaused(false);
+      await flush();
+      expect(fetched()).toEqual([]);
+    });
+    it("tells when a tile arrives, however it was asked for, asking for nothing", async () => {
+      const { loader, fetched } = harness();
+      loader.setPaused(true);
+      const interest = createTerrainInterest(), gone = createTerrainInterest();
+      const arrived = vi.fn(), early = vi.fn();
+      void loader.whenLoaded({ z: MAPTERHORN.maxZoom + 1, x: 0, y: 0 }, interest).then(arrived);
+      void loader.whenLoaded({ z: MAPTERHORN.maxZoom, x: 0, y: 0 }, gone).then(early);
+      gone.release();
+      await flush();
+      expect([arrived.mock.calls.length, loader.getMetrics().queued]).toEqual([0, 0]);
+      const tile = loader.load({ z: MAPTERHORN.maxZoom, x: 0, y: 0 });
+      loader.setPaused(false);
+      await tile; await flush();
+      expect([arrived.mock.calls.length, early.mock.calls.length]).toEqual([1, 0]);
+      await expect(loader.whenLoaded({ z: MAPTERHORN.maxZoom, x: 0, y: 0 }, createTerrainInterest())).resolves.toBeUndefined();
+      expect(fetched()).toEqual([`${MAPTERHORN.maxZoom}/0/0`]);
+    });
+    it("holds the tile a patch beyond the source's levels is taken from", async () => {
+      const { loader } = harness();
+      loader.setPaused(true);
+      const first = createTerrainInterest(), second = createTerrainInterest();
+      const kept = loader.load({ z: MAPTERHORN.maxZoom, x: 0, y: 0 }, false, first);
+      loader.holdPatch({ z: MAPTERHORN.maxZoom + 2, x: 1, y: 1 }, second);
+      first.release();
+      loader.setPaused(false);
+      await expect(kept).resolves.toMatchObject({ z: MAPTERHORN.maxZoom, x: 0, y: 0 });
     });
   });
 
