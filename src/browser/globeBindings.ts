@@ -167,6 +167,8 @@ export function createBrowserGlobeBindings(options: BrowserGlobeBindingOptions) 
           const onPage = (blob: Blob) => createTerrainImageDecoder({ createImageBitmap: (body, decodeOptions) => realm.window.createImageBitmap(body, decodeOptions),
             createCanvas: options.createCanvas, nowMs: () => options.clock.nowMs(), limits: createTerrainImageDecodeLimits(settings), onDecodeCpu: onPreparationMs })(blob);
           const actual = createTerrainTileLoader<Blob, AbortSignal>({ source, onBytes, trackMemory, limits: options.terrainLoaderLimits,
+            // Downloads go on while workers decode; tiles decoded on the page keep their download slot.
+            decodeSlots: () => terrainWorkers?.capacity() ?? 0,
             // Worker decodes take no page time, so only page decodes count as preparation.
             decode: (blob, request) => track(terrainWorkers ? terrainWorkers.decode(blob, onPage, { priority: request.prioritize ? 1 : 0, signal: request.signal }) : onPage(blob)),
             ports: { createAbortController: () => new realm.AbortController(),

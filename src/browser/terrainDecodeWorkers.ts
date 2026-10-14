@@ -27,6 +27,8 @@ export interface TerrainDecodeWorkers {
   /** `onPage`: the page's own decoder, used whenever no worker can decode this tile. */
   decode(blob: Blob, onPage: TerrainPageDecoder, request?: TerrainDecodeRequestOptions): Promise<{ size: number; heights: Float32Array }>;
   stats(): WorkerPoolStats & { pageDecodes: number; parity: TerrainDecodeParity };
+  /** Tiles workers can decode at once: 0 once every tile decodes on the page. */
+  capacity(): number;
   dispose(): void;
 }
 /**
@@ -118,6 +120,8 @@ export function createTerrainDecodeWorkers(options: TerrainDecodeWorkersOptions)
       return await onWorker(blob, request) ?? page();
     },
     stats: () => ({ ...pool.stats(), pageDecodes, parity: paritySeen }),
+    // The pool's own bound on its size.
+    capacity: () => pool.available() ? Math.min(16, Math.floor(options.workers())) : 0,
     dispose: () => pool.dispose(),
   };
 }

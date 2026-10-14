@@ -204,6 +204,25 @@ describe("terrain decode workers", () => {
     await expect(running).rejects.toThrow("loader disposed");
     expect(f.onPage).not.toHaveBeenCalled();
   });
+  it("can decode as many tiles at once as there are workers, and none once tiles decode on the page", async () => {
+    const f = fixture(); f.setSize(5);
+    expect(f.workers.capacity()).toBe(5);
+    f.setSize(40); expect(f.workers.capacity()).toBe(16);
+    f.setSize(2.5); expect(f.workers.capacity()).toBe(2);
+    f.setSize(0); expect(f.workers.capacity()).toBe(0);
+    f.setSize(3); await f.workers.decode(f.add(tile(2, () => [1, 2, 3, 255])), f.onPage);
+    expect(f.workers.capacity()).toBe(3);
+    f.workers.dispose(); expect(f.workers.capacity()).toBe(0);
+    const different = fixture(); different.worker.readsOtherBytes();
+    await different.workers.decode(different.add(tile(2, () => [1, 2, 3, 255])), different.onPage);
+    expect(different.workers.capacity()).toBe(0);
+    const unable = fixture({ kernel: { createCanvas: () => null } });
+    await unable.workers.decode(unable.add(tile(2, () => [1, 2, 3, 255])), unable.onPage);
+    expect(unable.workers.capacity()).toBe(0);
+    const missing = fixture({ bridge: { createWorker: () => null } });
+    await missing.workers.decode(missing.add(tile(2, () => [1, 2, 3, 255])), missing.onPage);
+    expect(missing.workers.capacity()).toBe(0);
+  });
   it("never uses a worker that returns malformed heights", async () => {
     const f = fixture({ bridge: { createWorker: () => {
       const port: TerrainDecodeWorkerPort = { onmessage: null, onerror: null, terminate() {},
