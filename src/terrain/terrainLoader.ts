@@ -13,7 +13,8 @@ export interface TerrainTileLoaderPorts<TBlob, TSignal extends NavigationAbortSi
 }
 export interface TerrainTileLoaderOptions<TBlob, TSignal extends NavigationAbortSignal> {
   source?: TerrainSource;
-  decode(blob: TBlob): Promise<{ size: number; heights: Float32Array }>;
+  /** `prioritize`: the loader moved this tile ahead of its queue (a neighbour or parent a started tile waits for). `signal` aborts when the loader is disposed. */
+  decode(blob: TBlob, request: { prioritize: boolean; signal: TSignal }): Promise<{ size: number; heights: Float32Array }>;
   ports: TerrainTileLoaderPorts<TBlob, TSignal>;
   limits(): TerrainLoaderLimits;
   onBytes?: (bytes: number) => void;
@@ -49,7 +50,7 @@ export function createTerrainTileLoader<TBlob, TSignal extends NavigationAbortSi
       const blob = await response.blob();
       requireCurrent();
       onBytes?.(ports.byteLength(blob));
-      const decoded = await decodeTile(blob);
+      const decoded = await decodeTile(blob, { prioritize, signal: controller.signal });
       requireCurrent();
       return { ...tile, ...decoded };
     } finally { active--; pump(); }

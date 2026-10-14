@@ -16,10 +16,15 @@ import type { GlobeMapPorts, GlobeRuntimeClock, GlobeRuntimePlatform } from "../
 import { createTerrainImageDecoder } from "./terrainImageDecoder.js";
 import { createAtlasImageryWorkerBridge } from "./atlasImageryWorkerBridge.js";
 import type { AtlasImageryWorkerPort } from "./atlasImageryWorkerProtocol.js";
+import { createTerrainDecodeWorkers } from "./terrainDecodeWorkers.js";
+import type { TerrainDecodeWorkerPort } from "./terrainDecodeWorkerProtocol.js";
 import { createBoundedAtlasImageryLoader, type BoundedAtlasImageryLoaderOptions } from "./boundedAtlasImageryLoader.js";
 import type { createMapCache } from "./mapCache.js";
 import { measureMapResponse } from "./mapDownloadMeter.js";
 import { latestResourceTiming } from "./describeGoogleTileFailure.js";
+
+/** A terrain decode worker idle this long stops; the next tile starts one again (a few ms). */
+const TERRAIN_WORKER_IDLE_MS = 30_000;
 
 export interface BrowserGlobeRealm {
   window: Window & typeof globalThis;
@@ -47,6 +52,10 @@ export interface BrowserGlobeBindingOptions {
   describeMapTransfer: BoundedAtlasImageryLoaderOptions["describe"];
   mapPriority(): number;
   createWorker(): AtlasImageryWorkerPort | null;
+  /** A worker running installTerrainDecodeWorkerKernel. Absent, null or a throw: terrain decodes on the page. */
+  createTerrainWorker?(): TerrainDecodeWorkerPort | null;
+  /** The most terrain decode workers at once, read at each decode. 0 or absent: terrain decodes on the page. */
+  terrainDecodeWorkers?(): number;
   createCanvas(width: number, height: number): HTMLCanvasElement | OffscreenCanvas;
   decode(bytes: Uint8Array, mimeType: "image/jpeg" | "image/png"): Promise<ImageBitmap>;
   onError(error: unknown): void;
@@ -87,11 +96,12 @@ export function createBrowserGlobeBindings(options: BrowserGlobeBindingOptions) 
   const managedAtlas = options.managedAtlas ?? createManagedImageryAtlasResources(broker);
   let worker: ReturnType<typeof createAtlasImageryWorkerBridge> | undefined;
   let loader: ReturnType<typeof createBoundedAtlasImageryLoader> | undefined;
+  let terrainWorkers: ReturnType<typeof createTerrainDecodeWorkers> | undefined;
   const retire = (): void => {
     if (disposed) return;
     disposed = true;
     for (const action of [() => options.signal?.removeEventListener("abort", abort),
-      ...[...terrain].map(value => () => value.dispose()), () => loader?.dispose(), () => worker?.dispose()]) {
+      ...[...terrain].map(value => () => value.dispose()), () => terrainWorkers?.dispose(), () => loader?.dispose(), () => worker?.dispose()]) {
       try { action(); } catch (error) { errors.push(error); }
     }
     changed();
@@ -101,6 +111,9 @@ export function createBrowserGlobeBindings(options: BrowserGlobeBindingOptions) 
     try { options.onError(error); } catch (reporting) { errors.push(reporting); }
   } };
   try {
+    if (options.createTerrainWorker) terrainWorkers = createTerrainDecodeWorkers({ createWorker: options.createTerrainWorker,
+      workers: options.terrainDecodeWorkers ?? (() => 0), timers: options.timers, nowMs: () => options.clock.nowMs(),
+      idleMs: TERRAIN_WORKER_IDLE_MS, limits: createTerrainImageDecodeLimits(settings), onError: options.onError });
     worker = createAtlasImageryWorkerBridge({ broker, createWorker: options.createWorker, decode: options.decode, onError: options.onError });
     const files = worker.createFileService({ limits: options.imageTransferLimits, priority: options.mapPriority, fetch: mapFetch, cache: null });
     loader = createBoundedAtlasImageryLoader({ broker, files, worker, describe: options.describeMapTransfer, priority: options.mapPriority,
@@ -151,9 +164,11 @@ export function createBrowserGlobeBindings(options: BrowserGlobeBindingOptions) 
         },
         createTerrainLoader(source, onBytes, trackMemory, onPreparationMs) {
           if (disposed) throw new Error("Browser globe bindings have retired.");
+          const onPage = (blob: Blob) => createTerrainImageDecoder({ createImageBitmap: (body, decodeOptions) => realm.window.createImageBitmap(body, decodeOptions),
+            createCanvas: options.createCanvas, nowMs: () => options.clock.nowMs(), limits: createTerrainImageDecodeLimits(settings), onDecodeCpu: onPreparationMs })(blob);
           const actual = createTerrainTileLoader<Blob, AbortSignal>({ source, onBytes, trackMemory, limits: options.terrainLoaderLimits,
-            decode: blob => track(createTerrainImageDecoder({ createImageBitmap: (body, decodeOptions) => realm.window.createImageBitmap(body, decodeOptions),
-              createCanvas: options.createCanvas, nowMs: () => options.clock.nowMs(), limits: createTerrainImageDecodeLimits(settings), onDecodeCpu: onPreparationMs })(blob)),
+            // Worker decodes take no page time, so only page decodes count as preparation.
+            decode: (blob, request) => track(terrainWorkers ? terrainWorkers.decode(blob, onPage, { priority: request.prioritize ? 1 : 0, signal: request.signal }) : onPage(blob)),
             ports: { createAbortController: () => new realm.AbortController(),
               requestSignal: (signal, timeoutMs) => realm.AbortSignal.any([signal, realm.AbortSignal.timeout(timeoutMs)]),
               fetchTile: (url, signal) => track(cache.fetch(url, { signal, mode: "cors" })), byteLength: blob => blob.size },
@@ -196,6 +211,8 @@ export function createBrowserGlobeBindings(options: BrowserGlobeBindingOptions) 
       nightTilePorts: { fetchTile: (url: string, init: RequestInit) => mapFetch(url, init),
         measureResponse: (response: Response, onBytes: (bytes: number) => void) => measureMapResponse(response, onBytes, { Response: realm.Response, TransformStream: realm.TransformStream }),
         setNightLightMap: (value: Parameters<typeof lighting.setTerrainNightLightMap>[1]) => lighting.setTerrainNightLightMap(scene, value) },
+      /** Terrain decode workers: live, busy, queued and per-worker counts, and tiles decoded on the page. Null without workers. */
+      terrainDecodeStats: () => terrainWorkers?.stats() ?? null,
       retire, dispose: retire,
       async whenSettled() {
         const results = await Promise.allSettled([worker!.whenSettled(), loader!.whenSettled(), native.whenSettled()]);

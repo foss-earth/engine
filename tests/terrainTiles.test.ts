@@ -65,4 +65,13 @@ describe("streamed terrain", () => {
     await expect(pending).rejects.toThrow("disposed");
     expect(loader.getMetrics()).toMatchObject({ queued: 0, active: 0, decodedBytes: 0 });
   });
+  it("tells the decoder which tiles were moved ahead and aborts its signal on disposal", async () => {
+    const decode = vi.fn<(blob: Blob, request: { prioritize: boolean; signal: AbortSignal }) => Promise<{ size: number; heights: Float32Array }>>(async () => ({ size: 1, heights: new Float32Array([1]) }));
+    const loader = createTerrainTileLoader({ ...options, decode, ports: { ...ports, fetchTile: async () => new Response("tile") } });
+    await loader.loadPatch({ z: 2, x: 1, y: 1 });
+    // The centre waits its turn; its eight neighbours are moved ahead of other centres.
+    expect(decode.mock.calls.map(([, request]) => request.prioritize)).toEqual([false, ...Array(8).fill(true)]);
+    const { signal } = decode.mock.calls[0][1];
+    expect(signal.aborted).toBe(false); loader.dispose(); expect(signal.aborted).toBe(true);
+  });
 });
