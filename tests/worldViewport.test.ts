@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
-import { GeospatialCamera, NullEngine, NullEngineOptions, Scene, Vector3, Viewport } from "@babylonjs/core";
+import { GeospatialCamera, NullEngine, NullEngineOptions, Scene, ShaderLanguage, ShaderMaterial, Vector3, Viewport } from "@babylonjs/core";
 import { afterEach, describe, expect, it } from "vitest";
 import { clientRay, projectEcefToClient } from "../src/babylon/anchorPan.js";
-import { coveredWorldClips } from "../src/babylon/uiOcclusion.js";
+import { attachWorldOcclusion, coveredWorldClips } from "../src/babylon/uiOcclusion.js";
 import { applyWorldViewport, attachWorldViewport, cameraViewportFromTop, worldRenderRect } from "../src/babylon/worldViewport.js";
 import {
   commitWorldViewport,
@@ -264,5 +264,23 @@ describe("coveredWorldClips", () => {
     canvas.getBoundingClientRect = () => { reads += 1; return read(); };
     coveredWorldClips(canvas);
     expect(reads).toBe(1);
+  });
+});
+
+describe("attachWorldOcclusion", () => {
+  it("draws its quad with WGSL on WebGPU, which then needs no GLSL compiler, and with GLSL elsewhere", () => {
+    for (const webGpu of [false, true]) {
+      const engine = new NullEngine();
+      if (webGpu) Object.defineProperty(engine, "isWebGPU", { value: true });
+      const scene = new Scene(engine), occlusion = attachWorldOcclusion(scene, canvasAt());
+      try {
+        const material = scene.materials.find(candidate => candidate.name === "world-occlusion") as ShaderMaterial;
+        const { vertexSource, fragmentSource } = material.shaderPath as { vertexSource: string; fragmentSource: string };
+        // The effect is compiled in the language the options give.
+        expect(material.options.shaderLanguage ?? ShaderLanguage.GLSL).toBe(webGpu ? ShaderLanguage.WGSL : ShaderLanguage.GLSL);
+        expect([vertexSource.includes("@vertex"), fragmentSource.includes("@fragment")]).toEqual([webGpu, webGpu]);
+        expect([material.options.attributes, material.options.uniforms]).toEqual([["position"], ["rect", "depthSign"]]);
+      } finally { occlusion.dispose(); scene.dispose(); engine.dispose(); }
+    }
   });
 });
