@@ -8,6 +8,7 @@ import { createTerrainLightingFixture } from "../fixtures/composition/terrainLig
 import { GROUND_LIGHT_LEAST_SINE, GROUND_LIGHT_SAMPLES, GROUND_LIGHT_TABLE, MERCATOR_MAX_LAT_DEG, NIGHT_RADIANCE_UNITS, groundLightAt } from "@foss-earth/sky";
 import { createTerrainPerformanceCapture } from "../src/terrain/terrainPerformanceCapture.js";
 import type { TerrainGrid, TerrainTile } from "../src/terrain/terrainGrid.js";
+import type { TerrainInterest } from "../src/terrain/terrainLoader.js";
 import { createRasterTilesRuntime as createCoreRaster, type RasterTilesRuntimeOptions } from "../src/babylon/createRasterTilesRuntime.js";
 import { RASTER_BASE_MAP_SOURCES } from "../src/map/rasterBaseMaps.js";
 import { createEngineSettings, testAtlasDevice, testAfter } from "../fixtures/composition/runtimeHost.js";
@@ -17,7 +18,7 @@ const getAppSettings = () => settings;
 const pending = vi.hoisted(() => ({
   imagery: [] as Array<() => void>,
   imageryErrors: [] as Array<(message?: string) => void>,
-  terrain: [] as Array<{ tile: TerrainTile; resolve(grid: TerrainGrid): void; reject(error: Error): void }>,
+  terrain: [] as Array<{ tile: TerrainTile; resolve(grid: TerrainGrid): void; reject(error: Error): void; interest?: TerrainInterest }>,
   dispose: vi.fn(),
 }));
 function createRasterTilesRuntime(options: Partial<RasterTilesRuntimeOptions> & Pick<RasterTilesRuntimeOptions, "scene" | "source">) {
@@ -29,7 +30,11 @@ function createRasterTilesRuntime(options: Partial<RasterTilesRuntimeOptions> & 
     createTerrainLoader: () => ({ dispose: pending.dispose,
       getMetrics: () => ({ active: 0, decoding: 0, queued: 0, decodedBytes: 0 }), setPaused: vi.fn(),
       load: (tile: TerrainTile) => new Promise<TerrainGrid>((resolve, reject) => pending.terrain.push({ tile, resolve, reject })),
-      loadPatch: (tile: TerrainTile) => new Promise<TerrainGrid>((resolve, reject) => {  pending.terrain.push({ tile, resolve, reject }); }),
+      loadPatch: (tile: TerrainTile, interest?: TerrainInterest) => new Promise<TerrainGrid>((resolve, reject) => {
+        pending.terrain.push({ tile, resolve, reject, interest });
+        // As the loader does with a tile no claim still wants.
+        interest?.onRelease(() => reject(Object.assign(new Error("Terrain request withdrawn"), { name: "TerrainWithdrawn" })));
+      }),
     }),
     imageryPorts: { device: testAtlasDevice(options.scene), capabilities: { backend: "webgl2", maxTextureSize: 8192, explicitGradients: true },
       createAbortController: () => new AbortController(), loader: { async load(_url, { width, height }) {
@@ -387,6 +392,44 @@ describe("raster imagery and terrain lifecycle", () => {
       expect(runtime.getLoadingDiagnostics!().pendingTiles).toBeGreaterThan(0);
       for (let round = 0; round < 4; round++) { await resolveAll(); pending.imagery.splice(0).forEach(loaded => loaded()); runtime.update(); }
       expect(pending.terrain).toHaveLength(0);
+      expect(runtime.getLoadingDiagnostics!().pendingTiles).toBe(0);
+      expect(loadEnd).toHaveBeenCalled();
+    } finally { runtime.dispose(); engine.dispose(); }
+  });
+  it("drops tiles that leave the selection before their elevation arrives, with the downloads they wait for", async () => {
+    getAppSettings().set("map.terrain.reselectWhileMoving", 0);
+    const engine = new NullEngine(), scene = new Scene(engine), loadEnd = vi.fn();
+    scene.useRightHandedSystem = true;
+    const camera = new GeospatialCamera("raster-camera", scene, { planetRadius: 6378137 });
+    camera.addBehavior(new GeospatialClippingBehavior());
+    const controller = new CameraController(camera);
+    const current = { latDeg: 36.1, lonDeg: -112.14, zoomMeters: 20_000, pitchDeg: 0, headingDeg: 0 };
+    const runtime = createRasterTilesRuntime({ scene, source: RASTER_BASE_MAP_SOURCES[0], getViewState: () => current, onLoadEnd: loadEnd });
+    const look = (latDeg: number, lonDeg: number) => {
+      Object.assign(current, { latDeg, lonDeg });
+      controller.applyViewState(current);
+      scene.render(); runtime.update();
+    };
+    const tiles = () => new Set(scene.meshes.filter(mesh => mesh.name.startsWith("raster-basemap-tile-") && !mesh.isDisposed()).map(mesh => mesh.name.split("-").at(-1)!));
+    try {
+      look(36.1, -112.14);
+      const first = pending.terrain.splice(0), firstTiles = tiles();
+      expect(first.length).toBeGreaterThan(0);
+      look(-33.9, 151.2);
+      await flush();
+      // The first view's own tiles are gone and their claims withdrawn; what both views need stays and still loads.
+      const left = [...firstTiles].filter(key => !tiles().has(key));
+      expect(left.length).toBeGreaterThan(0);
+      expect(left.every(key => Number(key.split("/")[0]) > 2)).toBe(true);
+      const withdrawn = first.filter(load => load.interest?.released);
+      expect(withdrawn.length).toBeGreaterThan(0);
+      expect(runtime.getLoadingDiagnostics!().pendingTiles).toBe(runtime.getMetrics().activeTiles);
+      // The second view settles and the load cycle ends without the first view's tiles.
+      const live = first.filter(load => !load.interest?.released);
+      for (let round = 0; round < 6; round++) {
+        for (const load of [...live.splice(0), ...pending.terrain.splice(0)]) load.resolve({ ...load.tile, size: 2, heights: new Float32Array([100, 100, 100, 100]) });
+        await flush(); pending.imagery.splice(0).forEach(loaded => loaded()); scene.render(); runtime.update();
+      }
       expect(runtime.getLoadingDiagnostics!().pendingTiles).toBe(0);
       expect(loadEnd).toHaveBeenCalled();
     } finally { runtime.dispose(); engine.dispose(); }

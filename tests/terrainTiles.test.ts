@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createTerrainTileLoader, DEFAULT_TERRAIN_LOADER_LIMITS } from "../src/terrain/terrainLoader.js";
+import { createTerrainInterest, createTerrainTileLoader, DEFAULT_TERRAIN_LOADER_LIMITS, isTerrainWithdrawn } from "../src/terrain/terrainLoader.js";
 import { decodeTerrarium, sampleTerrainGrid, sampleTerrainGridRow, terrainGridColumns, type TerrainGrid } from "../src/terrain/terrainGrid.js";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -126,6 +126,105 @@ describe("streamed terrain", () => {
     expect(decode.mock.calls.map(([, request]) => request.prioritize)).toEqual([false, ...Array(8).fill(true)]);
     const { signal } = decode.mock.calls[0][1];
     expect(signal.aborted).toBe(false); loader.dispose(); expect(signal.aborted).toBe(true);
+  });
+
+  describe("withdrawn claims", () => {
+    const flush = () => new Promise(resolve => setTimeout(resolve, 0));
+    function harness() {
+      const fetchTile = vi.fn<(url: string) => Promise<Response>>(async () => new Response("tile"));
+      const loader = createTerrainTileLoader({ ...options, ports: { ...ports, fetchTile } });
+      const fetched = () => fetchTile.mock.calls.map(([url]) => String(url).match(/\/(\d+\/\d+\/\d+)\.webp/)![1]);
+      return { loader, fetchTile, fetched };
+    }
+    it("takes a waiting tile out of the queue when its only claim is released, and asks for it again later", async () => {
+      const { loader, fetched } = harness();
+      loader.setPaused(true);
+      const interest = createTerrainInterest();
+      const withdrawn = loader.load({ z: 3, x: 1, y: 1 }, false, interest);
+      const kept = loader.load({ z: 3, x: 2, y: 1 });
+      expect(loader.getMetrics().queued).toBe(2);
+      interest.release();
+      await expect(withdrawn).rejects.toSatisfy(isTerrainWithdrawn);
+      expect(loader.getMetrics().queued).toBe(1);
+      loader.setPaused(false);
+      await kept;
+      expect(fetched()).toEqual(["3/2/1"]);
+      // Asked for again, it is a new request.
+      await expect(loader.load({ z: 3, x: 1, y: 1 })).resolves.toMatchObject({ z: 3, x: 1, y: 1 });
+      expect(fetched()).toEqual(["3/2/1", "3/1/1"]);
+    });
+    it("shares the request for a tile asked for again as it is withdrawn", async () => {
+      const { loader, fetched } = harness();
+      loader.setPaused(true);
+      const interest = createTerrainInterest();
+      const withdrawn = loader.load({ z: 3, x: 1, y: 1 }, false, interest);
+      interest.release();
+      const again = loader.load({ z: 3, x: 1, y: 1 });
+      loader.setPaused(false);
+      await expect(withdrawn).rejects.toSatisfy(isTerrainWithdrawn);
+      await again;
+      expect(loader.load({ z: 3, x: 1, y: 1 })).toBe(again);
+      expect(fetched()).toEqual(["3/1/1"]);
+    });
+    it("keeps a waiting tile another claim or a plain request still wants", async () => {
+      const { loader, fetched } = harness();
+      loader.setPaused(true);
+      const first = createTerrainInterest(), second = createTerrainInterest(), third = createTerrainInterest();
+      const shared = [loader.load({ z: 3, x: 1, y: 1 }, false, first), loader.load({ z: 3, x: 1, y: 1 }, false, second)];
+      const plain = [loader.load({ z: 3, x: 2, y: 1 }, false, third), loader.load({ z: 3, x: 2, y: 1 })];
+      first.release(); third.release();
+      loader.setPaused(false);
+      await expect(Promise.all([...shared, ...plain])).resolves.toHaveLength(4);
+      expect(fetched()).toEqual(["3/1/1", "3/2/1"]);
+    });
+    it("lets a downloading tile finish into the cache when its claim is released", async () => {
+      let release!: () => void;
+      const gate = new Promise<void>(resolve => { release = resolve; });
+      const { loader, fetchTile, fetched } = harness();
+      fetchTile.mockImplementationOnce(async () => { await gate; return new Response("tile"); });
+      const interest = createTerrainInterest();
+      const downloading = loader.load({ z: 3, x: 1, y: 1 }, false, interest);
+      await flush();
+      interest.release();
+      release();
+      await expect(downloading).resolves.toMatchObject({ z: 3, x: 1, y: 1 });
+      await loader.load({ z: 3, x: 1, y: 1 });
+      expect(fetched()).toEqual(["3/1/1"]);
+    });
+    it("asks for none of a patch's neighbours once its claim is released", async () => {
+      let release!: () => void;
+      const gate = new Promise<void>(resolve => { release = resolve; });
+      const { loader, fetchTile, fetched } = harness();
+      fetchTile.mockImplementationOnce(async () => { await gate; return new Response("tile"); });
+      const interest = createTerrainInterest();
+      const patch = loader.loadPatch({ z: 3, x: 1, y: 1 }, interest);
+      await flush();
+      interest.release();
+      release();
+      await expect(patch).rejects.toSatisfy(isTerrainWithdrawn);
+      await flush();
+      expect(fetched()).toEqual(["3/1/1"]);
+      expect(loader.getMetrics()).toMatchObject({ active: 0, queued: 0 });
+    });
+    it("withdraws a patch's waiting neighbours with its claim, keeping those another patch wants", async () => {
+      const { loader, fetched } = harness();
+      const first = createTerrainInterest(), second = createTerrainInterest();
+      await loader.load({ z: 3, x: 1, y: 1 });
+      await loader.load({ z: 3, x: 2, y: 1 });
+      loader.setPaused(true);
+      const patches = [loader.loadPatch({ z: 3, x: 1, y: 1 }, first), loader.loadPatch({ z: 3, x: 2, y: 1 }, second)];
+      await flush();
+      // 3/1/1's neighbours from x 0 to 2 and 3/2/1's from 1 to 3; both centres are already loaded.
+      expect(loader.getMetrics().queued).toBe(10);
+      first.release();
+      await expect(patches[0]).rejects.toSatisfy(isTerrainWithdrawn);
+      // Only those 3/1/1 alone asked for leave: x 0 in rows 0 to 2.
+      expect(loader.getMetrics().queued).toBe(7);
+      loader.setPaused(false);
+      await expect(patches[1]).resolves.toMatchObject({ z: 3, x: 2, y: 1 });
+      expect(fetched().filter(key => key.startsWith("3/0/"))).toEqual([]);
+      expect(fetched()).toHaveLength(2 + 7);
+    });
   });
 
   describe("decode slots", () => {
