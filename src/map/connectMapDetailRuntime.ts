@@ -1,13 +1,14 @@
 import type { MapRuntimeStatus } from "./runtimeContracts.js";
 import type { RasterDetailFeedback } from "./runtimeContracts.js";
-import { GOOGLE_DETAIL_KEY, rasterDetailKey } from "../terrain/mapDetailPolicy.js";
+import { deliveryDistribution } from "../terrain/detailDistribution.js";
+import { GOOGLE_DETAIL_KEY, rasterDetailKey, type DetailDistribution } from "../terrain/mapDetailPolicy.js";
 import type { MapDetailController } from "./mapDetailController.js";
 
 /** The part of the Babylon runtime the detail controller drives. */
 export interface MapDetailRuntime {
   readonly status: Pick<MapRuntimeStatus, "mode" | "rasterBaseMap">;
   readonly renderer: { mode: string };
-  getGoogleTerrainDetailState(): { defaultErrorTarget: number; loadedErrorTarget?: number | null } | null;
+  getGoogleTerrainDetailState(): { defaultErrorTarget: number; loadedErrorTarget?: number | null; loadedDistribution?: DetailDistribution | null } | null;
   setGoogleTerrainDetailTarget(errorTarget: number | null): void;
   setRasterDetailTarget(offset: number): void;
   getRasterDetailFeedback(): RasterDetailFeedback | null;
@@ -31,10 +32,12 @@ export function connectMapDetailRuntime(controller: MapDetailController, runtime
   const reportGoogleDelivery = (): void => {
     if (runtime.status.mode !== "google-tiles") return;
     const streaming = runtime.isStreamingTiles();
+    const googleDetail = runtime.getGoogleTerrainDetailState();
     controller.reportDelivery(GOOGLE_DETAIL_KEY, {
       pending: streaming,
       limits: streaming ? ["loading"] : [],
-      loadedTarget: runtime.getGoogleTerrainDetailState()?.loadedErrorTarget ?? null,
+      loadedTarget: googleDetail?.loadedErrorTarget ?? null,
+      distribution: deliveryDistribution(GOOGLE_DETAIL_KEY, "google", googleDetail?.loadedDistribution),
     });
   };
 
@@ -76,6 +79,7 @@ export function connectMapDetailRuntime(controller: MapDetailController, runtime
         loadedTarget: feedback.loadedTarget,
         effectiveTarget: feedback.effectiveTarget,
         constraints: feedback.constraints,
+        distribution: deliveryDistribution(key, "raster", feedback.distribution),
       });
       return;
     }

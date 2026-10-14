@@ -18,10 +18,11 @@ import {
 import type { ImageryConstraint, ImageryReloadConstraint } from "../../terrain/imagery/imageryConstraints.js";
 import { imagerySourceSupport, imageryTileUrl, type ImageryDescriptor } from "../../terrain/imagery/imagerySources.js";
 import { retryDelayMs } from "../../terrain/retryDelay.js";
-import type { DetailLimit } from "../../terrain/mapDetailPolicy.js";
+import { rasterDetailKey, type DetailDistribution, type DetailLimit } from "../../terrain/mapDetailPolicy.js";
+import { createDetailDistribution, unavailableDetailDistribution } from "../../terrain/detailDistribution.js";
 import { createImageryAtlas, planAtlasForBackend, type ImageryAtlasDevicePorts, type ManagedImageryAtlasResources, type OwnedImageryTableJob, type AtlasCapabilities, type ImageryAtlas } from "./imageryAtlas.js";
 import { IMAGERY_TABLE_BLOCK, IMAGERY_TABLE_MAX_CELLS_LOG2, slotBytes, type ImageryAtlasLayout } from "../../terrain/imagery/imageryAtlasLayout.js";
-import { buildImageryDisplay, buildPatchTable, patchTableDepth, createBoundLevels, measureLoadedImagery, type ImageryDisplay, type LoadedImageryBinding, type LoadedImageryRegion } from "../../terrain/imagery/imageryBinding.js";
+import { buildImageryDisplay, buildPatchTable, patchTableDepth, createBoundLevels, loadedImageryPages, measureLoadedImagery, measureLoadedImageryDistribution, type ImageryDisplay, type LoadedImageryBinding, type LoadedImageryRegion } from "../../terrain/imagery/imageryBinding.js";
 import { prepareManagedPatchTable, type HeldPatchTable } from "../../terrain/imagery/managedPatchTable.js";
 import type { TextureTransferOutcome, TextureTransferRetirement } from "@foss-earth/renderer";
 import { ImageryAtlasMaterialPlugin } from "./imageryMaterialPlugin.js";
@@ -74,6 +75,8 @@ export interface ImageryFeedback {
   activeTarget: number | null;
   /** Visible-area estimate of bound imagery detail; mixed regions are averaged in log space. */
   loadedTarget?: number | null;
+  /** Tile counts for the rail. Absent only on adapters that have not measured one. */
+  distribution?: DetailDistribution | null;
   effectiveTarget: number | null;
   /** The source the plan is for, which a switch can leave drawing the old one meanwhile. */
   source: { id: string; version: string; label: string } | null;
@@ -355,6 +358,12 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
   let measuredPublish = -1;
   let loadedRegions: LoadedImageryRegion[] = [];
   let loadedTarget: number | null = null;
+  let distributionGeneration = 1;
+  let distributionPageKey = "";
+  let distributionRegions: LoadedImageryRegion[] = [];
+  let distributionView: ReturnType<typeof readImageryView> = null;
+  let distributionSurface = -1;
+  let loadedDistribution: DetailDistribution = unavailableDetailDistribution("", "raster", distributionGeneration, "Loaded detail has not been measured.");
   let capped = 0;
   let emptyCells = 0;
   let fallbackPatches = 0;
@@ -363,7 +372,7 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
   let reload: ImageryReloadConstraint | null = null;
   /** Regions a budget coarsened after showing them finer, since that budget began to limit. */
   let reduced = { pages: 0, nodes: 0 };
-  let feedback: ImageryFeedback = { support: "unavailable", reason: unsupportedReason ?? undefined, pending: false, limits: [], activeTarget: null, loadedTarget: null, effectiveTarget: null, source: null, constraints: [] };
+  let feedback: ImageryFeedback = { support: "unavailable", reason: unsupportedReason ?? undefined, pending: false, limits: [], activeTarget: null, loadedTarget: null, effectiveTarget: null, source: null, constraints: [], distribution: loadedDistribution };
   const patches = new Map<string, PatchState>();
   const counters = { selections: 0, selectionCpuMs: 0, publishes: 0, tableWrites: 0, uploads: 0, uploadBytes: 0 };
   let countedUploads = 0, countedUploadBytes = 0;
@@ -664,6 +673,38 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
     pending.patch.tableRetryAt = now() + retryDelayMs(pending.patch.tableFailures, limits.retryDelayMs);
     scheduleWake(pending.patch.tableRetryAt);
   }
+  function slotsInTable(data: Uint8Array, cellsLog2: number): number[] {
+    const slots: number[] = [];
+    const seen = new Set<number>();
+    const side = 2 ** cellsLog2;
+    for (let y = 0; y < side; y++) for (let x = 0; x < side; x++) {
+      const index = (y * IMAGERY_TABLE_BLOCK + x) * 4;
+      if (data[index + 3] !== 255) continue;
+      const slot = data[index] + data[index + 1] * 256;
+      if (seen.has(slot)) continue;
+      seen.add(slot);
+      slots.push(slot);
+    }
+    return slots;
+  }
+  function snapshotImages(source: ImageryDisplay, slots: Iterable<number>): Map<number, string> | undefined {
+    const images = new Map<number, string>();
+    for (const slot of slots) {
+      if (source.ambiguousSlots.has(slot)) return undefined;
+      const image = source.slotImages.get(slot);
+      if (image === undefined) return undefined;
+      images.set(slot, image);
+    }
+    return images;
+  }
+  function directBinding(tile: TileId, source: ImageryDisplay, page: { slot: number; z: number } | undefined): LoadedImageryBinding {
+    if (!page) return { tile, table: null, directLevel: null, directImage: null, imagesBySlot: new Map() };
+    const images = snapshotImages(source, [page.slot]);
+    return { tile, table: null, directLevel: page.z, directImage: images?.get(page.slot), imagesBySlot: images };
+  }
+  function tableBinding(tile: TileId, source: ImageryDisplay, table: { cellsLog2: number; data: Uint8Array }, slots: Iterable<number>): LoadedImageryBinding {
+    return { tile, table: { cellsLog2: table.cellsLog2, data: table.data }, directLevel: null, imagesBySlot: snapshotImages(source, slots) };
+  }
   function bindManagedDirect(patch: PatchState, nextAtlas: ImageryAtlas, candidate: ImageryDisplay, source: SourceState, selected: ImageryPlan, revision: number): void {
     let page: { slot: number; z: number } | undefined; let { z, x, y } = patch.tile;
     for (;;) { page = candidate.pages.get(`${z}/${x}/${y}`); if (page || z === 0) break; z -= 1; x >>= 1; y >>= 1; }
@@ -673,7 +714,7 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
     try {
       patch.plugin.setBinding(nextAtlas, null, page ? { slot: page.slot, level: page.z } : null);
       patch.atlas = nextAtlas; patch.block = null; patch.tableSignature = directSignature; patch.table = null; patch.ownedTable = null;
-      patch.bound = { tile: patch.tile, table: null, directLevel: page?.z ?? null }; patch.boundSlots = new Set(page ? [page.slot] : []); patch.boundSource = source; patch.boundPlan = selected; patch.boundRevision = revision;
+      patch.bound = directBinding(patch.tile, candidate, page); patch.boundSlots = new Set(page ? [page.slot] : []); patch.boundSource = source; patch.boundPlan = selected; patch.boundRevision = revision;
       counters.publishes += 1;
       if (oldBlock !== null) try { oldAtlas?.releaseBlock(oldBlock); } catch (error) { reportManaged(error); }
       try { oldTable?.close(); } catch (error) { reportManaged(error); }
@@ -707,7 +748,7 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
     }
     patch.pendingTable = null; patch.atlas = pending.atlas; patch.block = pending.block;
     patch.tableSignature = pending.signature; patch.table = pending.table.data; patch.ownedTable = pending.table;
-    patch.bound = { tile: patch.tile, table: { cellsLog2: pending.table.cellsLog2, data: pending.table.data }, directLevel: null };
+    patch.bound = tableBinding(patch.tile, pending.display, pending.table, pending.slots);
     patch.boundSlots = pending.slots; patch.boundSource = pending.source; patch.boundPlan = pending.plan; patch.boundRevision = pending.revision; patch.tableFailures = 0; patch.tableRetryAt = 0;
     counters.tableWrites += 1; counters.publishes += 1;
     const errors: unknown[] = [];
@@ -840,7 +881,7 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
         z -= 1; x >>= 1; y >>= 1;
       }
       patch.plugin.setTable(null, page ? { slot: page.slot, level: page.z } : null);
-      patch.bound = { tile: patch.tile, table: null, directLevel: page?.z ?? null };
+      patch.bound = directBinding(patch.tile, display!, page);
     };
     for (const [, patch] of patches) {
       if (!patch.visible) {
@@ -891,7 +932,7 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
       }
       const origin = atlas.blockOrigin(patch.block);
       patch.plugin.setTable({ x: origin.x, y: origin.y, cellsLog2: table.cellsLog2 }, null);
-      patch.bound = { tile: patch.tile, table: { cellsLog2: table.cellsLog2, data: table.data }, directLevel: null };
+      patch.bound = tableBinding(patch.tile, display, table, slotsInTable(table.data, table.cellsLog2));
     }
     residency.setPinned(display.slots);
     if (retiredAtlas) {
@@ -956,8 +997,57 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
     options.requestRender();
   }
 
+  function clearDistributionPages(): void {
+    distributionPageKey = "";
+    distributionRegions = [];
+    distributionView = null;
+    distributionSurface = -1;
+  }
+  function syncDistribution(): void {
+    const sourceId = requested?.capabilities.id ?? displayed?.capabilities.id ?? "";
+    const sourceKey = sourceId ? rasterDetailKey(sourceId) : "";
+    const handoff = !requested || !displayed || imageSourceKey(displayed.capabilities) !== imageSourceKey(requested.capabilities);
+    let mixed = false;
+    if (requested) {
+      const activeRequested = requested;
+      mixed = [...patches.values()].some(patch => patch.visible && patch.boundSource != null
+        && imageSourceKey(patch.boundSource.capabilities) !== imageSourceKey(activeRequested.capabilities));
+    }
+    if (handoff || mixed) {
+      loadedDistribution = unavailableDetailDistribution(sourceKey, "raster", distributionGeneration, "Map sources are changing.");
+      return;
+    }
+    if (!latestView || !shownPlan) {
+      loadedDistribution = unavailableDetailDistribution(sourceKey, "raster", distributionGeneration, "Loaded detail has not been measured.");
+      return;
+    }
+    const visible = [...patches.values()].filter(patch => patch.visible);
+    if (visible.length === 0) {
+      loadedDistribution = createDetailDistribution({ status: "empty", kind: "raster", sourceKey, generation: distributionGeneration });
+      return;
+    }
+    const bindings = visible.flatMap(patch => patch.bound ? [patch.bound] : []);
+    const pages = loadedImageryPages(bindings);
+    const pageKey = pages.map(tile => `${tile.z}/${tile.x}/${tile.y}`).sort().join(",");
+    const surfaceRevision = options.surface.getRevision();
+    if (pageKey !== distributionPageKey || imageryViewChanged(distributionView, latestView) || surfaceRevision !== distributionSurface) {
+      const source = shownPlan.source.capabilities;
+      distributionRegions = measureImageryView({ view: latestView, source, surface: options.surface }, pages).map(region => ({
+        tile: region.tile, footprintPx: region.footprintPx, screenArea: region.screenArea, referenceLevel: region.tile.z,
+      }));
+      distributionPageKey = pageKey;
+      distributionView = latestView;
+      distributionSurface = surfaceRevision;
+    }
+    const draft = measureLoadedImageryDistribution(distributionRegions, bindings, shownPlan.plan.physicalTarget * 2 ** shownPlan.plan.offset);
+    const incomplete = draft.incomplete || bindings.length < visible.length;
+    loadedDistribution = createDetailDistribution({
+      ...draft, kind: "raster", sourceKey, generation: distributionGeneration, incomplete,
+      status: draft.status === "unavailable" ? "unavailable" : incomplete || draft.tileCount > 0 || draft.unknownCount > 0 ? "measured" : "empty",
+    });
+  }
   function refreshLoadedDetail(): void {
-    if (!latestView || !shownPlan) return;
+    if (!latestView || !shownPlan) { syncDistribution(); return; }
     const surfaceRevision = options.surface.getRevision();
     const moved = imageryViewChanged(measuredView, latestView) || surfaceRevision !== measuredSurfaceRevision;
     const planChanged = measuredPlan !== shownPlan.plan;
@@ -989,6 +1079,7 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
     }
     loadedTarget = measureLoadedImagery(loadedRegions, [...patches.values()].filter(patch => patch.visible && patch.bound).map(patch => patch.bound!), shownPlan.plan.physicalTarget * 2 ** shownPlan.plan.offset);
     measuredPublish = counters.publishes;
+    syncDistribution();
   }
 
   /**
@@ -1045,7 +1136,7 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
   function refreshFeedback(): void {
     let next: ImageryFeedback;
     if (!atlas || !requested) {
-      next = { support: "unavailable", reason: unsupportedReason ?? "Imagery is unavailable.", pending: false, limits: [], activeTarget: null, loadedTarget: null, effectiveTarget: null, source: null, constraints: [] };
+      next = { support: "unavailable", reason: unsupportedReason ?? "Imagery is unavailable.", pending: false, limits: [], activeTarget: null, loadedTarget: null, effectiveTarget: null, source: null, constraints: [], distribution: unavailableDetailDistribution(requested ? rasterDetailKey(requested.capabilities.id) : "", "raster", distributionGeneration, unsupportedReason ?? "Imagery is unavailable.") };
     } else {
       const stats = residency.stats();
       const limitSet = new Set<DetailLimit>([...(plan?.limits ?? []), ...stats.limits]);
@@ -1065,6 +1156,7 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
         effectiveTarget: !pending && limitsList.length === 0 ? offset : null,
         source: { id, version, label: requested.descriptor.label ?? id },
         constraints: currentConstraints(requested, stats),
+        distribution: loadedDistribution,
       };
     }
     if (!Object.is(next.loadedTarget, feedback.loadedTarget) || JSON.stringify(next) !== JSON.stringify(feedback)) {
@@ -1088,6 +1180,7 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
       try { residency.dispose(); } catch (error) { errors.push(error); }
       if (atlas) managedRetired.add(atlas);
       atlas = null; layout = null; display = null; displayed = null; acceptedCoverage.clear(); shownPlan = null; loadedTarget = null;
+      distributionGeneration += 1; clearDistributionPages(); loadedDistribution = unavailableDetailDistribution("", "raster", distributionGeneration, "Loaded detail has not been measured.");
       restartSelection = true; planChangedSincePublish = true; patchesChanged = true;
       reload = { cause: "reload", reason: "context-restored", parameter: null, value: null };
       retireUnusedManagedAtlases();
@@ -1107,6 +1200,7 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
     displayed = null;
     shownPlan = null;
     loadedTarget = null;
+    distributionGeneration += 1; clearDistributionPages(); loadedDistribution = unavailableDetailDistribution("", "raster", distributionGeneration, "Loaded detail has not been measured.");
     for (const patch of patches.values()) {
       patch.block = null;
       patch.tableSignature = null;
@@ -1174,7 +1268,10 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
         return;
       }
       if (requested && imageSourceKey(requested.capabilities) === imageSourceKey(next.capabilities)) return;
+      distributionGeneration += 1;
+      clearDistributionPages();
       requested = next;
+      loadedDistribution = unavailableDetailDistribution(rasterDetailKey(next.capabilities.id), "raster", distributionGeneration, "Map sources are changing.");
       selector.reset();
       plan = null;
       reduced = { pages: 0, nodes: 0 };
@@ -1183,6 +1280,7 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
       // the existing charged overlap allocation and retire it only after each
       // replacement binding adopts. Refusal keeps the displayed source intact.
       if (managed && [...patches.values()].some(patch => patch.boundSource)) reallocate("source");
+      refreshFeedback();
       options.requestRender();
     },
     setOffset(next) {

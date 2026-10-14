@@ -11,12 +11,14 @@ import {
   type DetailPolicy,
   type DetailRecommendationContext,
   type DetailState,
+  type DetailDistribution,
   type DetailTrackMarker,
   type DeviceHints,
   type GoogleDetailPolicy,
   type GoogleRecommendationPolicy,
   type RasterDetailPolicy,
 } from "../terrain/mapDetailPolicy.js";
+import { copyDetailDistribution } from "../terrain/detailDistribution.js";
 import type { ImageryConstraint } from "../terrain/imagery/imageryConstraints.js";
 import type { SettingsRegistry, SettingsStorage } from "@foss-earth/ui/settings";
 import type { NumberRange, ParameterValue } from "@foss-earth/ui/settings";
@@ -51,6 +53,8 @@ export interface MapDetailDelivery {
   activeTarget?: number | null;
   /** Actual loaded view detail, in raster offsets or Google screen-space error pixels. */
   loadedTarget?: number | null;
+  /** Tile counts along the same axis. Omitted by adapters that cannot measure them. */
+  distribution?: DetailDistribution | null;
   /** Raster only: the one delivered offset when every region agrees, otherwise null. */
   effectiveTarget?: number | null;
   /** Raster only: what limits visible imagery, with its values. */
@@ -287,6 +291,7 @@ export function createMapDetailController(options: MapDetailControllerOptions): 
       requestedTarget,
       activeTarget: kind === "google" ? effectiveTarget : delivery?.activeTarget ?? effectiveTarget,
       loadedTarget: delivery?.loadedTarget ?? null,
+      distribution: delivery?.distribution ?? null,
       effectiveTarget,
       pending: availability === "ready" && (delivery?.pending ?? false),
       limits: availability === "ready" ? composeLimits(active.key, requirementApplied) : [],
@@ -307,6 +312,7 @@ export function createMapDetailController(options: MapDetailControllerOptions): 
       && a.requestedTarget === b.requestedTarget
       && a.activeTarget === b.activeTarget
       && a.loadedTarget === b.loadedTarget
+      && a.distribution?.revision === b.distribution?.revision
       && a.effectiveTarget === b.effectiveTarget
       && a.pending === b.pending
       && sameLimits(a.limits, b.limits)
@@ -470,7 +476,8 @@ export function createMapDetailController(options: MapDetailControllerOptions): 
     reportDelivery(key, delivery) {
       if (delivery) {
         deliveries.set(key, { pending: delivery.pending, limits: [...delivery.limits], activeTarget: delivery.activeTarget,
-          loadedTarget: delivery.loadedTarget, effectiveTarget: delivery.effectiveTarget ?? null, constraints: [...delivery.constraints ?? []] });
+          loadedTarget: delivery.loadedTarget, effectiveTarget: delivery.effectiveTarget ?? null, constraints: [...delivery.constraints ?? []],
+          distribution: copyDetailDistribution(delivery.distribution) });
       } else {
         deliveries.delete(key);
       }

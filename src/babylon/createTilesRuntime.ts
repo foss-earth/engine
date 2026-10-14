@@ -12,6 +12,8 @@ import type { GoogleTileResourceTiming } from "../browser/describeGoogleTileFail
 import type { SurfaceOwnerChange } from "../surface/currentReadiness.js";
 import { createNativeMapSettlement, NativeMapStartupError } from "./nativeMapSettlement.js";
 import { finishOwnedCleanup } from "./ownedCleanup.js";
+import { createGoogleDetailDistribution, unavailableDetailDistribution } from "../terrain/detailDistribution.js";
+import type { DetailDistribution } from "../terrain/mapDetailPolicy.js";
 
 /** Structural Babylon binding over the public core traversal contract. */
 export interface GoogleTilesRenderer extends TilesRendererBase<TilesRendererBaseEventMap<TransformNode>> {
@@ -141,6 +143,8 @@ export interface GoogleTerrainDetailState {
    * a tile's bounds, so its projected error has no finite bound.
    */
   loadedErrorTarget: number | null;
+  /** One count per drawable in-view tile. Null is not used; unavailable is explicit. */
+  loadedDistribution: DetailDistribution;
 }
 
 const MIN_TERRAIN_ERROR_TARGET = 1;
@@ -184,24 +188,44 @@ interface GoogleTilesRendererWithViewError extends GoogleTilesRenderer {
   calculateTileViewError(tile: TileWithBabylonBounds, target: TileViewErrorTarget): void;
 }
 
-/** Reuse the traversal's camera measurement before any focus/anchor overrides. */
-function observeLoadedError(tiles: GoogleTilesRenderer): () => number | null {
-  const errors = new WeakMap<Tile, number | null>();
+const GOOGLE_TILE_LOADED = 4;
+
+/** A tile the renderer can draw. Mocks without traversal internals still count. */
+function tileDrawable(tile: Tile): boolean {
+  const internal = tile.internal;
+  if (!internal) return true;
+  if (internal.hasRenderableContent === false) return false;
+  return internal.loadingState === undefined || internal.loadingState === GOOGLE_TILE_LOADED;
+}
+
+/**
+ * Reuse the traversal's camera measurement before any focus/anchor overrides.
+ * The scalar stays the maximum. The distribution counts each drawable in-view
+ * tile once, including when that maximum does not change.
+ */
+function observeLoadedError(tiles: GoogleTilesRenderer): () => { worst: number | null; distribution: DetailDistribution } {
+  const samples = new WeakMap<Tile, { inView: boolean; error: number }>();
   const renderer = tiles as GoogleTilesRendererWithViewError;
   const calculate = renderer.calculateTileViewError.bind(renderer);
   renderer.calculateTileViewError = (tile, target) => {
     calculate(tile, target);
-    errors.set(tile, target.inView && !Number.isNaN(target.error) && target.error >= 0 ? target.error : null);
+    samples.set(tile, { inView: target.inView === true, error: target.error });
   };
   return () => {
     let worst: number | null = null;
+    const measured: Array<{ inView: boolean; error: number; drawable: boolean }> = [];
     // Selection is complete now: partially downloaded descendants and tiles
     // kept only for the focus region do not describe the displayed detail.
+    // The maximum stays every in-view measurement. Counts skip tiles that
+    // are not drawable yet.
     for (const tile of tiles.visibleTiles) {
-      const error = errors.get(tile);
-      if (error != null) worst = worst === null ? error : Math.max(worst, error);
+      const sample = samples.get(tile);
+      if (!sample?.inView) continue;
+      if (tileDrawable(tile)) measured.push({ inView: true, error: sample.error, drawable: true });
+      if (Number.isNaN(sample.error) || sample.error < 0) continue;
+      worst = worst === null ? sample.error : Math.max(worst, sample.error);
     }
-    return worst;
+    return { worst, distribution: createGoogleDetailDistribution(1, measured) };
   };
 }
 
@@ -371,6 +395,7 @@ export function createGoogleTilesRuntime(options: GoogleTilesRuntimeOptions): Se
   prepareDrawableTiles(tiles, drawableLifetime.signal, options, work);
   const readLoadedError = observeLoadedError(tiles);
   let loadedErrorTarget: number | null = null;
+  let loadedDistribution: DetailDistribution = unavailableDetailDistribution("google", "google", 1, "Loaded detail has not been measured.");
   applyViewMeasure(tiles, scene, options.getTerrainDetailAnchor, options.getFocus);
   const settings = options.settings;
   let suspended = false;
@@ -508,7 +533,7 @@ export function createGoogleTilesRuntime(options: GoogleTilesRuntimeOptions): Se
       };
     },
     getTerrainDetailState() {
-      return { defaultErrorTarget, errorTarget: tiles.errorTarget, overrideErrorTarget, loadedErrorTarget };
+      return { defaultErrorTarget, errorTarget: tiles.errorTarget, overrideErrorTarget, loadedErrorTarget, loadedDistribution };
     },
     setTerrainDetailTarget(nextErrorTarget) {
       overrideErrorTarget = normaliseTerrainDetailTarget(nextErrorTarget);
@@ -518,8 +543,9 @@ export function createGoogleTilesRuntime(options: GoogleTilesRuntimeOptions): Se
       if (suspended || disposed) return;
       tiles.update();
       const next = readLoadedError();
-      if (next !== loadedErrorTarget) {
-        loadedErrorTarget = next;
+      if (next.worst !== loadedErrorTarget || next.distribution.revision !== loadedDistribution.revision) {
+        loadedErrorTarget = next.worst;
+        loadedDistribution = next.distribution;
         options.onDetailFeedback?.();
       }
       options.onSurfaceChange?.("status");

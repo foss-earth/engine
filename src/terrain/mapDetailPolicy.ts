@@ -79,6 +79,40 @@ export interface DetailTrackMarker {
 export type DetailLimit = "source" | "memory" | "loading" | "backend" | "consumer" | "frame-time";
 
 /**
+ * One measured detail and how many distinct visible tiles share it.
+ * Equal values are combined. Image and GPU handles are not included.
+ */
+export interface DetailDistributionSample {
+  /** Raster offset, or Google screen-space error in pixels. Infinity is a real coarse measurement. */
+  readonly value: number;
+  readonly count: number;
+}
+
+/**
+ * Tiles contributing to the current view, not a reconstruction of the scalar
+ * mean or maximum. `empty` is a measured view with nothing in it.
+ * `unavailable` means the runtime could not classify tiles, so there are no bars.
+ */
+export interface DetailDistribution {
+  readonly status: "measured" | "empty" | "unavailable";
+  readonly kind: DetailKind;
+  /** "google" or "raster:<source id>", the same key the detail controller uses. */
+  readonly sourceKey: string;
+  /** Bumps when the runtime replaces the source, so a previous snapshot cannot be relabeled. */
+  readonly generation: number;
+  readonly samples: readonly DetailDistributionSample[];
+  /** Identified tiles, including those with no usable measurement. */
+  readonly tileCount: number;
+  /** Identified tiles that could not be placed on the axis. */
+  readonly unknownCount: number;
+  /** Some of the view has no bound coverage. That gap is not an invented tile. */
+  readonly incomplete: boolean;
+  readonly reason?: string;
+  /** Changes when the measured population changes, even if the old scalar does not. */
+  readonly revision: string;
+}
+
+/**
  * One source's detail request and what limits it. Numeric values carry the
  * policy's kind: raster offsets or Google error pixels. A target is a request,
  * not a measurement of delivered detail.
@@ -100,6 +134,11 @@ export interface DetailState {
   activeTarget: number | null;
   /** Measured loaded detail in this view, in the policy's units; never a request. */
   loadedTarget: number | null;
+  /**
+   * Tile counts across that same axis. Null when this delivery did not include
+   * one; the rail must not invent a bar from `loadedTarget`.
+   */
+  distribution: DetailDistribution | null;
   /**
    * For Google, the composed policy target. For raster, the delivered offset
    * once every region meets it; null while delivery is loading or limited.

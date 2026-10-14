@@ -69,6 +69,9 @@ export const MAP_SOURCE_PARAMETERS: readonly ParameterSpec[] = [
   },
 ];
 
+/** Which loaded-detail drawing the HUD rail uses. */
+export const MAP_DETAIL_LOADED_PRESENTATION_ID = "map.detail.loadedPresentation";
+
 const RASTER_BOUNDS = { min: RASTER_DETAIL_ENVELOPE.coarsest, max: RASTER_DETAIL_ENVELOPE.finest };
 const GOOGLE_BOUNDS = { min: GOOGLE_ERROR_TARGET_BOUNDS.finest, max: GOOGLE_ERROR_TARGET_BOUNDS.coarsest };
 /** Terrain mesh error targets, px: from finer than a pixel to where relief is gone. */
@@ -189,6 +192,22 @@ export const MAP_DETAIL_PARAMETERS: readonly ParameterSpec[] = [
     home: { tab: MAP_TAB, section: "detail", level: "main" },
     appliesLive: true,
     source: "src/babylon/createRasterTilesRuntime.ts",
+  },
+  {
+    id: MAP_DETAIL_LOADED_PRESENTATION_ID,
+    label: "Loaded detail on the rail",
+    description: "What the detail rail draws for tiles that are on screen. Tile distribution is a bar for each band of visible tiles. I-beam is the previous single marker.",
+    unit: "none",
+    kind: "choice",
+    choices: [
+      { id: "distribution", label: "Tile distribution" },
+      { id: "marker", label: "I-beam" },
+    ],
+    default: "distribution",
+    defaultReason: "The rail shows how many visible tiles sit at each detail. I-beam keeps the previous marker.",
+    home: { tab: MAP_TAB, section: "detail", level: "main" },
+    appliesLive: true,
+    source: "src/map/mapDetailSlider.ts",
   },
   {
     id: "map.detail.imageryPath",

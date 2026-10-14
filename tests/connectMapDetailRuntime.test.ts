@@ -4,6 +4,8 @@ import type { RasterDetailFeedback } from "../src/map/runtimeContracts.js";
 import { connectMapDetailRuntime, type MapDetailRuntime } from "../src/map/connectMapDetailRuntime.js";
 import { createMapDetailController } from "../fixtures/composition/mapPanelHost.js";
 import type { MapDetailStorage } from "../src/map/mapDetailController.js";
+import { createDetailDistribution, unavailableDetailDistribution } from "../src/terrain/detailDistribution.js";
+import type { DetailDistribution } from "../src/terrain/mapDetailPolicy.js";
 
 function memoryStorage(): MapDetailStorage {
   const data = new Map<string, string>();
@@ -15,7 +17,7 @@ function fakeRuntime() {
   const rasterListeners = new Set<() => void>();
   const googleListeners = new Set<() => void>();
   const streamingListeners = new Set<(streaming: boolean) => void>();
-  let google: { defaultErrorTarget: number; loadedErrorTarget?: number | null } | null = null;
+  let google: { defaultErrorTarget: number; loadedErrorTarget?: number | null; loadedDistribution?: DetailDistribution | null } | null = null;
   let feedback: RasterDetailFeedback | null = null;
   const status = { mode: "raster-basemap", rasterBaseMap: { id: "usgs-imagery" } } as BabylonRuntimeStatus;
   const runtime = {
@@ -34,8 +36,11 @@ function fakeRuntime() {
   return {
     runtime,
     setFeedback(next: RasterDetailFeedback | null) { feedback = next; for (const listener of rasterListeners) listener(); },
-    setGoogleLoaded(value: number | null) {
-      if (google) google.loadedErrorTarget = value;
+    setGoogleLoaded(value: number | null, distribution?: DetailDistribution | null) {
+      if (google) {
+        google.loadedErrorTarget = value;
+        if (distribution !== undefined) google.loadedDistribution = distribution;
+      }
       for (const listener of googleListeners) listener();
     },
     showGoogle(defaultErrorTarget: number | null) {
@@ -184,6 +189,66 @@ describe("connectMapDetailRuntime", () => {
     fake.showRaster("carto-positron");
     expect(controller.getState()).toMatchObject({ key: "raster:carto-positron", requestedTarget: 0 });
     expect(fake.runtime.setRasterDetailTarget).toHaveBeenLastCalledWith(0);
+  });
+
+  it("forwards a tile distribution and replaces it when the population changes", () => {
+    const controller = createMapDetailController({ storage: memoryStorage() });
+    const fake = fakeRuntime();
+    const measured = createDetailDistribution({
+      status: "measured", kind: "raster", sourceKey: "raster:usgs-imagery", generation: 1,
+      samples: [{ value: 0, count: 3 }], tileCount: 3,
+    });
+    const next = createDetailDistribution({
+      status: "measured", kind: "raster", sourceKey: "raster:usgs-imagery", generation: 1,
+      samples: [{ value: -1, count: 1 }, { value: 1, count: 1 }], tileCount: 2,
+    });
+    fake.setFeedback({ ...READY, loadedTarget: 0, distribution: measured });
+    connectMapDetailRuntime(controller, fake.runtime);
+    expect(controller.getState()?.distribution?.revision).toBe(measured.revision);
+    fake.setFeedback({ ...READY, loadedTarget: 0, distribution: next });
+    expect(controller.getState()?.loadedTarget).toBe(0);
+    expect(controller.getState()?.distribution?.revision).toBe(next.revision);
+    const google = createDetailDistribution({
+      status: "measured", kind: "google", sourceKey: "google", generation: 1,
+      samples: [{ value: 16, count: 2 }], tileCount: 2,
+    });
+    fake.showGoogle(16);
+    fake.setGoogleLoaded(16, google);
+    expect(controller.getState()).toMatchObject({ key: "google", loadedTarget: 16 });
+    expect(controller.getState()?.distribution?.revision).toBe(google.revision);
+  });
+
+  it("does not draw a distribution that belongs to another source", () => {
+    const controller = createMapDetailController({ storage: memoryStorage() });
+    const fake = fakeRuntime();
+    fake.setFeedback({
+      ...READY, loadedTarget: 0,
+      distribution: createDetailDistribution({
+        status: "measured", kind: "raster", sourceKey: "raster:other", generation: 1,
+        samples: [{ value: 0, count: 4 }], tileCount: 4,
+      }),
+    });
+    connectMapDetailRuntime(controller, fake.runtime);
+    expect(controller.getState()?.loadedTarget).toBe(0);
+    expect(controller.getState()?.distribution).toMatchObject({ status: "unavailable", samples: [], tileCount: 0 });
+  });
+
+  it("reads the runtime's current distribution when a source returns", () => {
+    const controller = createMapDetailController({ storage: memoryStorage() });
+    const fake = fakeRuntime();
+    const old = createDetailDistribution({
+      status: "measured", kind: "raster", sourceKey: "raster:usgs-imagery", generation: 1,
+      samples: [{ value: 0, count: 3 }], tileCount: 3,
+    });
+    fake.setFeedback({ ...READY, loadedTarget: 0, distribution: old });
+    connectMapDetailRuntime(controller, fake.runtime);
+    fake.showGoogle(16);
+    const fresh = unavailableDetailDistribution("raster:usgs-imagery", "raster", 2, "Loaded detail has not been measured.");
+    fake.setFeedback({ ...READY, loadedTarget: 0, distribution: fresh });
+    fake.showRaster("usgs-imagery");
+    expect(controller.getState()?.distribution?.status).toBe("unavailable");
+    expect(controller.getState()?.distribution?.revision).toBe(fresh.revision);
+    expect(controller.getState()?.loadedTarget).toBe(0);
   });
 
   it("stops following the runtime once disconnected", () => {

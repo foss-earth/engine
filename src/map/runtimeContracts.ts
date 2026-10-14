@@ -1,4 +1,4 @@
-import type { DetailLimit } from "../terrain/mapDetailPolicy.js";
+import type { DetailDistribution, DetailLimit } from "../terrain/mapDetailPolicy.js";
 import type { ImageryConstraint } from "../terrain/imagery/imageryConstraints.js";
 import type { AutoDetailState } from "../terrain/autoDetail.js";
 import type { RasterBaseMapSource } from "./rasterBaseMaps.js";
@@ -23,6 +23,8 @@ export interface RasterDetailFeedback {
   activeTarget?: number | null;
   /** Visible-area estimate of imagery actually bound to terrain, in detail offsets. */
   loadedTarget?: number | null;
+  /** Tile counts for the rail. Missing means this adapter has no distribution. */
+  distribution?: DetailDistribution | null;
   /** The one delivered offset when every region meets the request, otherwise null. */
   effectiveTarget: number | null;
   /** The source delivery is for, while imagery is supported. */

@@ -44,6 +44,13 @@ export interface ImageryDisplay {
   slots: Set<number>;
   /** Selected leaves shown by an ancestor while their own image loads; missing images do not count. */
   fallbackLeaves: number;
+  /**
+   * Source-image key for each slot this display adopted. A slot claimed by two
+   * images is left out: a reused slot number is not an identity.
+   */
+  slotImages: Map<number, string>;
+  /** Slots whose image key collided inside this display. */
+  ambiguousSlots: Set<number>;
 }
 
 function addAncestors(ancestors: Set<string>, z: number, x: number, y: number): void {
@@ -56,7 +63,16 @@ function addAncestors(ancestors: Set<string>, z: number, x: number, y: number): 
 }
 
 export function buildImageryDisplay(input: ImageryDisplayInput): ImageryDisplay {
-  const display: ImageryDisplay = { pages: new Map(), ancestors: new Set(), slots: new Set(), fallbackLeaves: 0 };
+  const display: ImageryDisplay = { pages: new Map(), ancestors: new Set(), slots: new Set(), fallbackLeaves: 0, slotImages: new Map(), ambiguousSlots: new Set() };
+  const remember = (slot: number, imageKey: string): void => {
+    if (display.ambiguousSlots.has(slot)) return;
+    const existing = display.slotImages.get(slot);
+    if (existing === undefined) display.slotImages.set(slot, imageKey);
+    else if (existing !== imageKey) {
+      display.slotImages.delete(slot);
+      display.ambiguousSlots.add(slot);
+    }
+  };
   const show = (z: number, x: number, y: number, slot: number): void => {
     const key = `${z}/${x}/${y}`;
     if (display.pages.has(key)) return;
@@ -64,21 +80,22 @@ export function buildImageryDisplay(input: ImageryDisplayInput): ImageryDisplay 
     display.slots.add(slot);
     addAncestors(display.ancestors, z, x, y);
   };
-  const showImage = (tile: TileId, slots: readonly number[], pagesPerSide: number): void => {
+  const showImage = (tile: TileId, slots: readonly number[], pagesPerSide: number, imageKey: string): void => {
     const shift = Math.round(Math.log2(pagesPerSide));
     for (let index = 0; index < slots.length; index++) {
       const px = index % pagesPerSide, py = Math.floor(index / pagesPerSide);
+      remember(slots[index], imageKey);
       show(tile.z + shift, (tile.x << shift) + px, (tile.y << shift) + py, slots[index]);
     }
   };
   for (const root of input.coverage) {
     const slots = input.slotsFor(input.standardKey(root));
-    if (slots) showImage(root, slots, 1);
+    if (slots) showImage(root, slots, 1, input.standardKey(root));
   }
   for (const leaf of input.leaves) {
     const own = input.slotsFor(leaf.imageKey);
     if (own) {
-      showImage(leaf.tile, own, leaf.pagesPerSide);
+      showImage(leaf.tile, own, leaf.pagesPerSide, leaf.imageKey);
       continue;
     }
     if (!leaf.presumedMissing && !input.isMissing?.(leaf.imageKey)) display.fallbackLeaves += 1;
@@ -88,7 +105,7 @@ export function buildImageryDisplay(input: ImageryDisplayInput): ImageryDisplay 
       const ancestor = { z, x, y };
       const slots = input.slotsFor(input.standardKey(ancestor));
       if (slots) {
-        showImage(ancestor, slots, 1);
+        showImage(ancestor, slots, 1, input.standardKey(ancestor));
         break;
       }
     }
@@ -148,6 +165,27 @@ export interface LoadedImageryBinding {
   tile: TileId;
   table: Pick<PatchTable, "cellsLog2" | "data"> | null;
   directLevel: number | null;
+  /**
+   * Source-image key for each atlas slot at the moment this material adopted
+   * the table. Copied then, so a later reuse of the slot number is ignored.
+   * Absent when identity was not recorded.
+   */
+  imagesBySlot?: ReadonlyMap<number, string>;
+  /**
+   * Image key of a table-less binding. Null when the patch shows no page.
+   * Absent when a page is shown but its image could not be named.
+   */
+  directImage?: string | null;
+}
+
+/** A classified imagery population before it is wrapped as a delivery snapshot. */
+export interface ImageryDistributionDraft {
+  status: "measured" | "empty" | "unavailable";
+  reason?: string;
+  samples: Array<{ value: number; count: number }>;
+  tileCount: number;
+  unknownCount: number;
+  incomplete: boolean;
 }
 
 /**
@@ -207,6 +245,130 @@ export function measureLoadedImagery(regions: readonly LoadedImageryRegion[], bi
     descend(region.tile);
   }
   return !missing && area > 0 ? weighted / area : null;
+}
+
+function tableSlot(data: Uint8Array, index: number): number {
+  return data[index] + data[index + 1] * 256;
+}
+
+function pageAt(tile: TileId, level: number): TileId {
+  const shift = tile.z - level;
+  if (shift >= 0) return { z: level, x: tile.x >> shift, y: tile.y >> shift };
+  return { z: level, x: tile.x << -shift, y: tile.y << -shift };
+}
+
+/**
+ * Page tiles sampled by adopted bindings. The distribution measures these,
+ * not the requested plan's leaves, so a new request cannot move a bar by
+ * repartitioning before different imagery is bound.
+ */
+export function loadedImageryPages(bindings: readonly LoadedImageryBinding[]): TileId[] {
+  const pages = new Map<string, TileId>();
+  const add = (tile: TileId): void => { pages.set(tileKey(tile), tile); };
+  for (const binding of bindings) {
+    if (!binding.table) {
+      if (binding.directLevel !== null) add(pageAt(binding.tile, binding.directLevel));
+      continue;
+    }
+    const { cellsLog2, data } = binding.table;
+    const side = 2 ** cellsLog2;
+    const cellLevel = binding.tile.z + cellsLog2;
+    for (let y = 0; y < side; y++) for (let x = 0; x < side; x++) {
+      const index = (y * IMAGERY_TABLE_BLOCK + x) * 4;
+      if (data[index + 3] !== 255) continue;
+      const cell = { z: cellLevel, x: binding.tile.x * side + x, y: binding.tile.y * side + y };
+      add(pageAt(cell, data[index + 2]));
+    }
+  }
+  return [...pages.values()];
+}
+
+/**
+ * One count per source image sampled by the bindings. A 512 px image spread
+ * across four pages, and one image repeated across cells or patches, counts
+ * once. Its position is the visible-area-weighted mean of
+ * `log2(normalTargetPx / footprintPx) + boundPageLevel − referenceLevel`
+ * inside that image. A bad projection makes the whole image unknown. Missing
+ * coverage sets `incomplete` and does not invent a tile. If a sampled page
+ * has no image identity, the result is unavailable rather than a guessed total.
+ */
+export function measureLoadedImageryDistribution(
+  regions: readonly LoadedImageryRegion[],
+  bindings: readonly LoadedImageryBinding[],
+  normalTargetPx = 1,
+): ImageryDistributionDraft {
+  const unavailable = (reason: string): ImageryDistributionDraft => ({ status: "unavailable", reason, samples: [], tileCount: 0, unknownCount: 0, incomplete: false });
+  const patches = new Map(bindings.map(binding => [tileKey(binding.tile), binding]));
+  const ancestors = new Set<string>();
+  for (const binding of bindings) addAncestors(ancestors, binding.tile.z, binding.tile.x, binding.tile.y);
+  const groups = new Map<string, { weighted: number; weight: number; unknown: boolean }>();
+  let incomplete = false;
+  let identityFailed = false;
+  const note = (image: string | null | undefined, level: number | null, fraction: number, region: LoadedImageryRegion): void => {
+    if (!(fraction > 0) || !(region.screenArea > 0)) return;
+    if (level === null || image === null) { incomplete = true; return; }
+    if (image === undefined) { identityFailed = true; return; }
+    const group = groups.get(image) ?? { weighted: 0, weight: 0, unknown: false };
+    groups.set(image, group);
+    const footprint = region.footprintPx;
+    const usable = footprint === Infinity || (Number.isFinite(footprint) && footprint > 0);
+    if (!usable) { group.unknown = true; return; }
+    const value = Math.log2(normalTargetPx / footprint) + level - region.referenceLevel;
+    const weight = region.screenArea * fraction;
+    group.weighted += weight * value;
+    group.weight += weight;
+  };
+  const sample = (binding: LoadedImageryBinding, intersection: TileId, region: LoadedImageryRegion): void => {
+    const fraction = 4 ** (region.tile.z - intersection.z);
+    if (!binding.table) {
+      note(binding.directLevel === null ? null : binding.directImage, binding.directLevel, fraction, region);
+      return;
+    }
+    if (!binding.imagesBySlot) { identityFailed = true; return; }
+    const { cellsLog2, data } = binding.table;
+    const cellLevel = binding.tile.z + cellsLog2;
+    const count = 2 ** Math.max(0, cellLevel - intersection.z);
+    const scale = 2 ** (cellLevel - intersection.z);
+    const startX = Math.floor(intersection.x * scale) - binding.tile.x * 2 ** cellsLog2;
+    const startY = Math.floor(intersection.y * scale) - binding.tile.y * 2 ** cellsLog2;
+    for (let y = startY; y < startY + count; y++) for (let x = startX; x < startX + count; x++) {
+      const index = (y * IMAGERY_TABLE_BLOCK + x) * 4;
+      if (data[index + 3] !== 255) { note(null, null, fraction / (count * count), region); continue; }
+      const slot = tableSlot(data, index);
+      note(binding.imagesBySlot.has(slot) ? binding.imagesBySlot.get(slot) : undefined, data[index + 2], fraction / (count * count), region);
+    }
+  };
+  for (const region of regions) {
+    if (!(region.screenArea > 0)) continue;
+    let { z, x, y } = region.tile;
+    let covering: LoadedImageryBinding | undefined;
+    for (;;) {
+      covering = patches.get(`${z}/${x}/${y}`);
+      if (covering || z === 0) break;
+      z -= 1; x >>= 1; y >>= 1;
+    }
+    if (covering) { sample(covering, region.tile, region); continue; }
+    const descend = (tile: TileId): void => {
+      const key = tileKey(tile);
+      const patch = patches.get(key);
+      if (patch) { sample(patch, tile, region); return; }
+      if (!ancestors.has(key)) { incomplete = true; return; }
+      for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) descend({ z: tile.z + 1, x: tile.x * 2 + dx, y: tile.y * 2 + dy });
+    };
+    descend(region.tile);
+  }
+  if (identityFailed) return unavailable("Imagery identity could not be recovered, so tiles were not counted.");
+  const samples: Array<{ value: number; count: number }> = [];
+  let unknownCount = 0;
+  for (const group of groups.values()) {
+    if (group.unknown || !(group.weight > 0)) { unknownCount += 1; continue; }
+    const value = group.weighted / group.weight;
+    if (value !== Infinity && value !== -Infinity && !Number.isFinite(value)) { unknownCount += 1; continue; }
+    samples.push({ value, count: 1 });
+  }
+  const tileCount = samples.reduce((sum, sample) => sum + sample.count, 0) + unknownCount;
+  if (tileCount === 0 && unknownCount === 0 && !incomplete) return { status: "empty", samples: [], tileCount: 0, unknownCount: 0, incomplete: false };
+  return { status: "measured", samples, tileCount, unknownCount, incomplete };
 }
 
 /**

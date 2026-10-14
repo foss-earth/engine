@@ -76,7 +76,7 @@ describe("actual Renderer whole-batch Atlas ownership", () => {
     } finally { h.dispose(); }
   });
   it("retains a fresh table block and candidate charge through failed native work without changing the outgoing table", async () => {
-    const h = ownedAtlasHost(), display = { pages: new Map([["2/0/0", { slot: 0, z: 2 }]]), ancestors: new Set(["1/0/0", "0/0/0"]), slots: new Set([0]), fallbackLeaves: 0 };
+    const h = ownedAtlasHost(), display = { pages: new Map([["2/0/0", { slot: 0, z: 2 }]]), ancestors: new Set(["1/0/0", "0/0/0"]), slots: new Set([0]), fallbackLeaves: 0, slotImages: new Map([[0, "s/std/2/0/0"]]), ambiguousSlots: new Set<number>() };
     const candidate = prepareManagedPatchTable(display, { z: 2, x: 0, y: 0 }, { reserve: h.resources.reserveTable })!;
     const old = h.atlas.allocateBlock()!, incoming = h.atlas.allocateBlock()!, job = h.atlas.prepareOwnedTable!(incoming, candidate.data, () => candidate.retain())!;
     const reason = new Error("table copy failed"); h.onWrite(() => { throw reason; }); job.submit();

@@ -15,9 +15,9 @@ vi.mock("3d-tiles-renderer/babylonjs", () => ({
     stats = { queued: 0 };
     listeners = new Map<string, Set<(event: unknown) => void>>();
     registerPlugin() {}
-    calculateTileViewError(_tile: unknown, target: { inView: boolean; error: number; distanceFromCamera: number }) {
-      target.inView = false;
-      target.error = 1;
+    calculateTileViewError(tile: { nativeInView?: boolean; nativeError?: number }, target: { inView: boolean; error: number; distanceFromCamera: number }) {
+      target.inView = tile?.nativeInView ?? false;
+      target.error = tile?.nativeError ?? 1;
       target.distanceFromCamera = 999;
     }
     update() {}
@@ -177,11 +177,83 @@ describe("Google terrain detail anchors", () => {
     const target = { inView: false, error: 0, distanceFromCamera: 0 };
     renderer.calculateTileViewError(tile, target);
     // The native measurement is camera-invisible in this mock. Anchor-only
-    // selection must not invent delivered camera coverage.
+    // selection must not invent delivered camera coverage. The first update
+    // only records that nothing drawable is in the camera view.
     runtime.update();
     expect(runtime.getTerrainDetailState().loadedErrorTarget).toBeNull();
+    expect(runtime.getTerrainDetailState().loadedDistribution.status).toBe("empty");
     expect(target.error).toBe(100);
-    expect(onDetailFeedback).not.toHaveBeenCalled();
+    expect(onDetailFeedback).toHaveBeenCalledTimes(1);
+    runtime.dispose();
+  });
+
+  it("counts each drawable in-view tile, including when the maximum error stays the same", () => {
+    const onDetailFeedback = vi.fn();
+    const scene = { activeCamera: null, getEngine: () => ({}) } as unknown as Scene;
+    const runtime = createGoogleTilesRuntime({ scene, apiKey: "test", onDetailFeedback });
+    const renderer = runtime.tiles as unknown as {
+      calculateTileViewError(tile: object, target: { inView: boolean; error: number; distanceFromCamera: number }): void;
+    };
+    const measure = (nativeError: number, extra: object = {}) => {
+      const tile = { nativeInView: true, nativeError, geometricError: 2, engineData: { boundingVolume: { distanceToPoint: () => 1 } }, ...extra };
+      runtime.tiles.visibleTiles.add(tile as never);
+      renderer.calculateTileViewError(tile, { inView: false, error: 0, distanceFromCamera: 0 });
+      return tile;
+    };
+    const parent = measure(8);
+    const child = measure(4);
+    runtime.update();
+    const first = runtime.getTerrainDetailState();
+    expect(first.loadedErrorTarget).toBe(8);
+    expect(first.loadedDistribution).toMatchObject({
+      status: "measured", sourceKey: "google", tileCount: 2,
+      samples: [{ value: 4, count: 1 }, { value: 8, count: 1 }],
+    });
+    onDetailFeedback.mockClear();
+    runtime.tiles.visibleTiles.delete(child as never);
+    runtime.update();
+    expect(runtime.getTerrainDetailState().loadedErrorTarget).toBe(8);
+    expect(runtime.getTerrainDetailState().loadedDistribution.samples).toEqual([{ value: 8, count: 1 }]);
+    expect(runtime.getTerrainDetailState().loadedDistribution.revision).not.toBe(first.loadedDistribution.revision);
+    expect(onDetailFeedback).toHaveBeenCalledTimes(1);
+    expect(runtime.tiles.visibleTiles.has(parent as never)).toBe(true);
+    runtime.dispose();
+  });
+
+  it("keeps raw zero, subpixel and infinite camera errors, and skips unfinished or focus-only tiles", () => {
+    const scene = {
+      activeCamera: { viewport: new Viewport(0, 0, 1, 1), getProjectionMatrix: () => Matrix.Identity(), globalPosition: new Vector3(0, 0, 0) },
+      getEngine: () => ({ getHardwareScalingLevel: () => 1, getRenderWidth: () => 100, getRenderHeight: () => 100 }),
+    } as Scene;
+    const runtime = createGoogleTilesRuntime({
+      scene, apiKey: "test",
+      getFocus: () => ({ mode: "around", position: new Vector3(0, 0, 0), radiusMeters: 1_000_000, finestErrorPx: null, horizonCull: false }),
+    });
+    const renderer = runtime.tiles as unknown as {
+      calculateTileViewError(tile: object, target: { inView: boolean; error: number; distanceFromCamera: number }): void;
+    };
+    const measure = (fields: object) => {
+      const tile = { geometricError: 2, engineData: { boundingVolume: { distanceToPoint: () => 1 } }, ...fields };
+      runtime.tiles.visibleTiles.add(tile as never);
+      const target = { inView: false, error: 0, distanceFromCamera: 0 };
+      renderer.calculateTileViewError(tile, target);
+      return target;
+    };
+    runtime.update();
+    measure({ nativeInView: true, nativeError: 0 });
+    measure({ nativeInView: true, nativeError: 0.25 });
+    measure({ nativeInView: true, nativeError: Infinity });
+    measure({ nativeInView: true, nativeError: Number.NaN });
+    measure({ nativeInView: true, nativeError: 64, internal: { loadingState: 2, hasRenderableContent: true } });
+    const focusOnly = measure({ nativeInView: false, nativeError: 2 });
+    runtime.update();
+    const distribution = runtime.getTerrainDetailState().loadedDistribution;
+    expect(focusOnly.inView).toBe(true);
+    expect(runtime.getTerrainDetailState().loadedErrorTarget).toBe(Infinity);
+    expect(distribution.samples.map(sample => sample.value).sort((a, b) => a - b)).toEqual([0, 0.25, Infinity]);
+    expect(distribution.unknownCount).toBe(1);
+    expect(distribution.tileCount).toBe(4);
+    expect(distribution.samples.some(sample => sample.value === 64 || sample.value === 2)).toBe(false);
     runtime.dispose();
   });
 });

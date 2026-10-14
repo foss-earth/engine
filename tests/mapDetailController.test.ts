@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_GOOGLE_DETAIL_POLICY, type GoogleDetailPolicy, type RasterDetailPolicy } from "../src/terrain/mapDetailPolicy.js";
+import { createDetailDistribution } from "../src/terrain/detailDistribution.js";
 import { SETTINGS_STORAGE_KEY } from "@foss-earth/ui/settings";
 import { createMapDetailController as createMapDetailControllerCore, MAP_DETAIL_STORAGE_KEY, type MapDetailStorage, type MapDetailControllerOptions } from "../src/map/mapDetailController.js";
 
@@ -264,5 +265,38 @@ describe("map detail controller", () => {
     controller.setActiveSource({ key: RASTER, availability: "unavailable", reason: "not yet" });
     expect(controller.setSessionOverride(1)).toBe(false);
     expect(controller.getRuntimeTarget()).toBeNull();
+  });
+
+  it("publishes a new tile population even when the loaded scalar is unchanged", () => {
+    const controller = createMapDetailController({ storage: memoryStorage() });
+    readyGoogle(controller);
+    const listener = vi.fn();
+    controller.subscribe(listener);
+    const population = (samples: Array<{ value: number; count: number }>) => createDetailDistribution({
+      status: "measured", kind: "google", sourceKey: "google", generation: 1, samples,
+      tileCount: samples.reduce((sum, sample) => sum + sample.count, 0),
+    });
+    const first = population([{ value: 8, count: 1 }, { value: 2, count: 1 }]);
+    const second = population([{ value: 8, count: 2 }]);
+    controller.reportDelivery("google", { pending: false, limits: [], loadedTarget: 8, distribution: first });
+    listener.mockClear();
+    controller.reportDelivery("google", { pending: false, limits: [], loadedTarget: 8, distribution: second });
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(controller.getState()?.loadedTarget).toBe(8);
+    expect(controller.getState()?.distribution?.revision).toBe(second.revision);
+    expect(controller.getState()?.distribution?.revision).not.toBe(first.revision);
+  });
+
+  it("keeps its copy when the caller later changes the sample list", () => {
+    const controller = createMapDetailController({ storage: memoryStorage() });
+    readyGoogle(controller);
+    const samples = [{ value: 4, count: 2 }];
+    const distribution = createDetailDistribution({
+      status: "measured", kind: "google", sourceKey: "google", generation: 1, samples, tileCount: 2,
+    });
+    controller.reportDelivery("google", { pending: false, limits: [], loadedTarget: 4, distribution });
+    samples.push({ value: 1, count: 9 });
+    samples[0].count = 99;
+    expect(controller.getState()?.distribution?.samples).toEqual([{ value: 4, count: 2 }]);
   });
 });

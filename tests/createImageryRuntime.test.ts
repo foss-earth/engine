@@ -170,6 +170,20 @@ describe("imagery runtime recovery", () => {
     } finally { test.dispose(); }
   });
 
+  it("does not move the tile distribution when only the request changes", async () => {
+    const test = harness();
+    try {
+      test.attach("current-view", VIEW_ROOT);
+      await test.settle();
+      const before = test.runtime.getFeedback().distribution;
+      expect(before?.status).toBe("measured");
+      expect(before?.tileCount).toBeGreaterThan(0);
+      test.runtime.setOffset(-1);
+      expect(test.runtime.getFeedback().activeTarget).toBe(-1);
+      expect(test.runtime.getFeedback().distribution?.revision).toBe(before?.revision);
+    } finally { test.dispose(); }
+  });
+
   it("moves loaded detail as visible pages arrive and after a view change, without changing the requested target", async () => {
     const waiting: Array<() => void> = [];
     const test = harness({
@@ -235,6 +249,8 @@ describe("imagery runtime recovery", () => {
       await test.settle();
       expect(test.runtime.getDisplayedSourceId()).toBe("test");
       expect(test.runtime.getFeedback()).toMatchObject({ loadedTarget: loaded, pending: true });
+      expect(test.runtime.getFeedback().distribution).toMatchObject({ status: "unavailable" });
+      expect(test.runtime.getFeedback().distribution?.samples).toEqual([]);
     } finally { test.dispose(); }
   });
 

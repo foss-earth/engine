@@ -10,6 +10,8 @@ import {
   type DetailState,
   type DetailTrackMarker,
 } from "../terrain/mapDetailPolicy.js";
+import { describeLoadedTiles, layoutDetailDistribution, type DetailBinLayout } from "../terrain/detailDistribution.js";
+import { MAP_DETAIL_LOADED_PRESENTATION_ID } from "../settings/catalogue/map.js";
 import type { MapDetailController } from "./mapDetailController.js";
 import { CONSTRAINT_LIMIT, describeImageryConstraint } from "./mapDetailExplanations.js";
 
@@ -63,9 +65,23 @@ function rangePercent(position: number, finer: number, coarser: number): number 
  * A small rail beside the map's credit that sets a temporary detail target for
  * this session: finer to the left, coarser to the right. Both ends are
  * ordinary values; "Restore saved detail" in the Map tab returns to the saved
- * default. A tick marks that default. An I-beam marks the detail actually drawn,
- * independently of the request, and stays visible when it reaches the thumb.
+ * default. A tick marks that default. Tile distribution draws the detail actually
+ * on screen; the I-beam is the previous marker, chosen with
+ * "Loaded detail on the rail". Either one stays visible when it meets the thumb.
+ * Distribution mode draws the handle as a white ring with an empty centre.
  */
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+let distributionSerial = 0;
+
+function loadedPresentation(controller: MapDetailController): "distribution" | "marker" {
+  if (!controller.settings.spec(MAP_DETAIL_LOADED_PRESENTATION_ID)) return "distribution";
+  return controller.settings.get(MAP_DETAIL_LOADED_PRESENTATION_ID) === "marker" ? "marker" : "distribution";
+}
+
+function setAttr(element: Element, name: string, value: string): void {
+  if (element.getAttribute(name) !== value) element.setAttribute(name, value);
+}
 export function createMapDetailSlider(options: MapDetailSliderOptions): MapDetailSliderHandle {
   const { controller, document } = options;
   const name = options.name ?? "Map detail";
@@ -84,6 +100,27 @@ export function createMapDetailSlider(options: MapDetailSliderOptions): MapDetai
   const loadedMarker = document.createElement("span");
   loadedMarker.className = "map-detail-control__loaded-marker";
   loadedMarker.setAttribute("aria-hidden", "true");
+  const distribution = document.createElementNS(SVG_NS, "svg");
+  distribution.classList.add("map-detail-control__distribution");
+  distribution.setAttribute("aria-hidden", "true");
+  distribution.setAttribute("pointer-events", "none");
+  const gradientId = `map-detail-distribution-${++distributionSerial}`;
+  const defs = document.createElementNS(SVG_NS, "defs");
+  const gradient = document.createElementNS(SVG_NS, "linearGradient");
+  gradient.id = gradientId;
+  gradient.setAttribute("gradientUnits", "userSpaceOnUse");
+  gradient.setAttribute("x1", "0");
+  gradient.setAttribute("y1", "0");
+  gradient.setAttribute("x2", "41");
+  gradient.setAttribute("y2", "0");
+  for (const [offset, color] of [["0%", "#46db8f"], ["55%", "#f6d365"], ["100%", "#ff6b6b"]] as const) {
+    const stop = document.createElementNS(SVG_NS, "stop");
+    stop.setAttribute("offset", offset);
+    stop.setAttribute("stop-color", color);
+    gradient.append(stop);
+  }
+  defs.append(gradient);
+  distribution.append(defs);
   const slider = document.createElement("input");
   slider.className = "map-detail-control__slider";
   slider.type = "range";
@@ -91,25 +128,71 @@ export function createMapDetailSlider(options: MapDetailSliderOptions): MapDetai
   const markerTicks = document.createElement("span");
   markerTicks.className = "map-detail-control__markers";
   markerTicks.setAttribute("aria-hidden", "true");
-  rail.append(validRange, defaultTick, loadedMarker, markerTicks, slider);
+  rail.append(validRange, distribution, defaultTick, loadedMarker, markerTicks, slider);
   element.append(rail);
 
   let shown: DetailState | null | undefined;
   let markerLayout = "";
   let shownMarkers: readonly DetailTrackMarker[] = [];
   let dragging = false;
+  let painted = "";
+  const barNodes: SVGRectElement[] = [];
+  let resizeFrame = 0;
+  const railWidth = (): number => {
+    const width = rail.getBoundingClientRect().width;
+    return width > 0 ? width : 41;
+  };
+  const paintDistribution = (presentation: "distribution" | "marker", layout: DetailBinLayout | null, width: number): void => {
+    if (presentation !== "distribution" || !layout || layout.bars.every(bar => bar.height === 0)) {
+      distribution.setAttribute("hidden", "");
+      if (painted === "hidden") return;
+      painted = "hidden";
+      while (barNodes.length) barNodes.pop()!.remove();
+      return;
+    }
+    const signature = `${width}|${layout.bars.map(bar => [bar.x, bar.y, bar.width, bar.height, bar.overflow].join(",")).join(";")}`;
+    distribution.removeAttribute("hidden");
+    if (signature === painted) return;
+    painted = signature;
+    setAttr(gradient, "x2", String(width));
+    setAttr(distribution, "viewBox", `0 0 ${width} 28`);
+    while (barNodes.length < layout.bars.length) {
+      const rect = document.createElementNS(SVG_NS, "rect");
+      rect.setAttribute("fill", `url(#${gradientId})`);
+      barNodes.push(rect);
+      distribution.append(rect);
+    }
+    while (barNodes.length > layout.bars.length) barNodes.pop()!.remove();
+    layout.bars.forEach((bar, index) => {
+      const rect = barNodes[index];
+      setAttr(rect, "x", String(bar.x));
+      setAttr(rect, "y", String(bar.y));
+      setAttr(rect, "width", String(bar.width));
+      setAttr(rect, "height", String(bar.height));
+      if (bar.overflow > 0) {
+        setAttr(rect, "stroke", "#061422");
+        setAttr(rect, "stroke-width", "1");
+      } else {
+        rect.removeAttribute("stroke");
+        rect.removeAttribute("stroke-width");
+      }
+    });
+  };
   const update = (): void => {
     const state = controller.getState();
     if (state === shown) return;
     shown = state;
     const ready = state?.availability === "ready";
+    const presentation = loadedPresentation(controller);
     element.classList.toggle("is-unavailable", !ready);
     element.classList.toggle("is-pending", Boolean(ready && state?.pending));
     element.classList.toggle("is-limited", Boolean(ready && state && state.limits.some(limit => limit !== "loading")));
+    element.classList.toggle("is-distribution", presentation === "distribution");
     if (!state) {
       slider.disabled = true;
       defaultTick.hidden = true;
       loadedMarker.hidden = true;
+      paintDistribution(presentation, null, railWidth());
       markerTicks.replaceChildren();
       shownMarkers = [];
       slider.removeAttribute("aria-valuetext");
@@ -140,19 +223,31 @@ export function createMapDetailSlider(options: MapDetailSliderOptions): MapDetai
         ? kind === "google" ? formatDetailValue(kind, loaded) : describeDetailValue(kind, loaded)
         : "beyond measurable range"}`
       : null;
-    slider.setAttribute("aria-valuetext", [valueText, activeText, loadedText, status].filter(Boolean).join(". "));
+    const width = railWidth();
+    let bins: DetailBinLayout | null = null;
+    if (presentation === "distribution" && state.distribution && ready) {
+      bins = layoutDetailDistribution({
+        kind, finer: range.finer, coarser: range.coarser, widthPx: width, distribution: state.distribution,
+      });
+    }
+    const distributionText = presentation !== "distribution" ? null
+      : state.distribution ? describeLoadedTiles(kind, state.distribution, bins ?? { ceiling: 1, finerOverflow: 0, coarserOverflow: 0 })
+      : "Loaded detail distribution is not available.";
+    slider.setAttribute("aria-valuetext", [valueText, activeText, presentation === "distribution" ? distributionText : loadedText, status].filter(Boolean).join(". "));
 
     defaultTick.hidden = false;
     defaultTick.style.left = `${rangePercent(detailPosition(kind, state.resolvedDefault), finer, coarser)}%`;
 
     // Delivery may be coarser than the selectable range while tiles arrive.
     // Clamp only its position; the tooltip preserves the measured value.
-    loadedMarker.hidden = !hasLoaded;
-    if (hasLoaded) {
+    // Distribution mode keeps this marker in the tree and hides it.
+    loadedMarker.hidden = presentation !== "marker" || !hasLoaded;
+    if (presentation === "marker" && hasLoaded) {
       const position = detailPosition(kind, loaded);
       loadedMarker.style.left = `${rangePercent(position, finer, coarser)}%`;
       loadedMarker.classList.toggle("is-beyond-range", position < finer - 1e-9 || position > coarser + 1e-9);
     }
+    paintDistribution(presentation, bins, width);
 
     // Hosts' markers that explain the rail, such as a flight's minimum while it holds.
     const railMarkers = ready ? state.markers.filter(marker => marker.onRail) : [];
@@ -185,7 +280,8 @@ export function createMapDetailSlider(options: MapDetailSliderOptions): MapDetai
         `Saved default: ${formatDetailValue(kind, state.resolvedDefault)}${state.defaultLimitedByRange ? ", limited by the range" : ""}.`,
       ];
       if (activeText) lines.push(`${activeText}.`);
-      if (loadedText) lines.push(`I-beam · ${loadedText} (${kind === "raster" ? "visible-area estimate" : "largest visible geometry error"}).`);
+      if (presentation === "distribution" && distributionText) lines.push(distributionText);
+      else if (loadedText) lines.push(`I-beam · ${loadedText} (${kind === "raster" ? "visible-area estimate" : "largest visible geometry error"}).`);
       if (kind === "raster" && state.effectiveTarget === null) lines.push("Imagery is still loading or limited.");
       for (const marker of railMarkers) lines.push(`${marker.label}: ${formatDetailValue(kind, marker.value)}${marker.hollow ? ", waived" : ""}.`);
       if (status) lines.push(status);
@@ -211,6 +307,20 @@ export function createMapDetailSlider(options: MapDetailSliderOptions): MapDetai
   slider.addEventListener("pointerup", onPointerUp);
   slider.addEventListener("pointercancel", onPointerUp);
   const unsubscribe = controller.subscribe(() => update());
+  const unsubscribeSettings = controller.settings.subscribe(changed => {
+    if (!changed.has(MAP_DETAIL_LOADED_PRESENTATION_ID)) return;
+    shown = undefined;
+    update();
+  });
+  const resize = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => {
+    if (resizeFrame) return;
+    resizeFrame = requestAnimationFrame(() => {
+      resizeFrame = 0;
+      shown = undefined;
+      update();
+    });
+  });
+  resize?.observe(rail);
   update();
 
   return {
@@ -218,6 +328,9 @@ export function createMapDetailSlider(options: MapDetailSliderOptions): MapDetai
     update,
     destroy(): void {
       unsubscribe();
+      unsubscribeSettings();
+      resize?.disconnect();
+      if (resizeFrame) cancelAnimationFrame(resizeFrame);
       slider.removeEventListener("input", onInput);
       slider.removeEventListener("pointerdown", onPointerDown);
       slider.removeEventListener("pointerup", onPointerUp);

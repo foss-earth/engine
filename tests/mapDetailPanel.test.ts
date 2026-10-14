@@ -8,6 +8,7 @@ import { createMapDetailController } from "../fixtures/composition/mapPanelHost.
 import { describeImageryConstraint } from "../src/map/mapDetailExplanations.js";
 import { createMapDetailPanel } from "../fixtures/composition/mapPanelHost.js";
 import type { ImageryConstraint } from "../src/terrain/imagery/imageryConstraints.js";
+import { createDetailDistribution } from "../src/terrain/detailDistribution.js";
 
 const MISSING: ImageryConstraint = { cause: "source", missingRegions: 3, finestLevelRegions: 0, finestLevel: 16, outsideRegions: 0, scaleRegions: 0 };
 
@@ -118,7 +119,13 @@ describe("Map tab detail editor", () => {
     observer.observe(panel.element, { subtree: true, attributes: true, childList: true, characterData: true });
     try {
       for (const loadedTarget of [-3, -2, -1, 0]) {
-        controller.reportDelivery("raster:usgs-imagery", { pending: false, limits: [], loadedTarget });
+        controller.reportDelivery("raster:usgs-imagery", {
+          pending: false, limits: [], loadedTarget,
+          distribution: createDetailDistribution({
+            status: "measured", kind: "raster", sourceKey: "raster:usgs-imagery", generation: 1,
+            samples: [{ value: loadedTarget, count: loadedTarget + 4 }], tileCount: loadedTarget + 4,
+          }),
+        });
       }
       expect(controller.getState()?.loadedTarget).toBe(0);
       expect(observer.takeRecords()).toEqual([]);

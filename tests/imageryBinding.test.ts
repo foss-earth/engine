@@ -8,7 +8,7 @@ import {
   IMAGERY_TABLE_BLOCK,
   planAtlasLayout,
 } from "../src/terrain/imagery/imageryAtlasLayout.js";
-import { buildImageryDisplay, buildPatchTable, measureLoadedImagery, type DisplayLeaf, type LoadedImageryBinding, type LoadedImageryRegion } from "../src/terrain/imagery/imageryBinding.js";
+import { buildImageryDisplay, buildPatchTable, loadedImageryPages, measureLoadedImagery, measureLoadedImageryDistribution, type DisplayLeaf, type LoadedImageryBinding, type LoadedImageryRegion } from "../src/terrain/imagery/imageryBinding.js";
 
 const MiB = 1024 * 1024;
 
@@ -54,6 +54,90 @@ describe("loaded imagery detail", () => {
     expect(measureLoadedImagery([region(0, 100, Infinity)], [direct(0, 8)])).toBe(-Infinity);
     expect(measureLoadedImagery([region(0, 100, NaN)], [direct(0, 8)])).toBeNull();
     expect(measureLoadedImagery([region(0, 100, 0)], [direct(0, 8)])).toBeNull();
+  });
+});
+
+describe("loaded imagery tile distribution", () => {
+  const region = (x = 0, screenArea = 100, footprintPx = 1, referenceLevel = 8): LoadedImageryRegion => ({ tile: { z: 8, x, y: 0 }, referenceLevel, footprintPx, screenArea });
+  const named = (x: number, level: number | null, image: string | null | undefined, z = 8): LoadedImageryBinding => ({
+    tile: { z, x, y: 0 }, table: null, directLevel: level, directImage: image,
+  });
+  const cellTable = (cells: Array<{ x: number; y: number; slot: number; level: number }>, cellsLog2 = 1) => {
+    const data = new Uint8Array(IMAGERY_TABLE_BLOCK ** 2 * 4);
+    for (const cell of cells) {
+      const at = (cell.y * IMAGERY_TABLE_BLOCK + cell.x) * 4;
+      data[at] = cell.slot & 255;
+      data[at + 1] = (cell.slot >> 8) & 255;
+      data[at + 2] = cell.level;
+      data[at + 3] = 255;
+    }
+    return { cellsLog2, data };
+  };
+
+  it("counts one source image once, at the visible-area-weighted mean of its pages", () => {
+    const image = "src@1/std/8/0/0";
+    const bindings = [0, 1, 2, 3].map(index => named(index % 2, index === 0 ? 4 : 8, image, 9));
+    bindings[1].tile = { z: 9, x: 1, y: 0 };
+    bindings[2].tile = { z: 9, x: 0, y: 1 };
+    bindings[3].tile = { z: 9, x: 1, y: 1 };
+    const draft = measureLoadedImageryDistribution([region()], bindings);
+    expect(draft).toMatchObject({ status: "measured", tileCount: 1, unknownCount: 0, incomplete: false, samples: [{ value: -1, count: 1 }] });
+    const separate = [0, 1, 2, 3].map(index => named(index % 2, index === 0 ? 4 : 8, `src@1/std/9/${index % 2}/${Math.floor(index / 2)}`, 9));
+    separate[1].tile = { z: 9, x: 1, y: 0 };
+    separate[2].tile = { z: 9, x: 0, y: 1 };
+    separate[3].tile = { z: 9, x: 1, y: 1 };
+    expect(measureLoadedImageryDistribution([region()], separate).tileCount).toBe(4);
+  });
+
+  it("counts a repeated table image once and treats a reused slot number as whatever that binding recorded", () => {
+    const image = "src@1/std/8/0/0";
+    const table = cellTable([
+      { x: 0, y: 0, slot: 7, level: 8 },
+      { x: 1, y: 0, slot: 7, level: 8 },
+      { x: 0, y: 1, slot: 7, level: 8 },
+      { x: 1, y: 1, slot: 7, level: 8 },
+    ]);
+    const binding: LoadedImageryBinding = {
+      tile: region().tile, table, directLevel: null, imagesBySlot: new Map([[7, image]]),
+    };
+    expect(measureLoadedImageryDistribution([region()], [binding])).toMatchObject({ tileCount: 1, samples: [{ value: 0, count: 1 }] });
+    const other = cellTable([{ x: 0, y: 0, slot: 7, level: 6 }], 0);
+    const reused: LoadedImageryBinding = {
+      tile: { z: 8, x: 1, y: 0 }, table: other, directLevel: null, imagesBySlot: new Map([[7, "src@1/std/8/1/0"]]),
+    };
+    const both = measureLoadedImageryDistribution([region(), region(1)], [binding, reused]);
+    expect(both.tileCount).toBe(2);
+    expect(both.samples.map(sample => sample.value).sort((a, b) => a - b)).toEqual([-2, 0]);
+  });
+
+  it("marks a bad projection unknown for the whole image and does not invent a tile for a gap", () => {
+    const image = "src@1/std/8/0/0";
+    const unknown = measureLoadedImageryDistribution([region(0, 100, Number.NaN), region(1)], [named(0, 8, image), named(1, 8, image)]);
+    expect(unknown).toMatchObject({ status: "measured", tileCount: 1, unknownCount: 1, samples: [] });
+    expect(measureLoadedImageryDistribution([region(0, 100, Infinity)], [named(0, 8, image)]).samples).toEqual([{ value: -Infinity, count: 1 }]);
+    const gap = measureLoadedImageryDistribution([region()], [named(0, null, null)]);
+    expect(gap).toMatchObject({ status: "measured", tileCount: 0, incomplete: true, samples: [] });
+    expect(measureLoadedImageryDistribution([region(0, 0)], [named(0, 8, image)])).toMatchObject({ status: "empty", tileCount: 0 });
+  });
+
+  it("is unavailable when a shown page has no image identity", () => {
+    const unnamed = measureLoadedImageryDistribution([region()], [named(0, 8, undefined)]);
+    expect(unnamed.status).toBe("unavailable");
+    expect(unnamed.samples).toEqual([]);
+    const table = cellTable([{ x: 0, y: 0, slot: 3, level: 8 }], 0);
+    const missingSlot = measureLoadedImageryDistribution([region()], [{
+      tile: region().tile, table, directLevel: null, imagesBySlot: new Map([[1, "src@1/std/8/0/0"]]),
+    }]);
+    expect(missingSlot.status).toBe("unavailable");
+    expect(missingSlot.reason).toMatch(/identity/);
+  });
+
+  it("derives page tiles from adopted bindings, not from a requested plan", () => {
+    const table = cellTable([{ x: 0, y: 0, slot: 4, level: 6 }], 0);
+    const pages = loadedImageryPages([{
+      tile: { z: 8, x: 2, y: 3 }, table, directLevel: null, imagesBySlot: new Map([[4, "src@1/std/6/0/0"]]),
+    }]);
+    expect(pages).toEqual([{ z: 6, x: 0, y: 0 }]);
   });
 });
 
