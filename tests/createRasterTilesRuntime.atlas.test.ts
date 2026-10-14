@@ -217,21 +217,32 @@ describe("raster runtime with atlas imagery", () => {
   });
 
   it("gives imagery selection the adopted terrain's heights with the shipped runtime's bits", async () => {
-    // Taken from the shipped runtime, over the view, the antimeridian and past the Mercator limit.
-    const SHIPPED_DIGEST = "c7c3b2f5f66e5bf13bb55e5f96a4ae456c15951f970b6cdcae9ba813625ead41";
+    // Taken from the shipped runtime, at three views, over the view, the antimeridian and past the Mercator limit.
+    const SHIPPED_DIGEST = "9b329add7453513e2585759b8c5e6f5eec0e5119c4825207af0a9f2aa7535ea8";
+    // A clock that stands still within a frame: no time budget runs out, and
+    // the tiles adopted do not depend on how fast the test runs.
+    let clock = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => clock);
     const created = vi.spyOn(imageryRuntimeModule, "createImageryRuntime");
-    const { runtime, settle, engine } = await setup();
-    await settle();
-    const surface = created.mock.calls[0]![0].surface, hash = createHash("sha256"), seen = new Set<number>();
+    const { runtime, frame, engine, controller, view } = await setup();
+    const surface = created.mock.calls[0]![0].surface, hash = createHash("sha256");
     const points: Array<[number, number]> = [[85.06, 10], [-85.06, -170], [0, 180], [0, -180], [36.1, 247.86]];
     for (let row = 0; row <= 60; row++) for (let col = 0; col <= 60; col++) points.push([35.4 + row * 0.025, -113 + col * 0.03]);
-    for (const [latDeg, lonDeg] of points) {
-      const height = surface.heightAt(latDeg, lonDeg);
-      if (height !== null) seen.add(height);
-      hash.update(height === null ? "-" : new Uint8Array(Float64Array.of(height).buffer));
+    // Looking across the canyon several levels are adopted at once; after
+    // climbing, finer tiles stay cached under the coarser ones shown.
+    for (const at of [{}, { zoomMeters: 6000, pitchDeg: 70 }, { zoomMeters: 120_000, pitchDeg: 20 }]) {
+      Object.assign(view, at);
+      controller.applyViewState(view);
+      for (let count = 0; count < 60; count++) { clock += 50; await frame(); }
+      const seen = new Set<number>();
+      for (const [latDeg, lonDeg] of points) {
+        const height = surface.heightAt(latDeg, lonDeg);
+        if (height !== null) seen.add(height);
+        hash.update(height === null ? "-" : new Uint8Array(Float64Array.of(height).buffer));
+      }
+      // Heights from grids, not the fallback alone.
+      expect(seen.size).toBeGreaterThan(100);
     }
-    // Heights from grids, not the fallback alone.
-    expect(seen.size).toBeGreaterThan(100);
     expect(hash.digest("hex")).toBe(SHIPPED_DIGEST);
     runtime.dispose();
     engine.dispose();

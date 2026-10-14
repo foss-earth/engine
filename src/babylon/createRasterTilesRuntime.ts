@@ -638,6 +638,27 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
   let heightsArrived = false;
   // Adopted terrain levels, finest first, for imagery height queries.
   let visibleLevels: number[] = [];
+  /**
+   * visibleTileKeys at each of visibleLevels, as row * 2^z + column, and the
+   * keys and levels it was taken from. Null cells: a level whose keys have no
+   * such number, asked by key instead.
+   */
+  let visibleCells: { keys: Set<string>; size: number; levels: number[]; byLevel: Array<{ z: number; n: number; cells: Set<number> | null }> } | null = null;
+  const indexedVisibleCells = (): NonNullable<typeof visibleCells>["byLevel"] => {
+    // The keys change by replacement or deletion, the levels by replacement.
+    if (visibleCells?.keys === visibleTileKeys && visibleCells.size === visibleTileKeys.size && visibleCells.levels === visibleLevels) return visibleCells.byLevel;
+    const byLevel = visibleLevels.map(z => ({ z, n: 2 ** z, cells: (z <= 26 ? new Set<number>() : null) as Set<number> | null }));
+    const byZ = new Map(byLevel.map(level => [level.z, level]));
+    for (const key of visibleTileKeys) {
+      const [z, x, y] = key.split("/").map(Number), level = byZ.get(z);
+      if (!level?.cells) continue;
+      // Exact below 2^53 for whole tiles of the level; any other key is asked by key.
+      if (Number.isInteger(x) && Number.isInteger(y) && x >= 0 && x < level.n && y >= 0 && y < level.n && key === `${z}/${x}/${y}`) level.cells.add(y * level.n + x);
+      else level.cells = null;
+    }
+    visibleCells = { keys: visibleTileKeys, size: visibleTileKeys.size, levels: visibleLevels, byLevel };
+    return byLevel;
+  };
 
   const coveringVisibleRecord = (tile: TileCoord): RasterTileRecord | null => {
     let { z, x, y } = tile;
@@ -670,11 +691,12 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
     heightAt(latDeg: number, lonDeg: number): number | null {
       // One Mercator position, scaled to each level: lonLatToTileXY's bits.
       let world: { x: number; y: number } | null = null;
-      for (const z of visibleLevels) {
+      for (const { z, n, cells } of indexedVisibleCells()) {
         world ??= lonLatToMercator(lonDeg, latDeg);
-        const n = 2 ** z, x = world.x * n, y = world.y * n;
-        const key = `${z}/${Math.floor(x)}/${Math.floor(y)}`;
-        if (!visibleTileKeys.has(key)) continue;
+        const x = world.x * n, y = world.y * n, column = Math.floor(x), row = Math.floor(y);
+        // The key is only made for the visible tile: a column and row outside the level are no tile's.
+        if (cells ? !(column >= 0 && column < n && row >= 0 && row < n && cells.has(row * n + column)) : !visibleTileKeys.has(`${z}/${column}/${row}`)) continue;
+        const key = `${z}/${column}/${row}`;
         const record = cache.get(key);
         if (!record) continue;
         if (record.grid) {
