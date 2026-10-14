@@ -28,12 +28,14 @@ function tileKey(tile: TileCoord): string {
 interface TerrainSurface { positions: number[]; uvs: number[] | null; center: EcefCoord; segments: number; minHeight: number; maxHeight: number }
 /** A tile's vertices relative to its centre, as float64. */
 function terrainSurface(options: Pick<TerrainMeshOptions, "segments" | "getSurfaceHeightMeters">, tile: TileCoord, grid: TerrainGrid | undefined, withUvs: boolean): TerrainSurface {
-  const positions: number[] = [];
-  const uvs: number[] | null = withUvs ? [] : null;
   const segments = Math.max(1, Math.round(options.segments ?? DEFAULT_TILE_SEGMENTS));
+  const stride = segments + 1;
+  const vertexCount = stride * stride;
+  // Sized once. Growing these with push copies them several times per tile.
+  const positions = new Array<number>(vertexCount * 3);
+  const uvs = withUvs ? new Array<number>(vertexCount * 2) : null;
   const center = geodeticToEcef(tileYToLat(tile.y + 0.5, tile.z) * DEG_TO_RAD, tileXToLon(tile.x + 0.5, tile.z) * DEG_TO_RAD, 0);
   let minHeight = Infinity, maxHeight = -Infinity;
-  const stride = segments + 1;
   // Every row has the same longitudes and every vertex of a row the same
   // latitude: their trigonometry is done once each, with geodeticToEcef's bits.
   const lonDegs = new Float64Array(stride), sinLons = new Float64Array(stride), cosLons = new Float64Array(stride);
@@ -43,6 +45,7 @@ function terrainSurface(options: Pick<TerrainMeshOptions, "segments" | "getSurfa
   }
   const scale = grid ? 2 ** (grid.z - tile.z) : 1;
   const ecef = { x: 0, y: 0, z: 0 };
+  let positionIndex = 0, uvIndex = 0;
 
   for (let row = 0; row <= segments; row += 1) {
     const v = row / segments;
@@ -59,8 +62,10 @@ function terrainSurface(options: Pick<TerrainMeshOptions, "segments" | "getSurfa
       if (altitudeMeters < minHeight) minHeight = altitudeMeters;
       if (altitudeMeters > maxHeight) maxHeight = altitudeMeters;
       ecefOnParallel(parallel, sinLons[col], cosLons[col], altitudeMeters, ecef);
-      positions.push(ecef.x - center.x, ecef.y - center.y, ecef.z - center.z);
-      uvs?.push(u, v);
+      positions[positionIndex++] = ecef.x - center.x;
+      positions[positionIndex++] = ecef.y - center.y;
+      positions[positionIndex++] = ecef.z - center.z;
+      if (uvs) { uvs[uvIndex++] = u; uvs[uvIndex++] = v; }
     }
   }
   return { positions, uvs, center, segments, minHeight, maxHeight };
@@ -83,14 +88,16 @@ export function createTerrainMesh(options: TerrainMeshOptions, tile: TileCoord, 
   const mesh = new Mesh(`raster-basemap-tile-${source.id}-${tileKey(tile)}`, scene);
   const { positions, uvs, center, segments, minHeight, maxHeight } = terrainSurface(options, tile, grid, true);
   const stride = segments + 1;
-  const indices: number[] = [];
+  const indices = new Array<number>(segments * segments * 6);
+  let index = 0;
   for (let row = 0; row < segments; row += 1) {
     for (let col = 0; col < segments; col += 1) {
       const a = row * stride + col;
       const b = a + 1;
       const c = a + stride;
       const d = c + 1;
-      indices.push(a, c, b, b, c, d);
+      indices[index++] = a; indices[index++] = c; indices[index++] = b;
+      indices[index++] = b; indices[index++] = c; indices[index++] = d;
     }
   }
 
