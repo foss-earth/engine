@@ -239,6 +239,101 @@ describe("raster imagery and terrain lifecycle", () => {
     expect(meshes.some((mesh, index) => (mesh.material as StandardMaterial).diffuseTexture !== previousTextures[index])).toBe(true);
     runtime.dispose(); engine.dispose();
   });
+  describe("coarser elevation", () => {
+    const keyOf = (tile: TerrainTile) => `${tile.z}/${tile.x}/${tile.y}`;
+    const up = (tile: TerrainTile, levels: number): TerrainTile => {
+      const shift = Math.min(levels, tile.z);
+      return { z: tile.z - shift, x: Math.floor(tile.x / 2 ** shift), y: Math.floor(tile.y / 2 ** shift) };
+    };
+    const fine = { latDeg: 36.1, lonDeg: -112.14, zoomMeters: 30_000, headingDeg: 0, pitchDeg: 40 };
+    function start() {
+      settings.set("map.terrain.reselectWhileMoving", 0);
+      const engine = new NullEngine(), scene = new Scene(engine), view = { ...fine };
+      scene.useRightHandedSystem = true;
+      const camera = new GeospatialCamera("raster-camera", scene, { planetRadius: 6378137 });
+      camera.addBehavior(new GeospatialClippingBehavior());
+      const controller = new CameraController(camera);
+      controller.applyViewState(view);
+      scene.render();
+      const select = vi.spyOn(selector, "selectTerrain");
+      const runtime = createRasterTilesRuntime({ scene, source: RASTER_BASE_MAP_SOURCES[0], getViewState: () => view });
+      runtime.update();
+      const tiles = scene.meshes.filter(mesh => mesh.metadata?.mapSurface).map(mesh => {
+        const [z, x, y] = mesh.name.split("-").at(-1)!.split("/").map(Number);
+        return { z, x, y };
+      });
+      expect(Math.max(...tiles.map(tile => tile.z))).toBeGreaterThan(8);
+      const leaves = () => select.mock.results.at(-1)!.value.leaves.map((leaf: { tile: TerrainTile }) => leaf.tile) as TerrainTile[];
+      const move = (zoomMeters: number) => { view.zoomMeters = zoomMeters; controller.applyViewState(view); scene.render(); runtime.update(); };
+      return { engine, scene, runtime, tiles, leaves, move };
+    }
+    /** Resolves elevation as it is asked for, until no more is, and returns what was asked for. */
+    async function resolveAll(): Promise<string[]> {
+      const asked: string[] = [];
+      for (let round = 0; round < 4 && pending.terrain.length; round++) {
+        for (const { tile, resolve } of pending.terrain.splice(0)) { asked.push(keyOf(tile)); resolve({ ...tile, size: 2, heights: new Float32Array([100, 100, 100, 100]) }); }
+        await flush();
+      }
+      return asked;
+    }
+    function expectShownFrom(scene: Scene, runtime: ReturnType<typeof createRasterTilesRuntime>, levels: number): void {
+      pending.imagery.splice(0).forEach(loaded => loaded());
+      runtime.update();
+      const shown = scene.meshes.filter(mesh => mesh.isEnabled() && mesh.metadata?.mapSurface);
+      expect(shown.length).toBeGreaterThan(0);
+      for (const mesh of shown) {
+        const z = Number(mesh.name.split("-").at(-1)!.split("/")[0]);
+        expect(mesh.metadata.terrainZoom, mesh.name).toBe(z - Math.min(levels, z));
+      }
+    }
+    it.each([0, 1, 3])("asks for each tile's elevation %i levels above it, after the patch four levels above that", async levels => {
+      if (levels) settings.set("map.terrain.coarserElevation", levels);
+      const { engine, scene, runtime, tiles } = start();
+      try {
+        const expected = new Set(tiles.flatMap(tile => {
+          const elevation = up(tile, levels);
+          return elevation.z ? [keyOf(up(elevation, 4)), keyOf(elevation)] : [keyOf(elevation)];
+        }));
+        expect(new Set(await resolveAll())).toEqual(expected);
+        expectShownFrom(scene, runtime, levels);
+      } finally { runtime.dispose(); engine.dispose(); }
+    });
+    it("asks again for what the view needs and shows when the levels change, keeping the shown terrain until it arrives", async () => {
+      const { engine, scene, runtime, leaves, move } = start();
+      try {
+        // Choices that the arriving heights change settle first.
+        for (let round = 0; round < 4 && (await resolveAll()).length; round++) runtime.update();
+        expect(pending.terrain).toHaveLength(0);
+        // Nothing is shown yet: each tile the view needs asks for its new elevation tile, without the coarse patch first.
+        settings.set("map.terrain.coarserElevation", 2);
+        const again = pending.terrain.map(load => keyOf(load.tile));
+        expect(again.sort()).toEqual(leaves().map(tile => keyOf(up(tile, 2))).sort());
+        // A note, or the same value, asks for nothing.
+        settings.setNote("map.terrain.coarserElevation", "noted"); settings.set("map.terrain.coarserElevation", 2);
+        expect(pending.terrain).toHaveLength(again.length);
+        // Choosing again asks for the coarser tiles kept above them too.
+        runtime.update();
+        expect(pending.terrain.length).toBeGreaterThan(again.length);
+        await resolveAll();
+        expectShownFrom(scene, runtime, 2);
+        // Closer in, the tiles shown until finer ones arrive ask again too.
+        move(fine.zoomMeters / 8);
+        const shown = scene.meshes.filter(mesh => mesh.isEnabled() && mesh.metadata?.mapSurface).map(mesh => mesh.name.split("-").at(-1)!);
+        const needed = new Set(leaves().map(keyOf));
+        expect(shown.some(key => !needed.has(key))).toBe(true);
+        const before = pending.terrain.length;
+        settings.set("map.terrain.coarserElevation", 0);
+        const asked = new Set(pending.terrain.slice(before).map(load => keyOf(load.tile)));
+        for (const key of [...shown, ...needed]) expect(asked.has(key), key).toBe(true);
+        runtime.update();
+        // The tiles kept above ask for the coarse patch first, as new tiles do.
+        const records = scene.meshes.filter(mesh => mesh.metadata?.mapSurface).map(mesh => mesh.name.split("-").at(-1)!.split("/").map(Number));
+        const own = new Set(records.flatMap(([z, x, y]) => [keyOf({ z, x, y }), keyOf(up({ z, x, y }, 4))]));
+        for (const key of await resolveAll()) expect(own.has(key), key).toBe(true);
+        expectShownFrom(scene, runtime, 0);
+      } finally { runtime.dispose(); engine.dispose(); }
+    });
+  });
   it("does not publish incoming DEM quality or geometry until the displayed buffer commit", async () => {
     const engine = new NullEngine(), scene = new Scene(engine), changes = vi.fn();
     const runtime = createRasterTilesRuntime({ scene, source: RASTER_BASE_MAP_SOURCES[0], onSurfaceChange: changes });

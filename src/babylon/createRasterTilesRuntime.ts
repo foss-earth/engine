@@ -604,6 +604,8 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
   };
   let terrain = createTerrainLoader();
   let terrainGeneration = 0;
+  const coarserElevation = (): number => Math.max(0, Math.round(setting("map.terrain.coarserElevation")) || 0);
+  let appliedCoarserElevation = coarserElevation();
   // Persistent cache: tiles stay alive after they leave the desired set so we
   // can keep showing them (or use them as best-effort fallbacks) without
   // re-downloading. Eviction is LRU and bound by `map.terrain.cachedTiles`.
@@ -805,6 +807,16 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
         selectionDirty = true;
       }
     }
+    if (changed.has("map.terrain.coarserElevation") && coarserElevation() !== appliedCoarserElevation) {
+      appliedCoarserElevation = coarserElevation();
+      terrainGeneration += 1;
+      // The displayed terrain stays until each tile's new elevation arrives.
+      // Choosing again asks for the coarser tiles kept above them, whose
+      // finer elevation would otherwise keep their children from showing;
+      // tiles only in the cache ask again if they are needed.
+      for (const key of new Set([...lastDesired.map(entry => entry.key), ...visibleTileKeys])) cache.get(key)?.replaceTerrain(loadDetail, terrainGeneration);
+      selectionDirty = true;
+    }
     if (ids.some(id => id.startsWith("map.auto.") || id === "renderer.frameRateCap")) autoDetail.setTuning(autoTuning());
     if (ids.some(id => TERRAIN_SELECTION_IDS.has(id) || id.startsWith("map.auto.") || id.startsWith("map.detail."))) applyDetail();
     options.requestRender?.();
@@ -908,11 +920,19 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
     cache.set(key, record);
   }
 
-  function loadDetail(requested: TileCoord): Promise<TerrainGrid> {
-    return terrain.loadPatch(requested);
+  /** The elevation tile a terrain tile takes its heights from: its own, or its ancestor `map.terrain.coarserElevation` levels up. */
+  function elevationTile(tile: TileCoord): TileCoord {
+    const levels = Math.min(tile.z, coarserElevation());
+    if (!levels) return tile;
+    return { z: tile.z - levels, x: Math.floor(tile.x / 2 ** levels), y: Math.floor(tile.y / 2 ** levels) };
   }
 
-  function loadProgressive(requested: TileCoord, progress: (grid: TerrainGrid) => void): Promise<TerrainGrid> {
+  function loadDetail(tile: TileCoord): Promise<TerrainGrid> {
+    return terrain.loadPatch(elevationTile(tile));
+  }
+
+  function loadProgressive(tile: TileCoord, progress: (grid: TerrainGrid) => void): Promise<TerrainGrid> {
+    const requested = elevationTile(tile);
     const coarseZoom = Math.max(0, Math.min(requested.z, requested.z - 4));
     const loader = terrain;
     return (async () => {

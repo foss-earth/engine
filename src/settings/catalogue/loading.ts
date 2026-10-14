@@ -174,6 +174,11 @@ export const MAP_LOADING_PARAMETERS: readonly ParameterSpec[] = [
     description: "The finest terrain tile level 2D basemaps ask for. Imagery can be finer than the terrain it is drawn on.",
     reason: "The level terrain was capped at before this became a setting; its tiles are about 600 m across at the equator.", source: RASTER_RUNTIME,
   }),
+  quantity({
+    id: "map.terrain.coarserElevation", label: "Coarser elevation", unit: "levels", min: 0, max: 3, fallback: 0, step: 1,
+    description: "Takes each terrain tile's heights from the elevation tile this many levels above it, which covers 4, 16 or 64 tiles. A 512-pixel elevation tile has 8 pixels for each of a 64-segment tile's segments, so even 3 levels keep about one pixel per vertex. Relief is smoother and heights can differ by metres. On the Minneapolis tour, 1 level downloaded and decoded about 60% less elevation and 3 levels about 75% less. Changing it loads the terrain again.",
+    reason: "Each tile's own elevation, as terrain was loaded before this became a setting.", source: RASTER_RUNTIME,
+  }),
   {
     id: "map.google.cacheTiles",
     label: "Google tiles kept",
