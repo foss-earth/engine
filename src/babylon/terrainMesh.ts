@@ -94,13 +94,12 @@ export function createTerrainMesh(options: TerrainMeshOptions, tile: TileCoord, 
     }
   }
 
-  const normals: number[] = [];
-  VertexData.ComputeNormals(positions, indices, normals);
-
+  // No normal buffer. Tile materials disable scene lighting, and the terrain
+  // light shades from the radial up direction, not vertex normals. Picking
+  // asks for the face normal. A buffer here is computed, uploaded and never read.
   const data = new VertexData();
   data.positions = positions;
   data.indices = indices;
-  data.normals = normals;
   data.uvs = uvs;
   data.applyToMesh(mesh, true);
 

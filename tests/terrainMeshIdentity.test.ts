@@ -4,11 +4,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTerrainMesh, terrainMeshTarget } from "../src/babylon/terrainMesh.js";
 import type { TerrainGrid, TerrainTile } from "../src/terrain/terrainGrid.js";
 
-// The arrays every terrain mesh is built from, before Babylon converts them,
+// The arrays every terrain mesh is drawn with, before Babylon converts them,
 // for tiles at the poles, the antimeridian, parent and child grids, grid
 // neighbours, and no grid at all. The digest was taken from the shipped
-// builder; a faster builder must give the same bits.
-const SHIPPED_DIGEST = "3725f483d27922ef692dacb355a56b22a37d01f2e4ebcaba4a75a9f132cd2237";
+// builder; a faster builder must give the same bits. Normals are not drawn
+// with: no terrain shader reads them (createRasterTilesRuntime.test.ts).
+const SHIPPED_DIGEST = "b105b5e75f8031acf9feb723662599fc20963bf34bd230481bcd18381781954a";
 
 const engines: NullEngine[] = [];
 afterEach(() => { for (const engine of engines.splice(0)) engine.dispose(); vi.restoreAllMocks(); });
@@ -59,7 +60,7 @@ function build(test: typeof CASES[number]) {
 function digestOf(test: typeof CASES[number]): string {
   const { data, mesh } = build(test), hash = createHash("sha256");
   // Every float64 bit Babylon was given, before it converts anything.
-  for (const values of [data.positions, data.normals, data.uvs]) hash.update(new Uint8Array(Float64Array.from(values as ArrayLike<number>).buffer));
+  for (const values of [data.positions, data.uvs]) hash.update(new Uint8Array(Float64Array.from(values as ArrayLike<number>).buffer));
   hash.update(new Uint8Array(Uint32Array.from(data.indices as ArrayLike<number>).buffer));
   hash.update(new Uint8Array(Float64Array.from(mesh.position.asArray()).buffer));
   hash.update(JSON.stringify(mesh.metadata));
@@ -76,7 +77,9 @@ describe("terrain mesh identity", () => {
     for (const test of CASES) {
       const { mesh } = build(test), stored = mesh.getVerticesData(VertexBuffer.PositionKind)!;
       const target = terrainMeshTarget({ segments: test.segments, ...(test.height ? { getSurfaceHeightMeters: test.height } : {}) }, test.tile, test.grid);
-      expect(stored, test.name).toBeInstanceOf(Float32Array); expect(target.positions.length, test.name).toBe(stored.length);
+      expect(stored, test.name).toBeInstanceOf(Float32Array);
+      expect(mesh.isVerticesDataPresent(VertexBuffer.NormalKind), test.name).toBe(false);
+      expect(target.positions.length, test.name).toBe(stored.length);
       expect(target.positions.every((value, index) => Object.is(value, stored[index])), test.name).toBe(true);
       expect(target.heightBounds, test.name).toEqual(mesh.metadata.heightBounds);
     }

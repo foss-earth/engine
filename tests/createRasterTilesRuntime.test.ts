@@ -4,6 +4,8 @@ import { HostCameraController as CameraController } from "../fixtures/compositio
 import * as refinement from "../src/babylon/meshRefinement.js";
 import * as selector from "../src/terrain/terrainSelector.js";
 import { createTerrainMesh } from "../src/babylon/terrainMesh.js";
+import { createTerrainLightingFixture } from "../fixtures/composition/terrainLightHost.js";
+import { GROUND_LIGHT_LEAST_SINE, GROUND_LIGHT_SAMPLES, GROUND_LIGHT_TABLE, MERCATOR_MAX_LAT_DEG, NIGHT_RADIANCE_UNITS, groundLightAt } from "@foss-earth/sky";
 import { createTerrainPerformanceCapture } from "../src/terrain/terrainPerformanceCapture.js";
 import type { TerrainGrid, TerrainTile } from "../src/terrain/terrainGrid.js";
 import { createRasterTilesRuntime as createCoreRaster, type RasterTilesRuntimeOptions } from "../src/babylon/createRasterTilesRuntime.js";
@@ -178,6 +180,39 @@ describe("raster imagery and terrain lifecycle", () => {
       runtime.dispose(); engine.dispose();
     }
   });
+  it("draws terrain under the terrain light with a shader that reads no vertex normals", async () => {
+    const engine = new NullEngine(), scene = new Scene(engine);
+    const light = createTerrainLightingFixture({ GROUND_LIGHT_TABLE, GROUND_LIGHT_SAMPLES, GROUND_LIGHT_LEAST_SINE, MERCATOR_MAX_LAT_DEG, NIGHT_RADIANCE_UNITS, groundLightAt });
+    light.setTerrainLighting(scene, { perPoint: true, centre: [0, 0, 0], sunDirection: [0, 0, 1], moonDirection: [0, 0, -1], sunScale: [1, 1, 1],
+      moonScale: [0, 0, 0], ambient: [0.001, 0.001, 0.001], table: new Float32Array(GROUND_LIGHT_SAMPLES * 4) });
+    light.setTerrainLocalLights(scene, [{ position: [1, 2, 3], direction: [0, -1, 0], cosInner: 0.9, cosOuter: 0.8, factor: [4, 5, 6] }]);
+    const runtime = createRasterTilesRuntime({ scene, source: RASTER_BASE_MAP_SOURCES[0], getViewState: () => view,
+      attachTerrainLighting: material => light.createMaterialPlugin(material) });
+    try {
+      runtime.update(); pending.imagery.forEach(loaded => loaded()); runtime.update();
+      await resolveFirstDetail(); runtime.update();
+      const tiles = scene.meshes.filter(mesh => mesh.isEnabled() && mesh.metadata?.mapSurface);
+      expect(tiles.length).toBeGreaterThan(0);
+      for (const mesh of tiles) {
+        const material = mesh.material as StandardMaterial;
+        const plugin = material.pluginManager?.getPlugin("TerrainLight") as { prepareDefines(defines: Record<string, unknown>): void; getCustomCode(shaderType: string): Record<string, string> | null } | null;
+        expect(plugin, mesh.name).toBeTruthy();
+        const defines = { TERRAIN_LIGHT: false, TERRAIN_LIGHT_PER_POINT: false, TERRAIN_LOCAL_LIGHTS: 0, TERRAIN_NIGHT_LIGHTS: false };
+        plugin!.prepareDefines(defines);
+        // The light is on, including a local light, and it never injects a vertex shader.
+        expect(defines, mesh.name).toEqual({ TERRAIN_LIGHT: true, TERRAIN_LIGHT_PER_POINT: true, TERRAIN_LOCAL_LIGHTS: 1, TERRAIN_NIGHT_LIGHTS: false });
+        expect(plugin!.getCustomCode("vertex"), mesh.name).toBeNull();
+        const fragment = Object.values(plugin!.getCustomCode("fragment") ?? {}).join("\n");
+        expect(fragment, mesh.name).not.toMatch(/\bvNormal\b|normalW/);
+        expect(fragment, mesh.name).toContain("vPositionW");
+        // Scene lighting is off, so Babylon does not ask for a normal attribute, and the mesh has none.
+        expect(material.disableLighting, mesh.name).toBe(true);
+        expect(mesh.isVerticesDataPresent(VertexBuffer.NormalKind), mesh.name).toBe(false);
+      }
+    } finally {
+      runtime.dispose(); engine.dispose();
+    }
+  });
   it("hot-swaps imagery without requesting elevation again or revising the surface", async () => {
     const engine = new NullEngine(); const scene = new Scene(engine);
     const runtime = createRasterTilesRuntime({ scene, source: RASTER_BASE_MAP_SOURCES[0], getViewState: () => view });
@@ -212,14 +247,14 @@ describe("raster imagery and terrain lifecycle", () => {
       const displayed = scene.meshes.filter(mesh => mesh.isEnabled() && mesh.metadata?.mapSurface);
       expect(displayed.length).toBeGreaterThan(0);
       const before = displayed.map(mesh => ({ mesh, quality: mesh.metadata.terrainZoom,
-        positions: [...mesh.getVerticesData(VertexBuffer.PositionKind)!], normals: [...mesh.getVerticesData(VertexBuffer.NormalKind)!] }));
+        positions: [...mesh.getVerticesData(VertexBuffer.PositionKind)!] }));
       const hit = runtime.sample(0.1, 0.1), revision = runtime.getRevision(); expect(hit).not.toBeNull(); changes.mockClear();
       await resolveFirstDetail();
       expect(runtime.getRevision()).toBe(revision); expect(runtime.sample(0.1, 0.1)).toEqual(hit);
       for (const record of before) {
         expect(record.mesh.metadata.terrainZoom).toBe(record.quality);
         expect([...record.mesh.getVerticesData(VertexBuffer.PositionKind)!]).toEqual(record.positions);
-        expect([...record.mesh.getVerticesData(VertexBuffer.NormalKind)!]).toEqual(record.normals);
+        expect(record.mesh.isVerticesDataPresent(VertexBuffer.NormalKind)).toBe(false);
       }
       expect(changes).toHaveBeenCalledWith("loading"); runtime.update();
       expect(runtime.getRevision()).toBeGreaterThan(revision);
