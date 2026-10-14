@@ -252,7 +252,7 @@ export type PointSelectionState = "off" | "armed" | "missed";
 export interface NavigationAnchorStatus {
   readonly pin: PinnedPoint | null;
   readonly selection: PointSelectionState;
-  /** Why picking or pinning is unavailable now, such as a panorama holding navigation; null when it is available. */
+  /** Why picking or pinning is unavailable now, such as a sphere holding navigation; null when it is available. */
   readonly pinningBlocked: string | null;
   /** True while a tracked point is the centre of every zoom and rotation. */
   readonly tracking: boolean;

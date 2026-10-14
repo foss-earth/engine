@@ -8,6 +8,7 @@ import { DEFAULT_INERTIA_DECAY_PER_FRAME, MAX_ZOOM_LOG_DELTA_PER_FRAME, type Ine
 import type { CameraLimits } from "../camera/cameraLimits.js";
 import type { InputHandback } from "../browser/createInputController.js";
 import type { EcefVector, NavigationLease, NavigationPresentation, NavigationSnapshot, NavigationGlide } from "../navigation/navigationLease.js";
+import { worldViewportHeight } from "../browser/worldViewport.js";
 
 export interface NavigationCameraPorts {
   getCamera(): GeospatialCamera | null;
@@ -136,7 +137,7 @@ export function createNavigationCameraAdapter(ports: NavigationCameraPorts) {
       return { yaw: angles.x, pitch: angles.y };
     };
     const angles = anglesOf(forward, center);
-    const canvasHeightPx = Math.max(1, ports.canvas.clientHeight || ports.canvas.height || 1);
+    const canvasHeightPx = Math.max(1, worldViewportHeight(ports.canvas) || ports.canvas.height || 1);
     const rates = orbitGlideRates({ center, forward, radius, verticalFovRad: view.verticalFovRad, canvasHeightPx }, vector(motion.velocity), vector(motion.turn), anglesOf);
     const frame = GLIDE_FRAME_MS / 1000;
     // As near as the glide's zoom takes it: each frame's step, capped as the glide caps it, summed as the glide slows.

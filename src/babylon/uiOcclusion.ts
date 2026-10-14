@@ -1,5 +1,6 @@
 import { Constants, Mesh, ShaderMaterial, Vector4, VertexData, type Scene } from "@babylonjs/core";
 import { cssRectToClip, type ClipRect, type CssBox } from "./uiCover.js";
+import { worldViewportClientRect } from "../browser/worldViewport.js";
 
 const VERTEX = `
 attribute vec3 position;
@@ -23,12 +24,24 @@ function boxOf(element: Element): CssBox | null {
   return { x: rect.left, y: rect.top, width: rect.width, height: rect.height };
 }
 
-/** Opaque windows and the floating log, in clip space, or nothing when the world is already only the uncovered area. */
+/** The world's part of the canvas, on the page. */
+function worldBoxOf(canvas: HTMLCanvasElement): CssBox | null {
+  if (!boxOf(canvas)) return null;
+  const world = worldViewportClientRect(canvas);
+  if (world.width < 1 || world.height < 1) return null;
+  return { x: world.left, y: world.top, width: world.width, height: world.height };
+}
+
+/**
+ * Opaque windows and the floating log over the world, in the clip space of
+ * the world's viewport. In the split presentation the world is only the
+ * uncovered area, so nothing covers it.
+ */
 export function coveredWorldClips(canvas: HTMLCanvasElement): ClipRect[] {
   const doc = canvas.ownerDocument;
   if (!doc || doc.documentElement.dataset.worldPresentation === "split") return [];
-  const canvasBox = boxOf(canvas);
-  if (!canvasBox) return [];
+  const worldBox = worldBoxOf(canvas);
+  if (!worldBox) return [];
   const elements = [...doc.querySelectorAll("[data-occlude-world]")];
   const log = doc.querySelector("#app-log");
   if (log && !log.closest("[data-occlude-world]")) elements.push(log);
@@ -36,7 +49,7 @@ export function coveredWorldClips(canvas: HTMLCanvasElement): ClipRect[] {
   for (const element of elements) {
     const box = boxOf(element);
     if (!box) continue;
-    const clip = cssRectToClip(box, canvasBox);
+    const clip = cssRectToClip(box, worldBox);
     if (clip) clips.push(clip);
   }
   return clips;
@@ -45,7 +58,7 @@ export function coveredWorldClips(canvas: HTMLCanvasElement): ClipRect[] {
 /**
  * Draws the opaque UI into the depth buffer before the world, so fragments under those windows are rejected.
  * A camera viewport is one rectangle and cannot punch several windows out of a full-screen pass.
- * The split presentation does not use this: its canvas is already only the uncovered area.
+ * The split presentation does not use this: its world viewport is already only the uncovered area.
  */
 export function attachWorldOcclusion(scene: Scene, canvas: HTMLCanvasElement): { dispose(): void } {
   const draws = scene.onBeforeDrawPhaseObservable;

@@ -6,7 +6,7 @@ import { watchWheelGestures } from "./wheelController.js";
  * Input that no control on the page uses goes to the world behind it. A
  * two-finger swipe over a panel that cannot scroll that way, over the HUD
  * bar or over an instrument moves the camera as it would over the map, and a
- * pinch zooms it, whichever camera has the canvas: the globe's, a panorama's
+ * pinch zooms it, whichever camera has the canvas: the globe's, a sphere's
  * or an application's. None of it reaches the browser, where a sideways
  * swipe went Back a page and a pinch zoomed the page.
  *

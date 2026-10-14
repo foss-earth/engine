@@ -2,6 +2,7 @@ import { orbitWith, zoomWith, type CameraInputTarget } from "../input/inertialCa
 import { DEFAULT_INPUT_RATES, type InputSettings } from "../input/inputSettings.js";
 import type { AnchorAcquisition } from "../input/navigationAnchors.js";
 import type { TouchDebugEvent, TouchDebugOverlayHandle } from "../input/touchDiagnostics.js";
+import { worldViewportHeight } from "./worldViewport.js";
 
 /** A contact already down when the handler attaches, such as one that took the camera over from a lease's owner, and where it is. */
 export interface HeldTouch {
@@ -297,7 +298,7 @@ export function attachTouchController(
     camera.panBy(
       -dx * sensitivity * rates().touchPanRate,
       -dy * sensitivity * rates().touchPanRate,
-      canvas.clientHeight,
+      worldViewportHeight(canvas),
     );
   }
 

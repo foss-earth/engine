@@ -5,7 +5,7 @@
   gap: 3px;
 }
 
-/* Hidden while a panorama is entered, where its credit takes the basemap's place. */
+/* Hidden while a sphere is entered, where its credit takes the basemap's place. */
 .map-source-hud[hidden] {
   display: none;
 }

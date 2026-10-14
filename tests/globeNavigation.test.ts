@@ -12,7 +12,7 @@ import {
 } from "../src/gamepad/index.js";
 
 import type { GlobeNavigationIntentFrame } from "../src/input/globeNavigationTypes.js";
-import { PANORAMA_GAMEPAD_ACTIONS, panoramaProfileContribution } from "../fixtures/composition/panoramaBindings.js";
+import { SPHERE_GAMEPAD_ACTIONS, sphereProfileContribution } from "../fixtures/composition/sphereBindings.js";
 const DEADZONE = 0.15;
 const cleanups: (() => void)[] = [];
 let pad: Gamepad;
@@ -50,8 +50,8 @@ function harness() {
   const onResetNorth = vi.fn();
   const source = createBrowserInputSource({ target: window });
   const runtime = new BindingRuntime({
-    profile: createStandardGlobeProfile(0, DEADZONE, panoramaProfileContribution),
-    adapter: createGlobeGamepadAdapter({ applyGlobeNavigationIntents }, { onResetNorth, featureActions: PANORAMA_GAMEPAD_ACTIONS }),
+    profile: createStandardGlobeProfile(0, DEADZONE, sphereProfileContribution),
+    adapter: createGlobeGamepadAdapter({ applyGlobeNavigationIntents }, { onResetNorth, featureActions: SPHERE_GAMEPAD_ACTIONS }),
   });
   const detach = source.subscribe((frame) => runtime.dispatch(frame));
   cleanups.push(() => { detach(); runtime.dispose(); source.dispose(); });
@@ -65,12 +65,12 @@ function harness() {
 }
 
 describe("standard globe controller profile", () => {
-  it("binds every globe and panorama action and survives export and import for this host", () => {
-    const profile = createStandardGlobeProfile(0, DEADZONE, panoramaProfileContribution);
+  it("binds every globe and sphere action and survives export and import for this host", () => {
+    const profile = createStandardGlobeProfile(0, DEADZONE, sphereProfileContribution);
     expect(new Set(profile.bindings.map((binding) => binding.actionId)))
-      .toEqual(new Set([...GLOBE_GAMEPAD_ACTIONS, ...PANORAMA_GAMEPAD_ACTIONS].map((action) => action.id)));
+      .toEqual(new Set([...GLOBE_GAMEPAD_ACTIONS, ...SPHERE_GAMEPAD_ACTIONS].map((action) => action.id)));
     // The binding editor recognises a built-in profile by its ID.
-    expect(createStandardGlobeProfile(0, DEADZONE, panoramaProfileContribution).profileId).toBe(profile.profileId);
+    expect(createStandardGlobeProfile(0, DEADZONE, sphereProfileContribution).profileId).toBe(profile.profileId);
 
     const imported = validateProfileImport(JSON.parse(JSON.stringify({ profile })));
     expect(imported.valid).toBe(true);
@@ -143,7 +143,7 @@ describe("standard globe controller profile", () => {
     expect(deadzones(after)).toEqual(deadzones(before).map(([id, deadzone]) => [id, String(id).match(/pan-|orbit|look/) ? 0.3 : deadzone]));
     // Nothing to change: the same profile comes back.
     expect(withStickDeadzone(after, 0.3)).toBe(after);
-    expect(deadzones(createStandardGlobeProfile(0, 0.3, panoramaProfileContribution))).toEqual(deadzones(after));
+    expect(deadzones(createStandardGlobeProfile(0, 0.3, sphereProfileContribution))).toEqual(deadzones(after));
   });
 
   it("keeps the camera still while a binding is being captured", () => {
@@ -159,15 +159,15 @@ describe("standard globe controller profile", () => {
   });
 });
 
-describe("panorama context", () => {
+describe("sphere context", () => {
   it("sends the right stick, triggers and B to whoever holds navigation, and moves no globe camera", () => {
     const applyGlobeNavigationIntents = vi.fn<(frame: GlobeNavigationIntentFrame) => void>();
     const applyNavigationIntents = vi.fn<(frame: ActionIntentFrame) => void>();
     let context = "panorama";
     const source = createBrowserInputSource({ target: window });
     const runtime = new BindingRuntime({
-      profile: createStandardGlobeProfile(0, DEADZONE, panoramaProfileContribution),
-      adapter: createGlobeGamepadAdapter({ applyGlobeNavigationIntents, applyNavigationIntents }, { getContext: () => context, featureActions: PANORAMA_GAMEPAD_ACTIONS }),
+      profile: createStandardGlobeProfile(0, DEADZONE, sphereProfileContribution),
+      adapter: createGlobeGamepadAdapter({ applyGlobeNavigationIntents, applyNavigationIntents }, { getContext: () => context, featureActions: SPHERE_GAMEPAD_ACTIONS }),
     });
     const detach = source.subscribe((frame) => runtime.dispatch(frame));
     cleanups.push(() => { detach(); runtime.dispose(); source.dispose(); });

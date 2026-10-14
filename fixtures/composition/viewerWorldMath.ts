@@ -1,5 +1,5 @@
 /** Host composition fixture: all world behavior remains engine-owned. */
-import type { ViewerNavigationSnapshot, ViewerWorldMath } from "@foss-earth/360/core";
+import type { ViewerNavigationSnapshot, ViewerWorldMath } from "@foss-earth/image-viewer/core";
 import { glideSettling, levelUp, orbitAngles, orbitLook, pointGeodetic, type NavigationSnapshot } from "@foss-earth/engine";
 
 /** Inject this value into the viewer; no viewer runtime import or second clock. */
@@ -17,7 +17,7 @@ export function viewerNavigationSnapshot(snapshot: NavigationSnapshot): ViewerNa
 }
 
 /** Capture ENU is distinct from image attitude. The host must provide its frame. */
-import type { ViewerImageInput, ViewerNavigationPresentation, ViewerPosePorts } from "@foss-earth/360/core";
+import type { ViewerImageInput, ViewerNavigationPresentation, ViewerPosePorts } from "@foss-earth/image-viewer/core";
 import { enuFrame, presentationFromView, viewFromPresentation, type GeoView } from "@foss-earth/engine";
 
 function frameFor(input: ViewerImageInput) {

@@ -274,8 +274,9 @@ function applyViewMeasure(
       tiles.group.getWorldMatrix().invertToRef(worldToTiles);
       const engine = scene.getEngine();
       const hardwareScaling = engine.getHardwareScalingLevel();
-      const width = engine.getRenderWidth() * hardwareScaling;
-      const height = engine.getRenderHeight() * hardwareScaling;
+      // The world's viewport, which can be part of a canvas other surfaces share.
+      const width = engine.getRenderWidth() * camera.viewport.width * hardwareScaling;
+      const height = engine.getRenderHeight() * camera.viewport.height * hardwareScaling;
       const projection = camera.getProjectionMatrix().m;
       isOrthographic = projection[15] === 1;
       orthographicPixelSize = Math.max(2 / projection[5] / height, 2 / projection[0] / width);

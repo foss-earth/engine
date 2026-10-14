@@ -1,6 +1,6 @@
 import { DEFAULT_BINDING_TRANSFORM, type ActionDescriptor, type BindingSource, type BindingSpec } from "@felipegalind0/gamepad-tools/core";
-/** Looking around a panorama: bound in the "panorama" context, which a scene's lease selects. */
-export const PANORAMA_GAMEPAD_ACTIONS: readonly ActionDescriptor[] = [
+/** Looking around a sphere: bound in the "panorama" context, which a scene's lease selects. */
+export const SPHERE_GAMEPAD_ACTIONS: readonly ActionDescriptor[] = [
   { id: "panorama.lookX", label: "Look left / right", category: "Panorama", kind: "rate", range: [-1, 1], contexts: ["panorama"], available: true },
   { id: "panorama.lookY", label: "Look down / up", category: "Panorama", kind: "rate", range: [-1, 1], contexts: ["panorama"], available: true },
   { id: "panorama.zoom", label: "Zoom in / out", category: "Panorama", kind: "rate", range: [-1, 1], contexts: ["panorama"], available: true },
@@ -30,8 +30,8 @@ function stickRate(id: string, actionId: string, source: BindingSource, deadzone
 }
 
 
-export const panoramaProfileContribution = { contexts: ["panorama"], bindings: (slot: number, deadzone: number): BindingSpec[] => [
-      // In a panorama the right stick looks the way it points, and the
+export const sphereProfileContribution = { contexts: ["panorama"], bindings: (slot: number, deadzone: number): BindingSpec[] => [
+      // In a sphere the right stick looks the way it points, and the
       // triggers zoom as they do on the globe.
       stickRate("standard-panorama-look-x", "panorama.lookX", axisSource(slot, 2), deadzone, false, "panorama"),
       stickRate("standard-panorama-look-y", "panorama.lookY", axisSource(slot, 3), deadzone, true, "panorama"),

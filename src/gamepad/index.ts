@@ -15,7 +15,7 @@ export interface GlobeProfileContributions { contexts?: readonly string[]; bindi
 export interface GlobeNavigationTarget {
   applyGlobeNavigationIntents(frame: GlobeNavigationIntentFrame): void;
   /**
-   * Intents in any context but "globe", such as a panorama's look and exit,
+   * Intents in any context but "globe", such as a sphere's look and exit,
    * for whoever holds navigation.
    */
   applyNavigationIntents?(frame: ActionIntentFrame): void;

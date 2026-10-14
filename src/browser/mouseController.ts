@@ -2,6 +2,7 @@ import { orbitWith, type CameraInputTarget } from "../input/inertialCameraContro
 import type { AnchorAcquisition } from "../input/navigationAnchors.js";
 import type { AnchorPanDebugOverlay } from "./anchorPanDebugOverlay.js";
 import { DEFAULT_INPUT_RATES, type InputSettings } from "../input/inputSettings.js";
+import { worldViewportHeight } from "./worldViewport.js";
 
 /** A mouse press already held when the handler attaches, and where the pointer is. */
 export interface HeldPress {
@@ -229,7 +230,7 @@ export function attachMouseController(
     if (activeButton === 0 && !(options.isOrbitMode?.() ?? false)) {
       const sensitivity = options.getSettings?.().sensitivity.mouse.pan ?? 1;
       const rate = rates().mousePanRate * sensitivity;
-      camera.panBy(-dx * rate, -dy * rate, canvas.clientHeight);
+      camera.panBy(-dx * rate, -dy * rate, worldViewportHeight(canvas));
     } else {
       // The press is a drag now: its anchor is in use.
       if (orbitAnchors && !orbitAnchorsHeld) {

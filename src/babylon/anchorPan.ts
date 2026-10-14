@@ -4,6 +4,7 @@ import {
   WGS84_B,
   type EcefCoord,
 } from "../camera/cameraMath.js";
+import { cameraViewportFromTop } from "./worldViewport.js";
 
 export interface ScreenPickInput {
   clientX: number;
@@ -116,15 +117,17 @@ function transform4(m: ArrayLike<number>, x: number, y: number, z: number, w = 1
 }
 
 /**
- * How the canvas's drawing maps to the page: its viewport in CSS pixels of
- * the canvas's layout box, and where that box is drawn, which CSS transforms
+ * How the canvas's drawing maps to the page: the camera's viewport (the
+ * world's part of the canvas) in CSS pixels of the canvas's layout box, from
+ * its top-left corner, and where that box is drawn, which CSS transforms
  * may scale. The device pixel ratio and render resolution drop out: a point's
  * share of the viewport is the same in every unit.
  */
 function canvasMapping(canvas: HTMLCanvasElement, scene: Scene, camera: Camera) {
   const { width, height } = getCanvasViewportDimensions(canvas, scene);
   const rect = canvas.getBoundingClientRect();
-  const viewport = camera.viewport.toGlobal(width, height);
+  // From the top, as client points are: Babylon's viewport is measured from the bottom.
+  const viewport = cameraViewportFromTop(camera, width, height);
   return {
     viewport,
     left: rect.left, top: rect.top,

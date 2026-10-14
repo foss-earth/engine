@@ -42,6 +42,8 @@ import { ecefToVector3, projectEcefToClient } from "./anchorPan.js";
 import type { NavigationAnchorMarkers, NavigationAnchorMarkerView } from "../browser/navigationAnchorMarkers.js";
 import { createBorrowedRuntimeAuthority } from "./borrowedRuntimeAuthority.js";
 import type { GlobeRuntimeOptions, GlobeMapDebugSnapshot } from "./globeRuntimePorts.js";
+import { gateWorldInput, worldViewportHeight } from "../browser/worldViewport.js";
+import { attachWorldViewport } from "./worldViewport.js";
 export type * from "./globeRuntimePorts.js";
 export { NAVIGATION_PRESENTATION_LAYER };
 const PLANET_RADIUS_METERS = 6_378_137;
@@ -253,7 +255,7 @@ export interface GlobeRuntime {
   setSimRunning(running: boolean): void;
   setSimTick(callback: ((deltaSeconds: number) => void) | null): void;
   /**
-   * Takes navigation for one owner, such as a panorama scene: the globe's
+   * Takes navigation for one owner, such as a sphere scene: the globe's
    * input, point tracking and map selection pause until the lease ends.
    * Busy while another owner or a simulation holds the camera.
    */
@@ -272,7 +274,7 @@ export interface GlobeRuntime {
    * While `lease` holds navigation, puts the globe camera's eye at the view's
    * position, looking along its forward with its up and field of view: nearer
    * than the zoom limit, at any pitch and through the ground, as a flight into
-   * a panorama's orb needs. The camera's limits and collisions return when a
+   * a sphere's orb needs. The camera's limits and collisions return when a
    * snapshot is restored or the lease ends. Refused (false) otherwise.
    */
   placeNavigationCamera(lease: NavigationLease, view: NavigationPresentation, options?: { render?: boolean }): boolean;
@@ -299,7 +301,7 @@ export interface GlobeRuntime {
   /** The current lease's presented view, or null while the globe camera's view is drawn. */
   getPresentationView(): NavigationPresentation | null;
   /**
-   * While a panorama presents its own view, also draw the globe behind it.
+   * While a sphere presents its own view, also draw the globe behind it.
    * The presented photograph can then be made translucent and lined up with the map.
    */
   setPresentedWorldVisible(visible: boolean): void;
@@ -439,6 +441,11 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
   // whichever camera has the canvas, the globe's or the application's, and
   // never reaches the browser as Back or a page zoom.
   authority.own(passUnusedInputToWorld(canvas, platform.passToWorld));
+  // The canvas can fill a shell that other surfaces share. The world draws,
+  // and takes presses, only where the host's world viewport puts it.
+  const worldViewport = attachWorldViewport(scene, canvas);
+  authority.own(() => worldViewport.dispose());
+  authority.own(gateWorldInput(canvas));
 
   let simLight: HemisphericLight | null = null;
   authority.own(() => { simLight?.dispose(); simLight = null; });
@@ -660,6 +667,8 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
     if (inFrame) throw new Error("The host prepared the globe twice without closing its frame.");
     inFrame = true; preparingFrame = true; focusCache = null;
     try {
+    // Before anything reads the camera's projection this frame.
+    worldViewport.apply();
     frameProfile.frame(frameNow);
     profiler.tag("engine frame", renderer.engine.frameId);
     terrainCapture?.beginFrame(frameNow);
@@ -1984,7 +1993,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
 
   const applyGlobeNavigationIntents = createGlobeIntentMotion<HTMLCanvasElement>({
     blocked: () => disposed || simMode || navigation.current() !== null,
-    target: () => inertialCameraController, canvasHeightPx: () => canvas.clientHeight || canvas.height || 1,
+    target: () => inertialCameraController, canvasHeightPx: () => worldViewportHeight(canvas) || canvas.height || 1,
     rates: cameraSettings.intentRates,
   });
   const setExternalViewState = (partial: Partial<GlobeViewState>): void => {

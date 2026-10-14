@@ -2,6 +2,7 @@ import { orbitWith, zoomWith, type CameraInputTarget } from "../input/inertialCa
 import { DEFAULT_INPUT_RATES, type InputSettings } from "../input/inputSettings.js";
 import type { AnchorFamily, NavigationAnchor } from "../input/navigationAnchors.js";
 import { WHEEL_GESTURE_IDLE_MS, createWheelGestureReader } from "../input/wheelGesture.js";
+import { worldViewportHeight } from "./worldViewport.js";
 export interface WheelWatchPorts { window: Pick<Window, "addEventListener" | "removeEventListener">; nowMs(): number }
 const FRACTIONAL_DELTA_EPSILON = 0.001;
 
@@ -116,7 +117,7 @@ export function attachWheelController(
     if (mode === "pan") {
       const sensitivity = options.getSettings?.().sensitivity.trackpad.pan ?? 1;
       const rate = rates().trackpadPanRate * sensitivity;
-      camera.panBy(e.deltaX * rate, e.deltaY * rate, canvas.clientHeight);
+      camera.panBy(e.deltaX * rate, e.deltaY * rate, worldViewportHeight(canvas));
       return;
     }
 

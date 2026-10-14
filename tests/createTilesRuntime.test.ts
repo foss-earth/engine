@@ -1,4 +1,4 @@
-import { Matrix, Vector3, type Scene } from "@babylonjs/core";
+import { Matrix, Vector3, Viewport, type Scene } from "@babylonjs/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("3d-tiles-renderer/babylonjs", () => ({
@@ -134,7 +134,7 @@ describe("Google terrain detail anchors", () => {
   it("keeps the active-camera frustum while measuring detail from the supplied anchor", () => {
     const anchor = new Vector3(12, 0, 0);
     const scene = {
-      activeCamera: { getProjectionMatrix: () => Matrix.Identity() },
+      activeCamera: { viewport: new Viewport(0, 0, 1, 1), getProjectionMatrix: () => Matrix.Identity() },
       getEngine: () => ({
         getHardwareScalingLevel: () => 1,
         getRenderWidth: () => 100,
@@ -164,7 +164,7 @@ describe("Google terrain detail anchors", () => {
   it("reports loaded camera detail independently of a focus anchor's requested refinement", () => {
     const onDetailFeedback = vi.fn();
     const scene = {
-      activeCamera: { getProjectionMatrix: () => Matrix.Identity() },
+      activeCamera: { viewport: new Viewport(0, 0, 1, 1), getProjectionMatrix: () => Matrix.Identity() },
       getEngine: () => ({ getHardwareScalingLevel: () => 1, getRenderWidth: () => 100, getRenderHeight: () => 100 }),
     } as Scene;
     const runtime = createGoogleTilesRuntime({ scene, apiKey: "test", onDetailFeedback, getTerrainDetailAnchor: () => new Vector3(12, 0, 0) });
@@ -268,6 +268,7 @@ describe("Google focus region", () => {
   const setup = (focus: { mode: "around" | "both"; finestErrorPx?: number | null }) => {
     const scene = {
       activeCamera: {
+        viewport: new Viewport(0, 0, 1, 1),
         getProjectionMatrix: () => Matrix.PerspectiveFovLH(Math.PI / 2, 1, 1, 1e7),
         // 1 km above the focus point, which is on the ground at 0° N 0° E.
         globalPosition: new Vector3(EARTH + 1000, 0, 0),

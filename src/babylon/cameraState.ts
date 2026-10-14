@@ -24,6 +24,7 @@ import { add, cross, dot, length, normalize, scale, sub, type Vec3 } from "../ca
 import { cameraAxes, lineOfSightTarget, orbitAbout, tiltAt, viewDirection, zoomAbout, type CameraPose, type ViewDirection } from "../camera/anchoredMotion.js";
 import type { AnchoredMotionConstraint, AnchoredMotionResult, GlideMotion, NavigationAnchor } from "../input/navigationAnchors.js";
 import type { GlideAnchors } from "../input/inertialCameraController.js";
+import { worldViewportHeight } from "../browser/worldViewport.js";
 
 // ─── Camera State Limits ────────────────────────────────────────────
 
@@ -541,7 +542,7 @@ export class CameraController {
       const latDeg = place.latRad * RAD_TO_DEG, lonDeg = place.lonRad * RAD_TO_DEG;
       this.applyViewState({ ...this.viewStateOf(fields), latDeg, lonDeg }, this.movedOrbitTargetHeightMeters(latDeg, lonDeg));
     }
-    const metersPerPixel = this.metersPerPixel(fields.radius, grab.canvas.clientHeight);
+    const metersPerPixel = this.metersPerPixel(fields.radius, worldViewportHeight(grab.canvas));
     grab.moving = stepMeters > GRAB_REST_PX * metersPerPixel || length(grab.velocity) > GRAB_REST_PX_PER_S * metersPerPixel;
     return grab.moving;
   }
@@ -564,7 +565,7 @@ export class CameraController {
     // pannedViewState's ground directions, turned back into the screen's.
     const forwardM = northM * Math.cos(heading) + eastM * Math.sin(heading);
     const rightM = -northM * Math.sin(heading) + eastM * Math.cos(heading);
-    const canvasHeight = Math.max(1, grab.canvas.clientHeight);
+    const canvasHeight = Math.max(1, worldViewportHeight(grab.canvas));
     const metersPerPixel = this.metersPerPixel(state.zoomMeters, canvasHeight);
     const screenDxPx = rightM / metersPerPixel, screenDyPx = -forwardM / metersPerPixel;
     if (!Number.isFinite(screenDxPx) || !Number.isFinite(screenDyPx) || Math.hypot(screenDxPx, screenDyPx) < GRAB_REST_PX) return null;

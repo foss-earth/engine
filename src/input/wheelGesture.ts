@@ -105,7 +105,7 @@ export function createWheelGestureReader(options: WheelGestureClassifierOptions)
   };
 }
 
-/** What each wheel event's gesture does, as `createWheelGestureReader` reads it. The globe and a panorama's look input read wheels alike. */
+/** What each wheel event's gesture does, as `createWheelGestureReader` reads it. The globe and a sphere's look input read wheels alike. */
 export function createWheelGestureClassifier(options: WheelGestureClassifierOptions): (e: WheelGestureEvent) => WheelGestureMode {
   const read = createWheelGestureReader(options);
   return (e) => read(e).mode;

@@ -4,7 +4,7 @@ import {
   groundQueryPoint, pointGeodetic, sub,
 } from "../src/camera/geographicFrames.js";
 
-// Original immutable panoramaMath placement cases; assertions and bodies retained.
+// Original immutable sphereMath placement cases; assertions and bodies retained.
 describe("geographic marker placement", () => {
   it("offsets a ground-relative query point east and north on the ellipsoid", () => {
     const capture = { longitudeDeg: -93.235, latitudeDeg: 44.974 };

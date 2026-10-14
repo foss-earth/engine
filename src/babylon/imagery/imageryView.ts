@@ -8,14 +8,16 @@ const eye = new Vector3();
  * The active camera as an imagery view: ECEF straight to clip space, through
  * the world root's transform when a floating origin moves the world. The
  * render size is the actual buffer after hardware scaling, not CSS size times
- * an assumed device pixel ratio.
+ * an assumed device pixel ratio, and only the camera's viewport: the world's
+ * part of a canvas that other surfaces share.
  */
 export function readImageryView(scene: Scene, worldRoot: TransformNode | null): ImageryView | null {
   const camera = scene.activeCamera;
   const engine = scene.getEngine();
   if (!camera) return null;
-  const renderWidth = engine.getRenderWidth();
-  const renderHeight = engine.getRenderHeight();
+  // The viewport's fractions carry a nudge that flooring takes back off.
+  const renderWidth = Math.floor(engine.getRenderWidth() * camera.viewport.width);
+  const renderHeight = Math.floor(engine.getRenderHeight() * camera.viewport.height);
   if (renderWidth <= 0 || renderHeight <= 0) return null;
   const projection = camera.getProjectionMatrix().m;
   const viewProjection = multiplyMatrices(camera.getViewMatrix().m, projection);
@@ -27,8 +29,8 @@ export function readImageryView(scene: Scene, worldRoot: TransformNode | null): 
     Vector3.TransformCoordinatesToRef(eye, worldToEcef, eye);
   }
   const canvas = engine.getRenderingCanvas();
-  const logicalWidth = canvas?.clientWidth || renderWidth;
-  const logicalHeight = canvas?.clientHeight || renderHeight;
+  const logicalWidth = canvas?.clientWidth ? canvas.clientWidth * camera.viewport.width : renderWidth;
+  const logicalHeight = canvas?.clientHeight ? canvas.clientHeight * camera.viewport.height : renderHeight;
   const halfZ = engine.isNDCHalfZRange;
   const reverse = engine.useReverseDepthBuffer;
   // Inside the near plane: z >= -w (WebGL), z >= 0 (WebGPU), z <= w (reversed depth).

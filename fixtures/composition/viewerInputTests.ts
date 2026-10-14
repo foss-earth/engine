@@ -36,7 +36,7 @@ const mouse = (type: string, x: number, buttons: number) =>
 afterEach(() => { document.body.replaceChildren(); });
 
 describe("engine with host viewer input", () => {
-  it("lets a panorama drag look as the pointer moves, and stop when the button is released", () => {
+  it("lets a sphere drag look as the pointer moves, and stop when the button is released", () => {
     const { canvas, controller } = setup();
     controller.setSuspended(true);
     const model = createLookModel({ headingDeg: 180, pitchDeg: 0, verticalFovDeg: 60 }, () => LOOK, () => {});
@@ -53,7 +53,7 @@ describe("engine with host viewer input", () => {
     input.detach();
   });
 
-  it("does not let a panorama look with a swipe under way when looking begins, such as the globe's momentum", () => {
+  it("does not let a sphere look with a swipe under way when looking begins, such as the globe's momentum", () => {
     let clock = 1_000;
     vi.spyOn(performance, "now").mockImplementation(() => clock);
     const { canvas, controller } = setup();
