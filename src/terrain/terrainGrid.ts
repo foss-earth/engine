@@ -55,24 +55,35 @@ export function decodeTerrarium(data: Uint8ClampedArray, size: number): Float32A
 export function sampleTerrainGrid(grid: TerrainGrid, x: number, y: number): number {
   if (grid.neighbors && (x - grid.x < 0.5 / grid.size || x - grid.x > 1 - 0.5 / grid.size
     || y - grid.y < 0.5 / grid.size || y - grid.y > 1 - 0.5 / grid.size)) {
-    const candidates = [grid, ...grid.neighbors];
     const px = (x - grid.x) * grid.size - 0.5, py = (y - grid.y) * grid.size - 0.5;
     const ix = Math.floor(px), iy = Math.floor(py), u = px - ix, v = py - iy;
-    const samplePixel = (col: number, row: number) => {
-      const n = 2 ** grid.z;
-      const tx = ((grid.x + (col + 0.5) / grid.size) % n + n) % n;
-      const ty = Math.max(0, Math.min(n - 1e-9, grid.y + (row + 0.5) / grid.size));
-      const source = candidates.find(candidate => {
-        const scale = 2 ** (candidate.z - grid.z);
-        return Math.floor(tx * scale) === candidate.x && Math.floor(ty * scale) === candidate.y;
-      }) ?? grid;
-      const scale = 2 ** (source.z - grid.z);
-      // Avoid recursively following the patch on its center grid.
-      return sampleTerrainGrid({ ...source, neighbors: undefined }, tx * scale, ty * scale);
-    };
-    return (samplePixel(ix, iy) * (1 - u) + samplePixel(ix + 1, iy) * u) * (1 - v)
-      + (samplePixel(ix, iy + 1) * (1 - u) + samplePixel(ix + 1, iy + 1) * u) * v;
+    return (samplePixel(grid, grid.neighbors, ix, iy) * (1 - u) + samplePixel(grid, grid.neighbors, ix + 1, iy) * u) * (1 - v)
+      + (samplePixel(grid, grid.neighbors, ix, iy + 1) * (1 - u) + samplePixel(grid, grid.neighbors, ix + 1, iy + 1) * u) * v;
   }
+  return sampleOwnGrid(grid, x, y);
+}
+
+/** A pixel of the grid's tile or, past its edge, of the first neighbour that covers it; the grid's own when none does. */
+function samplePixel(grid: TerrainGrid, neighbors: readonly TerrainGrid[], col: number, row: number): number {
+  const n = 2 ** grid.z;
+  const tx = ((grid.x + (col + 0.5) / grid.size) % n + n) % n;
+  const ty = Math.max(0, Math.min(n - 1e-9, grid.y + (row + 0.5) / grid.size));
+  let source = grid;
+  if (!covers(grid, grid.z, tx, ty)) {
+    for (const neighbor of neighbors) if (covers(neighbor, grid.z, tx, ty)) { source = neighbor; break; }
+  }
+  const scale = 2 ** (source.z - grid.z);
+  // The source's own pixels: the patch is not followed again on its centre grid.
+  return sampleOwnGrid(source, tx * scale, ty * scale);
+}
+
+function covers(candidate: TerrainTile, z: number, tx: number, ty: number): boolean {
+  const scale = 2 ** (candidate.z - z);
+  return Math.floor(tx * scale) === candidate.x && Math.floor(ty * scale) === candidate.y;
+}
+
+/** Pixel-center interpolation within the grid's own pixels, clamped at its edge. */
+function sampleOwnGrid(grid: TerrainGrid, x: number, y: number): number {
   const px = Math.max(0, Math.min(grid.size - 1, (x - grid.x) * grid.size - 0.5));
   const py = Math.max(0, Math.min(grid.size - 1, (y - grid.y) * grid.size - 0.5));
   const ix = Math.floor(px), iy = Math.floor(py);
