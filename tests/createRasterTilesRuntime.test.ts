@@ -2,6 +2,8 @@ import { Frustum, GeospatialCamera, GeospatialClippingBehavior, NullEngine, Scen
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HostCameraController as CameraController } from "../fixtures/composition/runtimeHost.js";
 import * as refinement from "../src/babylon/meshRefinement.js";
+import * as selector from "../src/terrain/terrainSelector.js";
+import { createTerrainMesh } from "../src/babylon/terrainMesh.js";
 import { createTerrainPerformanceCapture } from "../src/terrain/terrainPerformanceCapture.js";
 import type { TerrainGrid, TerrainTile } from "../src/terrain/terrainGrid.js";
 import { createRasterTilesRuntime as createCoreRaster, type RasterTilesRuntimeOptions } from "../src/babylon/createRasterTilesRuntime.js";
@@ -141,6 +143,40 @@ describe("raster imagery and terrain lifecycle", () => {
     runtime.dispose();
     expect(scene.meshes).toHaveLength(0);
     engine.dispose();
+  });
+  it("shows the positions and measures the height range the tile builder gives arriving terrain", async () => {
+    const engine = new NullEngine(), scene = new Scene(engine), select = vi.spyOn(selector, "selectTerrain");
+    const runtime = createRasterTilesRuntime({ scene, source: RASTER_BASE_MAP_SOURCES[0], getViewState: () => view });
+    try {
+      runtime.update(); pending.imagery.forEach(loaded => loaded()); runtime.update();
+      // Uneven heights on fine grids, so a stale or unrounded target cannot pass.
+      const grids = new Map<string, TerrainGrid>();
+      for (let round = 0; round < 4 && pending.terrain.length; round++) {
+        for (const { tile, resolve } of pending.terrain.splice(0)) {
+          const grid = { ...tile, size: 64, heights: Float32Array.from({ length: 64 * 64 }, (_, index) => ((index * 7919 + tile.x * 31 + tile.y) % 4000) / 4 - 300) };
+          grids.set(`${tile.z}/${tile.x}/${tile.y}`, grid); resolve(grid);
+        }
+        await flush(); runtime.update();
+      }
+      const shown = scene.meshes.filter(mesh => mesh.isEnabled() && mesh.metadata?.mapSurface);
+      const checked = shown.filter(mesh => grids.get(mesh.name.split("-").at(-1)!)?.z === mesh.metadata.terrainZoom);
+      expect(checked.length).toBeGreaterThan(0);
+      for (const mesh of checked) {
+        const grid = grids.get(mesh.name.split("-").at(-1)!)!, segments = mesh.metadata.segments as number;
+        const reference = createTerrainMesh({ scene, source: RASTER_BASE_MAP_SOURCES[0], nowMs: () => 0, segments }, grid, grid);
+        const expected = refinement.meshPositions(reference), actual = mesh.getVerticesData(VertexBuffer.PositionKind)!;
+        // Seams move vertices up to four in from an edge; the rest are the builder's.
+        for (let row = 4; row <= segments - 4; row++) for (let col = 4; col <= segments - 4; col++) for (let axis = 0; axis < 3; axis++) {
+          const index = (row * (segments + 1) + col) * 3 + axis;
+          if (!Object.is(actual[index], expected[index])) expect.fail(`${mesh.name} vertex ${row},${col} axis ${axis}: ${actual[index]} is not ${expected[index]}`);
+        }
+        const bounds = reference.metadata.heightBounds as { min: number; max: number };
+        expect(select.mock.calls.at(-1)![0].boundsFor(grid)).toEqual({ min: bounds.min - 50, max: bounds.max + 50 });
+        reference.dispose();
+      }
+    } finally {
+      runtime.dispose(); engine.dispose();
+    }
   });
   it("hot-swaps imagery without requesting elevation again or revising the surface", async () => {
     const engine = new NullEngine(); const scene = new Scene(engine);
