@@ -128,6 +128,8 @@ export function createOrbitCompass(scene: Scene, ports: OrbitCompassPorts): Orbi
   let scaleParams = DEFAULT_ORBIT_COMPASS_SCALE_PARAMS;
   let lastAnchor: Vector3 | null = null;
   let lastRadiusMeters = -1;
+  // Where the geometry was last built: unlike lastAnchor, it also follows moves within the epsilon.
+  let drawnAnchor: Vector3 | null = null;
 
   function hide(): void {
     for (const mesh of meshes) {
@@ -187,9 +189,14 @@ export function createOrbitCompass(scene: Scene, ports: OrbitCompassPorts): Orbi
       const anchorChanged = !lastAnchor || Vector3.Distance(anchor, lastAnchor) > ANCHOR_EPSILON_METERS;
       const radiusChanged = Math.abs(radiusMeters - lastRadiusMeters) > RADIUS_EPSILON_METERS;
       if (anchorChanged || radiusChanged) {
-        rebuildGeometry(anchor, radiusMeters);
         lastAnchor = anchor.clone();
         lastRadiusMeters = radiusMeters;
+      }
+      // A move within the epsilon is drawn too, in the frame being drawn, but asks for no other frame. The compass then
+      // rests exactly on its anchor, wherever the last move past the epsilon left it.
+      if (anchorChanged || radiusChanged || !drawnAnchor || !anchor.equals(drawnAnchor)) {
+        rebuildGeometry(anchor, lastRadiusMeters);
+        drawnAnchor = anchor.clone();
       }
 
       // Fade axis lines (not labels) as the camera zooms in past the minRadius clamp.
