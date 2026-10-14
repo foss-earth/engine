@@ -8,9 +8,13 @@ import {
 } from "@babylonjs/core";
 import type { LinesMesh, Scene } from "@babylonjs/core";
 
-import { DEFAULT_ORBIT_COMPASS_SCALE_PARAMS, DEFAULT_COMPASS_LABEL_TEXTURE_SIZE, type OrbitCompassScaleParams } from "./defaults.js";
+import { compassLabelMeters, compassLineFade, compassRadiusMeters, DEFAULT_ORBIT_COMPASS_SCALE_PARAMS, DEFAULT_COMPASS_LABEL_TEXTURE_SIZE, type OrbitCompassScaleParams } from "./defaults.js";
+import { horizonCompassPlacements } from "./horizonPlacement.js";
 import type { CanvasTextureDevicePorts } from "@foss-earth/renderer/babylon";
-export { DEFAULT_ORBIT_COMPASS_SCALE_PARAMS, DEFAULT_COMPASS_LABEL_TEXTURE_SIZE, type OrbitCompassScaleParams } from "./defaults.js";
+export { compassLabelMeters, compassLineFade, compassRadiusMeters, DEFAULT_ORBIT_COMPASS_SCALE_PARAMS, DEFAULT_COMPASS_LABEL_TEXTURE_SIZE, orbitCompassScaleFromSettings, COMPASS_SCALE_SETTING_IDS, type OrbitCompassScaleParams } from "./defaults.js";
+export { horizonCompassPlacements, HORIZON_COMPASS_ANGULAR_SIZE, HORIZON_COMPASS_LIFT } from "./horizonPlacement.js";
+
+export type CompassMode = "horizon" | "legacy";
 
 export interface OrbitCompassPorts { device: CanvasTextureDevicePorts; labelTextureSize?: number; requestRender?(): void }
 
@@ -23,11 +27,12 @@ const RADIUS_EPSILON_METERS = 500;
 const COMPASS_OPACITY = 0.5;
 const WHITE_LINE_ALPHA_FACTOR = 0.25;
 const RED_LINE_ALPHA_FACTOR = 1;
-// Lines fade out over this fraction of minRadius as the natural (pre-clamp) radius drops below it.
-const LINE_FADE_BAND = 0.5;
+const HORIZON_LABEL_ALPHA = 1;
 
 export interface OrbitCompassHandle {
-  update(anchor: Vector3 | null, zoomDistance: number): void;
+  update(anchor: Vector3 | null, zoomDistance: number, cameraPosition?: { x: number; y: number; z: number } | null): void;
+  /** Horizon letters are the default. Legacy is the ground compass. */
+  setMode(mode: CompassMode): void;
   setScaleParams(params: OrbitCompassScaleParams): void;
   isMesh(mesh: Mesh | null | undefined): boolean;
   destroy(): void;
@@ -42,7 +47,9 @@ function normalizeScaleParams(params: OrbitCompassScaleParams): OrbitCompassScal
   const minRadius = Math.max(1, params.minRadius);
   const maxRadius = Math.max(minRadius, params.maxRadius);
   const labelSizeScale = Math.max(0.000001, params.labelSizeScale);
-  return { radiusScale, minRadius, maxRadius, labelSizeScale };
+  const minDistance = params.minDistance === undefined ? undefined : Math.max(1, params.minDistance);
+  const maxDistance = minDistance === undefined || params.maxDistance === undefined ? undefined : Math.max(minDistance, params.maxDistance);
+  return { radiusScale, minRadius, maxRadius, labelSizeScale, ...(minDistance !== undefined && maxDistance !== undefined ? { minDistance, maxDistance } : {}) };
 }
 
 function createLine(name: string, color: Color3, scene: Scene, width = 1): LinesMesh {
@@ -66,10 +73,33 @@ function createLabel(text: string, color: string, scene: Scene, ports: OrbitComp
   let material: StandardMaterial | null = null;
   try {
   texture.hasAlpha = true;
-  texture.drawText(text, null, null, `bold ${size * 72 / 128}px system-ui`, color, "transparent", true, false);
+  const font = `bold ${size * 72 / 128}px system-ui`;
+  const ctx = texture.getContext() as unknown as {
+    clearRect(x: number, y: number, w: number, h: number): void;
+    font: string;
+    textAlign: string;
+    textBaseline: string;
+    lineJoin: string;
+    lineWidth: number;
+    strokeStyle: string;
+    fillStyle: string;
+    strokeText(text: string, x: number, y: number): void;
+    fillText(text: string, x: number, y: number): void;
+  };
+  ctx.clearRect(0, 0, size, size);
+  ctx.font = font;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.lineJoin = "round";
+  ctx.lineWidth = Math.max(4, size * 0.055);
+  ctx.strokeStyle = "rgba(8, 12, 20, 0.92)";
+  ctx.strokeText(text, size / 2, size / 2);
+  ctx.fillStyle = color;
+  ctx.fillText(text, size / 2, size / 2);
   ports.device.updateTexture(texture, true);
 
   material = new StandardMaterial(`orbit-compass-label-${text}-material`, scene);
+  material.fogEnabled = false;
   material.diffuseTexture = texture;
   material.opacityTexture = texture;
   material.emissiveColor = Color3.White();
@@ -121,18 +151,35 @@ export function createOrbitCompass(scene: Scene, ports: OrbitCompassPorts): Orbi
   const northSouthAxis = own(() => createLine("orbit-compass-north-south-axis", Color3.White(), scene));
   const northNeedle = own(() => createLine("orbit-compass-north-needle", Color3.FromHexString("#ef4444"), scene, 3));
   const northLabel = own(() => createLabel("N", "#ef4444", scene, ports));
-  const eastLabel = own(() => createLabel("E", "rgba(255,255,255,0.78)", scene, ports));
-  const southLabel = own(() => createLabel("S", "rgba(255,255,255,0.64)", scene, ports));
-  const westLabel = own(() => createLabel("W", "rgba(255,255,255,0.78)", scene, ports));
+  const eastLabel = own(() => createLabel("E", "#ffffff", scene, ports));
+  const southLabel = own(() => createLabel("S", "#ffffff", scene, ports));
+  const westLabel = own(() => createLabel("W", "#ffffff", scene, ports));
   const meshSet = new Set<Mesh>(meshes);
+  const cardinalLabels = [northLabel, eastLabel, southLabel, westLabel];
+  const labelsById = { N: northLabel, E: eastLabel, S: southLabel, W: westLabel };
+  const axisLines = [eastWestAxis, northSouthAxis, northNeedle];
   let scaleParams = DEFAULT_ORBIT_COMPASS_SCALE_PARAMS;
+  let mode: CompassMode = "horizon";
   let lastAnchor: Vector3 | null = null;
   let lastRadiusMeters = -1;
+  let lastLabelMeters = -1;
+  const lastHorizon = cardinalLabels.map(() => ({ x: Number.NaN, y: Number.NaN, z: Number.NaN, size: Number.NaN }));
 
   function hide(): void {
-    for (const mesh of meshes) {
-      mesh.setEnabled(false);
+    for (const mesh of meshes) mesh.setEnabled(false);
+    lastLabelMeters = -1;
+    for (const slot of lastHorizon) { slot.x = Number.NaN; slot.y = Number.NaN; slot.z = Number.NaN; slot.size = Number.NaN; }
+  }
+
+  function setLabelAlpha(alpha: number): void {
+    for (const label of cardinalLabels) {
+      const material = label.material as StandardMaterial | null;
+      if (material && material.alpha !== alpha) material.alpha = alpha;
     }
+  }
+
+  function setEnabledIfNeeded(mesh: Mesh, enabled: boolean): void {
+    if (mesh.isEnabled() !== enabled) mesh.setEnabled(enabled);
   }
 
   function rebuildGeometry(anchor: Vector3, radiusMeters: number): void {
@@ -161,64 +208,120 @@ export function createOrbitCompass(scene: Scene, ports: OrbitCompassPorts): Orbi
       scene,
     );
 
-    const labelScale = clamp(radiusMeters * scaleParams.labelSizeScale, 800, 32_000);
-    for (const label of [northLabel, eastLabel, southLabel, westLabel]) {
-      label.scaling.setAll(labelScale);
-    }
     northLabel.position.copyFrom(offsetPoint(center, east, north, up, 0, labelRadius, labelLift));
     eastLabel.position.copyFrom(offsetPoint(center, east, north, up, labelRadius, 0, labelLift));
     southLabel.position.copyFrom(offsetPoint(center, east, north, up, 0, -labelRadius, labelLift));
     westLabel.position.copyFrom(offsetPoint(center, east, north, up, -labelRadius, 0, labelLift));
   }
 
+  function applyLegacyLabelScale(zoomDistance: number): boolean {
+    const labelScale = compassLabelMeters(zoomDistance, scaleParams);
+    const tolerance = Math.max(1, Math.abs(lastLabelMeters) * 0.0025);
+    if (Math.abs(labelScale - lastLabelMeters) <= tolerance) return false;
+    lastLabelMeters = labelScale;
+    for (const label of cardinalLabels) label.scaling.setAll(labelScale);
+    return true;
+  }
+
+  function updateLegacy(anchor: Vector3 | null, zoomDistance: number): void {
+    if (!anchor) {
+      lastAnchor = null;
+      lastRadiusMeters = -1;
+      hide();
+      if (visible) ports.requestRender?.();
+      visible = false;
+      lastFade = -1;
+      return;
+    }
+
+    const radiusMeters = compassRadiusMeters(zoomDistance, scaleParams).radius;
+    const anchorChanged = !lastAnchor || Vector3.Distance(anchor, lastAnchor) > ANCHOR_EPSILON_METERS;
+    const radiusChanged = Math.abs(radiusMeters - lastRadiusMeters) > RADIUS_EPSILON_METERS;
+    if (anchorChanged || radiusChanged) {
+      rebuildGeometry(anchor, radiusMeters);
+      lastAnchor = anchor.clone();
+      lastRadiusMeters = radiusMeters;
+    }
+    const labelChanged = applyLegacyLabelScale(zoomDistance);
+    setLabelAlpha(COMPASS_OPACITY);
+
+    const fadeFactor = compassLineFade(zoomDistance, scaleParams);
+    const linesVisible = fadeFactor > 0.001;
+    eastWestAxis.alpha = WHITE_LINE_ALPHA_FACTOR * COMPASS_OPACITY * fadeFactor;
+    northSouthAxis.alpha = WHITE_LINE_ALPHA_FACTOR * COMPASS_OPACITY * fadeFactor;
+    northNeedle.alpha = RED_LINE_ALPHA_FACTOR * COMPASS_OPACITY * fadeFactor;
+
+    const changed = anchorChanged || radiusChanged || labelChanged || !visible || lastFade !== fadeFactor;
+    visible = true;
+    lastFade = fadeFactor;
+    for (const line of axisLines) setEnabledIfNeeded(line, linesVisible);
+    for (const label of cardinalLabels) setEnabledIfNeeded(label, true);
+    if (changed) ports.requestRender?.();
+  }
+
+  function updateHorizon(cameraPosition: { x: number; y: number; z: number } | null): void {
+    const camera = cameraPosition && [cameraPosition.x, cameraPosition.y, cameraPosition.z].every(Number.isFinite)
+      ? cameraPosition
+      : null;
+    const placements = camera ? horizonCompassPlacements(camera) : null;
+    if (!placements) {
+      hide();
+      if (visible) ports.requestRender?.();
+      visible = false;
+      lastFade = -1;
+      return;
+    }
+
+    let moved = !visible;
+    placements.forEach((placement, index) => {
+      const slot = lastHorizon[index];
+      const sizeTolerance = Math.max(1, Math.abs(slot.size) * 0.0025);
+      const slotMoved = !Number.isFinite(slot.x) || !Number.isFinite(slot.size)
+        || Math.abs(placement.position.x - slot.x) > 1
+        || Math.abs(placement.position.y - slot.y) > 1
+        || Math.abs(placement.position.z - slot.z) > 1
+        || Math.abs(placement.sizeMeters - slot.size) > sizeTolerance;
+      if (!slotMoved) return;
+      moved = true;
+      const label = labelsById[placement.id];
+      label.position.set(placement.position.x, placement.position.y, placement.position.z);
+      label.scaling.setAll(placement.sizeMeters);
+      slot.x = placement.position.x;
+      slot.y = placement.position.y;
+      slot.z = placement.position.z;
+      slot.size = placement.sizeMeters;
+    });
+    setLabelAlpha(HORIZON_LABEL_ALPHA);
+    for (const line of axisLines) setEnabledIfNeeded(line, false);
+    for (const label of cardinalLabels) setEnabledIfNeeded(label, true);
+    visible = true;
+    lastFade = -1;
+    if (moved) ports.requestRender?.();
+  }
+
   return {
-    update(anchor: Vector3 | null, zoomDistance: number): void {
+    update(anchor: Vector3 | null, zoomDistance: number, cameraPosition?: { x: number; y: number; z: number } | null): void {
       if (disposed) return;
-      if (!anchor) {
-        lastAnchor = null;
-        lastRadiusMeters = -1;
-        hide();
-        if (visible) ports.requestRender?.(); visible = false; lastFade = -1;
-        return;
-      }
+      if (mode === "horizon") updateHorizon(cameraPosition ?? null);
+      else updateLegacy(anchor, zoomDistance);
+    },
 
-      const naturalRadius = zoomDistance * scaleParams.radiusScale;
-      const radiusMeters = clamp(naturalRadius, scaleParams.minRadius, scaleParams.maxRadius);
-      const anchorChanged = !lastAnchor || Vector3.Distance(anchor, lastAnchor) > ANCHOR_EPSILON_METERS;
-      const radiusChanged = Math.abs(radiusMeters - lastRadiusMeters) > RADIUS_EPSILON_METERS;
-      if (anchorChanged || radiusChanged) {
-        rebuildGeometry(anchor, radiusMeters);
-        lastAnchor = anchor.clone();
-        lastRadiusMeters = radiusMeters;
-      }
-
-      // Fade axis lines (not labels) as the camera zooms in past the minRadius clamp.
-      const fadeStart = scaleParams.minRadius;
-      const fadeEnd = scaleParams.minRadius * (1 - LINE_FADE_BAND);
-      const fadeFactor = fadeStart <= fadeEnd
-        ? 1
-        : clamp((naturalRadius - fadeEnd) / (fadeStart - fadeEnd), 0, 1);
-      const linesVisible = fadeFactor > 0.001;
-      eastWestAxis.alpha = WHITE_LINE_ALPHA_FACTOR * COMPASS_OPACITY * fadeFactor;
-      northSouthAxis.alpha = WHITE_LINE_ALPHA_FACTOR * COMPASS_OPACITY * fadeFactor;
-      northNeedle.alpha = RED_LINE_ALPHA_FACTOR * COMPASS_OPACITY * fadeFactor;
-
-      const changed = anchorChanged || radiusChanged || !visible || lastFade !== fadeFactor; visible = true; lastFade = fadeFactor;
-      for (const mesh of meshes) {
-        if (mesh === eastWestAxis || mesh === northSouthAxis || mesh === northNeedle) {
-          mesh.setEnabled(linesVisible);
-        } else {
-          mesh.setEnabled(true);
-        }
-      }
-      if (changed) ports.requestRender?.();
+    setMode(next: CompassMode): void {
+      if (disposed || mode === next) return;
+      mode = next;
+      lastAnchor = null;
+      lastRadiusMeters = -1;
+      lastLabelMeters = -1;
+      lastFade = -1;
+      for (const slot of lastHorizon) { slot.x = Number.NaN; slot.y = Number.NaN; slot.z = Number.NaN; slot.size = Number.NaN; }
+      if (visible) ports.requestRender?.();
     },
 
     setScaleParams(params: OrbitCompassScaleParams): void {
       if (disposed) return;
       const next = normalizeScaleParams(params);
       if (Object.keys(next).every(key => next[key as keyof OrbitCompassScaleParams] === scaleParams[key as keyof OrbitCompassScaleParams])) return;
-      scaleParams = next; lastRadiusMeters = -1; if (visible) ports.requestRender?.();
+      scaleParams = next; lastRadiusMeters = -1; lastLabelMeters = -1; if (visible) ports.requestRender?.();
     },
 
     isMesh(mesh: Mesh | null | undefined): boolean {

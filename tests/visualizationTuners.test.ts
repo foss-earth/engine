@@ -6,7 +6,7 @@ import { DEFAULT_POI_SPRITE_SIZE_PARAMS, DEFAULT_ORBIT_COMPASS_SCALE_PARAMS } fr
 describe("injected visualization tuners",()=>{
   it.each([
     ["poiSprite",createPoiSpriteSizeTuner,DEFAULT_POI_SPRITE_SIZE_PARAMS,"maxSize","41000"],
-    ["compass",createCompassScaleTuner,DEFAULT_ORBIT_COMPASS_SCALE_PARAMS,"radiusScale","0.05"],
+    ["compass",createCompassScaleTuner,DEFAULT_ORBIT_COMPASS_SCALE_PARAMS,"labelSizeScale","0.2"],
   ] as const)("%s uses its supplied document/registry, refuses failed saving and disposes callbacks",(_name,create,defaults,key,value)=>{
     const doc=document.implementation.createHTMLDocument("host"),container=doc.createElement("div");doc.body.append(container);
     let allowed=false;const values=Object.fromEntries(Object.entries(defaults).map(([key,value])=>[`visualization.${_name}.${key}`,value]));

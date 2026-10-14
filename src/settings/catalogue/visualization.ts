@@ -2,8 +2,10 @@ import type { ParameterSpec } from "@foss-earth/ui/settings";
 import { DEFAULT_POI_REFINEMENT_POLICY } from "../../sprites/core.js";
 import { DEFAULT_DOT_TEXTURE_SIZE, DEFAULT_SPRITE_CAPACITY } from "../../sprites/types.js";
 import { DEFAULT_HORIZON_MARGIN } from "../../perf/culling.js";
-import { DEFAULT_COMPASS_LABEL_TEXTURE_SIZE } from "../../visualization/defaults.js";
+import { DEFAULT_COMPASS_LABEL_TEXTURE_SIZE, DEFAULT_ORBIT_COMPASS_SCALE_PARAMS } from "../../visualization/defaults.js";
 const PERFORMANCE = { tab: "renderer", section: "performance" } as const;
+const COMPASS = { tab: "interface", section: "compass" } as const;
+const LEGACY_COMPASS = { id: "visualization.compass.mode", value: "legacy" } as const;
 
 function toggle(id: string, label: string, description: string, fallback: boolean, reason: string, home: { tab: string; section: string }, source: string, level: "main" | "all" = "main"): ParameterSpec {
   return {
@@ -59,32 +61,64 @@ export const ENGINE_VISUALIZATION_PARAMETERS: readonly ParameterSpec[] = [
     source: "src/terrain/anchorHeight.ts",
   },
   {
-    id: "visualization.compass.radiusScale",
-    label: "Compass radius",
-    description: "The orbit compass's radius as a share of the camera's distance.",
-    unit: "ratio",
-    kind: "number",
-    bounds: () => ({ min: 0.001, max: 1 }),
-    scale: "log2",
-    default: 0.035,
-    defaultReason: "The value it was drawn with before it became a setting.",
-    home: { ...PERFORMANCE, level: "all" },
+    id: "visualization.compass.mode",
+    label: "Compass",
+    description: "Horizon draws N, E, S and W in the sky just above the earth's horizon. Legacy draws the compass on the ground around the point the camera orbits.",
+    unit: "none",
+    kind: "choice",
+    choiceControl: "two-position",
+    choices: [
+      { id: "legacy", label: "Legacy" },
+      { id: "horizon", label: "Horizon" },
+    ],
+    default: "horizon",
+    defaultReason: "Letters on the horizon stay readable up close and when the whole earth is in view. The ground compass is still there.",
+    home: { ...COMPASS, level: "main" },
     appliesLive: true,
     source: "src/visualization/orbitCompass.ts",
   },
-  metres("visualization.compass.minRadius", "Compass smallest radius", "The orbit compass never gets smaller than this.", 750, 1, 1_000_000, "src/visualization/orbitCompass.ts"),
-  metres("visualization.compass.maxRadius", "Compass largest radius", "The orbit compass never gets larger than this.", 240_000, 1, 10_000_000, "src/visualization/orbitCompass.ts"),
+  {
+    id: "visualization.compass.radius",
+    label: "Compass radius",
+    description: "How small and how large the ground compass gets, in metres. The lower handle is the size it keeps when the camera is close.",
+    unit: "m",
+    kind: "range",
+    bounds: () => ({ min: 1, max: 10_000_000 }),
+    scale: "log2",
+    default: { min: DEFAULT_ORBIT_COMPASS_SCALE_PARAMS.minRadius, max: DEFAULT_ORBIT_COMPASS_SCALE_PARAMS.maxRadius },
+    defaultReason: "The smallest radius is 8000 m. The largest is unchanged.",
+    visibleWhen: LEGACY_COMPASS,
+    home: { ...COMPASS, level: "main" },
+    appliesLive: true,
+    source: "src/visualization/orbitCompass.ts",
+  },
+  {
+    id: "visualization.compass.distance",
+    label: "Compass distance",
+    description: "Camera distance where the ground compass is at its smallest, and where it reaches its largest. Closer than the near end it stays small; farther than the far end it stays large.",
+    unit: "m",
+    kind: "range",
+    bounds: () => ({ min: 1, max: 100_000_000 }),
+    scale: "log2",
+    default: { min: DEFAULT_ORBIT_COMPASS_SCALE_PARAMS.minDistance ?? 1, max: DEFAULT_ORBIT_COMPASS_SCALE_PARAMS.maxDistance ?? 1 },
+    defaultReason: "The distances where a radius of 3.5% of the camera distance meets the smallest and largest radius.",
+    visibleWhen: LEGACY_COMPASS,
+    home: { ...COMPASS, level: "main" },
+    appliesLive: true,
+    source: "src/visualization/orbitCompass.ts",
+  },
   {
     id: "visualization.compass.labelSizeScale",
     label: "Compass label size",
-    description: "The compass's letters as a share of its radius.",
+    description: "The ground compass's letters as a share of the radius the camera distance would give before the size limits apply. They grow as the view pulls back.",
     unit: "ratio",
     kind: "number",
     bounds: () => ({ min: 0.01, max: 2 }),
     scale: "log2",
-    default: 0.16,
+    default: DEFAULT_ORBIT_COMPASS_SCALE_PARAMS.labelSizeScale,
     defaultReason: "The value it was drawn with before it became a setting.",
-    home: { ...PERFORMANCE, level: "all" },
+    visibleWhen: LEGACY_COMPASS,
+    home: { ...COMPASS, level: "main" },
     appliesLive: true,
     source: "src/visualization/orbitCompass.ts",
   },

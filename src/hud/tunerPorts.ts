@@ -2,6 +2,6 @@
 export interface VisualizationTunerSettings {
   get(id: string): unknown;
   inspect(id: string): { provenance: string };
-  setMany(values: Record<string, number>): { ok: boolean };
+  setMany(values: Record<string, number | { min: number; max: number }>): { ok: boolean };
 }
 export interface VisualizationTunerPorts { document: Document; settings: VisualizationTunerSettings }

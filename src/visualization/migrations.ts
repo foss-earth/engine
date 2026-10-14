@@ -1,6 +1,26 @@
 /** Pure legacy records. The host settings registry validates mapped values. */
-export interface VisualizationMigration { key: string; migrate(raw: string): Record<string, number | boolean> | null }
+export interface VisualizationMigration { key: string; migrate(raw: string): Record<string, number | boolean | { min: number; max: number }> | null }
 const record = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
+function finiteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+/** The old tuner saved a scale and two radii. Those are the two ranges the compass uses now. */
+function migrateCompassScale(raw: string): Record<string, number | { min: number; max: number }> | null {
+  const parsed: unknown = JSON.parse(raw);
+  if (!record(parsed)) return null;
+  const values: Record<string, number | { min: number; max: number }> = {};
+  const { minRadius, maxRadius, radiusScale, labelSizeScale } = parsed;
+  if (finiteNumber(minRadius) && finiteNumber(maxRadius) && minRadius > 0 && maxRadius >= minRadius) {
+    values["visualization.compass.radius"] = { min: minRadius, max: maxRadius };
+    if (finiteNumber(radiusScale) && radiusScale > 0) {
+      values["visualization.compass.distance"] = { min: minRadius / radiusScale, max: maxRadius / radiusScale };
+    }
+  }
+  if (finiteNumber(labelSizeScale) && labelSizeScale > 0) values["visualization.compass.labelSizeScale"] = labelSizeScale;
+  return Object.keys(values).length > 0 ? values : null;
+}
+
 function numbers(raw: string, prefix: string, keys: readonly string[]): Record<string, number> | null {
   const parsed: unknown = JSON.parse(raw); if (!record(parsed)) return null;
   const values: Record<string, number> = {};
@@ -11,6 +31,6 @@ export const VISUALIZATION_MIGRATIONS: readonly VisualizationMigration[] = [
   { key: "foss-earth.poiSpriteTunerVisible", migrate: raw => raw === "true" || raw === "false" ? { "interface.poiSpriteTuner": raw === "true" } : null },
   { key: "foss-earth.compassScaleTunerVisible", migrate: raw => raw === "true" || raw === "false" ? { "interface.compassScaleTuner": raw === "true" } : null },
   { key: "foss-earth.compassHeightOffsetMeters", migrate: raw => Number.isFinite(Number(raw)) ? { "visualization.compass.heightOffset": Math.max(-1000, Math.min(1000, Number(raw))) } : null },
-  { key: "foss-earth.compass-scale-defaults", migrate: raw => numbers(raw, "visualization.compass", ["radiusScale", "minRadius", "maxRadius", "labelSizeScale"]) },
+  { key: "foss-earth.compass-scale-defaults", migrate: migrateCompassScale },
   { key: "foss-earth.poi-sprite-size-defaults", migrate: raw => numbers(raw, "visualization.poiSprite", ["maxSize", "minSize", "minRefZoom", "maxRefZoom"]) },
 ];

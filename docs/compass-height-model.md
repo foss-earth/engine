@@ -57,4 +57,5 @@ the line of sight comes down to the orbit target's height. From there it follows
 bounded speed as before, so an anchored zoom never makes the compass jump.
 
 See also the [Smooth elevation height model proposal](proposals/smooth-elevation-height-model.md)
-for the design rationale of the smooth model.
+for the design rationale of the smooth model. How the compass is drawn, Horizon or Legacy, is
+[compass.md](compass.md). The height here is the orbit target either way.

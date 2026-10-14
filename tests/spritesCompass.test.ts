@@ -13,10 +13,25 @@ describe("supplied canvas and scene visualization",()=>{
       const atlas=makeCircularMarkerAtlas(device,"points",[{fill:[255,0,0],stroke:[255,255,255]},{fill:[0,0,255],stroke:[255,255,255]}]);
       expect(atlas.getSize()).toEqual({width:128,height:64});expect(transfer).toHaveBeenCalledTimes(1);
       const compass=createOrbitCompass(scene,{device,requestRender});expect(transfer).toHaveBeenCalledTimes(5);
+      compass.setMode("legacy");
       const label=scene.getMeshByName("orbit-compass-label-N")! as Mesh;expect(compass.isMesh(label)).toBe(true);
       compass.update(new Vector3(6378137,0,0),100_000);expect(requestRender).toHaveBeenCalledTimes(1);
       compass.update(new Vector3(6378137,0,0),100_000);expect(requestRender).toHaveBeenCalledTimes(1);
-      compass.update(null,100_000);expect(requestRender).toHaveBeenCalledTimes(2);expect(label.isEnabled()).toBe(false);
+      expect(scene.getMeshByName("orbit-compass-east-west-axis")!.isEnabled()).toBe(false);
+      compass.update(new Vector3(6378137,0,0),400_000);
+      const grown = label.scaling.x;
+      compass.update(new Vector3(6378137,0,0),800_000);
+      expect(label.scaling.x).toBeGreaterThan(grown * 1.5);
+      compass.update(null,100_000);expect(requestRender.mock.calls.length).toBeGreaterThan(1);expect(label.isEnabled()).toBe(false);
+      compass.setMode("horizon");
+      const eye = new Vector3(6_378_137 + 2_000_000, 0, 0);
+      compass.update(new Vector3(6378137,0,0), 2_000_000, eye);
+      expect(label.isEnabled()).toBe(true);
+      expect(label.position.z).toBeGreaterThan(1_000);
+      expect(scene.getMeshByName("orbit-compass-east-west-axis")!.isEnabled()).toBe(false);
+      const horizonRenders = requestRender.mock.calls.length;
+      compass.update(new Vector3(6378137,0,0), 2_000_000, eye);
+      expect(requestRender).toHaveBeenCalledTimes(horizonRenders);
       compass.destroy();compass.destroy();expect(scene.getMeshByName("orbit-compass-label-N")).toBeNull();atlas.dispose();
     } finally {scene.dispose();engine.dispose();}
   });
