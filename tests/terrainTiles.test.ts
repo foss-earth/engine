@@ -98,4 +98,114 @@ describe("streamed terrain", () => {
     const { signal } = decode.mock.calls[0][1];
     expect(signal.aborted).toBe(false); loader.dispose(); expect(signal.aborted).toBe(true);
   });
+
+  describe("decode slots", () => {
+    const decoded = { size: 1, heights: new Float32Array([7]) };
+    const flush = () => new Promise(resolve => setTimeout(resolve, 0));
+    function harness(limits: { maxConcurrent: number }, decodeSlots?: () => number) {
+      const decodes: { resolve(value: typeof decoded): void; reject(error: Error): void }[] = [];
+      const decode = vi.fn(() => new Promise<typeof decoded>((resolve, reject) => { decodes.push({ resolve, reject }); }));
+      const fetchTile = vi.fn(async () => new Response("tile"));
+      const loader = createTerrainTileLoader({ ...options, decode, limits: () => ({ ...DEFAULT_TERRAIN_LOADER_LIMITS, ...limits }),
+        ...(decodeSlots ? { decodeSlots } : {}), ports: { ...ports, fetchTile } });
+      const load = (x: number) => loader.load({ z: 4, x, y: 0 });
+      return { loader, decode, decodes, fetchTile, load };
+    }
+    it("keeps a tile in its download slot until it is decoded when there are none", async () => {
+      const { loader, decode, decodes, fetchTile, load } = harness({ maxConcurrent: 2 });
+      const tiles = [load(0), load(1), load(2)];
+      await vi.waitFor(() => expect(decode).toHaveBeenCalledTimes(2)); await flush();
+      expect(fetchTile).toHaveBeenCalledTimes(2);
+      expect(loader.getMetrics()).toMatchObject({ active: 2, decoding: 2, queued: 1 });
+      decodes[0].resolve(decoded);
+      await vi.waitFor(() => expect(decode).toHaveBeenCalledTimes(3));
+      decodes[1].resolve(decoded); decodes[2].resolve(decoded);
+      expect((await Promise.all(tiles)).map(grid => grid.x)).toEqual([0, 1, 2]);
+      expect(loader.getMetrics()).toMatchObject({ active: 0, decoding: 0, queued: 0 });
+    });
+    it("downloads more tiles while downloaded ones wait to decode, up to the decode slots", async () => {
+      const { loader, decode, decodes, fetchTile, load } = harness({ maxConcurrent: 2 }, () => 1);
+      const tiles = [0, 1, 2, 3].map(load);
+      await vi.waitFor(() => expect(decode).toHaveBeenCalledTimes(3)); await flush();
+      // Two download slots and one decode slot: three tiles download or decode, the fourth waits.
+      expect(fetchTile).toHaveBeenCalledTimes(3);
+      expect(loader.getMetrics()).toMatchObject({ active: 3, decoding: 3, queued: 1 });
+      decodes[1].resolve(decoded);
+      await vi.waitFor(() => expect(decode).toHaveBeenCalledTimes(4));
+      for (const index of [0, 2, 3]) decodes[index].resolve(decoded);
+      expect((await Promise.all(tiles)).map(grid => grid.x)).toEqual([0, 1, 2, 3]);
+      expect(loader.getMetrics()).toMatchObject({ active: 0, decoding: 0, queued: 0 });
+    });
+    it("never runs more downloads than the download slots, whatever the decode slots", async () => {
+      let release!: () => void;
+      const gate = new Promise<void>(resolve => { release = resolve; });
+      const { loader, fetchTile, load } = harness({ maxConcurrent: 2 }, () => 8);
+      fetchTile.mockImplementation(async () => { await gate; return new Response("tile"); });
+      void [0, 1, 2, 3].map(load);
+      await flush();
+      expect(fetchTile).toHaveBeenCalledTimes(2);
+      expect(loader.getMetrics()).toMatchObject({ active: 2, decoding: 0, queued: 2 });
+      release(); loader.dispose();
+    });
+    it("reads the decode slots at each start, so fewer stop downloads until decodes finish", async () => {
+      let slots = 2;
+      const { decode, decodes, fetchTile, load } = harness({ maxConcurrent: 1 }, () => slots);
+      void [0, 1, 2, 3, 4].map(load);
+      await vi.waitFor(() => expect(decode).toHaveBeenCalledTimes(3)); await flush();
+      slots = 0;
+      decodes[0].resolve(decoded); decodes[1].resolve(decoded); await flush();
+      // One tile still decodes and one download slot is all there is: nothing starts.
+      expect(fetchTile).toHaveBeenCalledTimes(3);
+      decodes[2].resolve(decoded);
+      await vi.waitFor(() => expect(fetchTile).toHaveBeenCalledTimes(4));
+    });
+    it("frees a decode slot when its decode fails, and forgets the tile", async () => {
+      const { decode, decodes, fetchTile, load } = harness({ maxConcurrent: 1 }, () => 1);
+      const first = load(0), second = load(1), third = load(2);
+      await vi.waitFor(() => expect(decode).toHaveBeenCalledTimes(2)); await flush();
+      expect(fetchTile).toHaveBeenCalledTimes(2);
+      decodes[0].reject(new Error("bad tile"));
+      await expect(first).rejects.toThrow("bad tile");
+      await vi.waitFor(() => expect(decode).toHaveBeenCalledTimes(3));
+      decodes[1].resolve(decoded); decodes[2].resolve(decoded);
+      await expect(Promise.all([second, third])).resolves.toHaveLength(2);
+      // A failed tile is asked for again.
+      void load(0);
+      await vi.waitFor(() => expect(fetchTile).toHaveBeenCalledTimes(4));
+    });
+    it("decodes downloaded tiles while paused and starts none", async () => {
+      const { loader, decode, decodes, fetchTile, load } = harness({ maxConcurrent: 1 }, () => 2);
+      const first = load(0);
+      await vi.waitFor(() => expect(decode).toHaveBeenCalledTimes(1));
+      loader.setPaused(true);
+      const later = [load(1), load(2)];
+      decodes[0].resolve(decoded);
+      await expect(first).resolves.toMatchObject({ x: 0 });
+      await flush();
+      expect(fetchTile).toHaveBeenCalledTimes(1);
+      expect(loader.getMetrics()).toMatchObject({ active: 0, decoding: 0, queued: 2 });
+      loader.setPaused(false);
+      await vi.waitFor(() => expect(decode).toHaveBeenCalledTimes(3));
+      decodes[1].resolve(decoded); decodes[2].resolve(decoded);
+      await expect(Promise.all(later)).resolves.toHaveLength(2);
+    });
+    it("rejects tiles waiting to decode on disposal and leaves nothing counted", async () => {
+      const { loader, decode, decodes, load } = harness({ maxConcurrent: 1 }, () => 2);
+      const tiles = [0, 1, 2, 3].map(load);
+      await vi.waitFor(() => expect(decode).toHaveBeenCalledTimes(3));
+      loader.dispose();
+      for (const pending of decodes) pending.resolve(decoded);
+      for (const tile of tiles) await expect(tile).rejects.toThrow("disposed");
+      expect(loader.getMetrics()).toMatchObject({ active: 0, decoding: 0, queued: 0 });
+    });
+    it("falls back on 404 without deadlocking when every slot holds a decode", async () => {
+      const fetcher = vi.fn(async (url: string) => new Response("tile", { status: url.includes("/0/0/0") ? 200 : 404 }));
+      vi.stubGlobal("fetch", fetcher);
+      const loader = createTerrainTileLoader({ ...options, decodeSlots: () => 2, limits: () => ({ ...DEFAULT_TERRAIN_LOADER_LIMITS, maxConcurrent: 1 }) });
+      const grids = await Promise.all(Array.from({ length: 8 }, (_, i) => loader.load({ z: 2, x: i % 4, y: Math.floor(i / 4) })));
+      expect(grids.every(grid => grid.z === 0 && grid.heights[0] === 250)).toBe(true);
+      expect(fetcher.mock.calls.filter(([url]) => url.includes("/0/0/0"))).toHaveLength(1);
+      expect(loader.getMetrics()).toMatchObject({ active: 0, decoding: 0, queued: 0 });
+    });
+  });
 });

@@ -27,7 +27,7 @@ function createRasterTilesRuntime(options: Partial<RasterTilesRuntimeOptions> & 
     loadMapTexture: (_url, scene, loaded, failed) => { pending.imagery.push(loaded); pending.imageryErrors.push(failed); return new Texture(null, scene); },
     attachTerrainLighting: () => ({}) as ReturnType<RasterTilesRuntimeOptions["attachTerrainLighting"]>,
     createTerrainLoader: () => ({ dispose: pending.dispose,
-      getMetrics: () => ({ active: 0, queued: 0, decodedBytes: 0 }), setPaused: vi.fn(),
+      getMetrics: () => ({ active: 0, decoding: 0, queued: 0, decodedBytes: 0 }), setPaused: vi.fn(),
       load: (tile: TerrainTile) => new Promise<TerrainGrid>((resolve, reject) => pending.terrain.push({ tile, resolve, reject })),
       loadPatch: (tile: TerrainTile) => new Promise<TerrainGrid>((resolve, reject) => {  pending.terrain.push({ tile, resolve, reject }); }),
     }),

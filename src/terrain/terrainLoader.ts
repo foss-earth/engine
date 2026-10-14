@@ -17,6 +17,13 @@ export interface TerrainTileLoaderOptions<TBlob, TSignal extends NavigationAbort
   decode(blob: TBlob, request: { prioritize: boolean; signal: TSignal }): Promise<{ size: number; heights: Float32Array }>;
   ports: TerrainTileLoaderPorts<TBlob, TSignal>;
   limits(): TerrainLoaderLimits;
+  /**
+   * Downloaded tiles that may wait for or be in decode past the download
+   * slots, read at each start: at most `maxConcurrent` tiles download, and at
+   * most `maxConcurrent + decodeSlots()` download or decode. Absent or 0: a
+   * tile keeps its download slot until it is decoded.
+   */
+  decodeSlots?(): number;
   onBytes?: (bytes: number) => void;
   trackMemory?: boolean;
 }
@@ -27,7 +34,8 @@ export function createTerrainTileLoader<TBlob, TSignal extends NavigationAbortSi
   const cache = new Map<string, Promise<TerrainGrid>>();
   const settled = new Set<string>();
   const decodedArrays = trackMemory ? new Map<string, Float32Array>() : null;
-  let active = 0;
+  // Tiles downloading, and tiles downloaded but not yet decoded.
+  let downloading = 0, decoding = 0;
   let paused = false;
   const queue: Array<{ key: string; start: () => void; reject: (reason: unknown) => void }> = [];
   const disposedError = (): unknown => controller.signal.reason ?? new Error("Terrain loader disposed");
@@ -39,6 +47,7 @@ export function createTerrainTileLoader<TBlob, TSignal extends NavigationAbortSi
       else queue.push(entry);
       pump();
     });
+    let blob: TBlob;
     try {
       requireCurrent();
       const url = source.urlTemplate.replace("{z}", String(tile.z)).replace("{x}", String(tile.x)).replace("{y}", String(tile.y));
@@ -47,19 +56,27 @@ export function createTerrainTileLoader<TBlob, TSignal extends NavigationAbortSi
         if (response.status === 404 && tile.z > 0) return awaitFallback(tile);
         throw new Error(`Terrain request failed (${response.status}): ${url}`);
       }
-      const blob = await response.blob();
+      blob = await response.blob();
       requireCurrent();
       onBytes?.(ports.byteLength(blob));
+      decoding++;
+    } finally { downloading--; pump(); }
+    try {
       const decoded = await decodeTile(blob, { prioritize, signal: controller.signal });
       requireCurrent();
       return { ...tile, ...decoded };
-    } finally { active--; pump(); }
+    } finally { decoding--; pump(); }
   }
   // Release the download slot before awaiting a parent (avoid queue deadlock).
   function awaitFallback(tile: TerrainTile): Promise<TerrainGrid> {
     return load({ z: tile.z - 1, x: Math.floor(tile.x / 2), y: Math.floor(tile.y / 2) }, true);
   }
-  function pump() { while (!controller.signal.aborted && !paused && active < options.limits().maxConcurrent && queue.length) { active++; queue.shift()!.start(); } }
+  function pump() {
+    const { maxConcurrent } = options.limits(), slots = Math.max(0, options.decodeSlots?.() || 0);
+    while (!controller.signal.aborted && !paused && downloading < maxConcurrent && downloading + decoding < maxConcurrent + slots && queue.length) {
+      downloading++; queue.shift()!.start();
+    }
+  }
   function load(tile: TerrainTile, prioritize = false): Promise<TerrainGrid> {
     if (controller.signal.aborted) return Promise.reject(disposedError());
     const shift = Math.max(0, tile.z - source.maxZoom);
@@ -109,7 +126,8 @@ export function createTerrainTileLoader<TBlob, TSignal extends NavigationAbortSi
      * shared by every tile record that asked.
      */
     setPaused(next: boolean) { paused = next; pump(); },
-    getMetrics() { return { active, queued: queue.length,
+    /** `active`: tiles downloading or decoding. */
+    getMetrics() { return { active: downloading + decoding, decoding, queued: queue.length,
       decodedBytes: decodedArrays ? [...new Set(decodedArrays.values())].reduce((sum, array) => sum + array.byteLength, 0) : null }; },
     dispose() {
       if (controller.signal.aborted) return;

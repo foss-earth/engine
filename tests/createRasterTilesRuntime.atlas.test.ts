@@ -28,7 +28,7 @@ function createRasterTilesRuntime(options: Partial<RasterTilesRuntimeOptions> & 
     meshRebuildCpuMs: () => settings.get<number>("map.terrain.meshRebuildTimePerFrame"),
     attachTerrainLighting: () => ({}) as ReturnType<RasterTilesRuntimeOptions["attachTerrainLighting"]>,
     createTerrainLoader: () => ({ dispose: vi.fn(),
-      getMetrics: () => ({ active: 0, queued: 0, decodedBytes: 0 }), setPaused: vi.fn(),
+      getMetrics: () => ({ active: 0, decoding: 0, queued: 0, decodedBytes: 0 }), setPaused: vi.fn(),
       load: (tile: TerrainTile) => new Promise<TerrainGrid>((resolve, reject) => pending.terrain.push({ tile, resolve, reject })),
       loadPatch: (tile: TerrainTile) => new Promise<TerrainGrid>((resolve, reject) => { pending.terrainRequests += 1; pending.terrain.push({ tile, resolve, reject }); }),
     }),
@@ -66,7 +66,7 @@ describe("selected raster acquisition contract", () => {
       capacityKey: () => JSON.stringify(broker.pools.stats()),
     };
     const releaseOwnedLoader = vi.fn(), terrainDispose = vi.fn(), terrainCreate = vi.fn(() => ({
-      dispose: terrainDispose, getMetrics: () => ({ active: 0, queued: 0, decodedBytes: 0 }), setPaused() {},
+      dispose: terrainDispose, getMetrics: () => ({ active: 0, decoding: 0, queued: 0, decodedBytes: 0 }), setPaused() {},
       load: () => new Promise<TerrainGrid>(() => {}), loadPatch: () => new Promise<TerrainGrid>(() => {}),
     }));
     const tracker = createTextureTransferTracker({ scene, admit: (bytes, label) => grant("uploadOutstanding", bytes, label), requestRender() {} });
