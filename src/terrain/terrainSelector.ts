@@ -1,9 +1,8 @@
 import { ecefToGeodetic } from "../camera/cameraMath.js";
 import {
-  WEB_MERCATOR_MAX_LAT_DEG,
   isBelowHorizon,
   isSphereBelowHorizon,
-  lonLatToTileXY,
+  lonLatToMercator,
   outcode,
   sagittaMeters,
   positionOnTileBasis,
@@ -121,10 +120,11 @@ interface Measured {
   errorPx: number;
 }
 
-/** The point of a tile nearest a longitude and latitude, in tile-local u and v. */
-function nearestLocal(tile: TileId, lonDeg: number, latDeg: number): { u: number; v: number } {
-  const at = lonLatToTileXY(lonDeg, Math.max(-WEB_MERCATOR_MAX_LAT_DEG, Math.min(WEB_MERCATOR_MAX_LAT_DEG, latDeg)), tile.z);
+/** The point of a tile nearest a point's zoom-0 Mercator position (lonLatToMercator), in tile-local u and v. */
+function nearestLocal(tile: TileId, world: { x: number; y: number }): { u: number; v: number } {
   const n = 2 ** tile.z;
+  // lonLatToTileXY's bits at this zoom; the point's trigonometry is done once per selection.
+  const at = { x: world.x * n, y: world.y * n };
   // Longitude wraps: take the tile-local u nearest the tile's own span.
   let u = at.x - tile.x;
   if (u > n / 2) u -= n;
@@ -161,8 +161,10 @@ export function selectTerrain(input: TerrainSelectionInput): TerrainSelection {
   const pixelAngle = view?.pixelAngle ?? (view ? 1 / view.renderHeight : 0);
   const cameraGeo = view ? ecefToGeodetic(view.camera.x, view.camera.y, view.camera.z) : null;
   const camera = cameraGeo && { lonDeg: (cameraGeo.lonRad * 180) / Math.PI, latDeg: (cameraGeo.latRad * 180) / Math.PI };
+  const cameraWorld = camera && lonLatToMercator(camera.lonDeg, camera.latDeg);
   const focusGeo = focus ? ecefToGeodetic(focus.position.x, focus.position.y, focus.position.z) : null;
   const focusLonLat = focusGeo && { lonDeg: (focusGeo.lonRad * 180) / Math.PI, latDeg: (focusGeo.latRad * 180) / Math.PI };
+  const focusWorld = focusLonLat && lonLatToMercator(focusLonLat.lonDeg, focusLonLat.latDeg);
   const focusViewer = focus && (() => {
     const lift = 1 + focus.minDistanceMeters / (Math.hypot(focus.position.x, focus.position.y, focus.position.z) || 1);
     return { x: focus.position.x * lift, y: focus.position.y * lift, z: focus.position.z * lift };
@@ -170,11 +172,12 @@ export function selectTerrain(input: TerrainSelectionInput): TerrainSelection {
   const refine = input.refineFrom ?? null;
   const refineGeo = refine ? ecefToGeodetic(refine.position.x, refine.position.y, refine.position.z) : null;
   const refineLonLat = refineGeo && { lonDeg: (refineGeo.lonRad * 180) / Math.PI, latDeg: (refineGeo.latRad * 180) / Math.PI };
+  const refineWorld = refineLonLat && lonLatToMercator(refineLonLat.lonDeg, refineLonLat.latDeg);
   /** The refine point's distance to a tile's ground, taken at the point's own height within the tile's bounds. */
   const refineDistance = (tile: TileId, bounds: { min: number; max: number }, points: ReadonlyArray<{ u: number; v: number }>): number => {
     const height = Math.min(bounds.max, Math.max(lowestGround(bounds, refineGeo!.altMeters), refineGeo!.altMeters));
     let nearest = Infinity;
-    for (const point of [...points, nearestLocal(tile, refineLonLat!.lonDeg, refineLonLat!.latDeg)]) {
+    for (const point of [...points, nearestLocal(tile, refineWorld!)]) {
       nearest = Math.min(nearest, distance(tileSurfacePosition(tile, point.u, point.v, height, positionScratch), refine!.position));
     }
     return nearest;
@@ -193,7 +196,7 @@ export function selectTerrain(input: TerrainSelectionInput): TerrainSelection {
 
     if (focus?.mode !== "around") {
       const low = lowestGround(bounds, cameraGeo!.altMeters);
-      const nearest = nearestLocal(tile, camera!.lonDeg, camera!.latDeg);
+      const nearest = nearestLocal(tile, cameraWorld!);
       const groundHeight = Math.min(bounds.max, Math.max(low, cameraGeo!.altMeters));
       let allOutside = 0b11111;
       let anyAboveHorizon = false;
@@ -231,7 +234,7 @@ export function selectTerrain(input: TerrainSelectionInput): TerrainSelection {
     }
 
     if (focus && focusLonLat && focusViewer) {
-      const nearestPoint = nearestLocal(tile, focusLonLat.lonDeg, focusLonLat.latDeg);
+      const nearestPoint = nearestLocal(tile, focusWorld!);
       const low = lowestGround(bounds, focusGeo!.altMeters);
       const groundHeight = Math.min(bounds.max, Math.max(low, focusGeo!.altMeters));
       let nearest = Infinity;

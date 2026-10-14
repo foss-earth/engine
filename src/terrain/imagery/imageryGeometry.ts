@@ -49,15 +49,23 @@ export function tileLatDeg(z: number, y: number): number {
   return Math.atan(Math.sinh(Math.PI * (1 - (2 * y) / 2 ** z))) / DEG;
 }
 
-/** Fractional tile coordinates of a point, with longitude wrapped into the tile grid. */
-export function lonLatToTileXY(lonDeg: number, latDeg: number, z: number): { x: number; y: number } {
-  const n = 2 ** z;
+/** A point's Web Mercator position as a share of the world, longitude wrapped: its tile coordinates at zoom 0. */
+export function lonLatToMercator(lonDeg: number, latDeg: number): { x: number; y: number } {
   const lat = Math.max(-WEB_MERCATOR_MAX_LAT_DEG, Math.min(WEB_MERCATOR_MAX_LAT_DEG, latDeg)) * DEG;
-  const wrapped = ((((lonDeg + 180) % 360) + 360) % 360) / 360;
   return {
-    x: wrapped * n,
-    y: ((1 - Math.log(Math.tan(lat) + 1 / Math.cos(lat)) / Math.PI) / 2) * n,
+    x: ((((lonDeg + 180) % 360) + 360) % 360) / 360,
+    y: (1 - Math.log(Math.tan(lat) + 1 / Math.cos(lat)) / Math.PI) / 2,
   };
+}
+
+/**
+ * Fractional tile coordinates of a point, with longitude wrapped into the tile
+ * grid. They are its zoom-0 position times 2^z: a caller with one point and
+ * many zooms takes lonLatToMercator once and scales it, with the same bits.
+ */
+export function lonLatToTileXY(lonDeg: number, latDeg: number, z: number): { x: number; y: number } {
+  const n = 2 ** z, at = lonLatToMercator(lonDeg, latDeg);
+  return { x: at.x * n, y: at.y * n };
 }
 
 /**

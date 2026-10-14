@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { GeospatialCamera, NullEngine, Scene, Texture } from "@babylonjs/core";
 import { createImageSessionBroker } from "@foss-earth/images";
 import { createTextureDevicePorts, createTextureTransferTracker } from "@foss-earth/renderer/babylon";
@@ -5,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { geodeticToEcef } from "../src/camera/cameraMath.js";
 import { HostCameraController as CameraController } from "../fixtures/composition/runtimeHost.js";
 import * as refinement from "../src/babylon/meshRefinement.js";
+import * as imageryRuntimeModule from "../src/babylon/imagery/createImageryRuntime.js";
 import type { TerrainGrid, TerrainTile } from "../src/terrain/terrainGrid.js";
 import { createRasterTilesRuntime as createCoreRaster, type RasterTilesRuntimeOptions } from "../src/babylon/createRasterTilesRuntime.js";
 import { ImageryMissingError, type ImageryLoader, type PreparedImage } from "../src/terrain/imagery/imageryResidency.js";
@@ -210,6 +212,27 @@ describe("raster runtime with atlas imagery", () => {
     expect(runtime.getRevision()).toBe(revision);
     expect(runtime.sample(36.1, -112.14)).toEqual(probe);
     expect(runtime.getDisplayedSourceId()).toBe("carto-positron");
+    runtime.dispose();
+    engine.dispose();
+  });
+
+  it("gives imagery selection the adopted terrain's heights with the shipped runtime's bits", async () => {
+    // Taken from the shipped runtime, over the view, the antimeridian and past the Mercator limit.
+    const SHIPPED_DIGEST = "c7c3b2f5f66e5bf13bb55e5f96a4ae456c15951f970b6cdcae9ba813625ead41";
+    const created = vi.spyOn(imageryRuntimeModule, "createImageryRuntime");
+    const { runtime, settle, engine } = await setup();
+    await settle();
+    const surface = created.mock.calls[0]![0].surface, hash = createHash("sha256"), seen = new Set<number>();
+    const points: Array<[number, number]> = [[85.06, 10], [-85.06, -170], [0, 180], [0, -180], [36.1, 247.86]];
+    for (let row = 0; row <= 60; row++) for (let col = 0; col <= 60; col++) points.push([35.4 + row * 0.025, -113 + col * 0.03]);
+    for (const [latDeg, lonDeg] of points) {
+      const height = surface.heightAt(latDeg, lonDeg);
+      if (height !== null) seen.add(height);
+      hash.update(height === null ? "-" : new Uint8Array(Float64Array.of(height).buffer));
+    }
+    // Heights from grids, not the fallback alone.
+    expect(seen.size).toBeGreaterThan(100);
+    expect(hash.digest("hex")).toBe(SHIPPED_DIGEST);
     runtime.dispose();
     engine.dispose();
   });

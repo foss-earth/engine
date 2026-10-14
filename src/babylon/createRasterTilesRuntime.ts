@@ -24,7 +24,7 @@ import type { TerrainPerformanceCapture } from "../terrain/terrainPerformanceCap
 import { retryDelayMs, type RetryDelay } from "../terrain/retryDelay.js";
 import { meshPositions, patchesForGeometryCommit, stitchTerrainEdges, updateTerrainPositions } from "./meshRefinement.js";
 import type { GlobeViewState } from "../view.js";
-import { lonLatToTileXY } from "../terrain/imagery/imageryGeometry.js";
+import { lonLatToMercator } from "../terrain/imagery/imageryGeometry.js";
 import { createImageryRuntime, type ImageryDiagnostics, type ImageryFocusRequest, type ImageryRuntime, type ImageryRuntimeOptions } from "./imagery/createImageryRuntime.js";
 import { IMAGERY_TABLE_MAX_CELLS_LOG2 } from "../terrain/imagery/imageryAtlasLayout.js";
 import type { Material, MaterialPluginBase } from "@babylonjs/core";
@@ -668,15 +668,18 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
   // It never asks for finer heights to decide imagery.
   const imagerySurface = {
     heightAt(latDeg: number, lonDeg: number): number | null {
+      // One Mercator position, scaled to each level: lonLatToTileXY's bits.
+      let world: { x: number; y: number } | null = null;
       for (const z of visibleLevels) {
-        const at = lonLatToTileXY(lonDeg, latDeg, z);
-        const key = `${z}/${Math.floor(at.x)}/${Math.floor(at.y)}`;
+        world ??= lonLatToMercator(lonDeg, latDeg);
+        const n = 2 ** z, x = world.x * n, y = world.y * n;
+        const key = `${z}/${Math.floor(x)}/${Math.floor(y)}`;
         if (!visibleTileKeys.has(key)) continue;
         const record = cache.get(key);
         if (!record) continue;
         if (record.grid) {
           const scale = 2 ** (record.grid.z - z);
-          return sampleTerrainGrid(record.grid, at.x * scale, at.y * scale);
+          return sampleTerrainGrid(record.grid, x * scale, y * scale);
         }
         break;
       }
