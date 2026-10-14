@@ -1,5 +1,5 @@
 import { Mesh, VertexData, Vector3, type Scene, type TransformNode } from "@babylonjs/core";
-import { DEG_TO_RAD, ecefOnParallel, geodeticParallel, geodeticToEcef } from "../camera/cameraMath.js";
+import { DEG_TO_RAD, ecefOnParallel, geodeticParallel, geodeticToEcef, type EcefCoord } from "../camera/cameraMath.js";
 import { sampleTerrainGrid, type TerrainGrid, type TerrainTile } from "../terrain/terrainGrid.js";
 export interface TerrainMeshOptions {
   scene: Scene;
@@ -25,13 +25,11 @@ function tileKey(tile: TileCoord): string {
   return `${tile.z}/${tile.x}/${tile.y}`;
 }
 
-export function createTerrainMesh(options: TerrainMeshOptions, tile: TileCoord, grid?: TerrainGrid): Mesh {
-  const started = options.performanceCapture ? options.nowMs() : 0;
-  const { scene, source } = options;
-  const mesh = new Mesh(`raster-basemap-tile-${source.id}-${tileKey(tile)}`, scene);
+interface TerrainSurface { positions: number[]; uvs: number[] | null; center: EcefCoord; segments: number; minHeight: number; maxHeight: number }
+/** A tile's vertices relative to its centre, as float64. */
+function terrainSurface(options: Pick<TerrainMeshOptions, "segments" | "getSurfaceHeightMeters">, tile: TileCoord, grid: TerrainGrid | undefined, withUvs: boolean): TerrainSurface {
   const positions: number[] = [];
-  const uvs: number[] = [];
-  const indices: number[] = [];
+  const uvs: number[] | null = withUvs ? [] : null;
   const segments = Math.max(1, Math.round(options.segments ?? DEFAULT_TILE_SEGMENTS));
   const center = geodeticToEcef(tileYToLat(tile.y + 0.5, tile.z) * DEG_TO_RAD, tileXToLon(tile.x + 0.5, tile.z) * DEG_TO_RAD, 0);
   let minHeight = Infinity, maxHeight = -Infinity;
@@ -62,10 +60,30 @@ export function createTerrainMesh(options: TerrainMeshOptions, tile: TileCoord, 
       if (altitudeMeters > maxHeight) maxHeight = altitudeMeters;
       ecefOnParallel(parallel, sinLons[col], cosLons[col], altitudeMeters, ecef);
       positions.push(ecef.x - center.x, ecef.y - center.y, ecef.z - center.z);
-      uvs.push(u, v);
+      uvs?.push(u, v);
     }
   }
+  return { positions, uvs, center, segments, minHeight, maxHeight };
+}
 
+/**
+ * The positions a new terrain mesh holds and its height range, without
+ * building the mesh. Babylon stores an updatable mesh's positions as float32,
+ * so each is rounded the same way.
+ */
+export function terrainMeshTarget(options: Pick<TerrainMeshOptions, "segments" | "getSurfaceHeightMeters">, tile: TileCoord, grid?: TerrainGrid): { positions: number[]; heightBounds: { min: number; max: number } } {
+  const { positions, minHeight, maxHeight } = terrainSurface(options, tile, grid, false);
+  for (let index = 0; index < positions.length; index++) positions[index] = Math.fround(positions[index]);
+  return { positions, heightBounds: { min: minHeight, max: maxHeight } };
+}
+
+export function createTerrainMesh(options: TerrainMeshOptions, tile: TileCoord, grid?: TerrainGrid): Mesh {
+  const started = options.performanceCapture ? options.nowMs() : 0;
+  const { scene, source } = options;
+  const mesh = new Mesh(`raster-basemap-tile-${source.id}-${tileKey(tile)}`, scene);
+  const { positions, uvs, center, segments, minHeight, maxHeight } = terrainSurface(options, tile, grid, true);
+  const stride = segments + 1;
+  const indices: number[] = [];
   for (let row = 0; row < segments; row += 1) {
     for (let col = 0; col < segments; col += 1) {
       const a = row * stride + col;

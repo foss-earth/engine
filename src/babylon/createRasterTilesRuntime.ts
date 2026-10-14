@@ -3,7 +3,7 @@ import type { createMapTextureLoader } from "./imagery/mapTextureLoader.js";
 import type { BoundedMapTextureRequest, LoadedMapTexture } from "./imagery/boundedMapTextureLoader.js";
 import type { HeaderImageRequest } from "@foss-earth/images/browser";
 import { finishOwnedCleanup } from "./ownedCleanup.js";
-import { createTerrainMesh, DEFAULT_TILE_SEGMENTS } from "./terrainMesh.js";
+import { createTerrainMesh, DEFAULT_TILE_SEGMENTS, terrainMeshTarget } from "./terrainMesh.js";
 import type { createTerrainTileLoader } from "../terrain/terrainLoader.js";
 import {
   Color3,
@@ -293,14 +293,14 @@ function createTileRecord(
   const applyGrid = (grid: TerrainGrid | undefined, generation: number) => {
     if (record.mesh.isDisposed() || generation !== record.terrainGeneration) return;
     if (grid && record.appliedTerrainGeneration === generation && grid.z <= record.mesh.metadata.terrainZoom) return;
-    const readyMesh = createTerrainMesh(options, tile, grid);
     const started = options.performanceCapture ? options.nowMs() : 0;
-    record.target = meshPositions(readyMesh);
+    // The displayed mesh takes only these positions at its next commit.
+    const target = terrainMeshTarget(options, tile, grid);
+    record.target = target.positions;
     record.grid = grid;
-    record.heightBounds = readyMesh.metadata.heightBounds;
+    record.heightBounds = target.heightBounds;
     record.appliedTerrainGeneration = generation;
     record.targetTerrainZoom = grid?.z ?? -1;
-    readyMesh.dispose();
     if (options.performanceCapture) options.performanceCapture.counters.preparationCpuMs += options.nowMs() - started;
     onChanged(record);
   };

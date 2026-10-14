@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { NullEngine, NullEngineOptions, Scene, TransformNode, VertexData } from "@babylonjs/core";
+import { NullEngine, NullEngineOptions, Scene, TransformNode, VertexBuffer, VertexData } from "@babylonjs/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createTerrainMesh } from "../src/babylon/terrainMesh.js";
+import { createTerrainMesh, terrainMeshTarget } from "../src/babylon/terrainMesh.js";
 import type { TerrainGrid, TerrainTile } from "../src/terrain/terrainGrid.js";
 
 // The arrays every terrain mesh is built from, before Babylon converts them,
@@ -71,6 +71,15 @@ describe("terrain mesh identity", () => {
     const digests = CASES.map(test => `${test.name}: ${digestOf(test)}`);
     const all = createHash("sha256").update(digests.join("\n")).digest("hex");
     expect(all, digests.join("\n")).toBe(SHIPPED_DIGEST);
+  });
+  it("gives the positions Babylon stores for a new mesh, and its height range, without building one", () => {
+    for (const test of CASES) {
+      const { mesh } = build(test), stored = mesh.getVerticesData(VertexBuffer.PositionKind)!;
+      const target = terrainMeshTarget({ segments: test.segments, ...(test.height ? { getSurfaceHeightMeters: test.height } : {}) }, test.tile, test.grid);
+      expect(stored, test.name).toBeInstanceOf(Float32Array); expect(target.positions.length, test.name).toBe(stored.length);
+      expect(target.positions.every((value, index) => Object.is(value, stored[index])), test.name).toBe(true);
+      expect(target.heightBounds, test.name).toEqual(mesh.metadata.heightBounds);
+    }
   });
   it("covers the edge, gap and fallback paths it claims to", () => {
     const polar = build(CASES[3]).data.positions as number[];
