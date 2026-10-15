@@ -46,7 +46,10 @@ describe("device location marker", () => {
       expect(accuracy.isPickable).toBe(false);
       expect(dot.isPickable).toBe(false);
       expect(dot.isVisible).toBe(true);
-      expect((scene.spriteManagers?.[0] as SpriteManager | undefined)?.disableDepthWrite).toBe(true);
+      const manager = scene.spriteManagers?.[0] as SpriteManager | undefined;
+      expect(manager?.disableDepthWrite).toBe(true);
+      expect(manager?.renderingGroupId).toBe(3);
+      expect(scene.getAutoClearDepthStencilSetup(3)).toMatchObject({ autoClear: true, depth: true });
       const distance = Vector3.Distance(camera.globalPosition, dot.position);
       expect(dot.size).toBeCloseTo(screenConstantSpriteSize(distance, camera.fov, engine.getRenderHeight(), DEVICE_LOCATION_DOT_PX), 3);
       expect(requestRender).toHaveBeenCalledTimes(1);
@@ -55,6 +58,7 @@ describe("device location marker", () => {
       expect(sprite("device-location").isVisible).toBe(true);
       marker.show(null);
       expect(sprite("device-location").isVisible).toBe(false);
+      expect(scene.getAutoClearDepthStencilSetup(3).autoClear).toBe(false);
       expect(requestRender).toHaveBeenCalledTimes(3);
       marker.show(null);
       expect(requestRender).toHaveBeenCalledTimes(3);

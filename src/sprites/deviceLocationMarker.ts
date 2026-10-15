@@ -11,6 +11,13 @@ import { makeCircularMarkerAtlas } from "./atlas.js";
 import { createPointSprite, createPointSpriteManager, disposeSpriteManagers } from "./spriteManager.js";
 import { DEFAULT_DOT_TEXTURE_SIZE } from "./types.js";
 
+/**
+ * After the world. A phone's depth buffer cannot tell a marker a few metres
+ * above the ground from the ground itself, so this group clears depth and the
+ * circles stay visible. Nothing else renders here.
+ */
+const MARKER_RENDERING_GROUP = 3;
+
 export interface DeviceLocationSurfaceHit {
   point: EcefCoord;
   normal: EcefCoord;
@@ -112,7 +119,13 @@ export function createDeviceLocationMarker(options: DeviceLocationMarkerOptions)
     manager = null;
     accuracy = null;
     dot = null;
+    clearDepthForMarker(false);
     if (owned) disposeSpriteManagers([owned]);
+  }
+
+  function clearDepthForMarker(enabled: boolean): void {
+    try { options.scene.setRenderingAutoClearDepthStencil(MARKER_RENDERING_GROUP, enabled, true, false); }
+    catch { /* The scene can already be gone. */ }
   }
 
   function ensure(): void {
@@ -123,7 +136,8 @@ export function createDeviceLocationMarker(options: DeviceLocationMarkerOptions)
     ], cellSize);
     try {
       manager = createPointSpriteManager({
-        scene: options.scene, name: "device-location", capacity: 2, minCapacity: 2, texture, cellSize, isPickable: false,
+        scene: options.scene, name: "device-location", capacity: 2, minCapacity: 2, texture, cellSize,
+        renderingGroupId: MARKER_RENDERING_GROUP, isPickable: false,
       });
       manager.disableDepthWrite = true;
       manager.fogEnabled = false;
@@ -195,10 +209,12 @@ export function createDeviceLocationMarker(options: DeviceLocationMarkerOptions)
     if (!next) {
       if (accuracy) accuracy.isVisible = false;
       if (dot) dot.isVisible = false;
+      clearDepthForMarker(false);
       if (had) options.requestRender();
       return;
     }
     ensure();
+    clearDepthForMarker(true);
     place();
     options.requestRender();
   }
