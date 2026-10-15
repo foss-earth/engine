@@ -246,8 +246,9 @@ export function createOrbitCompass(scene: Scene, ports: OrbitCompassPorts): Orbi
       lastRadiusMeters = radiusMeters;
     }
     // A move within the epsilon is drawn in this frame and asks for no other, so the compass rests on its anchor.
+    // The radius keeps its 500 m step: a smaller zoom change is drawn at the radius already built.
     if (anchorChanged || radiusChanged || !drawnAnchor || !anchor.equals(drawnAnchor)) {
-      rebuildGeometry(anchor, radiusMeters);
+      rebuildGeometry(anchor, lastRadiusMeters);
       drawnAnchor = anchor.clone();
     }
     const labelChanged = applyLegacyLabelScale(zoomDistance);

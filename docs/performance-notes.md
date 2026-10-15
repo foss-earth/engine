@@ -48,7 +48,8 @@ next. Before relying on a number, check it against the current code.
   | Desktop, 6 → 16 | 2.6 → 1.9 s | 5.7 → 2.9 s (with the compass fixes) | 320 → 327 |
   | Phone proxy, 6 → 16 | 10.2 → 8.0 s | 15.6 → 13.4 s | 441 → 444 |
 
-  The default is still 6; changing it is waiting on a decision.
+  The default is now 16 for both. Save battery and data keeps elevation at 6 and
+  imagery at 3. A browser that already saved the old 6 keeps that saved value.
 - Protocols, checked against the live servers. These need a recheck if the
   providers change.
   - Mapterhorn elevation (the default) and the USGS imagery use HTTP/2, so 16
@@ -151,7 +152,7 @@ by the "Smooth motion" and "Save battery and data" presets.
 
 ## Open questions
 
-- **Request caps.** Raise the default from 6 to 16? See the table above.
+- **Request caps.** Done: the default is 16. See the table above.
 - **Seam stitching.** Terrain levels now match across runs, but the vertices
   along tile edges depend on the order neighbours arrive in. A stitch that gives
   the same edge whatever the order would make the settled picture reproducible.
@@ -163,7 +164,8 @@ by the "Smooth motion" and "Save battery and data" presets.
 - **Shared-bandwidth replay.** The harness should model one shared link, so that
   byte savings show up in its timings.
 - **Other follow-ups:**
-  - A barrier for coarse patches.
+  - A barrier for coarse patches. Done: a tile's own elevation starts with the
+    coarse stand-in, and the stand-in is shown only if it arrives first.
   - Rechecking the size of the decoded-grid LRU.
   - Rounding the compass radius to 500 m steps.
   - Moving terrain mesh building to workers, which is postponed.

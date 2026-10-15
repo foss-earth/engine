@@ -40,18 +40,20 @@ describe("supplied canvas and scene visualization",()=>{
     const device=createCanvasTextureDevicePorts({scene,createCanvas:canvasRealm,transfer:(_bytes,_label,submit)=>submit()});
     try {
       const compass=createOrbitCompass(scene,{device,requestRender});
+      compass.setMode("legacy");
       compass.setScaleParams({radiusScale:0.1,minRadius:100,maxRadius:100_000,labelSizeScale:0.01});
       const label=scene.getMeshByName("orbit-compass-label-N")!;
       // At (R, 0, 0) up is +x and north is +z.
       compass.update(new Vector3(6378137,0,0),100_000);expect(requestRender).toHaveBeenCalledTimes(1);
       const north=label.position.z,up=label.position.x;
       // Half a metre up, and a radius 200 m larger, within its 500 m step: the label rises, its radius stays.
-      compass.update(new Vector3(6378137.5,0,0),102_000);expect(requestRender).toHaveBeenCalledTimes(1);
+      // The label's size changes with that zoom, so this frame is asked for. Its radius stays inside the 500 m step.
+      compass.update(new Vector3(6378137.5,0,0),102_000);expect(requestRender).toHaveBeenCalledTimes(2);
       expect(label.position.x-up).toBeCloseTo(0.5,6);expect(label.position.z).toBe(north);
       // 1.2 m from where it last asked for a frame, though 0.7 m from the last drawn.
-      compass.update(new Vector3(6378138.2,0,0),100_000);expect(requestRender).toHaveBeenCalledTimes(2);
+      compass.update(new Vector3(6378138.2,0,0),100_000);expect(requestRender).toHaveBeenCalledTimes(3);
       expect(label.position.x-up).toBeCloseTo(1.2,6);
-      compass.update(new Vector3(6378138.2,0,0),100_000);expect(requestRender).toHaveBeenCalledTimes(2);
+      compass.update(new Vector3(6378138.2,0,0),100_000);expect(requestRender).toHaveBeenCalledTimes(3);
       compass.destroy();
     } finally {scene.dispose();engine.dispose();}
   });

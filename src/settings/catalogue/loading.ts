@@ -105,9 +105,9 @@ export const MAP_LOADING_PARAMETERS: readonly ParameterSpec[] = [
     reason: STARTING_VALUE, source: "src/terrain/imagery/imageryResidency.ts",
   }),
   quantity({
-    id: "map.imagery.concurrentRequests", label: "2D imagery requests at once", unit: "count", min: 1, max: 32, fallback: 6,
+    id: "map.imagery.concurrentRequests", label: "2D imagery requests at once", unit: "count", min: 1, max: 32, fallback: 16,
     description: "Imagery requests in flight at the same time. A source's own policy may allow fewer.",
-    reason: "Six, the number of connections a browser opens to one host over HTTP/1.1.", source: "src/terrain/imagery/imageryResidency.ts",
+    reason: "Sixteen. On the tour's first view at 80 ms a request, 16 elevation and imagery requests asleep the renderer in 2.9 s on a desktop and 13.4 s on a 4× phone proxy, against 5.7 s and 15.6 s at 6. HTTP/1.1 hosts still open six connections.", source: "src/terrain/imagery/imageryResidency.ts",
   }),
   quantity({
     id: "map.imagery.queuedRequests", label: "2D imagery requests queued", unit: "count", min: 8, max: 4096, fallback: 128, scale: "log2",

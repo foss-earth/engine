@@ -3,7 +3,7 @@ import type { NavigationAbortController, NavigationAbortSignal } from "../naviga
 
 export interface TerrainLoaderLimits { maxConcurrent: number; cacheEntries: number; timeoutMs: number }
 /** Preserved source defaults; hosts may map their named settings to the required limits port. */
-export const DEFAULT_TERRAIN_LOADER_LIMITS: Readonly<TerrainLoaderLimits> = Object.freeze({ maxConcurrent: 6, cacheEntries: 256, timeoutMs: 20000 });
+export const DEFAULT_TERRAIN_LOADER_LIMITS: Readonly<TerrainLoaderLimits> = Object.freeze({ maxConcurrent: 16, cacheEntries: 256, timeoutMs: 20000 });
 /**
  * One holder's claim on the tiles it asks for. Released, it withdraws them: a
  * tile no claim still wants leaves the queue before it downloads. A tile asked

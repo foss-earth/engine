@@ -291,7 +291,7 @@ describe("raster imagery and terrain lifecycle", () => {
         expect(mesh.metadata.terrainZoom, mesh.name).toBe(z - Math.min(levels, z));
       }
     }
-    it.each([0, 1, 3])("asks for each tile's elevation %i levels above it, after the patch four levels above that", async levels => {
+    it.each([0, 1, 3])("asks for each tile's elevation %i levels above it, and the patch four levels above that", async levels => {
       if (levels) settings.set("map.terrain.coarserElevation", levels);
       const { engine, scene, runtime, tiles } = start();
       try {
@@ -331,7 +331,7 @@ describe("raster imagery and terrain lifecycle", () => {
         const asked = new Set(pending.terrain.slice(before).map(load => keyOf(load.tile)));
         for (const key of [...shown, ...needed]) expect(asked.has(key), key).toBe(true);
         runtime.update();
-        // The tiles kept above ask for the coarse patch first, as new tiles do.
+        // The tiles kept above ask for their own elevation and the coarse patch together, as new tiles do.
         const records = scene.meshes.filter(mesh => mesh.metadata?.mapSurface).map(mesh => mesh.name.split("-").at(-1)!.split("/").map(Number));
         const own = new Set(records.flatMap(([z, x, y]) => [keyOf({ z, x, y }), keyOf(up({ z, x, y }, 4))]));
         for (const key of await resolveAll()) expect(own.has(key), key).toBe(true);
@@ -453,9 +453,10 @@ describe("raster imagery and terrain lifecycle", () => {
     const grid = (tile: TerrainTile): TerrainGrid => ({ ...tile, size: 2, heights: new Float32Array([100, 100, 100, 100]) });
     try {
       runtime.update(); pending.imagery.splice(0).forEach(loaded => loaded()); runtime.update();
-      // Every tile asks for its coarse patch first, at level 0 here.
+      // Every tile asks for its own elevation and its coarse patch together. Here the coarse patch is level 0.
       expect(patches.length).toBeGreaterThan(1);
-      expect(patches.every(patch => patch.tile.z === 0)).toBe(true);
+      expect(patches.some(patch => patch.tile.z === 0)).toBe(true);
+      expect(patches.some(patch => patch.tile.z > 0)).toBe(true);
       const meshOf = (tile: string) => scene.meshes.find(mesh => mesh.name.split("-").at(-1) === tile);
       const [own, { arrive, interest: coarse }] = [...arrivals].find(([tile]) => meshOf(tile))!;
       const mesh = meshOf(own)!;
@@ -575,9 +576,6 @@ describe("raster imagery and terrain lifecycle", () => {
     const runtime = createRasterTilesRuntime({ scene, source: RASTER_BASE_MAP_SOURCES[0], getViewState: () => view });
     runtime.update();
     pending.imagery.forEach(loaded => loaded());
-    const coarse = pending.terrain[0];
-    coarse.resolve({ ...coarse.tile, size: 2, heights: new Float32Array([100, 100, 100, 100]) });
-    await flush();
     const detail = pending.terrain.find(item => item.tile.z > 0)!;
     detail.reject(new Error("Terrain request failed (503)"));
     await flush();

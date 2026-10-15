@@ -951,17 +951,18 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
     // Another tile may already wait for these, from earlier in the queue than this one would ask.
     loader.holdPatch?.(requested, interest);
     if (coarseZoom < requested.z) loader.holdPatch?.(coarse, coarseInterest);
-    return (async () => {
-      if (coarseZoom < requested.z) {
+    // The tile's own elevation starts at once. The coarse patch is only a stand-in, shown if it arrives first.
+    const detail = loader.loadPatch(requested, interest);
+    if (coarseZoom < requested.z) {
+      void (async () => {
         try {
-          // Another tile can bring this one's own elevation first, as a neighbour of its patch.
           const shown = await Promise.race([loader.loadPatch(coarse, coarseInterest), ...loader.whenLoaded ? [loader.whenLoaded(requested, coarseInterest).then(() => null)] : []]);
           if (shown) progress(shown);
-        } catch { /* Retain the current displayed surface and still try detail. */ }
+        } catch { /* Retain the current displayed surface. */ }
         coarseInterest.release();
-      }
-      return loader.loadPatch(requested, interest);
-    })();
+      })();
+    }
+    return detail;
   }
 
   function touchAncestors(tile: TileCoord, baseZoom: number): void {
