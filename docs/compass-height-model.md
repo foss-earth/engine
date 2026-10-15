@@ -45,13 +45,12 @@ default provider. That model, `smoothSurfaceHeightMeters(lat, lon)` and
 for hosts and for marker layers that place sprites above the same smooth ground, but the app's
 compass no longer reads it. A host can pass it as the provider to get the old behaviour back.
 
-With Eye contact on (`camera.eyeContact`, off by default), a pan, a grab or a zoom keeps the
-camera's altitude instead of following the ground. The ground under the eye pushes it up only
-while the eye is inside `camera.eyeClearance`, and that push is an acceleration
-(`camera.eyeContactAcceleration`), not a new height. The compass still marks the orbit point.
-The ask was to default eye contact on. `DEFAULT_EYE_CONTACT.enabled` is still false, on purpose
-until that change is made by itself: a browser that already saved `camera.eyeContact: false`
-keeps the saved value over a new catalogue default.
+Safe space (`camera.safeSpace`, on by default) keeps the camera's altitude through a pan, a
+grab or a zoom instead of following the ground. A sphere around the camera
+(`camera.safeSpace.clearance`, 15 m) is pushed upward when the ground enters it. That push is
+an acceleration (`camera.safeSpace.acceleration`, 60 m/s²), not a new height. The compass still
+marks the orbit point. A saved `camera.eyeContact` branch is not a parameter anymore, so it is
+dropped. Other saved settings stay.
 
 Tracked POIs keep their exact mesh position. When tracking starts, the camera centre eases onto
 the POI at the pace a glide slows by (`camera.inertiaDecay`) instead of jumping to it.

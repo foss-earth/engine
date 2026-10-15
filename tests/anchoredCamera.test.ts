@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { HostCameraController } from "../fixtures/composition/runtimeHost.js";
 import { clientRay, projectEcefToClient } from "../src/babylon/anchorPan.js";
 import { rayToHeight, type CameraPose } from "../src/camera/anchoredMotion.js";
-import { DEFAULT_CAMERA_LIMITS, type CameraLimits } from "../src/camera/cameraLimits.js";
+import { DEFAULT_CAMERA_LIMITS, DEFAULT_EYE_CONTACT, type CameraLimits } from "../src/camera/cameraLimits.js";
 import { RAD_TO_DEG, ecefToGeodetic, type EcefCoord } from "../src/camera/cameraMath.js";
 import { length, scale, sub, type Vec3 } from "../src/camera/geographicFrames.js";
 import type { GlobeViewState } from "../src/view.js";
@@ -424,7 +424,8 @@ describe("CameraController anchored motion and the orbit target's height", () =>
       expect(anchored.controller.zoomAbout(ecef(point), 0.1).constrained).toBe("distance-limit");
       const { latDeg, lonDeg } = anchored.controller.getViewState();
       expect(anchored.controller.orbitTargetHeightAt(latDeg, lonDeg)).toBeCloseTo(raised, 6);
-      // The centred zoom at the limit lowers the raised target, as it always has.
+      // With Safe space off, the centred zoom at the limit lowers the raised target, as it always has.
+      centred.controller.setEyeContact({ ...DEFAULT_EYE_CONTACT, enabled: false });
       centred.controller.zoomBy(0.1);
       expect(centred.camera.radius).toBeCloseTo(DEFAULT_CAMERA_LIMITS.zoomMeters.min, 6);
       expect(centred.centreHeight()).toBeLessThan(raised - 1);

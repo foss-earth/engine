@@ -57,26 +57,26 @@ export const DEFAULT_GROUND_FOLLOW: GroundFollow = Object.freeze({
 });
 
 /**
- * Experimental: the eye's altitude is a velocity. The ground pushes up only
- * while the eye is inside the clearance. `camera.eyeContact`,
- * `camera.eyeContactAcceleration` and `camera.eyeClearance`. Vertical speed
- * left after the push slows by `camera.inertiaDecay`.
+ * Safe space: the eye's altitude is a velocity. A sphere around the camera
+ * is pushed upward when the ground enters it. `camera.safeSpace`,
+ * `camera.safeSpace.acceleration` and `camera.safeSpace.clearance`. Vertical
+ * speed left after the push slows by `camera.inertiaDecay`.
  */
 export interface EyeContact {
   /** Off: the orbit point follows the ground. On: pan, grab and zoom keep altitude. */
   enabled: boolean;
   /** The fastest the ground may accelerate the eye upward, m/s². */
   maxAccelerationMetersPerSecondSquared: number;
-  /** How close the eye may come to the ground under it before the push starts, m. */
+  /** Radius of the sphere around the camera. Ground inside it pushes the camera up, m. */
   clearanceMeters: number;
   /** Share of upward speed kept each 60 Hz frame once the eye is clear of the ground. */
   glideKeepPerFrame: number;
 }
 
-/** Off, so the orbit point keeps following the ground. 30 m/s² and 2 m are the tunings while it is on. */
+/** On: the camera keeps its altitude, and the ground pushes it up only from inside a 15 m sphere, at up to 60 m/s². */
 export const DEFAULT_EYE_CONTACT: EyeContact = Object.freeze({
-  enabled: false,
-  maxAccelerationMetersPerSecondSquared: 30,
-  clearanceMeters: 2,
+  enabled: true,
+  maxAccelerationMetersPerSecondSquared: 60,
+  clearanceMeters: 15,
   glideKeepPerFrame: 0.82,
 });

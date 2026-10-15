@@ -19,10 +19,10 @@ export function createCameraSettings(settings: Pick<SettingsRegistry, "get">) {
       zoomStepMeters: settings.get<number>("camera.orbitTargetZoomStep"), retryMs: settings.get<number>("camera.surfaceRetry") }; },
     eyeContact(): EyeContact {
       const keep = settings.get("camera.inertiaDecay");
-      const acceleration = settings.get("camera.eyeContactAcceleration");
-      const clearance = settings.get("camera.eyeClearance");
+      const acceleration = settings.get("camera.safeSpace.acceleration");
+      const clearance = settings.get("camera.safeSpace.clearance");
       return {
-        enabled: settings.get("camera.eyeContact") === true,
+        enabled: settings.get("camera.safeSpace") === true,
         maxAccelerationMetersPerSecondSquared: typeof acceleration === "number" && Number.isFinite(acceleration)
           ? acceleration : DEFAULT_EYE_CONTACT.maxAccelerationMetersPerSecondSquared,
         clearanceMeters: typeof clearance === "number" && Number.isFinite(clearance) ? clearance : DEFAULT_EYE_CONTACT.clearanceMeters,

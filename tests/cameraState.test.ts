@@ -20,9 +20,16 @@ function centerHeight(camera: GeospatialCamera): number {
 }
 
 describe("CameraController orbit target height", () => {
+  /** These tests are the ground-following path, which Safe space replaces while it is on. */
+  function followGround(camera: GeospatialCamera, nowMs: () => number = () => performance.now()): CameraController {
+    const controller = new CameraController(camera, { nowMs, hasPickablePointAt: () => false });
+    controller.setEyeContact({ ...DEFAULT_EYE_CONTACT, enabled: false });
+    return controller;
+  }
+
   it("moves the camera orbit center to resolved surface height plus initial offset", () => {
     const camera = createCamera(44.977753, -93.265011, 0);
-    const controller = new CameraController(camera, { nowMs: () => performance.now(), hasPickablePointAt: () => false });
+    const controller = followGround(camera);
 
     controller.configureOrbitTargetHeight({
       resolveSurfaceHeightMeters: () => 264,
@@ -34,7 +41,7 @@ describe("CameraController orbit target height", () => {
 
   it("lowers orbit target offset instead of zooming past the minimum radius", () => {
     const camera = createCamera(44.977753, -93.265011, 0, MIN_ZOOM_METERS);
-    const controller = new CameraController(camera, { nowMs: () => performance.now(), hasPickablePointAt: () => false });
+    const controller = followGround(camera);
     controller.configureOrbitTargetHeight({
       resolveSurfaceHeightMeters: () => 264,
       initialOffsetMeters: 1_000,
@@ -55,7 +62,7 @@ describe("CameraController orbit target height", () => {
 
   it("lowers a raised target by camera.orbitTargetZoomStep for each e-fold of zoom", () => {
     const camera = createCamera(44.977753, -93.265011, 0, MIN_ZOOM_METERS);
-    const controller = new CameraController(camera, { nowMs: () => performance.now(), hasPickablePointAt: () => false });
+    const controller = followGround(camera);
     controller.configureOrbitTargetHeight({ resolveSurfaceHeightMeters: () => 264, initialOffsetMeters: 1_000 });
     controller.setGroundFollow({ ...controller.getGroundFollow(), zoomStepMeters: 100 });
 
@@ -66,7 +73,7 @@ describe("CameraController orbit target height", () => {
   it("preserves orbit center height while panning across changing city heights", () => {
     let surfaceHeightMeters = 264;
     const camera = createCamera(44.977753, -93.265011, 0, 80);
-    const controller = new CameraController(camera, { nowMs: () => performance.now(), hasPickablePointAt: () => false });
+    const controller = followGround(camera);
     controller.configureOrbitTargetHeight({
       resolveSurfaceHeightMeters: () => surfaceHeightMeters,
       initialOffsetMeters: 1_000,
@@ -82,7 +89,7 @@ describe("CameraController orbit target height", () => {
   it("keeps a view set before its terrain arrived on the ground the map shows until it is moved", () => {
     let surface: number | null = null, now = 0;
     const camera = createCamera(44.977753, -93.265011, 0);
-    const controller = new CameraController(camera, { nowMs: () => now, hasPickablePointAt: () => false });
+    const controller = followGround(camera, () => now);
     controller.configureOrbitTargetHeight({ resolveSurfaceHeightMeters: () => surface, initialOffsetMeters: 3 });
     expect(centerHeight(camera)).toBeCloseTo(0, 1);
     expect(controller.settleOnGround(1)).toBe(false);
@@ -113,7 +120,7 @@ describe("CameraController orbit target height", () => {
   it("puts a resting target straight onto ground that came up past the eye", () => {
     let surface = 0;
     const camera = createCamera(44.977753, -93.265011, 0, 200);
-    const controller = new CameraController(camera, { nowMs: () => performance.now(), hasPickablePointAt: () => false });
+    const controller = followGround(camera);
     controller.configureOrbitTargetHeight({ resolveSurfaceHeightMeters: () => surface });
 
     surface = 255;
@@ -124,7 +131,7 @@ describe("CameraController orbit target height", () => {
   it("puts a target placed before any ground was known onto it once, even after the view was moved", () => {
     let surface: number | null = null;
     const camera = createCamera(44.977753, -93.265011, 0);
-    const controller = new CameraController(camera, { nowMs: () => performance.now(), hasPickablePointAt: () => false });
+    const controller = followGround(camera);
     controller.configureOrbitTargetHeight({ resolveSurfaceHeightMeters: () => surface });
     controller.orbitBy(0, 5);
 
@@ -138,7 +145,7 @@ describe("CameraController orbit target height", () => {
   it("starts a view set over another point on the ground there", () => {
     let surface = 255;
     const camera = createCamera(44.977753, -93.265011, 0);
-    const controller = new CameraController(camera, { nowMs: () => performance.now(), hasPickablePointAt: () => false });
+    const controller = followGround(camera);
     controller.configureOrbitTargetHeight({ resolveSurfaceHeightMeters: () => surface });
 
     surface = 1_609;
@@ -149,7 +156,7 @@ describe("CameraController orbit target height", () => {
   it("leaves a tracked point's height to the point", () => {
     let surface: number | null = null;
     const camera = createCamera(44.977753, -93.265011, 0);
-    const controller = new CameraController(camera, { nowMs: () => performance.now(), hasPickablePointAt: () => false });
+    const controller = followGround(camera);
     controller.configureOrbitTargetHeight({ resolveSurfaceHeightMeters: () => surface });
     controller.setCenterFollowsGround(false);
 
@@ -161,7 +168,7 @@ describe("CameraController orbit target height", () => {
   it("preserves orbit center height while orbiting", () => {
     let surfaceHeightMeters = 264;
     const camera = createCamera(44.977753, -93.265011, 0, 80);
-    const controller = new CameraController(camera, { nowMs: () => performance.now(), hasPickablePointAt: () => false });
+    const controller = followGround(camera);
     controller.configureOrbitTargetHeight({
       resolveSurfaceHeightMeters: () => surfaceHeightMeters,
       initialOffsetMeters: 1_000,
@@ -181,6 +188,7 @@ describe("CameraController eye contact", () => {
     let surface = 200;
     const camera = createCamera(44.977753, -93.265011, 0, radius);
     const controller = new CameraController(camera, { nowMs: () => now, hasPickablePointAt: () => false });
+    controller.setEyeContact({ ...DEFAULT_EYE_CONTACT, enabled: false });
     controller.configureOrbitTargetHeight({ resolveSurfaceHeightMeters: () => surface });
     const contact = { ...DEFAULT_EYE_CONTACT, enabled: true };
     return {
@@ -211,6 +219,7 @@ describe("CameraController eye contact", () => {
 
   it("still follows the ground across a pan while eye contact is off", () => {
     const view = rig();
+    view.controller.setEyeContact({ ...view.contact, enabled: false });
     const height = centerHeight(view.camera);
     view.surface = 400;
     view.at(1000);
@@ -221,7 +230,7 @@ describe("CameraController eye contact", () => {
 
   it("pushes the eye up while it is inside the ground, by much less than the penetration", () => {
     const view = rig(50);
-    view.controller.setEyeContact(view.contact);
+    view.controller.setEyeContact({ ...view.contact, maxAccelerationMetersPerSecondSquared: 30, clearanceMeters: 2 });
     view.surface = 400;
     const before = centerHeight(view.camera);
     view.at(100);
@@ -233,7 +242,7 @@ describe("CameraController eye contact", () => {
 
   it("adds only a small speed for one frame of ground that then disappears", () => {
     const view = rig(80);
-    view.controller.setEyeContact(view.contact);
+    view.controller.setEyeContact({ ...view.contact, maxAccelerationMetersPerSecondSquared: 30, clearanceMeters: 2 });
     const before = centerHeight(view.camera);
     view.surface = 5_000;
     view.at(16);

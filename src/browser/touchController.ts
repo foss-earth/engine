@@ -51,6 +51,12 @@ interface PanSession {
   identifier: number;
   previous: Point2D;
   anchorPanActive: boolean;
+  /**
+   * The finger left after a pinch or a turn. It stays still, so that coast is
+   * not cancelled by a grab. A real drag of this finger takes the camera over.
+   */
+  coastHold: boolean;
+  coastTravelPx: number;
 }
 
 interface TransformSession {
@@ -195,14 +201,28 @@ export function attachTouchController(
 
   // ── Session transitions ─────────────────────────────────────────
 
-  function startPanSession(touches: ArrayLike<Contact>): void {
+  function startPanSession(touches: ArrayLike<Contact>, coastHold = false): void {
     if (touches.length < 1) {
       setSession(null);
       return;
     }
     const t = touches[0];
     // The last session lets go first: its grab is not the one this finger takes.
+    // Leaving a pinch or a turn starts that coast here, before any new grab.
     setSession(null);
+    // A finger left after a pinch or a turn must not grab while it is still.
+    // A grab cancels the coast the pair just started.
+    if (coastHold) {
+      setSession({
+        kind: "pan",
+        identifier: t.identifier,
+        previous: pointFromTouch(t),
+        anchorPanActive: false,
+        coastHold: true,
+        coastTravelPx: 0,
+      });
+      return;
+    }
     let anchorPanActive = false;
     if ((options.getSettings?.().globeAnchorRotation ?? false) && camera.beginAnchorPan) {
       anchorPanActive = camera.beginAnchorPan({
@@ -211,7 +231,14 @@ export function attachTouchController(
         canvas,
       });
     }
-    setSession({ kind: "pan", identifier: t.identifier, previous: pointFromTouch(t), anchorPanActive });
+    setSession({
+      kind: "pan",
+      identifier: t.identifier,
+      previous: pointFromTouch(t),
+      anchorPanActive,
+      coastHold: false,
+      coastTravelPx: 0,
+    });
   }
 
   function startTransformSession(touches: ArrayLike<Contact>): void {
@@ -249,7 +276,8 @@ export function attachTouchController(
     }
     if (touches.length === 1) {
       if (!session || session.kind !== "pan" || session.identifier !== touches[0].identifier) {
-        startPanSession(touches);
+        const coast = session?.kind === "transform" && (session.orbitActive || session.zoomActive);
+        startPanSession(touches, coast);
       } else {
         // Re-baseline previous to current to avoid jumps after multi-touch end.
         session.previous = pointFromTouch(touches[0]);
@@ -292,6 +320,27 @@ export function attachTouchController(
     if (Math.abs(dx) < TOUCH_PAN_DEADZONE_PX && Math.abs(dy) < TOUCH_PAN_DEADZONE_PX) return;
 
     const sensitivity = options.getSettings?.().sensitivity.touch.pan ?? 1;
+    const step = Math.hypot(dx, dy);
+    // The finger left from a pinch or a turn. Still, the coast keeps going.
+    // Once it actually drags, that drag is new input and takes the camera over.
+    if (s.coastHold) {
+      s.coastTravelPx += step;
+      if (s.coastTravelPx < ORBIT_ACTIVATION_PX) return;
+      s.coastHold = false;
+      camera.cancel?.();
+      if ((options.getSettings?.().globeAnchorRotation ?? false) && camera.beginAnchorPan) {
+        const began = camera.beginAnchorPan({
+          clientX: p.x - dx,
+          clientY: p.y - dy,
+          canvas,
+        });
+        s.anchorPanActive = began;
+        if (began && camera.panAnchorTo) {
+          camera.panAnchorTo({ clientX: p.x, clientY: p.y, canvas }, sensitivity);
+          return;
+        }
+      }
+    }
 
     if (s.anchorPanActive && camera.panAnchorTo) {
       camera.panAnchorTo({
@@ -462,7 +511,7 @@ export function attachTouchController(
       }, e.touches);
     }
     if (e.touches.length === 1) {
-      if (!session || session.kind !== "pan") startPanSession(e.touches);
+      if (!session || session.kind !== "pan") startPanSession(e.touches, session?.kind === "transform" && (session.orbitActive || session.zoomActive));
       applyPan(e.touches);
     } else if (e.touches.length >= 2) {
       if (!session || session.kind !== "transform") startTransformSession(e.touches);

@@ -1596,7 +1596,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
       scheduler.requestRender();
     })),
     ...["camera.surfaceFollowSpeed", "camera.orbitTargetZoomStep"].map(id => watch(id, () => cameraController?.setGroundFollow(groundFollow()))),
-    ...["camera.eyeContact", "camera.eyeContactAcceleration", "camera.eyeClearance", "camera.inertiaDecay"].map(id => watch(id, () => cameraController?.setEyeContact(cameraSettings.eyeContact()))),
+    ...["camera.safeSpace", "camera.safeSpace.acceleration", "camera.safeSpace.clearance", "camera.inertiaDecay"].map(id => watch(id, () => cameraController?.setEyeContact(cameraSettings.eyeContact()))),
     watch("camera.orbitInPlace", () => { cameraController?.setOrbitInPlace(settings.get("camera.orbitInPlace") === true); scheduler.requestRender(); }),
     ...Object.values(INPUT_RATE_IDS).map(id => watch(id, () => inputController?.setRates(inputRates()))),
     // The notes under the anchor choices say what each choice last did; the markers follow the switch.

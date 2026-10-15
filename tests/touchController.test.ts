@@ -443,6 +443,66 @@ describe("attachTouchController: a finger's grab of the ground", () => {
     cleanup();
   });
 
+  it("lets a pinch or a turn coast when one finger lifts, and grabs only once that finger drags", () => {
+    const canvas = createCanvas();
+    const camera = {
+      ...grabbingCamera(),
+      releaseMomentum: vi.fn(),
+      armReleaseMomentum: vi.fn(),
+    };
+    const cleanup = attachTouchController(canvas, camera, options);
+    const start = [
+      { identifier: 1, clientX: 50, clientY: 0 },
+      { identifier: 2, clientX: 50, clientY: 100 },
+    ];
+    const spread = [
+      { identifier: 1, clientX: 50, clientY: -15 },
+      { identifier: 2, clientX: 50, clientY: 115 },
+    ];
+    dispatchTouch(canvas, "touchstart", start, start, 0);
+    dispatchTouch(canvas, "touchmove", spread, spread, 16);
+    const cancels = camera.cancel.mock.calls.length;
+
+    dispatchTouch(canvas, "touchend", [spread[0]], [spread[1]], 32);
+    expect(camera.releaseMomentum).toHaveBeenCalledWith("zoom");
+    expect(camera.releaseMomentum).toHaveBeenCalledWith("orbit");
+    expect(camera.beginAnchorPan).not.toHaveBeenCalled();
+    expect(camera.cancel).toHaveBeenCalledTimes(cancels);
+
+    dispatchTouch(canvas, "touchmove", [{ ...spread[0], clientY: -14 }], [{ ...spread[0], clientY: -14 }], 40);
+    expect(camera.beginAnchorPan).not.toHaveBeenCalled();
+    expect(camera.cancel).toHaveBeenCalledTimes(cancels);
+
+    dispatchTouch(canvas, "touchmove", [{ ...spread[0], clientY: -6 }], [{ ...spread[0], clientY: -6 }], 56);
+    expect(camera.cancel).toHaveBeenCalledTimes(cancels + 1);
+    expect(camera.beginAnchorPan).toHaveBeenCalledTimes(1);
+    cleanup();
+  });
+
+  it("lets a pinch coast when both fingers lift together", () => {
+    const canvas = createCanvas();
+    const camera = {
+      ...grabbingCamera(),
+      releaseMomentum: vi.fn(),
+    };
+    const cleanup = attachTouchController(canvas, camera, options);
+    const start = [
+      { identifier: 1, clientX: 50, clientY: 0 },
+      { identifier: 2, clientX: 50, clientY: 100 },
+    ];
+    const spread = [
+      { identifier: 1, clientX: 50, clientY: -15 },
+      { identifier: 2, clientX: 50, clientY: 115 },
+    ];
+    dispatchTouch(canvas, "touchstart", start, start, 0);
+    dispatchTouch(canvas, "touchmove", spread, spread, 16);
+    dispatchTouch(canvas, "touchend", [], spread, 32);
+    expect(camera.releaseMomentum).toHaveBeenCalledWith("zoom");
+    expect(camera.releaseMomentum).toHaveBeenCalledWith("orbit");
+    expect(camera.beginAnchorPan).not.toHaveBeenCalled();
+    cleanup();
+  });
+
   it("lets go of the ground when a second finger lands, and grabs afresh under the finger left", () => {
     const canvas = createCanvas();
     const camera = grabbingCamera();
