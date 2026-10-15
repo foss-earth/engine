@@ -702,8 +702,10 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
     if (!pending.outcome || !pending.retirement) return;
     pendingTableJobs.delete(pending);
     const patch = pending.patch;
+    // A table built for an earlier selection or earlier resident pages is still bound: its pages stayed pinned, so it
+    // draws what it was built from, and the next publish uploads the newest table where that differs.
     const current = !disposed && !pending.cancelled && [...patches.values()].includes(patch) && patch.visible
-      && patch.pendingTable === pending && atlas === pending.atlas && requested === pending.source && plan === pending.plan && residency.getRevision() === pending.revision && pending.job.isCurrent();
+      && patch.pendingTable === pending && atlas === pending.atlas && requested === pending.source && pending.job.isCurrent();
     if (!current || pending.outcome.status !== "uploaded" || pending.retirement.status !== "completed" || pending.retirement.cleanupError !== undefined) {
       if (patch.pendingTable === pending) patch.pendingTable = null;
       const errors: unknown[] = [];
@@ -762,7 +764,10 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
       if (needsTable) { tablesNeeded += 1; logicalTables += 1; }
       const allowedTable = needsTable && logicalTables <= Math.min(tuning.tablePatches, Math.floor(nextAtlas.layout.tableBlocks / 2));
       if (patch.pendingTable) {
-        if (allowedTable && patch.pendingTable.atlas === nextAtlas && patch.pendingTable.source === source && patch.pendingTable.plan === selected && patch.pendingTable.revision === residencyRevision) continue;
+        // An uploading table finishes even when the selection or the resident pages changed since it was built. On a
+        // slow device both change several times during one upload, and a table cancelled for each change completed
+        // only once loading stopped, leaving the imagery nearest the camera coarse until then.
+        if (allowedTable && patch.pendingTable.atlas === nextAtlas && patch.pendingTable.source === source) continue;
         cancelPendingTable(patch, new Error("Desired page-table generation changed."));
       }
       if (!allowedTable) {
