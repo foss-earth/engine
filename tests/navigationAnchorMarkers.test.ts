@@ -54,18 +54,29 @@ describe("navigation anchor markers", () => {
     expect(svgs()[0]!.style.transform).toBe("translate(-2px, 8px)");
   });
 
-  it("draws an occluded marker dashed and faint, and a visible one solid", () => {
+  it("paints an X pattern on an occluded marker's coloured ink and leaves its colour alone", () => {
     const { markers, svgs } = mount();
+    const cross = (svg: SVGSVGElement): Element | null => svg.querySelector("pattern");
     markers.show([marker({ occluded: true })]);
     const svg = svgs()[0]!;
-    expect(svg.style.opacity).toBe("0.5");
-    expect(svg.getAttribute("aria-label")).toBe("Zoom point, hidden behind the ground");
-    const lines = Array.from(svg.querySelectorAll("path")).filter(path => path.getAttribute("stroke") === "currentColor");
-    expect(lines.length).toBeGreaterThan(0);
-    expect(lines.every(path => path.getAttribute("stroke-dasharray") === "2.5 2.5")).toBe(true);
-    markers.show([marker()]);
     expect(svg.style.opacity).toBe("1");
-    expect(svg.querySelector("[stroke-dasharray]")).toBeNull();
+    expect(svg.style.color).toBe("");
+    expect(svg.getAttribute("aria-label")).toBe("Zoom point, hidden behind the ground");
+    const pattern = cross(svg);
+    expect(pattern?.getAttribute("width")).toBe("3");
+    expect(pattern?.querySelector("path")?.getAttribute("d")).toBe("M 0 0 L 3 3 M 3 0 L 0 3");
+    const paint = `url(#${pattern?.id})`;
+    const ink = Array.from(svg.querySelectorAll(":scope > path")).filter(path => path.getAttribute("stroke") === paint);
+    expect(ink.length).toBeGreaterThan(0);
+    expect(ink.every(path => path.getAttribute("stroke-width") === "1.75")).toBe(true);
+    expect(svg.querySelector("rect")).toBeNull();
+    expect(Array.from(svg.querySelectorAll("path")).some(path => path.getAttribute("stroke") === "currentColor")).toBe(true);
+    markers.show([marker({ zoom: false, grab: true, held: false, occluded: true })]);
+    expect(svg.style.color).toBe("var(--foss-earth-navigation-anchor-coast-color,#a3a3a3)");
+    expect(cross(svg)).not.toBeNull();
+    markers.show([marker()]);
+    expect(svg.style.color).toBe("");
+    expect(cross(svg)).toBeNull();
   });
 
   it("draws a halo under each shape: reticle and dot for zoom, turning arrows too for both, a pin alone for the pin", () => {

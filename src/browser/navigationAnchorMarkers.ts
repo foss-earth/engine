@@ -5,6 +5,7 @@
  * and a pin above the pinned point. Shapes and labels tell them apart. A grab
  * still under the finger, and a zoom whose events are still arriving, keep the
  * anchor colour. Once a point is only waiting out its glide, it turns gray.
+ * A point behind the ground keeps that colour, with an X pattern on its coloured ink.
  * They take no pointer input. The runtime says where they are, each frame drawn.
  */
 
@@ -21,7 +22,7 @@ export interface NavigationAnchorMarkerView {
   /** Zoom events are still arriving. False while this zoom only waits out its glide. */
   readonly zoomHeld: boolean;
   readonly pinned: boolean;
-  /** Ground or a building nearer the eye hides the point: the marker is drawn faint. */
+  /** Ground or a building nearer the eye hides the point: an X pattern is drawn on its coloured ink. */
   readonly occluded: boolean;
 }
 
@@ -39,6 +40,9 @@ const TURN = "M -9.5 -4 A 10.3 10.3 0 0 1 4 -9.5 M 9.5 4 A 10.3 10.3 0 0 1 -4 9.
 /** Four outward arrows around the centre: the ground a drag has grabbed. */
 const GRAB = "M 0 -6 V -13 M -3 -10 L 0 -13 L 3 -10 M 0 6 V 13 M -3 10 L 0 13 L 3 10 M -6 0 H -13 M -10 -3 L -13 0 L -10 3 M 6 0 H 13 M 10 -3 L 13 0 L 10 3";
 const DOT = "M -2.5 0 A 2.5 2.5 0 1 0 2.5 0 A 2.5 2.5 0 1 0 -2.5 0 Z";
+/** One cell of the X pattern painted onto the coloured ink of a hidden marker. */
+const OBSCURED_X = "M 0 0 L 3 3 M 3 0 L 0 3";
+let nextObscured = 0;
 const PIN = "M 0 -1 C -2 -7 -7 -10 -7 -15 A 7 7 0 1 1 7 -15 C 7 -10 2 -7 0 -1 Z M -2.4 -15 A 2.4 2.4 0 1 0 2.4 -15 A 2.4 2.4 0 1 0 -2.4 -15 Z";
 
 function joinActs(parts: readonly string[]): string {
@@ -108,9 +112,22 @@ export function attachNavigationAnchorMarkers(canvas: HTMLCanvasElement): Naviga
     if (!marker.pinned || marker.zoom || marker.orbit || marker.grab) shapes.push({ d: DOT, fill: true });
     const halo = shapes.map(shape => path(shape.d, "rgba(15, 23, 42, 0.7)", 3.5, shape.fill ? "rgba(15, 23, 42, 0.7)" : "none"));
     const line = shapes.map(shape => path(shape.d, "currentColor", 1.75, shape.fill ? "currentColor" : "none"));
-    if (marker.occluded) for (const element of line) element.setAttribute("stroke-dasharray", "2.5 2.5");
-    element.replaceChildren(...halo, ...line);
-    element.style.opacity = marker.occluded ? "0.5" : "1";
+    const children: Node[] = [...halo, ...line];
+    if (marker.occluded) {
+      const id = `foss-earth-anchor-x-${nextObscured++}`;
+      const defs = doc.createElementNS(SVG_NS, "defs");
+      const pattern = doc.createElementNS(SVG_NS, "pattern");
+      pattern.setAttribute("id", id);
+      pattern.setAttribute("patternUnits", "userSpaceOnUse");
+      pattern.setAttribute("width", "3");
+      pattern.setAttribute("height", "3");
+      pattern.append(path(OBSCURED_X, "rgba(15, 23, 42, 0.9)", 0.6));
+      defs.append(pattern);
+      const paint = `url(#${id})`;
+      children.push(defs, ...shapes.map(shape => path(shape.d, paint, 1.75, shape.fill ? paint : "none")));
+    }
+    element.replaceChildren(...children);
+    element.style.opacity = "1";
     element.setAttribute("aria-label", describeNavigationAnchorMarker(marker));
   }
 
