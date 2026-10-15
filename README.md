@@ -38,6 +38,7 @@ A displayed geometry coordinate height does not establish a physical terrain dat
 - [Bounded atlas page producer](docs/bounded-atlas-producer.md). It uses the public images acquisition and readback broker and returns explicitly held pages. Managed pages need the optional owned atlas runtime below; legacy void stores are refused before allocation.
 - [Managed atlas runtime](docs/owned-atlas-runtime.md). It uses the renderer's whole-batch admission, completion and retirement with explicit GPU, table and copy grants from the same broker. Transactional tables reserve two physical blocks per logical patch inside the GPU budget.
 - [Retained engine specifications](docs/retained-specifications.md): nine specifications kept with their proposal limits.
+- [Performance notes](docs/performance-notes.md): where the tour's first view spends its time, what was measured and how, and the rules a speedup must keep.
 
 ## Assets
 
