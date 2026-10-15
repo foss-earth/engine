@@ -18,7 +18,7 @@ function harness() {
     device: host.device, managedAtlas: host.resources, createAbortController: () => new AbortController(), capabilities: { backend: "webgpu", maxTextureSize: 8192, explicitGradients: true },
     surface: { heightAt: () => 0, boundsFor: () => ({ min: 0, max: 0 }), maxLevelFor: () => 8, getRevision: () => 0 },
     limits: { gpuBytes: OWNED_ATLAS_GPU_BUDGET, stagingBytes: 16 * 2 ** 20, concurrentRequests: 2, queuedRequests: 128, uploadBytesPerUpdate: 8 * 2 ** 20, cpuMsPerUpdate: 2, missingRetryMs: 1000, retryDelayMs: { min: 2000, max: 30000 } },
-    tuning: { reselectWhileMovingMs: 0, anisotropy: 4, fallbackGap: 4, fallbackStep: 3, tablePatches: 1, maxNodes: 12_000, hysteresis: { refineAbove: 1.2, coarsenBelow: 0.8, coarsenAfterMs: 500, pinMs: 1000 } },
+    tuning: { reselectWhileMovingMs: 0, anisotropy: 4, fallbackGap: 4, fallbackStep: 3, tablePatches: 1, maxNodes: 12_000, hysteresis: { refineAbove: 1.2, coarsenBelow: 0.8, coarsenAfterMs: 500, pinMs: 1000 }, refineAtRestAbove: 1 },
     requestRender: () => { frame = true; }, now: () => now, log: { warn() {} }, onError: error => { errors.push(error.message); },
     after(callback, delay) { const timer = { at: now + delay, callback }; timers.push(timer); return () => { const index = timers.indexOf(timer); if (index >= 0) timers.splice(index,1); }; },
   });

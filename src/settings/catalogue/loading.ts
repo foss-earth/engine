@@ -239,8 +239,13 @@ export const MAP_LOADING_PARAMETERS: readonly ParameterSpec[] = [
 export const MAP_SELECTION_PARAMETERS: readonly ParameterSpec[] = [
   quantity({
     id: "map.imagery.refineAbove", label: "Refine above", unit: "ratio", min: 1, max: 4, fallback: 1.2, step: 0.05, section: "selection",
-    description: "A region shown at one level asks for a finer one when its pixels exceed the target by this much. Above 1, the view does not flicker between levels at the threshold.",
+    description: "While the view moves, a region shown at one level asks for a finer one when its pixels exceed the target by this much. Above 1, the view does not flicker between levels at the threshold.",
     reason: STARTING_VALUE, source: SELECTOR,
+  }),
+  quantity({
+    id: "map.imagery.refineAtRest", label: "Refine at rest above", unit: "ratio", min: 1, max: 4, fallback: 1, step: 0.05, section: "selection",
+    description: "Once the view stops, a region asks for a finer level when its pixels exceed the target by this much. At 1 the view settles on the imagery it would load from scratch, however it got there; at Refine above, a small move loads nothing more.",
+    reason: "At 1, the imagery a view settles on does not depend on how it got there.", source: IMAGERY_RUNTIME,
   }),
   quantity({
     id: "map.imagery.coarsenBelow", label: "Coarsen below", unit: "ratio", min: 0.1, max: 1, fallback: 0.8, step: 0.05, section: "selection",

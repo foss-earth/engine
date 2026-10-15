@@ -13,7 +13,7 @@ const flush = async () => { for (let turn = 0; turn < 8; turn++) await Promise.r
 const VIEW = { latDeg: 36.1, lonDeg: -112.14, zoomMeters: 30_000, pitchDeg: 0, headingDeg: 0 };
 const VIEW_ROOT = { z: 2, x: 0, y: 1 };
 const LIMITS: ImageryResourceLimits = { gpuBytes: 48 * 2 ** 20, stagingBytes: 16 * 2 ** 20, concurrentRequests: 6, queuedRequests: 128, uploadBytesPerUpdate: 2 * 2 ** 20, cpuMsPerUpdate: 2, missingRetryMs: 1000, retryDelayMs: { min: 2000, max: 30_000 } };
-const TUNING: ImageryTuning = { reselectWhileMovingMs: 0, anisotropy: 4, fallbackGap: 4, fallbackStep: 3, tablePatches: 16, maxNodes: 12_000, hysteresis: { refineAbove: 1.2, coarsenBelow: 0.8, coarsenAfterMs: 500, pinMs: 1000 } };
+const TUNING: ImageryTuning = { reselectWhileMovingMs: 0, anisotropy: 4, fallbackGap: 4, fallbackStep: 3, tablePatches: 16, maxNodes: 12_000, hysteresis: { refineAbove: 1.2, coarsenBelow: 0.8, coarsenAfterMs: 500, pinMs: 1000 }, refineAtRestAbove: 1 };
 
 /** Real selection, residency, atlas allocation and material binding; downloads are deterministic. */
 function harness(loaderOverride?: ImageryLoader<AbortSignal>, tablePatches = 1, extra: Partial<ImageryRuntimeOptions> | ((scene: Scene) => Partial<ImageryRuntimeOptions>) = {}) {
@@ -295,6 +295,99 @@ describe("imagery runtime recovery", () => {
       expect(test.runtime.getDiagnostics().counters.selections).toBe(selections);
       expect(test.runtime.getFeedback().loadedTarget).toEqual(expect.any(Number));
       expect(test.runtime.getFeedback().loadedTarget).not.toBe(loaded);
+    } finally { test.dispose(); }
+  });
+});
+
+describe("imagery selection at rest", () => {
+  // Enough pages and levels that only hysteresis decides how far the view refines.
+  const FAR = { ...VIEW, zoomMeters: 1_000_000 };
+  const NEAR = { ...VIEW, zoomMeters: 1_000_000 / 1.05 };
+  const roomy = (tuning: Partial<ImageryTuning> = {}) => harness(undefined, 16, {
+    surface: { heightAt: () => 0, boundsFor: () => ({ min: 0, max: 0 }), maxLevelFor: () => 14, getRevision: () => 0 },
+    limits: { ...LIMITS, gpuBytes: 128 * 2 ** 20 },
+    tuning: { ...TUNING, tablePatches: 16, ...tuning },
+  });
+  const regions = (test: ReturnType<typeof harness>) => (test.runtime.getDiagnostics().plan?.regions ?? []).map(region => region.key).sort();
+  const freshRegions = async (view: typeof VIEW) => {
+    const test = roomy();
+    try {
+      test.controller.applyViewState(view);
+      test.attach("root", VIEW_ROOT);
+      await test.settle();
+      return regions(test);
+    } finally { test.dispose(); }
+  };
+
+  it("keeps leaves from refining while the view moves, then refines to what a fresh view of the same place selects", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const fresh = await freshRegions(NEAR);
+    const test = roomy({ reselectWhileMovingMs: 100 });
+    try {
+      test.controller.applyViewState(FAR);
+      test.attach("root", VIEW_ROOT);
+      await test.settle();
+      test.advance(5000);
+      test.controller.applyViewState(NEAR);
+      test.update();
+      await test.settle();
+      // While it moves, a 5% nearer view refines nothing that was already a leaf.
+      const moving = regions(test);
+      expect(moving.length).toBeLessThan(fresh.length - 10);
+      expect(test.runtime.getFeedback().pending).toBe(true);
+      const selections = test.runtime.getDiagnostics().counters.selections;
+      test.advance(100);
+      vi.advanceTimersByTime(100);
+      await test.settle();
+      expect(test.runtime.getDiagnostics().counters.selections).toBe(selections + 1);
+      expect(regions(test)).toEqual(fresh);
+      // At rest it selects nothing more.
+      test.advance(5000);
+      test.update();
+      await test.settle();
+      expect(test.runtime.getDiagnostics().counters.selections).toBe(selections + 1);
+      expect(test.runtime.getFeedback().pending).toBe(false);
+    } finally { test.dispose(); }
+  });
+
+  it("selects the resting view after a move that loads nothing, so loading ends", async () => {
+    const test = roomy();
+    try {
+      test.controller.applyViewState(NEAR);
+      test.attach("root", VIEW_ROOT);
+      await test.settle();
+      const plan = regions(test);
+      const selections = test.runtime.getDiagnostics().counters.selections;
+      // A slight pan selects the same regions, so no page arrives to draw another frame.
+      test.advance(2000);
+      test.controller.applyViewState({ ...NEAR, lonDeg: NEAR.lonDeg + 1e-4 });
+      test.update();
+      await test.settle();
+      expect(regions(test)).toEqual(plan);
+      expect(test.runtime.getDiagnostics().counters.selections).toBe(selections + 2);
+      expect(test.runtime.getFeedback().pending).toBe(false);
+    } finally { test.dispose(); }
+  });
+
+  it("keeps what it refined at rest when the view moves back and forth, without merging it or refining again", async () => {
+    const test = roomy();
+    try {
+      test.controller.applyViewState(FAR);
+      test.attach("root", VIEW_ROOT);
+      await test.settle();
+      const seen: Record<string, string[][]> = { far: [], near: [] };
+      for (let cycle = 0; cycle < 4; cycle++) {
+        for (const [name, view] of [["near", NEAR], ["far", FAR]] as const) {
+          test.advance(2000);
+          test.controller.applyViewState(view);
+          test.update();
+          await test.settle();
+          seen[name].push(regions(test));
+        }
+      }
+      // The first rest near refines; from then on each view keeps the plan it had.
+      for (const name of ["far", "near"]) for (const plan of seen[name]) expect(plan).toEqual(seen[name][0]);
+      expect(seen.near[0].length).toBe((await freshRegions(NEAR)).length);
     } finally { test.dispose(); }
   });
 });
