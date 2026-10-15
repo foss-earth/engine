@@ -164,10 +164,13 @@ export function createOrbitCompass(scene: Scene, ports: OrbitCompassPorts): Orbi
   let lastRadiusMeters = -1;
   let lastLabelMeters = -1;
   const lastHorizon = cardinalLabels.map(() => ({ x: Number.NaN, y: Number.NaN, z: Number.NaN, size: Number.NaN }));
+  // Where the legacy geometry was last built. Unlike lastAnchor, it follows moves within the epsilon.
+  let drawnAnchor: Vector3 | null = null;
 
   function hide(): void {
     for (const mesh of meshes) mesh.setEnabled(false);
     lastLabelMeters = -1;
+    drawnAnchor = null;
     for (const slot of lastHorizon) { slot.x = Number.NaN; slot.y = Number.NaN; slot.z = Number.NaN; slot.size = Number.NaN; }
   }
 
@@ -226,6 +229,7 @@ export function createOrbitCompass(scene: Scene, ports: OrbitCompassPorts): Orbi
   function updateLegacy(anchor: Vector3 | null, zoomDistance: number): void {
     if (!anchor) {
       lastAnchor = null;
+      drawnAnchor = null;
       lastRadiusMeters = -1;
       hide();
       if (visible) ports.requestRender?.();
@@ -238,9 +242,13 @@ export function createOrbitCompass(scene: Scene, ports: OrbitCompassPorts): Orbi
     const anchorChanged = !lastAnchor || Vector3.Distance(anchor, lastAnchor) > ANCHOR_EPSILON_METERS;
     const radiusChanged = Math.abs(radiusMeters - lastRadiusMeters) > RADIUS_EPSILON_METERS;
     if (anchorChanged || radiusChanged) {
-      rebuildGeometry(anchor, radiusMeters);
       lastAnchor = anchor.clone();
       lastRadiusMeters = radiusMeters;
+    }
+    // A move within the epsilon is drawn in this frame and asks for no other, so the compass rests on its anchor.
+    if (anchorChanged || radiusChanged || !drawnAnchor || !anchor.equals(drawnAnchor)) {
+      rebuildGeometry(anchor, radiusMeters);
+      drawnAnchor = anchor.clone();
     }
     const labelChanged = applyLegacyLabelScale(zoomDistance);
     setLabelAlpha(COMPASS_OPACITY);
@@ -310,6 +318,7 @@ export function createOrbitCompass(scene: Scene, ports: OrbitCompassPorts): Orbi
       if (disposed || mode === next) return;
       mode = next;
       lastAnchor = null;
+      drawnAnchor = null;
       lastRadiusMeters = -1;
       lastLabelMeters = -1;
       lastFade = -1;

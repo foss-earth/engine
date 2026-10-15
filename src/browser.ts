@@ -37,3 +37,7 @@ export * from "./browser/terrainImageDecoder.js";
 export * from "./browser/atlasImageryWorkerBridge.js";
 export * from "./browser/atlasImageryWorkerKernel.js";
 export * from "./browser/atlasImageryWorkerProtocol.js";
+export * from "./browser/workerPool.js";
+export * from "./browser/terrainDecodeWorkers.js";
+export * from "./browser/terrainDecodeWorkerKernel.js";
+export * from "./browser/terrainDecodeWorkerProtocol.js";

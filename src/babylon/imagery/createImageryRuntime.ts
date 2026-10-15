@@ -63,7 +63,10 @@ export interface ImageryTuning {
   /** Terrain patches that may each hold a page-table block. */
   tablePatches: number;
   maxNodes: number;
+  /** `refineAbove` holds while the view moves. */
   hysteresis: ImageryHysteresis;
+  /** Once the view rests, an existing leaf refines past this many times its target. 1 settles on what a fresh view selects. */
+  refineAtRestAbove: number;
 }
 
 export interface ImageryFeedback {
@@ -341,8 +344,12 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
   let lastTraversalStart = -Infinity;
   let lastFocus: ImageryFocus | null = null;
   let lastRefine: ImageryRefinePoint | null = null;
-  // What the running traversal measured; a traversal can span several frames.
-  let traversalInputs: { view: NonNullable<ReturnType<typeof readImageryView>>; surfaceRevision: number; missingRevision: number; focus: ImageryFocus | null; refine: ImageryRefinePoint | null } | null = null;
+  let lastOffset = offset;
+  // What the running traversal measured; a traversal can span several frames. `moving`: the view, focus, refine point
+  // or offset changed since the last selection, so the traversal keeps hysteresis.
+  let traversalInputs: { view: NonNullable<ReturnType<typeof readImageryView>>; surfaceRevision: number; missingRevision: number; focus: ImageryFocus | null; refine: ImageryRefinePoint | null; offset: number; moving: boolean } | null = null;
+  // The last selection kept hysteresis because the view moved: once it rests, one more selection refines to the target.
+  let settleDue = false;
   let lastPublishedResidency = -1;
   let planChangedSincePublish = true;
   let patchesChanged = true;
@@ -467,7 +474,7 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
     return { pages, estimatedPages: Math.round(estimateFocusPages(focus)) };
   }
 
-  function selectionInput(view: NonNullable<ReturnType<typeof readImageryView>>, source: SourceState, focus: ImageryFocus | null, refineFrom: ImageryRefinePoint | null): ImagerySelectionInput {
+  function selectionInput(view: NonNullable<ReturnType<typeof readImageryView>>, source: SourceState, focus: ImageryFocus | null, refineFrom: ImageryRefinePoint | null, moving: boolean): ImagerySelectionInput {
     return {
       view,
       source: source.capabilities,
@@ -477,7 +484,10 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
       maxLevelFor: options.surface.maxLevelFor,
       maxPages: pageBudget(),
       maxNodes: tuning.maxNodes,
-      hysteresis: tuning.hysteresis,
+      // Hysteresis keeps leaves from refining while the view moves across a threshold. At rest they refine to the
+      // target, so where the view stops, not how it got there, decides the imagery. Splits are still kept: merging
+      // waits as before.
+      hysteresis: moving ? tuning.hysteresis : { ...tuning.hysteresis, refineAbove: tuning.refineAtRestAbove },
       focus,
       refineFrom,
       now: now(),
@@ -549,10 +559,10 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
     const mergeReady = (plan?.mergeCandidates.length ?? 0) > 0 && residency.getRevision() !== lastMergeResidency;
     // Around a focus point the view decides nothing: turning the camera selects nothing again.
     const viewMatters = focus?.mode !== "around";
-    const wanted = restartSelection || selector.isRunning() || !plan
-      || (viewMatters && imageryViewChanged(lastView, view)) || focusChanged(lastFocus, focus)
-      || refineChanged(lastRefine, refine) || surfaceRevision !== lastSurfaceRevision
-      || missingRevision !== lastMissingRevision || due || mergeReady;
+    const moved = (viewMatters && imageryViewChanged(lastView, view)) || focusChanged(lastFocus, focus)
+      || refineChanged(lastRefine, refine) || offset !== lastOffset;
+    const wanted = restartSelection || selector.isRunning() || !plan || moved || settleDue
+      || surfaceRevision !== lastSurfaceRevision || missingRevision !== lastMissingRevision || due || mergeReady;
     if (!wanted) return;
     // During continuous motion, start a traversal at most every 100 ms and
     // wake once more afterwards so the final view is always selected.
@@ -564,9 +574,10 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
     const started = now();
     if (!selector.isRunning() || restartSelection) {
       lastTraversalStart = started;
-      traversalInputs = { view, surfaceRevision, missingRevision, focus, refine };
+      // A first selection has no hysteresis memory to keep.
+      traversalInputs = { view, surfaceRevision, missingRevision, focus, refine, offset, moving: moved && plan !== null };
     }
-    const step = selector.step(selectionInput(view, requested, traversalInputs?.focus ?? focus, traversalInputs?.refine ?? refine), started + limits.cpuMsPerUpdate, now, restartSelection);
+    const step = selector.step(selectionInput(view, requested, traversalInputs?.focus ?? focus, traversalInputs?.refine ?? refine, traversalInputs?.moving ?? moved), started + limits.cpuMsPerUpdate, now, restartSelection);
     counters.selectionCpuMs += now() - started;
     restartSelection = false;
     if (step.running) {
@@ -580,6 +591,8 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
     lastRefine = traversalInputs?.refine ?? refine;
     lastSurfaceRevision = traversalInputs?.surfaceRevision ?? surfaceRevision;
     lastMissingRevision = traversalInputs?.missingRevision ?? missingRevision;
+    lastOffset = traversalInputs?.offset ?? offset;
+    settleDue = traversalInputs?.moving ?? moved;
     traversalInputs = null;
     lastMergeResidency = residency.getRevision();
     plan = step.plan;
@@ -592,6 +605,12 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
       };
       demand(requested, plan);
       scheduleWake(plan.wakeAt);
+    }
+    if (settleDue) {
+      // Select again once the throttle allows, without waiting for another reason to draw.
+      const at = lastTraversalStart + tuning.reselectWhileMovingMs;
+      if (at <= now()) options.requestRender();
+      else scheduleWake(at);
     }
   }
 
@@ -724,8 +743,10 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
     if (!pending.outcome || !pending.retirement) return;
     pendingTableJobs.delete(pending);
     const patch = pending.patch;
+    // A table built for an earlier selection or earlier resident pages is still bound: its pages stayed pinned, so it
+    // draws what it was built from, and the next publish uploads the newest table where that differs.
     const current = !disposed && !pending.cancelled && [...patches.values()].includes(patch) && patch.visible
-      && patch.pendingTable === pending && atlas === pending.atlas && requested === pending.source && plan === pending.plan && residency.getRevision() === pending.revision && pending.job.isCurrent();
+      && patch.pendingTable === pending && atlas === pending.atlas && requested === pending.source && pending.job.isCurrent();
     if (!current || pending.outcome.status !== "uploaded" || pending.retirement.status !== "completed" || pending.retirement.cleanupError !== undefined) {
       if (patch.pendingTable === pending) patch.pendingTable = null;
       const errors: unknown[] = [];
@@ -784,7 +805,10 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
       if (needsTable) { tablesNeeded += 1; logicalTables += 1; }
       const allowedTable = needsTable && logicalTables <= Math.min(tuning.tablePatches, Math.floor(nextAtlas.layout.tableBlocks / 2));
       if (patch.pendingTable) {
-        if (allowedTable && patch.pendingTable.atlas === nextAtlas && patch.pendingTable.source === source && patch.pendingTable.plan === selected && patch.pendingTable.revision === residencyRevision) continue;
+        // An uploading table finishes even when the selection or the resident pages changed since it was built. On a
+        // slow device both change several times during one upload, and a table cancelled for each change completed
+        // only once loading stopped, leaving the imagery nearest the camera coarse until then.
+        if (allowedTable && patch.pendingTable.atlas === nextAtlas && patch.pendingTable.source === source) continue;
         cancelPendingTable(patch, new Error("Desired page-table generation changed."));
       }
       if (!allowedTable) {
@@ -1141,7 +1165,7 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
       const stats = residency.stats();
       const limitSet = new Set<DetailLimit>([...(plan?.limits ?? []), ...stats.limits]);
       if (capped > 0 || fallbackPatches > 0 || backendLimited || (atlasCappedByBackend() && limitSet.has("memory"))) limitSet.add("backend");
-      const pending = restartSelection || selector.isRunning() || residency.isBusy() || (display?.fallbackLeaves ?? 0) > 0 || displayed !== requested || !plan || (managed !== undefined && (patchesChanged || planChangedSincePublish || pendingTableJobs.size > 0));
+      const pending = restartSelection || settleDue || selector.isRunning() || residency.isBusy() || (display?.fallbackLeaves ?? 0) > 0 || displayed !== requested || !plan || (managed !== undefined && (patchesChanged || planChangedSincePublish || pendingTableJobs.size > 0));
       if (pending) limitSet.add("loading");
       // A reload is over once the view has everything it asks for again.
       if (!pending) reload = null;

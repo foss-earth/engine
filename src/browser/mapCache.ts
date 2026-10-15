@@ -10,6 +10,17 @@ export interface MapCacheLimits {
   maxTileBytes: number;
 }
 
+const MIB = 1024 * 1024;
+/** The cache's limits from the `map.cache.*` parameters; one that is not a number reads as 0. */
+export function mapCacheLimits(get: (id: string) => unknown): MapCacheLimits {
+  const number = (id: string): number => {
+    const value = get(id);
+    return typeof value === "number" ? value : 0;
+  };
+  return { maxBytes: number("map.cache.httpBytes") * MIB, maxEntries: Math.round(number("map.cache.httpEntries")),
+    maxTileBytes: number("map.cache.maxTileBytes") * MIB };
+}
+
 export interface MapCacheEntry { url: string; provider: string; bytes: number; storedAt: number; expiresAt: number }
 export interface MapCacheSnapshot {
   available: boolean;
@@ -205,7 +216,10 @@ export function createMapCache(options: {
     maxBytes = limits.maxBytes;
     maxEntries = limits.maxEntries;
     maxTileBytes = limits.maxTileBytes;
-    if (initialized) void serialize(async () => { await prune(); await saveIndex(); }).catch(() => {});
+    // While the cache is opening, it waits for the saved index: pruning before would save an empty one over it.
+    if (initialized) void serialize(async () => { await initialized; await prune(); await saveIndex(); }).catch(() => {});
   }
-  return { fetch: fetchTile, inspect, clear, recordBrowserRequest, setLimits };
+  /** Reads the saved index now. Every fetch waits for it, so a host opens the cache as early as it can. */
+  function open(): Promise<void> { return init(); }
+  return { fetch: fetchTile, inspect, clear, recordBrowserRequest, setLimits, open };
 }

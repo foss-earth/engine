@@ -3,6 +3,7 @@ import type { RendererMode } from "@foss-earth/renderer";
 import type { RendererSelection, FrameProfileSession } from "@foss-earth/renderer/babylon";
 import type { SkyRuntime } from "@foss-earth/sky/babylon";
 import { createMapDownloadMeter } from "../browser/mapDownloadMeter.js";
+import { mapCacheLimits } from "../browser/mapCache.js";
 import { createSurfaceQuery } from "./surfaceQuery.js";
 import type { SurfaceQuery } from "../surface/contracts.js";
 import { createCurrentDisplayedSurface, type CurrentDisplayedSurface, type CurrentSurfaceOwnerState, type SurfaceOwnerChange } from "../surface/currentReadiness.js";
@@ -1610,15 +1611,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
 
   // The HTTP tile cache is shared by every map on the page; its limits are parameters.
   const MiB = 1024 * 1024;
-  const settingNumber = (id: string): number => {
-    const value = settings.get(id);
-    return typeof value === "number" ? value : 0;
-  };
-  const applyMapCacheLimits = (): void => options.mapPorts.setCacheLimits({
-    maxBytes: settingNumber("map.cache.httpBytes") * MiB,
-    maxEntries: Math.round(settingNumber("map.cache.httpEntries")),
-    maxTileBytes: settingNumber("map.cache.maxTileBytes") * MiB,
-  });
+  const applyMapCacheLimits = (): void => options.mapPorts.setCacheLimits(mapCacheLimits(id => settings.get(id)));
   applyMapCacheLimits();
   void [
     watch("map.cache.httpBytes", applyMapCacheLimits),

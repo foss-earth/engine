@@ -24,7 +24,7 @@ function fixture(change: Partial<RasterTilesRuntimeOptions> = {}) {
     after(callback) { timers.add(callback); return () => { timers.delete(callback); }; },
     asyncMapTextures: { resolve, acquire, createAbortController: () => new AbortController() },
     attachTerrainLighting: () => ({}) as ReturnType<RasterTilesRuntimeOptions["attachTerrainLighting"]>,
-    createTerrainLoader: () => ({ dispose: terrainDispose, getMetrics: () => ({ active: 0, queued: 0, decodedBytes: 0 }),
+    createTerrainLoader: () => ({ dispose: terrainDispose, getMetrics: () => ({ active: 0, decoding: 0, queued: 0, decodedBytes: 0 }),
       setPaused() {}, load: terrainLoads, loadPatch: terrainLoads }),
     imageryPorts: { device: testAtlasDevice(scene), capabilities: { backend: "webgl2", maxTextureSize: 8192, explicitGradients: true },
       loader: { load() { throw new Error("This fixture uses per-mesh imagery."); } }, createAbortController: () => new AbortController() },

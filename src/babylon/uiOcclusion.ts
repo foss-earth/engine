@@ -1,4 +1,4 @@
-import { Constants, Mesh, ShaderMaterial, Vector4, VertexData, type Scene } from "@babylonjs/core";
+import { Constants, Mesh, ShaderLanguage, ShaderMaterial, Vector4, VertexData, type Scene } from "@babylonjs/core";
 import { cssRectToClip, type ClipRect, type CssBox } from "./uiCover.js";
 import { worldViewportClientRect } from "../browser/worldViewport.js";
 
@@ -15,6 +15,27 @@ void main(void) {
 const FRAGMENT = `
 void main(void) {
   gl_FragColor = vec4(0.0);
+}
+`;
+
+// The same quad in WGSL. WebGPU compiles GLSL only with glslang and twgsl,
+// 2.6 MiB downloaded and compiled that no other shader here needs.
+const VERTEX_WGSL = /* wgsl */ `
+attribute position : vec3<f32>;
+uniform rect : vec4<f32>;
+uniform depthSign : f32;
+
+@vertex
+fn main(input : VertexInputs) -> FragmentInputs {
+  let clip = uniforms.rect.xy + vertexInputs.position.xy * uniforms.rect.zw;
+  vertexOutputs.position = vec4<f32>(clip, uniforms.depthSign, 1.0);
+}
+`;
+
+const FRAGMENT_WGSL = /* wgsl */ `
+@fragment
+fn main(input : FragmentInputs) -> FragmentOutputs {
+  fragmentOutputs.color = vec4<f32>(0.0);
 }
 `;
 
@@ -37,10 +58,11 @@ function shown(element: Element): boolean {
   return !element.closest("[data-hud-overflow-hidden], [hidden]");
 }
 
-/** The world's part of the canvas, on the page. */
+/** The world's part of the canvas, on the page. One layout read of the canvas. */
 function worldBoxOf(canvas: HTMLCanvasElement): CssBox | null {
-  if (!boxOf(canvas)) return null;
-  const world = worldViewportClientRect(canvas);
+  const rect = canvas.getBoundingClientRect();
+  if (rect.width < 1 || rect.height < 1) return null;
+  const world = worldViewportClientRect(canvas, rect);
   if (world.width < 1 || world.height < 1) return null;
   return { x: world.left, y: world.top, width: world.width, height: world.height };
 }
@@ -80,10 +102,13 @@ export function attachWorldOcclusion(scene: Scene, canvas: HTMLCanvasElement): {
   const draws = scene.onBeforeDrawPhaseObservable;
   if (typeof draws?.add !== "function") return { dispose() {} };
 
-  const material = new ShaderMaterial("world-occlusion", scene, { vertexSource: VERTEX, fragmentSource: FRAGMENT }, {
-    attributes: ["position"],
-    uniforms: ["rect", "depthSign"],
-  });
+  const webGpu = scene.getEngine().isWebGPU;
+  const material = new ShaderMaterial("world-occlusion", scene,
+    webGpu ? { vertexSource: VERTEX_WGSL, fragmentSource: FRAGMENT_WGSL } : { vertexSource: VERTEX, fragmentSource: FRAGMENT }, {
+      attributes: ["position"],
+      uniforms: ["rect", "depthSign"],
+      shaderLanguage: webGpu ? ShaderLanguage.WGSL : ShaderLanguage.GLSL,
+    });
   material.disableColorWrite = true;
   material.forceDepthWrite = true;
   material.depthFunction = Constants.ALWAYS;

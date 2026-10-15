@@ -1,13 +1,14 @@
 import { ecefToGeodetic } from "../camera/cameraMath.js";
 import {
-  WEB_MERCATOR_MAX_LAT_DEG,
   isBelowHorizon,
   isSphereBelowHorizon,
-  lonLatToTileXY,
+  lonLatToMercator,
   outcode,
   sagittaMeters,
-  sampleTileSurface,
+  positionOnTileBasis,
   tileAngularSpan,
+  tileSurfaceBasis,
+  tileSurfacePosition,
   tileKey,
   tileLatDeg,
   toClip,
@@ -18,6 +19,10 @@ import {
 
 const WGS84_A = 6378137;
 const GRID = [0, 0.5, 1];
+/** The nine sample points of every tile. The tenth, nearest the viewer, is computed per tile. */
+const GRID_POINTS = GRID.flatMap(v => GRID.map(u => ({ u, v })));
+/** Reused by distance checks. Hull points are kept, so they get their own objects. */
+const positionScratch = { x: 0, y: 0, z: 0 };
 
 /**
  * The traversal's structure, not tuning: the level whose 16 tiles always cover
@@ -115,10 +120,11 @@ interface Measured {
   errorPx: number;
 }
 
-/** The point of a tile nearest a longitude and latitude, in tile-local u and v. */
-function nearestLocal(tile: TileId, lonDeg: number, latDeg: number): { u: number; v: number } {
-  const at = lonLatToTileXY(lonDeg, Math.max(-WEB_MERCATOR_MAX_LAT_DEG, Math.min(WEB_MERCATOR_MAX_LAT_DEG, latDeg)), tile.z);
+/** The point of a tile nearest a point's zoom-0 Mercator position (lonLatToMercator), in tile-local u and v. */
+function nearestLocal(tile: TileId, world: { x: number; y: number }): { u: number; v: number } {
   const n = 2 ** tile.z;
+  // lonLatToTileXY's bits at this zoom; the point's trigonometry is done once per selection.
+  const at = { x: world.x * n, y: world.y * n };
   // Longitude wraps: take the tile-local u nearest the tile's own span.
   let u = at.x - tile.x;
   if (u > n / 2) u -= n;
@@ -155,8 +161,10 @@ export function selectTerrain(input: TerrainSelectionInput): TerrainSelection {
   const pixelAngle = view?.pixelAngle ?? (view ? 1 / view.renderHeight : 0);
   const cameraGeo = view ? ecefToGeodetic(view.camera.x, view.camera.y, view.camera.z) : null;
   const camera = cameraGeo && { lonDeg: (cameraGeo.lonRad * 180) / Math.PI, latDeg: (cameraGeo.latRad * 180) / Math.PI };
+  const cameraWorld = camera && lonLatToMercator(camera.lonDeg, camera.latDeg);
   const focusGeo = focus ? ecefToGeodetic(focus.position.x, focus.position.y, focus.position.z) : null;
   const focusLonLat = focusGeo && { lonDeg: (focusGeo.lonRad * 180) / Math.PI, latDeg: (focusGeo.latRad * 180) / Math.PI };
+  const focusWorld = focusLonLat && lonLatToMercator(focusLonLat.lonDeg, focusLonLat.latDeg);
   const focusViewer = focus && (() => {
     const lift = 1 + focus.minDistanceMeters / (Math.hypot(focus.position.x, focus.position.y, focus.position.z) || 1);
     return { x: focus.position.x * lift, y: focus.position.y * lift, z: focus.position.z * lift };
@@ -164,12 +172,13 @@ export function selectTerrain(input: TerrainSelectionInput): TerrainSelection {
   const refine = input.refineFrom ?? null;
   const refineGeo = refine ? ecefToGeodetic(refine.position.x, refine.position.y, refine.position.z) : null;
   const refineLonLat = refineGeo && { lonDeg: (refineGeo.lonRad * 180) / Math.PI, latDeg: (refineGeo.latRad * 180) / Math.PI };
+  const refineWorld = refineLonLat && lonLatToMercator(refineLonLat.lonDeg, refineLonLat.latDeg);
   /** The refine point's distance to a tile's ground, taken at the point's own height within the tile's bounds. */
   const refineDistance = (tile: TileId, bounds: { min: number; max: number }, points: ReadonlyArray<{ u: number; v: number }>): number => {
     const height = Math.min(bounds.max, Math.max(lowestGround(bounds, refineGeo!.altMeters), refineGeo!.altMeters));
     let nearest = Infinity;
-    for (const point of [...points, nearestLocal(tile, refineLonLat!.lonDeg, refineLonLat!.latDeg)]) {
-      nearest = Math.min(nearest, distance(sampleTileSurface(tile, point.u, point.v, height).position, refine!.position));
+    for (const point of [...points, nearestLocal(tile, refineWorld!)]) {
+      nearest = Math.min(nearest, distance(tileSurfacePosition(tile, point.u, point.v, height, positionScratch), refine!.position));
     }
     return nearest;
   };
@@ -184,27 +193,28 @@ export function selectTerrain(input: TerrainSelectionInput): TerrainSelection {
     const bounds = input.boundsFor(tile);
     const span = tileAngularSpan(tile);
     const lift = sagittaMeters(span / 2);
-    const points: Array<{ u: number; v: number }> = [];
-    for (const v of GRID) for (const u of GRID) points.push({ u, v });
 
     if (focus?.mode !== "around") {
       const low = lowestGround(bounds, cameraGeo!.altMeters);
-      const nearest = nearestLocal(tile, camera!.lonDeg, camera!.latDeg);
-      const all = [...points, nearest];
+      const nearest = nearestLocal(tile, cameraWorld!);
+      const groundHeight = Math.min(bounds.max, Math.max(low, cameraGeo!.altMeters));
       let allOutside = 0b11111;
       let anyAboveHorizon = false;
       let nearestDistance = Infinity;
       const hull: Vec3[] = [];
-      for (const point of all) {
+      const visit = (u: number, v: number): void => {
+        // One latitude and longitude for the hull's two heights and the ground.
+        const basis = tileSurfaceBasis(tile, u, v);
         for (const height of [low, bounds.max + lift]) {
-          const position = sampleTileSurface(tile, point.u, point.v, height).position;
+          const position = positionOnTileBasis(basis, height);
           hull.push(position);
           allOutside &= outcode(view, toClip(view.ecefToClip, position));
           if (!anyAboveHorizon && !isBelowHorizon(view.camera, position)) anyAboveHorizon = true;
         }
-        const ground = sampleTileSurface(tile, point.u, point.v, Math.min(bounds.max, Math.max(low, cameraGeo!.altMeters))).position;
-        nearestDistance = Math.min(nearestDistance, distance(ground, view.camera));
-      }
+        nearestDistance = Math.min(nearestDistance, distance(positionOnTileBasis(basis, groundHeight, positionScratch), view.camera));
+      };
+      for (const point of GRID_POINTS) visit(point.u, point.v);
+      visit(nearest.u, nearest.v);
       const center = hull.reduce((sum, p) => ({ x: sum.x + p.x / hull.length, y: sum.y + p.y / hull.length, z: sum.z + p.z / hull.length }), { x: 0, y: 0, z: 0 });
       const radius = Math.max(...hull.map(p => distance(p, center))) * 1.1;
       const hidden = allOutside !== 0
@@ -212,7 +222,7 @@ export function selectTerrain(input: TerrainSelectionInput): TerrainSelection {
         || isSphereBelowHorizon(view.camera, center, radius);
       if (!hidden && refine) {
         // Seen by the camera, measured from the point: its distance alone sets the level.
-        const nearest = refineDistance(tile, bounds, points);
+        const nearest = refineDistance(tile, bounds, GRID_POINTS);
         result.needed = true;
         result.distanceMeters = nearest;
         result.errorPx = error / (Math.max(1, nearest, refine.minDistanceMeters) * pixelAngle);
@@ -224,14 +234,18 @@ export function selectTerrain(input: TerrainSelectionInput): TerrainSelection {
     }
 
     if (focus && focusLonLat && focusViewer) {
-      const all = [...points, nearestLocal(tile, focusLonLat.lonDeg, focusLonLat.latDeg)];
+      const nearestPoint = nearestLocal(tile, focusWorld!);
       const low = lowestGround(bounds, focusGeo!.altMeters);
+      const groundHeight = Math.min(bounds.max, Math.max(low, focusGeo!.altMeters));
       let nearest = Infinity;
       const hull: Vec3[] = [];
-      for (const point of all) {
-        nearest = Math.min(nearest, distance(sampleTileSurface(tile, point.u, point.v, Math.min(bounds.max, Math.max(low, focusGeo!.altMeters))).position, focus.position));
-        if (focus.horizonCull) for (const height of [low, bounds.max + lift]) hull.push(sampleTileSurface(tile, point.u, point.v, height).position);
-      }
+      const visit = (u: number, v: number): void => {
+        const basis = tileSurfaceBasis(tile, u, v);
+        nearest = Math.min(nearest, distance(positionOnTileBasis(basis, groundHeight, positionScratch), focus.position));
+        if (focus.horizonCull) for (const height of [low, bounds.max + lift]) hull.push(positionOnTileBasis(basis, height));
+      };
+      for (const point of GRID_POINTS) visit(point.u, point.v);
+      visit(nearestPoint.u, nearestPoint.v);
       let within = nearest <= focus.radiusMeters;
       if (within && focus.horizonCull) {
         const center = hull.reduce((sum, p) => ({ x: sum.x + p.x / hull.length, y: sum.y + p.y / hull.length, z: sum.z + p.z / hull.length }), { x: 0, y: 0, z: 0 });

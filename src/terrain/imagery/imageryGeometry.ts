@@ -49,15 +49,23 @@ export function tileLatDeg(z: number, y: number): number {
   return Math.atan(Math.sinh(Math.PI * (1 - (2 * y) / 2 ** z))) / DEG;
 }
 
-/** Fractional tile coordinates of a point, with longitude wrapped into the tile grid. */
-export function lonLatToTileXY(lonDeg: number, latDeg: number, z: number): { x: number; y: number } {
-  const n = 2 ** z;
+/** A point's Web Mercator position as a share of the world, longitude wrapped: its tile coordinates at zoom 0. */
+export function lonLatToMercator(lonDeg: number, latDeg: number): { x: number; y: number } {
   const lat = Math.max(-WEB_MERCATOR_MAX_LAT_DEG, Math.min(WEB_MERCATOR_MAX_LAT_DEG, latDeg)) * DEG;
-  const wrapped = ((((lonDeg + 180) % 360) + 360) % 360) / 360;
   return {
-    x: wrapped * n,
-    y: ((1 - Math.log(Math.tan(lat) + 1 / Math.cos(lat)) / Math.PI) / 2) * n,
+    x: ((((lonDeg + 180) % 360) + 360) % 360) / 360,
+    y: (1 - Math.log(Math.tan(lat) + 1 / Math.cos(lat)) / Math.PI) / 2,
   };
+}
+
+/**
+ * Fractional tile coordinates of a point, with longitude wrapped into the tile
+ * grid. They are its zoom-0 position times 2^z: a caller with one point and
+ * many zooms takes lonLatToMercator once and scales it, with the same bits.
+ */
+export function lonLatToTileXY(lonDeg: number, latDeg: number, z: number): { x: number; y: number } {
+  const n = 2 ** z, at = lonLatToMercator(lonDeg, latDeg);
+  return { x: at.x * n, y: at.y * n };
 }
 
 /**
@@ -120,6 +128,53 @@ export function sampleTileSurface(
     latDeg: lat / DEG,
     lonDeg,
   };
+}
+
+/**
+ * The part of a tile-surface position that does not depend on height: one
+ * latitude and longitude, reused for every height sampled there.
+ */
+export interface TileSurfaceBasis {
+  primeVertical: number;
+  sinLat: number;
+  cosLat: number;
+  sinLon: number;
+  cosLon: number;
+}
+
+/** The height-independent part of `sampleTileSurface`'s position, in its operation order. */
+export function tileSurfaceBasis(tile: TileId, u: number, v: number): TileSurfaceBasis {
+  const n = 2 ** tile.z;
+  const lonDeg = ((tile.x + u) / n) * 360 - 180;
+  const s = Math.PI * (1 - (2 * (tile.y + v)) / n);
+  const lat = Math.atan(Math.sinh(s));
+  const lon = lonDeg * DEG;
+  const sinLat = Math.sin(lat), cosLat = Math.cos(lat);
+  const sinLon = Math.sin(lon), cosLon = Math.cos(lon);
+  const w = Math.sqrt(1 - WGS84_E2 * sinLat * sinLat);
+  return { primeVertical: WGS84_A / w, sinLat, cosLat, sinLon, cosLon };
+}
+
+/**
+ * Applies a height to a basis with the same multiplies as `sampleTileSurface`.
+ * `out` is filled and returned when the caller does not keep the point.
+ */
+export function positionOnTileBasis(basis: TileSurfaceBasis, height: number, out?: Vec3): Vec3 {
+  const scaled = (basis.primeVertical + height) * basis.cosLat;
+  const position = out ?? { x: 0, y: 0, z: 0 };
+  position.x = scaled * basis.cosLon;
+  position.y = scaled * basis.sinLon;
+  position.z = (basis.primeVertical * (1 - WGS84_E2) + height) * basis.sinLat;
+  return position;
+}
+
+/**
+ * The ECEF position `sampleTileSurface` returns, and not its tangents.
+ * Selection reads only the position: the tangents are there for imagery
+ * footprints. `out` is filled and returned when the caller does not keep it.
+ */
+export function tileSurfacePosition(tile: TileId, u: number, v: number, height: number, out?: Vec3): Vec3 {
+  return positionOnTileBasis(tileSurfaceBasis(tile, u, v), height, out);
 }
 
 /** Geographic span of a tile in radians, for curvature bounds. */

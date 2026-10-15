@@ -23,6 +23,8 @@ import {
   screenGroundPoints,
   sagittaMeters,
   sampleTileSurface,
+  tileSurfaceBasis,
+  positionOnTileBasis,
   tileAngularSpan,
   tileKey,
   tileLatDeg,
@@ -486,7 +488,10 @@ function measureFocus(job: Job, tile: TileId): { within: boolean; footprint: num
     const span = tileAngularSpan(tile);
     const lift = sagittaMeters(span / 2);
     const hull: Vec3[] = [];
-    for (const point of points) for (const height of [bounds.min, bounds.max + lift]) hull.push(sampleTileSurface(tile, point.u, point.v, height).position);
+    for (const point of points) {
+      const basis = tileSurfaceBasis(tile, point.u, point.v);
+      for (const height of [bounds.min, bounds.max + lift]) hull.push(positionOnTileBasis(basis, height));
+    }
     const center = hull.reduce((sum, p) => ({ x: sum.x + p.x / hull.length, y: sum.y + p.y / hull.length, z: sum.z + p.z / hull.length }), { x: 0, y: 0, z: 0 });
     const radius = Math.max(...hull.map(p => Math.hypot(p.x - center.x, p.y - center.y, p.z - center.z))) * 1.1;
     if (isSphereBelowHorizon(job.focusViewer, center, radius)) within = false;
@@ -672,9 +677,11 @@ function evaluateView(job: ViewMeasurementContext, tile: TileId): Evaluated {
       const low = Math.min(...known), high = Math.max(...known);
       const margin = Math.max(100, (high - low) * 0.5);
       let outside = 0b11111;
+      const positionScratch = { x: 0, y: 0, z: 0 };
       for (const point of hullPoints) {
+        const basis = tileSurfaceBasis(tile, point.u, point.v);
         for (const height of [low - margin, high + margin + lift]) {
-          outside &= outcode(view, toClip(m, sampleTileSurface(tile, point.u, point.v, height).position));
+          outside &= outcode(view, toClip(m, positionOnTileBasis(basis, height, positionScratch)));
         }
       }
       if (outside !== 0) {

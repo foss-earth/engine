@@ -25,6 +25,7 @@ export const IMAGERY_TUNING_IDS = [
   "map.imagery.pageTablePatches",
   "map.imagery.maxNodes",
   "map.imagery.refineAbove",
+  "map.imagery.refineAtRest",
   "map.imagery.coarsenBelow",
   "map.imagery.coarsenAfter",
   "map.imagery.pinFor",
@@ -70,5 +71,6 @@ export function imageryTuningFrom(settings: SettingsRegistry): ImageryTuning {
       coarsenAfterMs: number(settings, "map.imagery.coarsenAfter"),
       pinMs: number(settings, "map.imagery.pinFor"),
     },
+    refineAtRestAbove: number(settings, "map.imagery.refineAtRest"),
   };
 }

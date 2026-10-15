@@ -74,7 +74,7 @@ export function createLocalSurfaceHost(document: Document, synchronousSettlement
           return new Texture(null, scene);
         },
         attachTerrainLighting: () => ({}) as ReturnType<GlobeRuntimeOptions["mapPorts"]["raster"]["attachTerrainLighting"]>,
-        createTerrainLoader: () => ({ dispose() {}, getMetrics: () => ({ active: 0, queued: 0, decodedBytes: 0 }), setPaused() {},
+        createTerrainLoader: () => ({ dispose() {}, getMetrics: () => ({ active: 0, decoding: 0, queued: 0, decodedBytes: 0 }), setPaused() {},
           load: tile => new Promise<TerrainGrid>((resolve, reject) => elevation.push({ tile, resolve, reject })),
           loadPatch: tile => new Promise<TerrainGrid>((resolve, reject) => elevation.push({ tile, resolve, reject })),
         }),

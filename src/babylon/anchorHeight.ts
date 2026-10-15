@@ -79,6 +79,8 @@ export function createAnchorHeightResolver(options: AnchorHeightResolverOptions)
   const heightCache = new Map<string, number>();
   const missRetryByCell = new Map<string, { atMs: number; revision: number | undefined }>();
   let smoothedHeightMeters: number | null = null;
+  // Whether the smoothed height has followed a known height (a sample or the provider's), not only the fallback.
+  let smoothedKnown = false;
   let lastResolveMs: number | null = null;
 
   function setSample(sample: AnchorHeightSample): void {
@@ -95,6 +97,7 @@ export function createAnchorHeightResolver(options: AnchorHeightResolverOptions)
     return heightCache.get(getCellKey(latDeg, lonDeg, cellSizeDeg)) ?? null;
   }
 
+  /** The known height of the cell, or null where only the fallback is. */
   function knownHeight(latDeg: number, lonDeg: number): number | null {
     const key = getCellKey(latDeg, lonDeg, cellSizeDeg);
     const cached = heightCache.get(key);
@@ -127,10 +130,13 @@ export function createAnchorHeightResolver(options: AnchorHeightResolverOptions)
     return knownHeight(latDeg, lonDeg) ?? fallbackHeightMeters;
   }
 
-  function smoothHeight(targetHeightMeters: number): number {
+  function smoothHeight(targetHeightMeters: number, known: boolean): number {
     const now = nowMs();
-    if (smoothedHeightMeters === null || lastResolveMs === null) {
+    // The fallback stands in until a height is known; the first known height is taken at once, not glided to. On the
+    // tour's first view the compass otherwise rose 245 m from it, keeping the renderer awake after the terrain had loaded.
+    if (smoothedHeightMeters === null || lastResolveMs === null || (known && !smoothedKnown)) {
       smoothedHeightMeters = targetHeightMeters;
+      smoothedKnown = known;
       lastResolveMs = now;
       return smoothedHeightMeters;
     }
@@ -154,7 +160,8 @@ export function createAnchorHeightResolver(options: AnchorHeightResolverOptions)
       return null;
     }
     const { latRad, lonRad } = ecefToGeodetic(anchor.x, anchor.y, anchor.z);
-    const heightMeters = smoothHeight(resolveBaseHeight(latRad * RAD_TO_DEG, lonRad * RAD_TO_DEG) + heightOffsetMeters);
+    const known = knownHeight(latRad * RAD_TO_DEG, lonRad * RAD_TO_DEG);
+    const heightMeters = smoothHeight((known ?? fallbackHeightMeters) + heightOffsetMeters, known !== null);
     return createAnchorAtHeight(anchor, heightMeters);
   }
 
@@ -162,6 +169,7 @@ export function createAnchorHeightResolver(options: AnchorHeightResolverOptions)
     heightCache.clear();
     missRetryByCell.clear();
     smoothedHeightMeters = null;
+    smoothedKnown = false;
     lastResolveMs = null;
     for (const sample of options.samples ?? []) {
       setSample(sample);

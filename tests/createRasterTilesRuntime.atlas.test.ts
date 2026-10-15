@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { GeospatialCamera, NullEngine, Scene, Texture } from "@babylonjs/core";
 import { createImageSessionBroker } from "@foss-earth/images";
 import { createTextureDevicePorts, createTextureTransferTracker } from "@foss-earth/renderer/babylon";
@@ -5,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { geodeticToEcef } from "../src/camera/cameraMath.js";
 import { HostCameraController as CameraController } from "../fixtures/composition/runtimeHost.js";
 import * as refinement from "../src/babylon/meshRefinement.js";
+import * as imageryRuntimeModule from "../src/babylon/imagery/createImageryRuntime.js";
 import type { TerrainGrid, TerrainTile } from "../src/terrain/terrainGrid.js";
 import { createRasterTilesRuntime as createCoreRaster, type RasterTilesRuntimeOptions } from "../src/babylon/createRasterTilesRuntime.js";
 import { ImageryMissingError, type ImageryLoader, type PreparedImage } from "../src/terrain/imagery/imageryResidency.js";
@@ -28,7 +30,7 @@ function createRasterTilesRuntime(options: Partial<RasterTilesRuntimeOptions> & 
     meshRebuildCpuMs: () => settings.get<number>("map.terrain.meshRebuildTimePerFrame"),
     attachTerrainLighting: () => ({}) as ReturnType<RasterTilesRuntimeOptions["attachTerrainLighting"]>,
     createTerrainLoader: () => ({ dispose: vi.fn(),
-      getMetrics: () => ({ active: 0, queued: 0, decodedBytes: 0 }), setPaused: vi.fn(),
+      getMetrics: () => ({ active: 0, decoding: 0, queued: 0, decodedBytes: 0 }), setPaused: vi.fn(),
       load: (tile: TerrainTile) => new Promise<TerrainGrid>((resolve, reject) => pending.terrain.push({ tile, resolve, reject })),
       loadPatch: (tile: TerrainTile) => new Promise<TerrainGrid>((resolve, reject) => { pending.terrainRequests += 1; pending.terrain.push({ tile, resolve, reject }); }),
     }),
@@ -66,7 +68,7 @@ describe("selected raster acquisition contract", () => {
       capacityKey: () => JSON.stringify(broker.pools.stats()),
     };
     const releaseOwnedLoader = vi.fn(), terrainDispose = vi.fn(), terrainCreate = vi.fn(() => ({
-      dispose: terrainDispose, getMetrics: () => ({ active: 0, queued: 0, decodedBytes: 0 }), setPaused() {},
+      dispose: terrainDispose, getMetrics: () => ({ active: 0, decoding: 0, queued: 0, decodedBytes: 0 }), setPaused() {},
       load: () => new Promise<TerrainGrid>(() => {}), loadPatch: () => new Promise<TerrainGrid>(() => {}),
     }));
     const tracker = createTextureTransferTracker({ scene, admit: (bytes, label) => grant("uploadOutstanding", bytes, label), requestRender() {} });
@@ -214,6 +216,38 @@ describe("raster runtime with atlas imagery", () => {
     engine.dispose();
   });
 
+  it("gives imagery selection the adopted terrain's heights with the shipped runtime's bits", async () => {
+    // Taken from the shipped runtime, at three views, over the view, the antimeridian and past the Mercator limit.
+    const SHIPPED_DIGEST = "9b329add7453513e2585759b8c5e6f5eec0e5119c4825207af0a9f2aa7535ea8";
+    // A clock that stands still within a frame: no time budget runs out, and
+    // the tiles adopted do not depend on how fast the test runs.
+    let clock = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => clock);
+    const created = vi.spyOn(imageryRuntimeModule, "createImageryRuntime");
+    const { runtime, frame, engine, controller, view } = await setup();
+    const surface = created.mock.calls[0]![0].surface, hash = createHash("sha256");
+    const points: Array<[number, number]> = [[85.06, 10], [-85.06, -170], [0, 180], [0, -180], [36.1, 247.86]];
+    for (let row = 0; row <= 60; row++) for (let col = 0; col <= 60; col++) points.push([35.4 + row * 0.025, -113 + col * 0.03]);
+    // Looking across the canyon several levels are adopted at once; after
+    // climbing, finer tiles stay cached under the coarser ones shown.
+    for (const at of [{}, { zoomMeters: 6000, pitchDeg: 70 }, { zoomMeters: 120_000, pitchDeg: 20 }]) {
+      Object.assign(view, at);
+      controller.applyViewState(view);
+      for (let count = 0; count < 60; count++) { clock += 50; await frame(); }
+      const seen = new Set<number>();
+      for (const [latDeg, lonDeg] of points) {
+        const height = surface.heightAt(latDeg, lonDeg);
+        if (height !== null) seen.add(height);
+        hash.update(height === null ? "-" : new Uint8Array(Float64Array.of(height).buffer));
+      }
+      // Heights from grids, not the fallback alone.
+      expect(seen.size).toBeGreaterThan(100);
+    }
+    expect(hash.digest("hex")).toBe(SHIPPED_DIGEST);
+    runtime.dispose();
+    engine.dispose();
+  });
+
   it("asks the new source only for its own images after a switch", async () => {
     const { runtime, settle, engine, urls } = await setup();
     await settle();
@@ -283,6 +317,8 @@ describe("raster runtime with atlas imagery", () => {
 
   it("keeps no more terrain tiles than its budget beyond what the view needs", async () => {
     const settings = getAppSettings();
+    // Select the second view at once, however fast the frames run.
+    settings.set("map.terrain.reselectWhileMoving", 0);
     const visit = async (cachedTiles: number) => {
       settings.set("map.terrain.cachedTiles", cachedTiles);
       const { runtime, settle, engine, controller, view } = await setup();

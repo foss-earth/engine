@@ -47,14 +47,16 @@ describe("public GlobeRuntime current displayed surface wiring", () => {
       const adopted = observation.read(); expect(adopted.displayedSources).toEqual(["raster"]);
       expect(adopted.samples[0]).toMatchObject({ status: "hit", hit: { revision: adopted.revision } });
       const revision = adopted.revision, mesh = host.scene.meshes.find(candidate => candidate.isEnabled() && candidate.metadata?.mapSurface)!;
-      const positions = [...mesh.getVerticesData(VertexBuffer.PositionKind)!], normals = [...mesh.getVerticesData(VertexBuffer.NormalKind)!];
+      const positions = [...mesh.getVerticesData(VertexBuffer.PositionKind)!];
+      expect(mesh.isVerticesDataPresent(VertexBuffer.NormalKind)).toBe(false);
       const terrainZoom = mesh.metadata.terrainZoom;
       // Same stable ID, new provider version: public source forwarding must
       // invalidate observation currentness without rebuilding terrain.
       host.runtime.setMapSource({ ...raster, version: "2" });
       host.images.splice(0).forEach(done => done()); host.frame(3);
       const imageryOnly = observation.read(); expect(imageryOnly.revision).toBe(revision); expect(imageryOnly.sourceGeneration).toBeGreaterThan(adopted.sourceGeneration);
-      expect([...mesh.getVerticesData(VertexBuffer.PositionKind)!]).toEqual(positions); expect([...mesh.getVerticesData(VertexBuffer.NormalKind)!]).toEqual(normals);
+      expect([...mesh.getVerticesData(VertexBuffer.PositionKind)!]).toEqual(positions);
+      expect(mesh.isVerticesDataPresent(VertexBuffer.NormalKind)).toBe(false);
       expect(mesh.metadata.terrainZoom).toBe(terrainZoom); expect(host.elevation).toHaveLength(0);
       host.runtime.setMapSource("google"); const incoming = host.tiles();
       expect(observation.read().displayedSources).toContain("raster"); incoming.addGround(300); host.frame(4);

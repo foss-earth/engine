@@ -3,8 +3,8 @@ import type { createMapTextureLoader } from "./imagery/mapTextureLoader.js";
 import type { BoundedMapTextureRequest, LoadedMapTexture } from "./imagery/boundedMapTextureLoader.js";
 import type { HeaderImageRequest } from "@foss-earth/images/browser";
 import { finishOwnedCleanup } from "./ownedCleanup.js";
-import { createTerrainMesh, DEFAULT_TILE_SEGMENTS } from "./terrainMesh.js";
-import type { createTerrainTileLoader } from "../terrain/terrainLoader.js";
+import { createTerrainMesh, DEFAULT_TILE_SEGMENTS, terrainMeshTarget } from "./terrainMesh.js";
+import { createTerrainInterest, type createTerrainTileLoader, type TerrainInterest } from "../terrain/terrainLoader.js";
 import {
   Color3,
   Mesh,
@@ -24,7 +24,7 @@ import type { TerrainPerformanceCapture } from "../terrain/terrainPerformanceCap
 import { retryDelayMs, type RetryDelay } from "../terrain/retryDelay.js";
 import { meshPositions, patchesForGeometryCommit, stitchTerrainEdges, updateTerrainPositions } from "./meshRefinement.js";
 import type { GlobeViewState } from "../view.js";
-import { lonLatToTileXY } from "../terrain/imagery/imageryGeometry.js";
+import { lonLatToMercator } from "../terrain/imagery/imageryGeometry.js";
 import { createImageryRuntime, type ImageryDiagnostics, type ImageryFocusRequest, type ImageryRuntime, type ImageryRuntimeOptions } from "./imagery/createImageryRuntime.js";
 import { IMAGERY_TABLE_MAX_CELLS_LOG2 } from "../terrain/imagery/imageryAtlasLayout.js";
 import type { Material, MaterialPluginBase } from "@babylonjs/core";
@@ -114,7 +114,7 @@ export interface RasterTilesRuntimeOptions {
   asyncMapTextures?: AsyncRasterMapTextures;
   attachTerrainLighting(material: Material): MaterialPluginBase;
   createTerrainLoader(source: TerrainSource | undefined, onBytes: ((bytes: number) => void) | undefined,
-    trackMemory: boolean, onPreparationMs?: (milliseconds: number) => void): ReturnType<typeof createTerrainTileLoader<Blob, AbortSignal>>;
+    trackMemory: boolean, onPreparationMs?: (milliseconds: number) => void): TerrainLoaderPort;
   /** Actual renderer atlas, shared acquisition loader and cancellation ports. */
   imageryPorts: Pick<ImageryRuntimeOptions, "device" | "managedAtlas" | "restoreManagedDevice" | "capabilities" | "loader" | "releaseOwnedLoader" | "createAbortController">;
   /** Existing source CPU yield budget was 2 ms; host maps its named setting here. */
@@ -212,7 +212,9 @@ interface RasterTileRecord {
   replaceImagery(source: RasterBaseMapSource, generation: number): void;
   terrainGeneration: number;
   appliedTerrainGeneration: number;
-  replaceTerrain(loadTerrain: (tile: TileCoord, progress: (grid: TerrainGrid) => void) => Promise<TerrainGrid>, generation: number): void;
+  replaceTerrain(loadTerrain: LoadTerrain, generation: number): void;
+  /** This tile's claim on the elevation it asked for, released when it is disposed. */
+  terrainInterest: TerrainInterest;
   /** When failed detail elevation is requested again; Infinity when none failed. */
   terrainRetryAt: number;
   terrainFailures: number;
@@ -221,6 +223,11 @@ interface RasterTileRecord {
   /** Lowest and highest adopted heights, for imagery culling. */
   heightBounds: { min: number; max: number } | null;
 }
+
+type LoadTerrain = (tile: TileCoord, progress: (grid: TerrainGrid) => void, interest: TerrainInterest) => Promise<TerrainGrid>;
+type TerrainTileLoader = ReturnType<typeof createTerrainTileLoader<Blob, AbortSignal>>;
+/** A host's elevation loader. Without holding patches or reporting arrivals, each tile loads its coarse patch, then its own. */
+export type TerrainLoaderPort = Omit<TerrainTileLoader, "holdPatch" | "whenLoaded"> & Partial<Pick<TerrainTileLoader, "holdPatch" | "whenLoaded">>;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -245,7 +252,7 @@ function createTileRecord(
   source: RasterBaseMapSource,
   tile: TileCoord,
   onSettled: (record: RasterTileRecord) => void,
-  loadTerrain: (tile: TileCoord, progress: (grid: TerrainGrid) => void) => Promise<TerrainGrid>,
+  loadTerrain: LoadTerrain,
   onChanged: (record: RasterTileRecord) => void,
   onRetryScheduled: (at: number) => void,
   imagery: ImageryRuntime | null,
@@ -277,6 +284,7 @@ function createTileRecord(
     terrainGeneration: 0,
     appliedTerrainGeneration: 0,
     replaceTerrain: () => {},
+    terrainInterest: createTerrainInterest(),
     terrainRetryAt: Infinity,
     terrainFailures: 0,
     refreshImagery: () => {},
@@ -293,33 +301,35 @@ function createTileRecord(
   const applyGrid = (grid: TerrainGrid | undefined, generation: number) => {
     if (record.mesh.isDisposed() || generation !== record.terrainGeneration) return;
     if (grid && record.appliedTerrainGeneration === generation && grid.z <= record.mesh.metadata.terrainZoom) return;
-    const readyMesh = createTerrainMesh(options, tile, grid);
     const started = options.performanceCapture ? options.nowMs() : 0;
-    record.target = meshPositions(readyMesh);
+    // The displayed mesh takes only these positions at its next commit.
+    const target = terrainMeshTarget(options, tile, grid);
+    record.target = target.positions;
     record.grid = grid;
-    record.heightBounds = readyMesh.metadata.heightBounds;
+    record.heightBounds = target.heightBounds;
     record.appliedTerrainGeneration = generation;
     record.targetTerrainZoom = grid?.z ?? -1;
-    readyMesh.dispose();
     if (options.performanceCapture) options.performanceCapture.counters.preparationCpuMs += options.nowMs() - started;
     onChanged(record);
   };
-  const requestTerrain = (
-    nextLoadTerrain: (tile: TileCoord, progress: (grid: TerrainGrid) => void) => Promise<TerrainGrid>,
-    generation: number,
-    settlesInitialRecord: boolean,
-  ) => {
+  // A provider or setting can change before the first elevation arrives,
+  // and its completion is then discarded. The replacement is still
+  // responsible for settling this record once it arrives.
+  const settleTerrain = () => {
+    if (terrainReady) return;
+    terrainReady = true;
+    finish();
+  };
+  const requestTerrain = (nextLoadTerrain: LoadTerrain, generation: number) => {
     record.terrainGeneration = generation;
     record.terrainRetryAt = Infinity;
-    const terrain = options.getSurfaceHeightMeters ? Promise.resolve(undefined) : nextLoadTerrain(tile, grid => applyGrid(grid, generation));
+    const terrain = options.getSurfaceHeightMeters ? Promise.resolve(undefined)
+      : nextLoadTerrain(tile, grid => applyGrid(grid, generation), record.terrainInterest);
     void work.track(terrain.then(grid => {
       applyGrid(grid, generation);
       if (record.mesh.isDisposed() || generation !== record.terrainGeneration) return;
       record.terrainFailures = 0;
-      if (settlesInitialRecord) {
-        terrainReady = true;
-        finish();
-      }
+      settleTerrain();
     }).catch(error => {
       if (record.mesh.isDisposed() || generation !== record.terrainGeneration) return;
       options.onLoadError?.(error instanceof Error ? error : new Error(String(error)), `terrain:${key}`);
@@ -328,14 +338,11 @@ function createTileRecord(
       record.terrainFailures += 1;
       record.terrainRetryAt = options.nowMs() + retryDelayMs(record.terrainFailures, options.retryDelay?.());
       onRetryScheduled(record.terrainRetryAt);
-      if (settlesInitialRecord) {
-        terrainReady = true;
-        finish();
-      }
+      settleTerrain();
     }));
   };
-  record.replaceTerrain = (nextLoadTerrain, generation) => requestTerrain(nextLoadTerrain, generation, false);
-  requestTerrain(loadTerrain, 0, true);
+  record.replaceTerrain = requestTerrain;
+  requestTerrain(loadTerrain, 0);
   const loadImagery = (nextSource: RasterBaseMapSource, generation: number) => {
     const url = buildTileUrl(nextSource, tile);
     options.onDebugEvent?.("imagery-request-start", { key, source: nextSource.id, generation, url });
@@ -496,7 +503,7 @@ function disposeTile(record: RasterTileRecord): void {
   record.disposed = true;
   const cancel = record.cancelPendingImagery, handle = record.textureHandle, texture = record.texture;
   record.cancelPendingImagery = null; record.textureHandle = null; record.texture = null;
-  finishOwnedCleanup([() => cancel?.(), () => { if (handle) handle.dispose(); else texture?.dispose(); },
+  finishOwnedCleanup([() => record.terrainInterest.release(), () => cancel?.(), () => { if (handle) handle.dispose(); else texture?.dispose(); },
     () => record.material.dispose(), () => record.mesh.dispose()], "Raster tile cleanup failed.");
 }
 
@@ -603,6 +610,8 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
   };
   let terrain = createTerrainLoader();
   let terrainGeneration = 0;
+  const coarserElevation = (): number => Math.max(0, Math.round(setting("map.terrain.coarserElevation")) || 0);
+  let appliedCoarserElevation = coarserElevation();
   // Persistent cache: tiles stay alive after they leave the desired set so we
   // can keep showing them (or use them as best-effort fallbacks) without
   // re-downloading. Eviction is LRU and bound by `map.terrain.cachedTiles`.
@@ -615,6 +624,8 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
   let lastDesired: DesiredEntry[] = [];
   // The tiles the last selection chose and the parents above them it keeps loaded.
   let neededKeys = new Set<string>();
+  // A selection ran since unneeded loading tiles were last dropped.
+  let selectedSinceDrop = false;
   let loadingCount = 0;
   let loadCycleActive = false;
   let disposed = false;
@@ -638,6 +649,27 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
   let heightsArrived = false;
   // Adopted terrain levels, finest first, for imagery height queries.
   let visibleLevels: number[] = [];
+  /**
+   * visibleTileKeys at each of visibleLevels, as row * 2^z + column, and the
+   * keys and levels it was taken from. Null cells: a level whose keys have no
+   * such number, asked by key instead.
+   */
+  let visibleCells: { keys: Set<string>; size: number; levels: number[]; byLevel: Array<{ z: number; n: number; cells: Set<number> | null }> } | null = null;
+  const indexedVisibleCells = (): NonNullable<typeof visibleCells>["byLevel"] => {
+    // The keys change by replacement or deletion, the levels by replacement.
+    if (visibleCells?.keys === visibleTileKeys && visibleCells.size === visibleTileKeys.size && visibleCells.levels === visibleLevels) return visibleCells.byLevel;
+    const byLevel = visibleLevels.map(z => ({ z, n: 2 ** z, cells: (z <= 26 ? new Set<number>() : null) as Set<number> | null }));
+    const byZ = new Map(byLevel.map(level => [level.z, level]));
+    for (const key of visibleTileKeys) {
+      const [z, x, y] = key.split("/").map(Number), level = byZ.get(z);
+      if (!level?.cells) continue;
+      // Exact below 2^53 for whole tiles of the level; any other key is asked by key.
+      if (Number.isInteger(x) && Number.isInteger(y) && x >= 0 && x < level.n && y >= 0 && y < level.n && key === `${z}/${x}/${y}`) level.cells.add(y * level.n + x);
+      else level.cells = null;
+    }
+    visibleCells = { keys: visibleTileKeys, size: visibleTileKeys.size, levels: visibleLevels, byLevel };
+    return byLevel;
+  };
 
   const coveringVisibleRecord = (tile: TileCoord): RasterTileRecord | null => {
     let { z, x, y } = tile;
@@ -668,15 +700,19 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
   // It never asks for finer heights to decide imagery.
   const imagerySurface = {
     heightAt(latDeg: number, lonDeg: number): number | null {
-      for (const z of visibleLevels) {
-        const at = lonLatToTileXY(lonDeg, latDeg, z);
-        const key = `${z}/${Math.floor(at.x)}/${Math.floor(at.y)}`;
-        if (!visibleTileKeys.has(key)) continue;
+      // One Mercator position, scaled to each level: lonLatToTileXY's bits.
+      let world: { x: number; y: number } | null = null;
+      for (const { z, n, cells } of indexedVisibleCells()) {
+        world ??= lonLatToMercator(lonDeg, latDeg);
+        const x = world.x * n, y = world.y * n, column = Math.floor(x), row = Math.floor(y);
+        // The key is only made for the visible tile: a column and row outside the level are no tile's.
+        if (cells ? !(column >= 0 && column < n && row >= 0 && row < n && cells.has(row * n + column)) : !visibleTileKeys.has(`${z}/${column}/${row}`)) continue;
+        const key = `${z}/${column}/${row}`;
         const record = cache.get(key);
         if (!record) continue;
         if (record.grid) {
           const scale = 2 ** (record.grid.z - z);
-          return sampleTerrainGrid(record.grid, at.x * scale, at.y * scale);
+          return sampleTerrainGrid(record.grid, x * scale, y * scale);
         }
         break;
       }
@@ -778,6 +814,16 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
         for (const key of cache.keys()) meshRebuildQueue.add(key);
         selectionDirty = true;
       }
+    }
+    if (changed.has("map.terrain.coarserElevation") && coarserElevation() !== appliedCoarserElevation) {
+      appliedCoarserElevation = coarserElevation();
+      terrainGeneration += 1;
+      // The displayed terrain stays until each tile's new elevation arrives.
+      // Choosing again asks for the coarser tiles kept above them, whose
+      // finer elevation would otherwise keep their children from showing;
+      // tiles only in the cache ask again if they are needed.
+      for (const key of new Set([...lastDesired.map(entry => entry.key), ...visibleTileKeys])) cache.get(key)?.replaceTerrain(loadDetail, terrainGeneration);
+      selectionDirty = true;
     }
     if (ids.some(id => id.startsWith("map.auto.") || id === "renderer.frameRateCap")) autoDetail.setTuning(autoTuning());
     if (ids.some(id => TERRAIN_SELECTION_IDS.has(id) || id.startsWith("map.auto.") || id.startsWith("map.detail."))) applyDetail();
@@ -882,21 +928,39 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
     cache.set(key, record);
   }
 
-  function loadDetail(requested: TileCoord): Promise<TerrainGrid> {
-    return terrain.loadPatch(requested);
+  /** The elevation tile a terrain tile takes its heights from: its own, or its ancestor `map.terrain.coarserElevation` levels up. */
+  function elevationTile(tile: TileCoord): TileCoord {
+    const levels = Math.min(tile.z, coarserElevation());
+    if (!levels) return tile;
+    return { z: tile.z - levels, x: Math.floor(tile.x / 2 ** levels), y: Math.floor(tile.y / 2 ** levels) };
   }
 
-  function loadProgressive(requested: TileCoord, progress: (grid: TerrainGrid) => void): Promise<TerrainGrid> {
+  function loadDetail(tile: TileCoord, _progress: (grid: TerrainGrid) => void, interest: TerrainInterest): Promise<TerrainGrid> {
+    return terrain.loadPatch(elevationTile(tile), interest);
+  }
+
+  function loadProgressive(tile: TileCoord, progress: (grid: TerrainGrid) => void, interest: TerrainInterest): Promise<TerrainGrid> {
+    const requested = elevationTile(tile);
     const coarseZoom = Math.max(0, Math.min(requested.z, requested.z - 4));
+    const scale = 2 ** (requested.z - coarseZoom);
+    const coarse = { z: coarseZoom, x: Math.floor(requested.x / scale), y: Math.floor(requested.y / scale) };
     const loader = terrain;
+    // The coarse patch is wanted only until this tile's own elevation arrives.
+    const coarseInterest = createTerrainInterest();
+    interest.onRelease(() => coarseInterest.release());
+    // Another tile may already wait for these, from earlier in the queue than this one would ask.
+    loader.holdPatch?.(requested, interest);
+    if (coarseZoom < requested.z) loader.holdPatch?.(coarse, coarseInterest);
     return (async () => {
       if (coarseZoom < requested.z) {
         try {
-          const scale = 2 ** (requested.z - coarseZoom);
-          progress(await loader.loadPatch({ z: coarseZoom, x: Math.floor(requested.x / scale), y: Math.floor(requested.y / scale) }));
+          // Another tile can bring this one's own elevation first, as a neighbour of its patch.
+          const shown = await Promise.race([loader.loadPatch(coarse, coarseInterest), ...loader.whenLoaded ? [loader.whenLoaded(requested, coarseInterest).then(() => null)] : []]);
+          if (shown) progress(shown);
         } catch { /* Retain the current displayed surface and still try detail. */ }
+        coarseInterest.release();
       }
-      return loader.loadPatch(requested);
+      return loader.loadPatch(requested, interest);
     })();
   }
 
@@ -1011,6 +1075,23 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
     }
     visibleLevels = [...new Set([...representatives].map(key => Number(key.split("/")[0])))].sort((a, b) => b - a);
     if (changed) surfaceSampler.setCoverage([...representatives].map(key => cache.get(key)!));
+  }
+
+  /**
+   * Tiles that left the selection before their elevation arrived are dropped,
+   * and with them the downloads they still wait for that no other tile wants.
+   * Kept, they would download ahead of the tiles the view needs, since the
+   * queue is first in, first out, and hold the load cycle open until then.
+   */
+  function dropUnneeded(): void {
+    for (const [key, record] of cache) {
+      if (record.settled || neededKeys.has(key) || visibleTileKeys.has(key)) continue;
+      cache.delete(key);
+      lastUsedTick.delete(key);
+      record.settled = true;
+      loadingCount = Math.max(0, loadingCount - 1);
+      disposeRecord(record);
+    }
   }
 
   function evictIfNeeded(): void {
@@ -1170,6 +1251,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
 
   function selectTiles(view: ImageryView | null, focus: TerrainFocus | null, refine: TerrainRefinePoint | null): void {
     selectionDirty = false;
+    selectedSinceDrop = true;
     heightsArrived = false;
     selectedView = view;
     selectedFocus = focus;
@@ -1301,6 +1383,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
       // New imagery can unlock usable startup coverage. Commit it before any
       // final owner notification publishes displayed geometry evidence.
       if (visibilityDirty) { recomputeVisibility(); commitTerrain(); }
+      if (selectedSinceDrop) { selectedSinceDrop = false; dropUnneeded(); }
       evictIfNeeded();
       emitLoadEndIfIdle();
       options.onSurfaceChange?.("geometry");

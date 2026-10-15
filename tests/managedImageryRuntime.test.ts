@@ -10,23 +10,26 @@ function harness() {
   scene.useRightHandedSystem = true;
   const camera = new GeospatialCamera("owned-table", scene, { planetRadius: 6378137 });
   new HostCameraController(camera, () => 0).applyViewState({ latDeg: 36.1, lonDeg: -112.14, zoomMeters: 30_000, pitchDeg: 0, headingDeg: 0 });
-  let frame = true, now = 0, nativeIndex = 0;
+  let frame = true, now = 0, nativeIndex = 0, surfaceRevision = 0;
   const timers: { at: number; callback(): void }[] = [];
   const errors: string[] = [];
   const source = { id: "old", version: "1", label: "Old", provider: "Fixture", attribution: "Fixture", protocol: "xyz" as const, kind: "cartographic" as const, urlTemplate: "https://fixture.invalid/old/{z}/{x}/{y}", maxZoom: 14 };
   const runtime = createImageryRuntime({ scene, source, loader: { load: async (_url, expected) => host.image(expected.width, expected.height) },
     device: host.device, managedAtlas: host.resources, createAbortController: () => new AbortController(), capabilities: { backend: "webgpu", maxTextureSize: 8192, explicitGradients: true },
-    surface: { heightAt: () => 0, boundsFor: () => ({ min: 0, max: 0 }), maxLevelFor: () => 8, getRevision: () => 0 },
+    surface: { heightAt: () => 0, boundsFor: () => ({ min: 0, max: 0 }), maxLevelFor: () => 8, getRevision: () => surfaceRevision },
     limits: { gpuBytes: OWNED_ATLAS_GPU_BUDGET, stagingBytes: 16 * 2 ** 20, concurrentRequests: 2, queuedRequests: 128, uploadBytesPerUpdate: 8 * 2 ** 20, cpuMsPerUpdate: 2, missingRetryMs: 1000, retryDelayMs: { min: 2000, max: 30000 } },
-    tuning: { reselectWhileMovingMs: 0, anisotropy: 4, fallbackGap: 4, fallbackStep: 3, tablePatches: 1, maxNodes: 12_000, hysteresis: { refineAbove: 1.2, coarsenBelow: 0.8, coarsenAfterMs: 500, pinMs: 1000 } },
+    tuning: { reselectWhileMovingMs: 0, anisotropy: 4, fallbackGap: 4, fallbackStep: 3, tablePatches: 1, maxNodes: 12_000, hysteresis: { refineAbove: 1.2, coarsenBelow: 0.8, coarsenAfterMs: 500, pinMs: 1000 }, refineAtRestAbove: 1 },
     requestRender: () => { frame = true; }, now: () => now, log: { warn() {} }, onError: error => { errors.push(error.message); },
     after(callback, delay) { const timer = { at: now + delay, callback }; timers.push(timer); return () => { const index = timers.indexOf(timer); if (index >= 0) timers.splice(index,1); }; },
   });
   const material = new StandardMaterial("patch", scene); runtime.attachPatch("patch", { z: 2, x: 0, y: 1 }, material); runtime.setPatchVisible("patch", true);
-  const binding = () => {
+  const bound = () => {
     const plugin = material.pluginManager!.getPlugin("ImageryAtlas") as ImageryAtlasMaterialPlugin, values: Record<string, number[]> = {}, textures: Record<string, unknown> = {};
-    plugin.bindForSubMesh({ updateFloat4(name: string, ...value: number[]) { values[name] = value; }, setTexture(name: string, texture: unknown) { textures[name] = texture; } } as unknown as UniformBuffer); return { ...values, textures };
+    plugin.bindForSubMesh({ updateFloat4(name: string, ...value: number[]) { values[name] = value; }, setTexture(name: string, texture: unknown) { textures[name] = texture; } } as unknown as UniformBuffer); return { values, textures };
   };
+  const binding = () => { const { values, textures } = bound(); return { ...values, textures }; };
+  /** One of the patch material's vec4 uniforms, as the next draw binds it. */
+  const uniform = (name: string) => bound().values[name];
   const pump = async (holdTables = false) => {
     for (let turn = 0; turn < 120; turn++) {
       if (frame) { frame = false; runtime.update(); await flushOwnedAtlas(); }
@@ -38,8 +41,26 @@ function harness() {
     }
     throw new Error("Managed host frame failed to settle.");
   };
-  return { host, runtime, binding, pump, source, errors, gpuBudget: OWNED_ATLAS_GPU_BUDGET, switchSource() { runtime.setSource({ ...source, id: "new", label: "New", urlTemplate: "https://fixture.invalid/new/{z}/{x}/{y}" }); },
-    completeTable() { host.native[nativeIndex++].resolve(); }, failTable(error: unknown) { host.native[nativeIndex++].reject(error); },
+  // Table uploads pumpHolding has not completed, in the order they were submitted.
+  const held: typeof host.native = [];
+  /** Updates until the runtime is idle, completing every native upload but tables, which it holds. */
+  const pumpHolding = async () => {
+    for (let turn = 0; turn < 120; turn++) {
+      if (frame) { frame = false; runtime.update(); await flushOwnedAtlas(); }
+      for (; nativeIndex < host.native.length; nativeIndex++) {
+        const next = host.native[nativeIndex]; if (next.table) held.push(next); else { next.resolve(); await flushOwnedAtlas(); }
+      }
+      if (!frame) return [...held];
+    }
+    throw new Error("Managed host frame failed to settle.");
+  };
+  return { host, runtime, binding, uniform, pump, pumpHolding, source, errors, gpuBudget: OWNED_ATLAS_GPU_BUDGET, switchSource() { runtime.setSource({ ...source, id: "new", label: "New", urlTemplate: "https://fixture.invalid/new/{z}/{x}/{y}" }); },
+    completeTable() { host.native[nativeIndex++].resolve(); },
+    async completeHeld() { for (const next of held.splice(0)) { next.resolve(); await flushOwnedAtlas(); } },
+    /** The terrain changed: the runtime selects its imagery again, which picks the same pages. */
+    touchSurface() { surfaceRevision += 1; frame = true; },
+    /** Shows or hides the patch, as the terrain does before it draws a frame. */
+    setVisible(visible: boolean) { runtime.setPatchVisible("patch", visible); frame = true; }, failTable(error: unknown) { host.native[nativeIndex++].reject(error); },
     advance(ms: number) { now += ms; for (const timer of [...timers]) if (timer.at <= now) { timers.splice(timers.indexOf(timer),1); timer.callback(); } },
     dispose() { runtime.dispose(); host.dispose(); scene.dispose(); engine.dispose(); } };
 }
@@ -84,6 +105,37 @@ describe("managed actual runtime table acknowledgement", () => {
       failing.switchSource(); expect((await failing.pump(true))?.table).toBe(true); failing.completeTable(); await flushOwnedAtlas(); await failing.pump();
       expect(failing.errors.join(" ")).toContain("partial native table failure");
     } finally { failing.dispose(); }
+  });
+  it("keeps a table uploading while its imagery is selected again with the same result, and binds it when it completes", async () => {
+    const h = harness();
+    try { await h.pump(); h.touchSurface(); await h.pump(); expect(h.runtime.getDiagnostics().binding.fallbackLeaves).toBe(0); const cellsLog2 = h.uniform("imageryTable")[2];
+      // Shown again with every page resident, the patch uploads a table whose content no update changes.
+      h.setVisible(false); await h.pump(); h.setVisible(true);
+      const uploading = await h.pumpHolding(); expect(uploading).toHaveLength(1);
+      const { selections, tableWrites } = h.runtime.getDiagnostics().counters, tables = h.host.native.filter(next => next.table).length;
+      // On a slow device the terrain changes several times while one table uploads. Each change selected the imagery
+      // again, and the runtime cancelled the table and started the same one over, so it completed only once the
+      // terrain stopped changing.
+      h.touchSurface(); expect(await h.pumpHolding()).toEqual(uploading); h.touchSurface(); expect(await h.pumpHolding()).toEqual(uploading);
+      expect(h.runtime.getDiagnostics().counters.selections).toBe(selections + 2);
+      // Completed after the selection changed, the table is bound, and the next update finds it current.
+      await h.completeHeld(); await h.pump();
+      expect(h.runtime.getDiagnostics().counters.tableWrites).toBe(tableWrites + 1); expect(h.host.native.filter(next => next.table)).toHaveLength(tables);
+      expect(h.uniform("imageryTable")[2]).toBe(cellsLog2); expect(h.runtime.getFeedback().pending).toBe(false);
+    } finally { h.dispose(); }
+  });
+  it("binds a table that completes after newer pages arrived, then uploads the newest, ending on the table an unheld view ends on", async () => {
+    // What the patch draws: its table's content and size, and its fallback page.
+    const picture = (h: ReturnType<typeof harness>) => ({ table: [...h.host.writes.filter(write => write.width === 64).at(-1)!.data],
+      cellsLog2: h.uniform("imageryTable")[2], fallback: h.uniform("imageryFallback") });
+    const reference = harness(); let expected: ReturnType<typeof picture>;
+    try { await reference.pump(); expected = picture(reference); } finally { reference.dispose(); }
+    const h = harness();
+    try { // Pages arrive while the first table uploads. Cancelled for each, it was submitted four times.
+      expect(await h.pumpHolding()).toHaveLength(1);
+      await h.completeHeld(); expect(h.runtime.getDiagnostics().counters.tableWrites).toBe(1); expect(h.uniform("imageryTable")[2]).toBeGreaterThan(0);
+      await h.pump(); expect(h.runtime.getDiagnostics().counters.tableWrites).toBe(2); expect(picture(h)).toEqual(expected);
+    } finally { h.dispose(); }
   });
   it("uses two physical table blocks per logical patch inside the same named GPU budget", async () => {
     const h = harness();

@@ -35,6 +35,26 @@ describe("supplied canvas and scene visualization",()=>{
       compass.destroy();compass.destroy();expect(scene.getMeshByName("orbit-compass-label-N")).toBeNull();atlas.dispose();
     } finally {scene.dispose();engine.dispose();}
   });
+  it("draws a compass move within a metre in the frame being drawn, asking for another frame only past a metre",()=>{
+    const engine=new NullEngine(),scene=new Scene(engine),requestRender=vi.fn();
+    const device=createCanvasTextureDevicePorts({scene,createCanvas:canvasRealm,transfer:(_bytes,_label,submit)=>submit()});
+    try {
+      const compass=createOrbitCompass(scene,{device,requestRender});
+      compass.setScaleParams({radiusScale:0.1,minRadius:100,maxRadius:100_000,labelSizeScale:0.01});
+      const label=scene.getMeshByName("orbit-compass-label-N")!;
+      // At (R, 0, 0) up is +x and north is +z.
+      compass.update(new Vector3(6378137,0,0),100_000);expect(requestRender).toHaveBeenCalledTimes(1);
+      const north=label.position.z,up=label.position.x;
+      // Half a metre up, and a radius 200 m larger, within its 500 m step: the label rises, its radius stays.
+      compass.update(new Vector3(6378137.5,0,0),102_000);expect(requestRender).toHaveBeenCalledTimes(1);
+      expect(label.position.x-up).toBeCloseTo(0.5,6);expect(label.position.z).toBe(north);
+      // 1.2 m from where it last asked for a frame, though 0.7 m from the last drawn.
+      compass.update(new Vector3(6378138.2,0,0),100_000);expect(requestRender).toHaveBeenCalledTimes(2);
+      expect(label.position.x-up).toBeCloseTo(1.2,6);
+      compass.update(new Vector3(6378138.2,0,0),100_000);expect(requestRender).toHaveBeenCalledTimes(2);
+      compass.destroy();
+    } finally {scene.dispose();engine.dispose();}
+  });
   it("retains sprite manager/source metadata semantics while allowing a host-selected capacity floor",()=>{
     const engine=new NullEngine(),scene=new Scene(engine),device=createCanvasTextureDevicePorts({scene,createCanvas:canvasRealm,transfer:(_bytes,_label,submit)=>submit()});
     try {

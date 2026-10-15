@@ -99,11 +99,60 @@ describe("createAnchorHeightResolver", () => {
     resolver.resolve(anchorAt(10, 20, 0));
     expect(provider).toHaveBeenCalledTimes(2);
 
-    provider.mockReturnValue(300);
+    provider.mockReturnValue(0);
     nowMs = 11_002;
-    const resolved = resolver.resolve(anchorAt(10, 20, 0));
+    resolver.resolve(anchorAt(10, 20, 0));
+    provider.mockReturnValue(300);
+    nowMs = 12_000;
+    const resolved = resolver.resolve(anchorAt(10, 20.01, 0));
     // 100 ms (the stall cap) at 1000 m/s.
     expect(ecefToGeodetic(resolved!.x, resolved!.y, resolved!.z).altMeters).toBeCloseTo(100, 1);
+  });
+
+  it("takes the first known height at once instead of gliding to it from the fallback", () => {
+    let nowMs = 0;
+    const provider = vi.fn(() => null as number | null);
+    const resolver = createAnchorHeightResolver({ provider, nowMs: () => nowMs, cacheProviderSamples: false,
+      providerMissRetryMs: 1000, maxVerticalSpeedMetersPerSecond: 100, heightOffsetMeters: 5 });
+    const altitude = () => {
+      const resolved = resolver.resolve(anchorAt(10, 20, 0))!;
+      return ecefToGeodetic(resolved.x, resolved.y, resolved.z).altMeters;
+    };
+    expect(altitude()).toBeCloseTo(5, 1);
+    nowMs = 100;
+    expect(altitude()).toBeCloseTo(5, 1);
+    provider.mockReturnValue(245);
+    nowMs = 1001;
+    expect(altitude()).toBeCloseTo(250, 1);
+    // From then on it glides, also toward the fallback where the height is lost and back.
+    provider.mockReturnValue(275);
+    nowMs = 1101;
+    expect(altitude()).toBeCloseTo(260, 1);
+    provider.mockReturnValue(null);
+    nowMs = 1201;
+    expect(altitude()).toBeCloseTo(250, 1);
+    provider.mockReturnValue(275);
+    nowMs = 2202;
+    expect(altitude()).toBeCloseTo(260, 1);
+  });
+
+  it("takes a sample added after the fallback at once, and stands the fallback in again after clear", () => {
+    let nowMs = 0;
+    const resolver = createAnchorHeightResolver({ nowMs: () => nowMs, maxVerticalSpeedMetersPerSecond: 100 });
+    const altitude = () => {
+      const resolved = resolver.resolve(anchorAt(10, 20, 0))!;
+      return ecefToGeodetic(resolved.x, resolved.y, resolved.z).altMeters;
+    };
+    expect(altitude()).toBeCloseTo(0, 1);
+    resolver.setSample({ latDeg: 10, lonDeg: 20, heightMeters: 300 });
+    nowMs = 100;
+    expect(altitude()).toBeCloseTo(300, 1);
+    resolver.clear();
+    nowMs = 200;
+    expect(altitude()).toBeCloseTo(0, 1);
+    resolver.setSample({ latDeg: 10, lonDeg: 20, heightMeters: 300 });
+    nowMs = 300;
+    expect(altitude()).toBeCloseTo(300, 1);
   });
 
   it("uses fallback height when no provider data exists", () => {

@@ -1,6 +1,6 @@
 import { Mesh, VertexData, Vector3, type Scene, type TransformNode } from "@babylonjs/core";
-import { DEG_TO_RAD, geodeticToEcef } from "../camera/cameraMath.js";
-import { sampleTerrainGrid, type TerrainGrid, type TerrainTile } from "../terrain/terrainGrid.js";
+import { DEG_TO_RAD, ecefOnParallel, geodeticParallel, geodeticToEcef, type EcefCoord } from "../camera/cameraMath.js";
+import { sampleTerrainGridRow, terrainGridColumns, type TerrainGrid, type TerrainTile } from "../terrain/terrainGrid.js";
 export interface TerrainMeshOptions {
   scene: Scene;
   source: { id: string };
@@ -25,56 +25,92 @@ function tileKey(tile: TileCoord): string {
   return `${tile.z}/${tile.x}/${tile.y}`;
 }
 
-export function createTerrainMesh(options: TerrainMeshOptions, tile: TileCoord, grid?: TerrainGrid): Mesh {
-  const started = options.performanceCapture ? options.nowMs() : 0;
-  const { scene, source } = options;
-  const mesh = new Mesh(`raster-basemap-tile-${source.id}-${tileKey(tile)}`, scene);
-  const positions: number[] = [];
-  const uvs: number[] = [];
-  const indices: number[] = [];
+interface TerrainSurface { positions: number[]; uvs: number[] | null; center: EcefCoord; segments: number; minHeight: number; maxHeight: number }
+/** A tile's vertices relative to its centre, as float64. */
+function terrainSurface(options: Pick<TerrainMeshOptions, "segments" | "getSurfaceHeightMeters">, tile: TileCoord, grid: TerrainGrid | undefined, withUvs: boolean): TerrainSurface {
   const segments = Math.max(1, Math.round(options.segments ?? DEFAULT_TILE_SEGMENTS));
+  const stride = segments + 1;
+  const vertexCount = stride * stride;
+  // Sized once. Growing these with push copies them several times per tile.
+  const positions = new Array<number>(vertexCount * 3);
+  const uvs = withUvs ? new Array<number>(vertexCount * 2) : null;
   const center = geodeticToEcef(tileYToLat(tile.y + 0.5, tile.z) * DEG_TO_RAD, tileXToLon(tile.x + 0.5, tile.z) * DEG_TO_RAD, 0);
   let minHeight = Infinity, maxHeight = -Infinity;
+  // Every row has the same longitudes and every vertex of a row the same
+  // latitude: their trigonometry is done once each, with geodeticToEcef's bits.
+  const lonDegs = new Float64Array(stride), sinLons = new Float64Array(stride), cosLons = new Float64Array(stride);
+  for (let col = 0; col <= segments; col += 1) {
+    const lonDeg = tileXToLon(tile.x + col / segments, tile.z);
+    lonDegs[col] = lonDeg; sinLons[col] = Math.sin(lonDeg * DEG_TO_RAD); cosLons[col] = Math.cos(lonDeg * DEG_TO_RAD);
+  }
+  const scale = grid ? 2 ** (grid.z - tile.z) : 1;
+  // Grid samples: what depends on the column alone is worked out once per
+  // tile and the rest once per row, with sampleTerrainGrid's bits.
+  const columns = grid ? terrainGridColumns(grid, Float64Array.from({ length: stride }, (_, col) => (tile.x + col / segments) * scale)) : null;
+  const rowHeights = new Float64Array(stride);
+  const ecef = { x: 0, y: 0, z: 0 };
+  let positionIndex = 0, uvIndex = 0;
 
   for (let row = 0; row <= segments; row += 1) {
     const v = row / segments;
     const mercatorY = tile.y + v;
     const latDeg = tileYToLat(mercatorY, tile.z);
+    const parallel = geodeticParallel(latDeg * DEG_TO_RAD);
+    if (grid && columns) sampleTerrainGridRow(grid, columns, mercatorY * scale, rowHeights);
 
     for (let col = 0; col <= segments; col += 1) {
       const u = col / segments;
-      const mercatorX = tile.x + u;
-      const lonDeg = tileXToLon(mercatorX, tile.z);
-      const scale = grid ? 2 ** (grid.z - tile.z) : 1;
-      const altitudeMeters = grid
-        ? sampleTerrainGrid(grid, mercatorX * scale, mercatorY * scale)
-        : options.getSurfaceHeightMeters?.(latDeg, lonDeg) ?? 0;
+      const altitudeMeters = columns
+        ? rowHeights[col]
+        : options.getSurfaceHeightMeters?.(latDeg, lonDegs[col]) ?? 0;
       if (altitudeMeters < minHeight) minHeight = altitudeMeters;
       if (altitudeMeters > maxHeight) maxHeight = altitudeMeters;
-      const ecef = geodeticToEcef(latDeg * DEG_TO_RAD, lonDeg * DEG_TO_RAD, altitudeMeters);
-      positions.push(ecef.x - center.x, ecef.y - center.y, ecef.z - center.z);
-      uvs.push(u, v);
+      ecefOnParallel(parallel, sinLons[col], cosLons[col], altitudeMeters, ecef);
+      positions[positionIndex++] = ecef.x - center.x;
+      positions[positionIndex++] = ecef.y - center.y;
+      positions[positionIndex++] = ecef.z - center.z;
+      if (uvs) { uvs[uvIndex++] = u; uvs[uvIndex++] = v; }
     }
   }
+  return { positions, uvs, center, segments, minHeight, maxHeight };
+}
 
+/**
+ * The positions a new terrain mesh holds and its height range, without
+ * building the mesh. Babylon stores an updatable mesh's positions as float32,
+ * so each is rounded the same way.
+ */
+export function terrainMeshTarget(options: Pick<TerrainMeshOptions, "segments" | "getSurfaceHeightMeters">, tile: TileCoord, grid?: TerrainGrid): { positions: number[]; heightBounds: { min: number; max: number } } {
+  const { positions, minHeight, maxHeight } = terrainSurface(options, tile, grid, false);
+  for (let index = 0; index < positions.length; index++) positions[index] = Math.fround(positions[index]);
+  return { positions, heightBounds: { min: minHeight, max: maxHeight } };
+}
+
+export function createTerrainMesh(options: TerrainMeshOptions, tile: TileCoord, grid?: TerrainGrid): Mesh {
+  const started = options.performanceCapture ? options.nowMs() : 0;
+  const { scene, source } = options;
+  const mesh = new Mesh(`raster-basemap-tile-${source.id}-${tileKey(tile)}`, scene);
+  const { positions, uvs, center, segments, minHeight, maxHeight } = terrainSurface(options, tile, grid, true);
   const stride = segments + 1;
+  const indices = new Array<number>(segments * segments * 6);
+  let index = 0;
   for (let row = 0; row < segments; row += 1) {
     for (let col = 0; col < segments; col += 1) {
       const a = row * stride + col;
       const b = a + 1;
       const c = a + stride;
       const d = c + 1;
-      indices.push(a, c, b, b, c, d);
+      indices[index++] = a; indices[index++] = c; indices[index++] = b;
+      indices[index++] = b; indices[index++] = c; indices[index++] = d;
     }
   }
 
-  const normals: number[] = [];
-  VertexData.ComputeNormals(positions, indices, normals);
-
+  // No normal buffer. Tile materials disable scene lighting, and the terrain
+  // light shades from the radial up direction, not vertex normals. Picking
+  // asks for the face normal. A buffer here is computed, uploaded and never read.
   const data = new VertexData();
   data.positions = positions;
   data.indices = indices;
-  data.normals = normals;
   data.uvs = uvs;
   data.applyToMesh(mesh, true);
 
