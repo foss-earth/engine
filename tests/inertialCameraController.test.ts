@@ -64,6 +64,127 @@ describe("createInertialCameraController", () => {
     expect(controller.isActive()).toBe(false);
   });
 
+  it("settles a pan, a turn and a zoom in the same number of frames when each starts the same multiple of its rest", () => {
+    const target = { panBy: vi.fn(), orbitBy: vi.fn(), zoomBy: vi.fn() };
+    const framesUntilRest = (push: (controller: InertialCameraController) => void): number => {
+      const controller = createInertialCameraController(target, { nowMs: () => 0 });
+      push(controller);
+      let frames = 0;
+      let now = 1000;
+      while (controller.isActive() && frames < 500) {
+        controller.update(now);
+        now += 1000 / 60;
+        frames += 1;
+      }
+      return frames;
+    };
+    // A thousand times each channel's rest: 0.01 px, 0.002°, and a log of 0.00005.
+    const pan = framesUntilRest(controller => controller.panBy(10, 0, 800));
+    const orbit = framesUntilRest(controller => controller.orbitBy(2, 0));
+    const zoom = framesUntilRest(controller => controller.zoomBy(Math.exp(0.05)));
+    expect(orbit).toBe(pan);
+    expect(zoom).toBe(pan);
+    expect(pan).toBeGreaterThan(10);
+  });
+
+  it("keeps decaying a turn the camera did not take and did not refuse", () => {
+    const target = anchoredTarget();
+    target.orbitBy.mockReturnValue({ moved: false, constrained: null });
+    const { controller, step } = glideOf(target);
+
+    controller.orbitBy(0.2, 0, anchorOf(1, "orbit", P1));
+    step();
+
+    expect(controller.motion().orbit.pitch).toBeCloseTo(0.1);
+    expect(controller.isActive()).toBe(true);
+  });
+
+  it("feeds a released turn and a finished pinch for about as long as a trackpad keeps a swipe", () => {
+    const framesAfter = (run: (controller: InertialCameraController, at: (ms: number) => void) => void): number => {
+      let now = 1000;
+      const controller = createInertialCameraController(
+        { panBy: vi.fn(), orbitBy: vi.fn(), zoomBy: vi.fn() },
+        { nowMs: () => now },
+      );
+      const at = (ms: number) => { now = ms; };
+      run(controller, at);
+      let frames = 0;
+      while (controller.isActive() && frames < 400) {
+        now += 1000 / 60;
+        controller.update(now);
+        frames += 1;
+      }
+      return frames;
+    };
+    const flick = (controller: InertialCameraController, at: (ms: number) => void, push: () => void) => {
+      for (let step = 0; step < 8; step += 1) {
+        at(1000 + step * (1000 / 60));
+        push();
+        controller.update(1000 + (step + 1) * (1000 / 60));
+      }
+    };
+    const turn = framesAfter((controller, at) => {
+      flick(controller, at, () => {
+        controller.orbitBy(0, 0.5);
+        controller.armReleaseMomentum("orbit");
+      });
+      controller.releaseMomentum("orbit");
+    });
+    const turnLeftAlone = framesAfter((controller, at) => {
+      flick(controller, at, () => controller.orbitBy(0, 0.5));
+    });
+    const pinch = framesAfter((controller, at) => {
+      flick(controller, at, () => {
+        controller.zoomBy(Math.exp(-0.02));
+        controller.armReleaseMomentum("zoom");
+      });
+    });
+    const pinchLeftAlone = framesAfter((controller, at) => {
+      flick(controller, at, () => controller.zoomBy(Math.exp(-0.02)));
+    });
+    expect(turn).toBeGreaterThan(turnLeftAlone + 30);
+    expect(pinch).toBeGreaterThan(pinchLeftAlone + 30);
+    expect(turn).toBeGreaterThan(60);
+    const pan = framesAfter((controller, at) => {
+      flick(controller, at, () => {
+        controller.panBy(4, 0, 800);
+        controller.armReleaseMomentum("pan");
+      });
+      controller.releaseMomentum("pan");
+    });
+    const panLeftAlone = framesAfter((controller, at) => {
+      flick(controller, at, () => controller.panBy(4, 0, 800));
+    });
+    expect(pan).toBeGreaterThan(panLeftAlone + 30);
+    expect(pan).toBeGreaterThan(60);
+    expect(pinch).toBeGreaterThan(60);
+  });
+
+  it("keeps a zoom mark live while its events arrive, and coasting once they stop", () => {
+    let now = 1000;
+    const controller = createInertialCameraController(
+      { panBy: vi.fn(), orbitBy: vi.fn(), zoomBy: vi.fn() },
+      { nowMs: () => now },
+    );
+    const zoomAt = anchorOf(1, "zoom", { x: 1, y: 2, z: 3 });
+    controller.zoomBy(0.98, zoomAt);
+    expect(controller.anchors().zoomHeld).toBe(true);
+    now += 200;
+    controller.update(now);
+    expect(controller.anchors().zoomHeld).toBeUndefined();
+    expect(controller.isActive()).toBe(true);
+
+    now += 1000;
+    controller.cancel();
+    controller.zoomBy(Math.exp(-0.02), zoomAt);
+    controller.armReleaseMomentum("zoom");
+    expect(controller.anchors().zoomHeld).toBe(true);
+    now += 80;
+    controller.update(now);
+    expect(controller.anchors().zoomHeld).toBeUndefined();
+    expect(controller.isActive()).toBe(true);
+  });
+
   it("cancels queued motion", () => {
     const target = {
       panBy: vi.fn(),
@@ -151,7 +272,7 @@ describe("createInertialCameraController: anchored glide", () => {
 
     controller.orbitBy(0.01, 0, pivot);
     controller.zoomBy(0.9, zoomAt);
-    expect(controller.anchors()).toEqual({ orbit: pivot, zoom: zoomAt });
+    expect(controller.anchors()).toEqual({ orbit: pivot, zoom: zoomAt, zoomHeld: true });
 
     // Direct input has ended: the tail goes on about the same points.
     step();
@@ -159,12 +280,12 @@ describe("createInertialCameraController: anchored glide", () => {
     expect(target.orbitBy).toHaveBeenNthCalledWith(1, 0.01, 0, pivot);
     expect(target.orbitBy).toHaveBeenNthCalledWith(2, 0.005, 0, pivot);
     expect(target.zoomBy).toHaveBeenNthCalledWith(2, expect.closeTo(Math.sqrt(0.9), 12), zoomAt);
-    expect(controller.anchors()).toEqual({ orbit: pivot, zoom: zoomAt });
+    expect(controller.anchors()).toEqual({ orbit: pivot, zoom: zoomAt, zoomHeld: true });
 
     // The orbit settles first and lets go of its pivot; the zoom keeps its anchor.
     step();
     expect(target.orbitBy).toHaveBeenCalledTimes(3);
-    expect(controller.anchors()).toEqual({ orbit: null, zoom: zoomAt });
+    expect(controller.anchors()).toEqual({ orbit: null, zoom: zoomAt, zoomHeld: true });
     expect(controller.motion().orbit.anchor).toBeNull();
 
     while (controller.isActive()) step();
@@ -246,7 +367,7 @@ describe("createInertialCameraController: anchored glide", () => {
     controller.orbitBy(2, 0, anchorOf(1, "orbit", P1));
     controller.zoomBy(0.9, zoomAt);
     step();
-    expect(controller.anchors()).toEqual({ orbit: null, zoom: zoomAt });
+    expect(controller.anchors()).toEqual({ orbit: null, zoom: zoomAt, zoomHeld: true });
     expect(controller.motion().orbit).toEqual({ pitch: 0, heading: 0, anchor: null });
 
     step();
@@ -379,7 +500,7 @@ describe("createInertialCameraController: a new gesture's anchors during a glide
     expect(target.rebaseMotion).toHaveBeenCalledWith(expect.objectContaining({ zoom: { log: Math.log(0.9), anchor: oldZoom } }), { orbit: pivot, zoom: newZoom });
     expect(controller.motion().zoom).toEqual({ log: expect.closeTo(-0.03 + Math.log(0.95), 12), anchor: newZoom });
     expect(controller.motion().orbit).toEqual({ pitch: 0.4, heading: 0, anchor: pivot });
-    expect(controller.anchors()).toEqual({ orbit: pivot, zoom: newZoom });
+    expect(controller.anchors()).toEqual({ orbit: pivot, zoom: newZoom, zoomHeld: true });
   });
 
   it("adds to the glide without rewriting it when the same point is picked again", () => {

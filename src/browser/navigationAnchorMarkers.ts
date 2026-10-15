@@ -2,9 +2,10 @@
  * Markers for the points navigation acts about, over the globe canvas
  * (`input.showNavigationAnchors`): outward arrows where a drag grabs the
  * ground, a reticle where a zoom acts, turning arrows where a rotation does,
- * and a pin above the pinned point. Shapes and labels tell them apart, not
- * colour. They take no pointer input. The runtime says where they are, each
- * frame drawn.
+ * and a pin above the pinned point. Shapes and labels tell them apart. A grab
+ * still under the finger, and a zoom whose events are still arriving, keep the
+ * anchor colour. Once a point is only waiting out its glide, it turns gray.
+ * They take no pointer input. The runtime says where they are, each frame drawn.
  */
 
 /** One marker: where it is, in client CSS pixels, and what acts there. */
@@ -15,6 +16,10 @@ export interface NavigationAnchorMarkerView {
   readonly orbit: boolean;
   /** A grab holds this ground, or is still gliding from having held it. */
   readonly grab: boolean;
+  /** The finger is still down on this grab. False while the point only waits out the glide. */
+  readonly held: boolean;
+  /** Zoom events are still arriving. False while this zoom only waits out its glide. */
+  readonly zoomHeld: boolean;
   readonly pinned: boolean;
   /** Ground or a building nearer the eye hides the point: the marker is drawn faint. */
   readonly occluded: boolean;
@@ -43,7 +48,7 @@ function joinActs(parts: readonly string[]): string {
 }
 
 /** What a marker says to assistive technology: "Pinned point, where zoom and rotation act". */
-export function describeNavigationAnchorMarker(marker: Pick<NavigationAnchorMarkerView, "zoom" | "orbit" | "grab" | "pinned" | "occluded">): string {
+export function describeNavigationAnchorMarker(marker: Pick<NavigationAnchorMarkerView, "zoom" | "orbit" | "grab" | "pinned" | "occluded"> & { held?: boolean; zoomHeld?: boolean }): string {
   const motions = [marker.zoom ? "zoom" : "", marker.orbit ? "rotation" : ""].filter(Boolean);
   const motion = motions.length === 2 ? "zoom and rotation" : motions[0] ?? "";
   let what: string;
@@ -51,16 +56,16 @@ export function describeNavigationAnchorMarker(marker: Pick<NavigationAnchorMark
     const acts = [motion, marker.grab ? "the grab" : ""].filter(Boolean);
     const plural = acts.length > 1 || motion === "zoom and rotation";
     what = acts.length > 0 ? `Pinned point, where ${joinActs(acts)} ${plural ? "act" : "acts"}` : "Pinned point";
-  } else if (marker.grab && !motion) what = "Grabbed point";
+  } else if (marker.grab && !motion) what = marker.held === false ? "Grabbed point, gliding" : "Grabbed point";
   else if (marker.grab) what = motion === "zoom and rotation" ? "Grabbed point, where zoom and rotation act" : `Grabbed point, where ${motion} acts`;
   else if (motion === "zoom and rotation") what = "Zoom and rotation point";
-  else if (marker.zoom) what = "Zoom point";
+  else if (marker.zoom) what = marker.zoomHeld === false ? "Zoom point, gliding" : "Zoom point";
   else what = "Rotation point";
   return marker.occluded ? `${what}, hidden behind the ground` : what;
 }
 
 function kindOf(marker: NavigationAnchorMarkerView): string {
-  return `${marker.zoom ? "z" : ""}${marker.orbit ? "o" : ""}${marker.grab ? "g" : ""}${marker.pinned ? "p" : ""}${marker.occluded ? "-" : ""}`;
+  return `${marker.zoom ? (marker.zoomHeld ? "Z" : "z") : ""}${marker.orbit ? "o" : ""}${marker.grab ? (marker.held ? "H" : "g") : ""}${marker.pinned ? "p" : ""}${marker.occluded ? "-" : ""}`;
 }
 
 export function attachNavigationAnchorMarkers(canvas: HTMLCanvasElement): NavigationAnchorMarkers {
@@ -136,6 +141,10 @@ export function attachNavigationAnchorMarkers(canvas: HTMLCanvasElement): Naviga
           entry.kind = kind;
         }
         entry.element.style.display = "";
+        const grabLive = marker.grab && marker.held;
+        const zoomLive = marker.zoom && marker.zoomHeld;
+        const coasting = ((marker.grab && !marker.held) || (marker.zoom && !marker.zoomHeld)) && !grabLive && !zoomLive;
+        entry.element.style.color = coasting ? "var(--foss-earth-navigation-anchor-coast-color,#a3a3a3)" : "";
         entry.element.style.transform = `translate(${marker.x - origin.left - HALF}px, ${marker.y - origin.top - HALF}px)`;
       });
       for (const entry of shown.slice(markers.length)) entry.element.style.display = "none";

@@ -148,6 +148,8 @@ export function attachWheelController(
       const factor = 1 + e.deltaY * rates().trackpadPinchZoomPerPx * sensitivity;
       // A pinch is a trackpad's, Ctrl+wheel in mouse mode too.
       zoomWith(camera, factor, zoomAnchorFor("trackpad", e));
+      // A pinch stops when the fingers do. A swipe's wheel events keep arriving, so a pan is not armed.
+      camera.armReleaseMomentum?.("zoom");
       return;
     }
 

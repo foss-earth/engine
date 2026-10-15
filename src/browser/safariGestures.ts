@@ -87,6 +87,7 @@ export function attachSafariGestures(
     if (Math.abs(rotDelta) > 0.1) {
       const sensitivity = options.getSettings?.().sensitivity.trackpad.orbit ?? 1;
       orbitWith(camera, 0, -rotDelta * sensitivity * rates().trackpadRotateRate, anchors?.orbit);
+      camera.armReleaseMomentum?.("orbit");
     }
 
     const scaleDelta = ge.scale / lastScale;
@@ -96,11 +97,14 @@ export function attachSafariGestures(
     if (Math.abs(factor - 1) > 0.001) {
       const sensitivity = options.getSettings?.().sensitivity.trackpad.zoom ?? 1;
       zoomWith(camera, Math.pow(factor, sensitivity * rates().trackpadGestureZoomExponent), anchors?.zoom);
+      camera.armReleaseMomentum?.("zoom");
     }
   }
 
   function onGestureEnd(e: Event): void {
     e.preventDefault();
+    camera.releaseMomentum?.("orbit");
+    camera.releaseMomentum?.("zoom");
     releaseAnchors();
   }
 

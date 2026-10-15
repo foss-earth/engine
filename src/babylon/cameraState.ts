@@ -10,7 +10,7 @@ import {
   type ScreenPickInput,
 } from "./anchorPan.js";
 
-import { DEFAULT_CAMERA_LIMITS, DEFAULT_GROUND_FOLLOW, type CameraLimits, type GroundFollow } from "../camera/cameraLimits.js";
+import { DEFAULT_CAMERA_LIMITS, DEFAULT_EYE_CONTACT, DEFAULT_GROUND_FOLLOW, type CameraLimits, type EyeContact, type GroundFollow } from "../camera/cameraLimits.js";
 import {
   geodeticToEcef,
   ecefToGeodetic,
@@ -21,26 +21,36 @@ import {
   type EcefCoord,
 } from "../camera/cameraMath.js";
 import { add, cross, dot, length, normalize, scale, sub, type Vec3 } from "../camera/geographicFrames.js";
+import { orbitAngles, turnLook } from "../camera/orbitMath.js";
 import { cameraAxes, lineOfSightTarget, orbitAbout, tiltAt, viewDirection, zoomAbout, type CameraPose, type ViewDirection } from "../camera/anchoredMotion.js";
 import type { AnchoredMotionConstraint, AnchoredMotionResult, GlideMotion, NavigationAnchor } from "../input/navigationAnchors.js";
-import type { GlideAnchors } from "../input/inertialCameraController.js";
+import { ORBIT_GLIDE_REST_DEG, type GlideAnchors } from "../input/inertialCameraController.js";
 import { worldViewportHeight } from "../browser/worldViewport.js";
 
 // ─── Camera State Limits ────────────────────────────────────────────
 
 export {
   DEFAULT_CAMERA_LIMITS,
+  DEFAULT_EYE_CONTACT,
   DEFAULT_GROUND_FOLLOW,
   MAX_PITCH_DEG,
   MAX_ZOOM_METERS,
   MIN_PITCH_DEG,
   MIN_ZOOM_METERS,
   type CameraLimits,
+  type EyeContact,
   type GroundFollow,
 } from "../camera/cameraLimits.js";
 const MAX_ORBIT_HEIGHT_SMOOTHING_DELTA_MS = 100;
-/** Orbit steps smaller than this, degrees, are left out: inertia's tail below what can be seen. */
-const ORBIT_DEADZONE_DEG = 0.02;
+/** Penetration, metres, at which eye contact reaches its full acceleration. Shallower pushes are softer. */
+const EYE_CONTACT_SPRING_METERS = 4;
+/** A stalled frame does not integrate a long push. */
+const EYE_CONTACT_MAX_STEP_MS = 100;
+const EYE_CONTACT_FRAME_MS = 1000 / 60;
+/** Upward speed slower than this has stopped, so the runtime can skip another frame. */
+const EYE_CONTACT_REST_MPS = 0.05;
+/** Orbit steps smaller than the glide's rest, degrees. A faster turn coasts until then, on the same decay as a pan or a zoom. */
+const ORBIT_DEADZONE_DEG = ORBIT_GLIDE_REST_DEG;
 /** Babylon keeps the orbit centre this far from the poles, as the sine of its geocentric latitude. */
 const POLE_SINE_LIMIT = 0.998749218;
 /** How near straight down or up, degrees at the eye, one anchored tilt step may turn the look. */
@@ -183,8 +193,15 @@ export class CameraController {
 
   private limits: CameraLimits = DEFAULT_CAMERA_LIMITS;
   private groundFollow: GroundFollow = DEFAULT_GROUND_FOLLOW;
+  /** Experimental. Off, the orbit point follows the ground. On, altitude is a velocity the ground can only push up. */
+  private eyeContact: EyeContact = DEFAULT_EYE_CONTACT;
+  /** Upward speed from eye contact, m/s. Never downward: the ground does not pull. */
+  private verticalVelocityMps = 0;
+  private lastEyeContactMs: number | null = null;
   /** Zoom toward the compass, the centre of the view, instead of the ground anchor. */
   private zoomAboutViewCenter = false;
+  /** A turn keeps the eye where it is. Off, a turn is about the compass. */
+  private orbitInPlace = false;
   /**
    * The nearest the camera may orbit after a view was handed back nearer
    * than the zoom limit, until it is out past the limit; null otherwise.
@@ -272,9 +289,45 @@ export class CameraController {
     return this.groundFollow;
   }
 
+  /**
+   * Experimental eye contact, from the next frame. Turning it off drops the
+   * upward speed and starts ground following again from the height the camera
+   * has now. Tuning it while it is on keeps that speed.
+   */
+  setEyeContact(contact: EyeContact): void {
+    const was = this.eyeContact.enabled;
+    const finite = (value: number, fallback: number): number => (Number.isFinite(value) ? value : fallback);
+    const keep = contact.glideKeepPerFrame;
+    this.eyeContact = {
+      enabled: contact.enabled === true,
+      maxAccelerationMetersPerSecondSquared: Math.max(0, finite(contact.maxAccelerationMetersPerSecondSquared, DEFAULT_EYE_CONTACT.maxAccelerationMetersPerSecondSquared)),
+      clearanceMeters: Math.max(0, finite(contact.clearanceMeters, DEFAULT_EYE_CONTACT.clearanceMeters)),
+      glideKeepPerFrame: Math.min(0.999, Math.max(0, finite(keep, DEFAULT_EYE_CONTACT.glideKeepPerFrame))),
+    };
+    if (!this.eyeContact.enabled) {
+      this.verticalVelocityMps = 0;
+      this.lastEyeContactMs = null;
+      if (was) this.followGroundFromHere();
+      return;
+    }
+    if (!was) {
+      this.verticalVelocityMps = 0;
+      this.lastEyeContactMs = this.ports.nowMs();
+    }
+  }
+
+  getEyeContact(): EyeContact {
+    return this.eyeContact;
+  }
+
   /** Zoom toward the compass instead of the ground point a gesture picked. Turning is unaffected. */
   setZoomAboutViewCenter(enabled: boolean): void {
     this.zoomAboutViewCenter = enabled;
+  }
+
+  /** Turn where the camera is, instead of about the compass. From the next turn. */
+  setOrbitInPlace(enabled: boolean): void {
+    this.orbitInPlace = enabled;
   }
 
   private clampPitchDeg(pitchDeg: number): number {
@@ -378,6 +431,8 @@ export class CameraController {
    * a resting view is not looked up again.
    */
   settleOnGround(surfaceRevision?: number): boolean {
+    // Eye contact replaces this kinematic lift: the eye is pushed only while it is inside the ground.
+    if (this.eyeContact.enabled) return false;
     if (!this.centerFollowsGround || this.resolveSurfaceHeightMeters === null) return false;
     if (this.restingPose && !sameOrbitFields(this.currentFields(), this.restingPose)) {
       this.restingPose = null;
@@ -421,6 +476,50 @@ export class CameraController {
 
   private getCurrentCenterHeightMeters(): number {
     return ecefToGeodetic(this.camera.center.x, this.camera.center.y, this.camera.center.z).altMeters;
+  }
+
+  /**
+   * One step of experimental eye contact. Samples the ground under the eye.
+   * While the eye is inside `clearanceMeters` of that ground, a spring pushes
+   * it up, capped at the contact acceleration. Clear of the ground, the upward
+   * speed slows by `camera.inertiaDecay` and nothing pulls the eye down.
+   * True while the eye is still being pushed or is still coasting, so the
+   * runtime draws another frame. False while Eye contact is off.
+   */
+  stepEyeContact(): boolean {
+    if (!this.eyeContact.enabled) return false;
+    const now = this.ports.nowMs();
+    const previous = this.lastEyeContactMs;
+    this.lastEyeContactMs = now;
+    if (previous === null) return false;
+    const dtMs = Math.max(0, Math.min(EYE_CONTACT_MAX_STEP_MS, now - previous));
+    if (!(dtMs > 0)) return Math.abs(this.verticalVelocityMps) > EYE_CONTACT_REST_MPS;
+
+    const dt = dtMs / 1000;
+    const eye = ecefToGeodetic(...this.poseOf(this.currentFields()).eye);
+    const ground = this.resolveSurfaceHeightMeters?.(eye.latRad * RAD_TO_DEG, eye.lonRad * RAD_TO_DEG);
+    const penetration = typeof ground === "number" ? ground + this.eyeContact.clearanceMeters - eye.altMeters : 0;
+    const maxAccel = this.eyeContact.maxAccelerationMetersPerSecondSquared;
+    const inContact = penetration > 0 && maxAccel > 0;
+    if (inContact) {
+      const stiffness = maxAccel / EYE_CONTACT_SPRING_METERS;
+      const damping = 2 * Math.sqrt(stiffness);
+      const accel = Math.max(-maxAccel, Math.min(maxAccel, stiffness * penetration - damping * this.verticalVelocityMps));
+      this.verticalVelocityMps = Math.max(0, this.verticalVelocityMps + accel * dt);
+    } else {
+      this.verticalVelocityMps *= this.eyeContact.glideKeepPerFrame ** (dtMs / EYE_CONTACT_FRAME_MS);
+      if (Math.abs(this.verticalVelocityMps) < EYE_CONTACT_REST_MPS) this.verticalVelocityMps = 0;
+    }
+    const rise = this.verticalVelocityMps * dt;
+    if (rise >= 1e-4) this.addCenterHeightMeters(rise);
+    return inContact || this.verticalVelocityMps > EYE_CONTACT_REST_MPS;
+  }
+
+  /** Raises the orbit point, and with it the eye, by `meters` along the local up. */
+  private addCenterHeightMeters(meters: number): void {
+    const { latRad, lonRad, altMeters } = ecefToGeodetic(this.camera.center.x, this.camera.center.y, this.camera.center.z);
+    const { x, y, z } = geodeticToEcef(latRad, lonRad, altMeters + meters);
+    this.withoutMeshSweep(() => { this.camera.center = new Vector3(x, y, z); });
   }
 
   /**
@@ -472,10 +571,12 @@ export class CameraController {
     // Field by field, as it always has: Babylon clamps the tilt for the
     // distance the camera is at when the tilt is written. Anchored moves,
     // which change both together, write them as one (`commit`).
-    this.camera.center = new Vector3(fields.center[0], fields.center[1], fields.center[2]);
-    this.camera.yaw = fields.yaw;
-    this.camera.pitch = fields.pitch;
-    this.camera.radius = fields.radius;
+    this.withoutMeshSweep(() => {
+      this.camera.center = new Vector3(fields.center[0], fields.center[1], fields.center[2]);
+      this.camera.yaw = fields.yaw;
+      this.camera.pitch = fields.pitch;
+      this.camera.radius = fields.radius;
+    });
     this.relaxZoomFloor(fields.radius);
   }
 
@@ -495,16 +596,36 @@ export class CameraController {
    * and never sees a mix of the two.
    */
   private commit(fields: OrbitFields): void {
-    const setOrientation = (this.camera as unknown as { _setOrientation?: SetOrientation })._setOrientation;
-    const center = new Vector3(fields.center[0], fields.center[1], fields.center[2]);
-    if (typeof setOrientation === "function") {
-      setOrientation.call(this.camera, fields.yaw, fields.pitch, fields.radius, center);
+    this.withoutMeshSweep(() => {
+      const setOrientation = (this.camera as unknown as { _setOrientation?: SetOrientation })._setOrientation;
+      const center = new Vector3(fields.center[0], fields.center[1], fields.center[2]);
+      if (typeof setOrientation === "function") {
+        setOrientation.call(this.camera, fields.yaw, fields.pitch, fields.radius, center);
+        return;
+      }
+      this.camera.center = center;
+      this.camera.yaw = fields.yaw;
+      this.camera.pitch = fields.pitch;
+      this.camera.radius = fields.radius;
+    });
+  }
+
+  /**
+   * Eye contact is the only vertical response to the mesh, so a pose write
+   * does not also let Babylon's collision sweep slide the eye.
+   */
+  private withoutMeshSweep(write: () => void): void {
+    if (!this.eyeContact.enabled) {
+      write();
       return;
     }
-    this.camera.center = center;
-    this.camera.yaw = fields.yaw;
-    this.camera.pitch = fields.pitch;
-    this.camera.radius = fields.radius;
+    const collisions = this.camera.checkCollisions;
+    this.camera.checkCollisions = false;
+    try {
+      write();
+    } finally {
+      this.camera.checkCollisions = collisions;
+    }
   }
 
   /**
@@ -518,7 +639,8 @@ export class CameraController {
   /**
    * Pan the camera by a screen-space pixel delta.
    * Translates the lat/lon anchor point while preserving heading, pitch, and zoom.
-   * The orbit target follows the ground it moves over at the ground following's speed.
+   * With Eye contact off, the orbit target follows the ground it moves over at the ground following's speed.
+   * With Eye contact on, the altitude stays: the ground can only push the eye up (`stepEyeContact`).
    * @param screenDxPx Positive = right (east when heading=0)
    * @param screenDyPx Positive = down (south when heading=0)
    * @param canvasHeight Canvas height in CSS pixels
@@ -533,6 +655,7 @@ export class CameraController {
    * the ground, or, while a tracked point is the centre, where it is.
    */
   private movedOrbitTargetHeightMeters(latDeg: number, lonDeg: number): number {
+    if (this.eyeContact.enabled) return this.getCurrentCenterHeightMeters();
     return this.centerFollowsGround ? this.followedOrbitTargetHeightMeters(latDeg, lonDeg) : this.getCurrentCenterHeightMeters();
   }
 
@@ -637,7 +760,7 @@ export class CameraController {
       next = add(goal, scale(add(offset, scale(k, dt)), decay));
       grab.velocity = scale(sub(grab.velocity, scale(k, omega * dt)), decay);
     }
-    // The centre moves over the ground: what it gains in height the ground following decides.
+    // The centre moves over the ground: what it gains in height the ground following decides, unless Eye contact keeps the altitude.
     grab.velocity = sub(grab.velocity, scale(up, dot(grab.velocity, up)));
     const stepMeters = length(sub(next, at));
     if (stepMeters > 0) {
@@ -782,10 +905,14 @@ export class CameraController {
    * @param headingDeltaDeg Positive = rotate clockwise (eastward)
    */
   orbitBy(pitchDeltaDeg: number, headingDeltaDeg: number, anchor?: NavigationAnchor | null): void | AnchoredMotionResult {
-    if (anchor?.point) return this.orbitAbout(anchor.point, pitchDeltaDeg, headingDeltaDeg);
+    if (anchor?.point && !this.orbitInPlace) return this.orbitAbout(anchor.point, pitchDeltaDeg, headingDeltaDeg);
     const ep = Math.abs(pitchDeltaDeg) >= ORBIT_DEADZONE_DEG ? pitchDeltaDeg : 0;
     const eh = Math.abs(headingDeltaDeg) >= ORBIT_DEADZONE_DEG ? headingDeltaDeg : 0;
     if (ep === 0 && eh === 0) return;
+    if (this.orbitInPlace) {
+      this.turnWhereItIs(ep, eh);
+      return;
+    }
     const state = this.syncFromCamera();
     this.applyViewState(
       {
@@ -795,6 +922,24 @@ export class CameraController {
       },
       this.movedOrbitTargetHeightMeters(state.latDeg, state.lonDeg),
     );
+  }
+
+  /** A turn about the eye: the compass swings, the eye stays. */
+  private turnWhereItIs(pitchDownDeg: number, headingDeg: number): void {
+    const fields = this.currentFields();
+    const pose = this.poseOf(fields);
+    const turned = turnLook(pose.eye, pose.forward, headingDeg, pitchDownDeg, fields.yaw);
+    const center = add(pose.eye, scale(turned, fields.radius));
+    const place = ecefToGeodetic(center[0], center[1], center[2]);
+    const angles = orbitAngles(center, turned, fields.yaw);
+    const latDeg = place.latRad * RAD_TO_DEG;
+    const lonDeg = ((place.lonRad * RAD_TO_DEG + 180) % 360 + 360) % 360 - 180;
+    this.applyViewState({
+      latDeg, lonDeg,
+      headingDeg: normalizeHeadingDeg(angles.yaw * RAD_TO_DEG),
+      pitchDeg: this.clampPitchDeg(babylonPitchToSurfacePitchDeg(angles.pitch)),
+      zoomMeters: fields.radius,
+    }, place.altMeters);
   }
 
   /**
@@ -812,8 +957,11 @@ export class CameraController {
     const state = this.syncFromCamera();
     const requestedZoomMeters = state.zoomMeters * factor;
 
-    if (requestedZoomMeters >= this.zoomMinMeters() || factor >= 1 || this.orbitTargetOffsetMeters <= 0) {
-      this.setViewState({ zoomMeters: this.clampZoomMeters(requestedZoomMeters) });
+    if (this.eyeContact.enabled || requestedZoomMeters >= this.zoomMinMeters() || factor >= 1 || this.orbitTargetOffsetMeters <= 0) {
+      const zoomMeters = this.clampZoomMeters(requestedZoomMeters);
+      // Zoom changes distance. It does not drop or lift the camera onto the ground under it.
+      if (this.eyeContact.enabled) this.applyViewState({ ...state, zoomMeters }, this.getCurrentCenterHeightMeters());
+      else this.setViewState({ zoomMeters });
       return;
     }
 

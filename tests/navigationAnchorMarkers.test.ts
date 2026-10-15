@@ -17,7 +17,7 @@ function mount() {
 }
 
 const marker = (extra: Partial<NavigationAnchorMarkerView> = {}): NavigationAnchorMarkerView =>
-  ({ x: 300, y: 200, zoom: true, orbit: false, grab: false, pinned: false, occluded: false, ...extra });
+  ({ x: 300, y: 200, zoom: true, orbit: false, grab: false, held: true, zoomHeld: true, pinned: false, occluded: false, ...extra });
 
 describe("navigation anchor markers", () => {
   it("adds a hidden group beside the canvas that takes no pointer input", () => {
@@ -104,6 +104,23 @@ describe("navigation anchor markers", () => {
     expect(first!.firstChild).not.toBe(redrawn);
     expect(first!.getAttribute("aria-label")).toBe("Grabbed point");
     expect(second!.style.display).toBe("none");
+  });
+
+  it("keeps a held grab in the anchor colour, and draws a gliding one in the coast colour", () => {
+    const { markers, svgs } = mount();
+    markers.show([marker({ zoom: false, grab: true, held: true })]);
+    const svg = svgs()[0]!;
+    expect(svg.style.color).toBe("");
+    expect(svg.getAttribute("aria-label")).toBe("Grabbed point");
+    markers.show([marker({ zoom: false, grab: true, held: false })]);
+    expect(svg.style.color).toBe("var(--foss-earth-navigation-anchor-coast-color,#a3a3a3)");
+    expect(svg.getAttribute("aria-label")).toBe("Grabbed point, gliding");
+    markers.show([marker({ zoom: true, grab: false, zoomHeld: true })]);
+    expect(svg.style.color).toBe("");
+    expect(svg.getAttribute("aria-label")).toBe("Zoom point");
+    markers.show([marker({ zoom: true, grab: false, zoomHeld: false })]);
+    expect(svg.style.color).toBe("var(--foss-earth-navigation-anchor-coast-color,#a3a3a3)");
+    expect(svg.getAttribute("aria-label")).toBe("Zoom point, gliding");
   });
 
   it("removes its group on destroy", () => {

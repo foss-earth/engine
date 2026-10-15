@@ -1,6 +1,7 @@
 import type { RenderScheduler } from "@foss-earth/renderer";
 import type { EcefCoord } from "../camera/cameraMath.js";
 import { createInertialCameraController, DEFAULT_INERTIA_DECAY_PER_FRAME, type InertialCameraController } from "../input/inertialCameraController.js";
+import { trackpadMomentumFraction } from "../input/trackpadMomentum.js";
 import type { NavigationAnchor } from "../input/navigationAnchors.js";
 import type { CameraController } from "./cameraState.js";
 import type { NavigationAnchorService } from "./navigationAnchorService.js";
@@ -13,6 +14,10 @@ export interface GlobeInertiaPorts {
   anchors?: Pick<NavigationAnchorService, "acquire" | "hold" | "release" | "isCurrent">;
   /** How long a grabbed point takes to catch up with the pointer, ms (`camera.grabFollowMs`); 0 or none: at once. */
   grabFollowMs?(): number;
+  /** `camera.unifiedInertia`. Off, every push is at strength 1. */
+  unified?(): boolean;
+  /** `camera.panForce`, `camera.orbitForce` and `camera.zoomForce`. They scale a push; they do not change where it acts. */
+  forces?(): { pan: number; orbit: number; zoom: number };
 }
 /** A pan glide slower than this, in pixels a frame, has stopped: the same rest as the inertial controller. */
 const PAN_REST_PX = 0.01;
@@ -22,16 +27,38 @@ const MAX_STEP_MS = 100;
 /** The inertial pan's cap for one 60 Hz frame. A grab's fling is capped the same way, then kept as a speed. */
 const MAX_PAN_PX_PER_FRAME = 80;
 
-/** The grab's release, in screen pixels per second, so a faster display does not fling it further. */
+/**
+ * The grab's release, in screen pixels per second, so a faster display does not
+ * fling it further. `releaseX` and `releaseY` are that speed at the moment of
+ * letting go: the feed holds the glide there, then shrinks it.
+ */
 interface GrabGlide {
   x: number;
   y: number;
   height: number;
+  releaseX: number;
+  releaseY: number;
+  startedMs: number;
 }
 
 /** Source request-on-input wrapper; target and renderer are supplied, no animation loop is created. */
 export function createGlobeInertia(controller: CameraController, ports: GlobeInertiaPorts): InertialCameraController<HTMLCanvasElement> {
   const base = createInertialCameraController<HTMLCanvasElement>(controller, ports);
+  let unifiedOn = false;
+  const strength = (kind: "pan" | "orbit" | "zoom"): number => {
+    if (!(ports.unified?.() ?? false)) return 1;
+    const value = ports.forces?.()[kind];
+    return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : value === 0 ? 0 : 1;
+  };
+  /** Flipping the setting lets go of the glide under way, so the two strengths never mix in one coast. */
+  const syncUnified = (): void => {
+    const on = ports.unified?.() ?? false;
+    if (on === unifiedOn) return;
+    base.cancel();
+    grabGlide = null;
+    grabGlideSteppedMs = null;
+    unifiedOn = on;
+  };
   const anchors = ports.anchors;
   // A gesture's anchor from before its context was cleared (the view replaced, navigation leased) is the orbit target's.
   const current = (anchor?: NavigationAnchor | null): NavigationAnchor | null => (anchor && anchors && !anchors.isCurrent(anchor) ? null : anchor ?? null);
@@ -65,7 +92,8 @@ export function createGlobeInertia(controller: CameraController, ports: GlobeIne
     if (!glide) return;
     grabGlide = null;
     grabGlideSteppedMs = null;
-    base.panBy(glide.x / 60, glide.y / 60, glide.height);
+    const scale = strength("pan");
+    base.panBy(glide.x / 60 * scale, glide.y / 60 * scale, glide.height);
   };
   const stepGrab = (nowMs: number): void => {
     if (!controller.isAnchorPanActive()) { grabSteppedMs = null; return; }
@@ -80,20 +108,47 @@ export function createGlobeInertia(controller: CameraController, ports: GlobeIne
     const dtMs = grabGlideSteppedMs === null ? FRAME_MS : Math.max(0, Math.min(MAX_STEP_MS, nowMs - grabGlideSteppedMs));
     grabGlideSteppedMs = nowMs;
     if (dtMs > 0) {
-      controller.panBy(glide.x * dtMs / 1000, glide.y * dtMs / 1000, glide.height);
       const share = decayShare(dtMs);
-      glide.x *= share;
-      glide.y *= share;
+      const fraction = trackpadMomentumFraction(nowMs - glide.startedMs);
+      // Friction is still camera.inertiaDecay. The feed puts back the share it
+      // removed, in the proportion a swipe's later wheel events still have, so
+      // the speed stays what the drag had and then shrinks. Letting go does
+      // not speed the camera up, and the marker is not what slows it.
+      glide.x = glide.x * share + glide.releaseX * (1 - share) * fraction;
+      glide.y = glide.y * share + glide.releaseY * (1 - share) * fraction;
+      controller.panBy(glide.x * dtMs / 1000, glide.y * dtMs / 1000, glide.height);
     }
-    if (Math.hypot(glide.x, glide.y) / 60 <= PAN_REST_PX) {
+    if (trackpadMomentumFraction(nowMs - glide.startedMs) === 0 && Math.hypot(glide.x, glide.y) / 60 <= PAN_REST_PX) {
       grabGlide = null;
       grabGlideSteppedMs = null;
     }
   };
   return {
-    panBy(dx, dy, height) { endRememberedGrab(); foldGrabGlide(); base.panBy(dx, dy, height); ports.renderer.requestRender(); },
-    orbitBy(pitch, heading, anchor) { endRememberedGrab(); base.orbitBy(pitch, heading, current(anchor)); ports.renderer.requestRender(); },
-    zoomBy(factor, anchor) { endRememberedGrab(); base.zoomBy(factor, current(anchor)); ports.renderer.requestRender(); },
+    panBy(dx, dy, height) {
+      endRememberedGrab();
+      foldGrabGlide();
+      syncUnified();
+      const scale = strength("pan");
+      base.panBy(dx * scale, dy * scale, height);
+      ports.renderer.requestRender();
+    },
+    orbitBy(pitch, heading, anchor) {
+      endRememberedGrab();
+      syncUnified();
+      const scale = strength("orbit");
+      base.orbitBy(pitch * scale, heading * scale, current(anchor));
+      ports.renderer.requestRender();
+    },
+    zoomBy(factor, anchor) {
+      endRememberedGrab();
+      syncUnified();
+      const scale = strength("zoom");
+      const pushed = Number.isFinite(factor) && factor > 0 ? factor ** scale : factor;
+      base.zoomBy(pushed, current(anchor));
+      ports.renderer.requestRender();
+    },
+    armReleaseMomentum(channel) { base.armReleaseMomentum(channel); },
+    releaseMomentum(channel) { base.releaseMomentum(channel); ports.renderer.requestRender(); },
     ...(anchors ? {
       acquireAnchors: request => anchors.acquire(request),
       holdAnchors: acquisition => anchors.hold(acquisition),
@@ -112,20 +167,26 @@ export function createGlobeInertia(controller: CameraController, ports: GlobeIne
     panAnchorTo(pick) { const held = controller.panAnchorTo(pick); if (held) ports.renderer.requestRender(); return held; },
     getAnchorPanScreenError: pick => controller.getAnchorPanScreenError(pick),
     endAnchorPan() {
-      // Let go: the speed it had, in pixels per second, glides on and slows by camera.inertiaDecay per 60 Hz frame.
+      // Let go: the speed it had, in pixels per second, keeps being fed for as long as a
+      // swipe's wheel events, shrinking the same way, and camera.inertiaDecay slows it.
       // A press that never moved, or that had already settled, leaves no glide and no marker.
       const fling = controller.endAnchorPan();
       const stepped = grabSteppedMs;
       grabSteppedMs = null;
       if (!fling) { grabbed = null; grabGlide = null; grabGlideSteppedMs = null; return; }
       const cap = (px: number): number => Math.max(-MAX_PAN_PX_PER_FRAME, Math.min(MAX_PAN_PX_PER_FRAME, px));
-      grabGlide = { x: cap(fling.screenDxPx) * 60, y: cap(fling.screenDyPx) * 60, height: fling.canvasHeight };
+      syncUnified();
+      const scale = strength("pan");
+      const x = cap(fling.screenDxPx) * scale * 60;
+      const y = cap(fling.screenDyPx) * scale * 60;
+      grabGlide = { x, y, height: fling.canvasHeight, releaseX: x, releaseY: y, startedMs: ports.nowMs() };
       grabGlideSteppedMs = stepped;
       ports.renderer.requestRender();
     },
     update(nowMs = ports.nowMs()) {
       stepGrab(nowMs);
       stepGrabGlide(nowMs);
+      syncUnified();
       base.update(nowMs);
       // The frame the pan glide comes to rest reports no grabbed point, as a zoom or turn at rest reports no anchor.
       if (grabbed && !controller.isAnchorPanActive() && !grabGlide && !panGliding()) grabbed = null;
@@ -133,7 +194,8 @@ export function createGlobeInertia(controller: CameraController, ports: GlobeIne
     cancelInertial() { base.cancel(); grabGlide = null; grabGlideSteppedMs = null; endRememberedGrab(); },
     cancel() { base.cancel(); controller.cancelAnchorPan(); grabSteppedMs = null; grabGlide = null; grabGlideSteppedMs = null; grabbed = null; },
     isActive: () => base.isActive() || controller.isAnchorPanMoving() || grabGlide !== null,
-    anchors: () => (grabbed ? { ...base.anchors(), pan: grabbed } : base.anchors()),
+    // The point stays for the glide. panHeld is the finger: once it is up, the marker is only showing where the grab was.
+    anchors: () => (grabbed ? { ...base.anchors(), pan: grabbed, panHeld: controller.isAnchorPanActive() } : base.anchors()),
     motion() {
       const current = base.motion();
       if (!grabGlide) return current;

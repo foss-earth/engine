@@ -351,6 +351,7 @@ describe("createGlobeInertia grab pan", () => {
         f.advance(FRAME_MS);
         inertia.update(f.now());
         expect(inertia.anchors().pan).toEqual(grabbed);
+        expect(inertia.anchors().panHeld).toBe(true);
       }
     };
     try {
@@ -365,6 +366,7 @@ describe("createGlobeInertia grab pan", () => {
       sweep(dragged);
       inertia.endAnchorPan!();
       expect(inertia.isActive()).toBe(true);
+      expect(inertia.anchors().panHeld).toBe(false);
       expect(inertia.anchors().pan).toEqual(dragged);
       f.advance(FRAME_MS); inertia.update(f.now());
       expect(inertia.anchors().pan).toEqual(dragged);
@@ -418,6 +420,37 @@ describe("createGlobeInertia grab pan", () => {
       inertia.endAnchorPan!();
       expect(inertia.anchors().pan).toBeUndefined();
       expect(inertia.isActive()).toBe(false);
+    } finally { f.dispose(); }
+  });
+
+  it("keeps feeding a released grab for about as long as a swipe's wheel events", () => {
+    const view = VIEWS[0];
+    const f = rig(view);
+    const inertia = createGlobeInertia(f.controller, { nowMs: f.now, decayPerFrame: () => 0.82, renderer: { requestRender: vi.fn() }, grabFollowMs: () => 0 });
+    try {
+      inertia.beginAnchorPan!(f.pick(300, 500));
+      let x = 300;
+      for (let i = 0; i < 20; i += 1) {
+        x += 8;
+        inertia.panAnchorTo!(f.pick(x, 500));
+        f.advance(FRAME_MS);
+        inertia.update(f.now());
+      }
+      const atRelease = f.camera.center.clone();
+      expect(inertia.anchors().panHeld).toBe(true);
+      expect(f.controller.isAnchorPanActive()).toBe(true);
+      inertia.endAnchorPan!();
+      // The finger is up, so the grab no longer holds the camera. The point stays for the glide.
+      expect(f.controller.isAnchorPanActive()).toBe(false);
+      expect(inertia.anchors().panHeld).toBe(false);
+      expect(inertia.anchors().pan).toBeDefined();
+      // Forty-two frames is about 700 ms. Decay alone, 0.82^42, would have stopped it.
+      for (let i = 0; i < 42; i += 1) { f.advance(FRAME_MS); inertia.update(f.now()); }
+      expect(inertia.isActive()).toBe(true);
+      expect(f.camera.center.subtract(atRelease).length()).toBeGreaterThan(20);
+      for (let i = 0; i < 200 && inertia.isActive(); i += 1) { f.advance(FRAME_MS); inertia.update(f.now()); }
+      expect(inertia.isActive()).toBe(false);
+      expect(inertia.anchors().pan).toBeUndefined();
     } finally { f.dispose(); }
   });
 

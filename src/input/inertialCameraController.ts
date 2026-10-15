@@ -7,6 +7,8 @@ import {
   type GlideMotion,
   type NavigationAnchor,
 } from "./navigationAnchors.js";
+import { trackpadMomentumFraction } from "./trackpadMomentum.js";
+import { WHEEL_GESTURE_IDLE_MS } from "./wheelGesture.js";
 
 export interface AnchorPanPick<TCanvas = unknown> {
   clientX: number;
@@ -31,6 +33,16 @@ export interface GlideAnchors {
    * the pan it set going still glides. Absent when nothing is grabbed.
    */
   readonly pan?: Readonly<EcefCoord> | null;
+  /**
+   * True while the finger still holds that ground. False while the point only
+   * stays up for the glide: the marker is not pulling the camera.
+   */
+  readonly panHeld?: boolean;
+  /**
+   * True while a zoom's own events are still arriving. False while its point
+   * only stays up for the glide.
+   */
+  readonly zoomHeld?: boolean;
 }
 
 export interface CameraInputTarget<TCanvas = unknown> {
@@ -60,6 +72,13 @@ export interface CameraInputTarget<TCanvas = unknown> {
    * Null when it cannot be written so.
    */
   rebaseMotion?(motion: GlideMotion, anchors: GlideAnchors): GlideMotion | null;
+  /**
+   * This orbit, zoom or pointer pan will not keep arriving from the trackpad
+   * after the fingers lift. A swipe is not armed: the trackpad already feeds it.
+   */
+  armReleaseMomentum?(channel: "orbit" | "zoom" | "pan"): void;
+  /** The armed gesture's fingers have lifted. A pinch can omit this; its events stopping is the lift. */
+  releaseMomentum?(channel: "orbit" | "zoom" | "pan"): void;
   /** Stop inertial velocity without ending an active anchor-pan grab. */
   cancelInertial?(): void;
   cancel?(): void;
@@ -83,6 +102,8 @@ export interface InertialCameraController<TCanvas = unknown> extends CameraInput
    * velocity and the look's turn, as when following a point begins or ends.
    */
   rebaseTo(anchors: GlideAnchors): void;
+  armReleaseMomentum(channel: "orbit" | "zoom" | "pan"): void;
+  releaseMomentum(channel: "orbit" | "zoom" | "pan"): void;
 }
 
 /** Turns `target` about `anchor`, or as a target from before anchors is called, without one. */
@@ -103,8 +124,14 @@ export const GRAB_FOLLOW_ID = "camera.grabFollowMs";
 /** Its default, ms. 0 holds the ground on the pointer; a longer time is the spring that trails it. */
 export const DEFAULT_GRAB_FOLLOW_MS = 0;
 const STOP_EPSILON_PX = 0.01;
-const STOP_EPSILON_DEG = 0.002;
+/** A turn slower than this, degrees a frame, has settled. The same multiple of a pan's or a zoom's rest takes the same number of frames. */
+export const ORBIT_GLIDE_REST_DEG = 0.002;
+const STOP_EPSILON_DEG = ORBIT_GLIDE_REST_DEG;
 const STOP_EPSILON_ZOOM_LOG = 0.00005;
+/** Recent input kept for the release rate of a turn or a pinch. */
+const MOMENTUM_WINDOW_MS = 120;
+/** A pinch this quiet has ended. Shorter than a trackpad event gap, so a live pinch is not cut in two. */
+const PINCH_RELEASE_GAP_MS = 48;
 const MAX_PAN_DELTA_PER_FRAME_PX = 80;
 const MAX_ORBIT_DELTA_PER_FRAME_DEG = 12;
 /** The most a 60 Hz frame of glide may zoom, as a natural log of the distance. */
@@ -121,9 +148,13 @@ export interface InertialCameraOptions {
   decayPerFrame?: () => number;
 }
 
-/** A step a target says it could not take at all: its channel stops, and keeps no anchor. */
+/**
+ * A step a target refused: its channel stops, and keeps no anchor.
+ * A step it did not take and did not refuse, such as a turn below its rest,
+ * leaves the speed to decay with the others.
+ */
 function blocked(result: void | AnchoredMotionResult): boolean {
-  return typeof result === "object" && result !== null && !result.moved;
+  return typeof result === "object" && result !== null && !result.moved && result.constrained !== null;
 }
 
 export function createInertialCameraController<TCanvas = unknown>(target: CameraInputTarget<TCanvas>, options: InertialCameraOptions): InertialCameraController<TCanvas> {
@@ -141,6 +172,19 @@ export function createInertialCameraController<TCanvas = unknown>(target: Camera
   // Each channel's anchor, from the input that set it moving until it settles.
   let orbitAnchor: NavigationAnchor | null = null;
   let zoomAnchor: NavigationAnchor | null = null;
+  // A turn, a pinch or a pointer pan the trackpad will not keep feeding, and the tail that feeds it after the lift.
+  let orbitArmed = false;
+  let zoomArmed = false;
+  let panArmed = false;
+  let recentOrbit: { t: number; pitch: number; heading: number }[] = [];
+  let recentZoom: { t: number; log: number }[] = [];
+  let recentPan: { t: number; x: number; y: number }[] = [];
+  let lastOrbit: { t: number; pitch: number; heading: number } | null = null;
+  let lastZoom: { t: number; log: number } | null = null;
+  let lastPan: { t: number; x: number; y: number } | null = null;
+  let orbitTail: { pitchPerMs: number; headingPerMs: number; startedMs: number } | null = null;
+  let zoomTail: { logPerMs: number; startedMs: number } | null = null;
+  let panTail: { xPerMs: number; yPerMs: number; startedMs: number } | null = null;
 
   const panMoving = (): boolean => Math.abs(panVelocityX) > STOP_EPSILON_PX || Math.abs(panVelocityY) > STOP_EPSILON_PX;
   const orbitMoving = (): boolean => Math.abs(orbitVelocityPitch) > STOP_EPSILON_DEG || Math.abs(orbitVelocityHeading) > STOP_EPSILON_DEG;
@@ -154,6 +198,113 @@ export function createInertialCameraController<TCanvas = unknown>(target: Camera
     zoomLogVelocity = 0;
     orbitAnchor = null;
     zoomAnchor = null;
+    orbitArmed = false;
+    zoomArmed = false;
+    panArmed = false;
+    recentOrbit = [];
+    recentZoom = [];
+    recentPan = [];
+    lastOrbit = null;
+    lastZoom = null;
+    lastPan = null;
+    orbitTail = null;
+    zoomTail = null;
+    panTail = null;
+  }
+
+  function remember<T extends { t: number }>(samples: T[], sample: T, now: number): T[] {
+    const kept = samples.filter(item => item.t >= now - MOMENTUM_WINDOW_MS);
+    kept.push(sample);
+    return kept;
+  }
+
+  function beginOrbitTail(now: number): void {
+    orbitArmed = false;
+    let pitch = 0;
+    let heading = 0;
+    for (const sample of recentOrbit) { pitch += sample.pitch; heading += sample.heading; }
+    const span = recentOrbit.length === 0 ? 0 : Math.max(FRAME_MS, recentOrbit[recentOrbit.length - 1].t - recentOrbit[0].t);
+    recentOrbit = [];
+    if (!(span > 0) || (pitch === 0 && heading === 0)) return;
+    orbitTail = { pitchPerMs: pitch / span, headingPerMs: heading / span, startedMs: now };
+  }
+
+  function beginZoomTail(now: number): void {
+    zoomArmed = false;
+    let log = 0;
+    for (const sample of recentZoom) log += sample.log;
+    const span = recentZoom.length === 0 ? 0 : Math.max(FRAME_MS, recentZoom[recentZoom.length - 1].t - recentZoom[0].t);
+    recentZoom = [];
+    if (!(span > 0) || log === 0) return;
+    zoomTail = { logPerMs: log / span, startedMs: now };
+  }
+
+  function beginPanTail(now: number): void {
+    panArmed = false;
+    let x = 0;
+    let y = 0;
+    for (const sample of recentPan) { x += sample.x; y += sample.y; }
+    const span = recentPan.length === 0 ? 0 : Math.max(FRAME_MS, recentPan[recentPan.length - 1].t - recentPan[0].t);
+    recentPan = [];
+    if (!(span > 0) || (x === 0 && y === 0)) return;
+    panTail = { xPerMs: x / span, yPerMs: y / span, startedMs: now };
+  }
+
+  function armReleaseMomentum(channel: "orbit" | "zoom" | "pan"): void {
+    const now = options.nowMs();
+    if (channel === "orbit") {
+      if (!orbitArmed && lastOrbit && now - lastOrbit.t <= FRAME_MS * 2) recentOrbit = remember(recentOrbit, lastOrbit, now);
+      orbitArmed = true;
+      return;
+    }
+    if (channel === "pan") {
+      if (!panArmed && lastPan && now - lastPan.t <= FRAME_MS * 2) recentPan = remember(recentPan, lastPan, now);
+      panArmed = true;
+      return;
+    }
+    if (!zoomArmed && lastZoom && now - lastZoom.t <= FRAME_MS * 2) recentZoom = remember(recentZoom, lastZoom, now);
+    zoomArmed = true;
+  }
+
+  function releaseMomentum(channel: "orbit" | "zoom" | "pan"): void {
+    const now = options.nowMs();
+    if (channel === "orbit") {
+      if (!orbitArmed) return;
+      beginOrbitTail(now);
+      return;
+    }
+    if (channel === "pan") {
+      if (!panArmed) return;
+      beginPanTail(now);
+      return;
+    }
+    if (!zoomArmed) return;
+    beginZoomTail(now);
+  }
+
+  function feedRelease(now: number, deltaMs: number): void {
+    if (zoomArmed && lastZoom && now - lastZoom.t >= PINCH_RELEASE_GAP_MS) beginZoomTail(now);
+    if (orbitTail) {
+      const fraction = trackpadMomentumFraction(now - orbitTail.startedMs);
+      if (fraction === 0) orbitTail = null;
+      else {
+        orbitVelocityPitch = clamp(orbitVelocityPitch + orbitTail.pitchPerMs * deltaMs * fraction, -MAX_ORBIT_DELTA_PER_FRAME_DEG, MAX_ORBIT_DELTA_PER_FRAME_DEG);
+        orbitVelocityHeading = clamp(orbitVelocityHeading + orbitTail.headingPerMs * deltaMs * fraction, -MAX_ORBIT_DELTA_PER_FRAME_DEG, MAX_ORBIT_DELTA_PER_FRAME_DEG);
+      }
+    }
+    if (zoomTail) {
+      const fraction = trackpadMomentumFraction(now - zoomTail.startedMs);
+      if (fraction === 0) zoomTail = null;
+      else zoomLogVelocity = clamp(zoomLogVelocity + zoomTail.logPerMs * deltaMs * fraction, -MAX_ZOOM_LOG_DELTA_PER_FRAME, MAX_ZOOM_LOG_DELTA_PER_FRAME);
+    }
+    if (panTail) {
+      const fraction = trackpadMomentumFraction(now - panTail.startedMs);
+      if (fraction === 0) panTail = null;
+      else {
+        panVelocityX = clamp(panVelocityX + panTail.xPerMs * deltaMs * fraction, -MAX_PAN_DELTA_PER_FRAME_PX, MAX_PAN_DELTA_PER_FRAME_PX);
+        panVelocityY = clamp(panVelocityY + panTail.yPerMs * deltaMs * fraction, -MAX_PAN_DELTA_PER_FRAME_PX, MAX_PAN_DELTA_PER_FRAME_PX);
+      }
+    }
   }
 
   function motion(): GlideMotion {
@@ -194,6 +345,10 @@ export function createInertialCameraController<TCanvas = unknown>(target: Camera
 
   function panBy(screenDxPx: number, screenDyPx: number, canvasHeight: number): void {
     panCanvasHeight = Math.max(1, canvasHeight);
+    panTail = null;
+    const sample = { t: options.nowMs(), x: screenDxPx, y: screenDyPx };
+    lastPan = sample;
+    if (panArmed) recentPan = remember(recentPan, sample, sample.t);
     panVelocityX = clamp(panVelocityX + screenDxPx, -MAX_PAN_DELTA_PER_FRAME_PX, MAX_PAN_DELTA_PER_FRAME_PX);
     panVelocityY = clamp(panVelocityY + screenDyPx, -MAX_PAN_DELTA_PER_FRAME_PX, MAX_PAN_DELTA_PER_FRAME_PX);
   }
@@ -201,6 +356,10 @@ export function createInertialCameraController<TCanvas = unknown>(target: Camera
   function orbitBy(pitchDeltaDeg: number, headingDeltaDeg: number, anchor: NavigationAnchor | null = null): void {
     if (!sameAnchorPoint(orbitAnchor, anchor)) switchAnchors({ orbit: anchor, zoom: zoomAnchor });
     else orbitAnchor = anchor;
+    orbitTail = null;
+    const sample = { t: options.nowMs(), pitch: pitchDeltaDeg, heading: headingDeltaDeg };
+    lastOrbit = sample;
+    if (orbitArmed) recentOrbit = remember(recentOrbit, sample, sample.t);
     orbitVelocityPitch = clamp(
       orbitVelocityPitch + pitchDeltaDeg,
       -MAX_ORBIT_DELTA_PER_FRAME_DEG,
@@ -219,8 +378,12 @@ export function createInertialCameraController<TCanvas = unknown>(target: Camera
     }
     if (!sameAnchorPoint(zoomAnchor, anchor)) switchAnchors({ orbit: orbitAnchor, zoom: anchor });
     else zoomAnchor = anchor;
+    zoomTail = null;
+    const sample = { t: options.nowMs(), log: Math.log(factor) };
+    lastZoom = sample;
+    if (zoomArmed) recentZoom = remember(recentZoom, sample, sample.t);
     zoomLogVelocity = clamp(
-      zoomLogVelocity + Math.log(factor),
+      zoomLogVelocity + sample.log,
       -MAX_ZOOM_LOG_DELTA_PER_FRAME,
       MAX_ZOOM_LOG_DELTA_PER_FRAME,
     );
@@ -229,6 +392,7 @@ export function createInertialCameraController<TCanvas = unknown>(target: Camera
   function update(nowMs = options.nowMs()): void {
     const deltaMs = lastUpdateMs === null ? FRAME_MS : Math.max(0, Math.min(100, nowMs - lastUpdateMs));
     lastUpdateMs = nowMs;
+    feedRelease(nowMs, deltaMs || FRAME_MS);
 
     // Pan, then orbit, then zoom, once a frame.
     if (panMoving()) {
@@ -263,12 +427,19 @@ export function createInertialCameraController<TCanvas = unknown>(target: Camera
   }
 
   function isActive(): boolean {
-    return panMoving() || orbitMoving() || zoomMoving();
+    return panMoving() || orbitMoving() || zoomMoving() || orbitTail !== null || zoomTail !== null || panTail !== null || zoomArmed;
   }
 
   return {
-    panBy, orbitBy, zoomBy, update, cancel, isActive, motion,
-    anchors: () => ({ orbit: orbitMoving() ? orbitAnchor : null, zoom: zoomMoving() ? zoomAnchor : null }),
+    panBy, orbitBy, zoomBy, update, cancel, isActive, motion, armReleaseMomentum, releaseMomentum,
+    anchors: () => {
+      const now = options.nowMs();
+      const zoom = zoomMoving() ? zoomAnchor : null;
+      // Armed while a pinch is still in the fingers. A wheel zoom stays live for
+      // the gesture's own idle, and a tail means the fingers have already left.
+      const zoomHeld = zoom !== null && (zoomArmed || (zoomTail === null && lastZoom !== null && now - lastZoom.t <= WHEEL_GESTURE_IDLE_MS));
+      return { orbit: orbitMoving() ? orbitAnchor : null, zoom, ...(zoomHeld ? { zoomHeld: true } : {}) };
+    },
     rebaseTo: switchAnchors,
     ...(target.acquireAnchors ? { acquireAnchors: (request: AnchorRequest<TCanvas>) => target.acquireAnchors!(request) } : {}),
     ...(target.holdAnchors ? { holdAnchors: (acquisition: AnchorAcquisition) => target.holdAnchors!(acquisition) } : {}),

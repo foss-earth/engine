@@ -99,6 +99,11 @@ export interface FocusPoint {
 }
 
 /** Levels as the adjustment reports them: "0.5 levels", "1 level". */
+/** A force slider that is missing or not a number pushes at the usual strength. */
+function finiteForce(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 1;
+}
+
 function formatLevels(levels: number): string {
   const rounded = Math.round(levels * 100) / 100;
   return `${rounded} level${rounded === 1 ? "" : "s"}`;
@@ -694,7 +699,12 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
     adoptRasterCoverage();
     refreshCurrentSurface();
     // A view set before the ground under it was known goes onto it now it is; the next frame picks tiles for it there.
-    if (!simMode && !mapsSuspended && cameraController?.settleOnGround(surfaceRevision())) scheduler.requestRender();
+    // Eye contact, when it is on, pushes the eye up instead of copying the ground height.
+    if (!simMode && !mapsSuspended) {
+      const followingGround = cameraController?.settleOnGround(surfaceRevision()) ?? false;
+      const eyeContact = cameraController?.stepEyeContact() ?? false;
+      if (followingGround || eyeContact) scheduler.requestRender();
+    }
     // The host renderer lifecycle has begun this frame before preparing it.
     const deltaSeconds = Math.max(renderer.engine.getDeltaTime() / 1000, 1 / 240);
     simTick?.(deltaSeconds);
@@ -851,7 +861,9 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
     });
     cameraController.setLimits(cameraLimits());
     cameraController.setGroundFollow(groundFollow());
+    cameraController.setEyeContact(cameraSettings.eyeContact());
     cameraController.setZoomAboutViewCenter(zoomAboutViewCenter());
+    cameraController.setOrbitInPlace(settings.get("camera.orbitInPlace") === true);
     const anchors = navigationAnchors = createNavigationAnchorService({
       scene, canvas, getCamera: () => geospatialCamera, getPose: () => cameraController?.getPose() ?? null,
       // Read when a gesture starts, once the runtime is built.
@@ -864,7 +876,13 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
     });
     anchorMarkers = simMode ? null : platform.navigationAnchorMarkers?.(canvas) ?? null;
     inertialCameraController = createGlobeInertia(cameraController, { nowMs: clock.nowMs, decayPerFrame: () => settings.get<number>("camera.inertiaDecay"), renderer: scheduler, anchors,
-      grabFollowMs: () => (settings.has(GRAB_FOLLOW_ID) ? settings.get<number>(GRAB_FOLLOW_ID) : DEFAULT_GRAB_FOLLOW_MS) });
+      grabFollowMs: () => (settings.has(GRAB_FOLLOW_ID) ? settings.get<number>(GRAB_FOLLOW_ID) : DEFAULT_GRAB_FOLLOW_MS),
+      unified: () => settings.get("camera.unifiedInertia") === true,
+      forces: () => ({
+        pan: finiteForce(settings.get("camera.panForce")),
+        orbit: finiteForce(settings.get("camera.orbitForce")),
+        zoom: finiteForce(settings.get("camera.zoomForce")),
+      }) });
     inputController = simMode
       ? null
       : createInputController(canvas, inertialCameraController, { ...platform.input, isOrbitMode: () => orbitModeActive, pointSelection: anchors.selection });
@@ -960,7 +978,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
         // Rotation is the compass, already drawn. A view-centred zoom has no separate point.
         const zoom = zoomAboutViewCenter() ? false : marker.zoom;
         if (!zoom && !marker.grab && !marker.pinned) continue;
-        markers.push({ x: at.x, y: at.y, zoom, orbit: false, grab: marker.grab, pinned: marker.pinned, occluded });
+        markers.push({ x: at.x, y: at.y, zoom, orbit: false, grab: marker.grab, held: marker.held, zoomHeld: zoom && marker.zoomHeld, pinned: marker.pinned, occluded });
       }
     }
     anchorMarkers.show(markers);
@@ -1577,6 +1595,8 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
       scheduler.requestRender();
     })),
     ...["camera.surfaceFollowSpeed", "camera.orbitTargetZoomStep"].map(id => watch(id, () => cameraController?.setGroundFollow(groundFollow()))),
+    ...["camera.eyeContact", "camera.eyeContactAcceleration", "camera.eyeClearance", "camera.inertiaDecay"].map(id => watch(id, () => cameraController?.setEyeContact(cameraSettings.eyeContact()))),
+    watch("camera.orbitInPlace", () => { cameraController?.setOrbitInPlace(settings.get("camera.orbitInPlace") === true); scheduler.requestRender(); }),
     ...Object.values(INPUT_RATE_IDS).map(id => watch(id, () => inputController?.setRates(inputRates()))),
     // The notes under the anchor choices say what each choice last did; the markers follow the switch.
     ...NAVIGATION_ANCHOR_SETTING_IDS.filter(id => settings.has(id)).map(id => watch(id, updateAnchorNotes)),

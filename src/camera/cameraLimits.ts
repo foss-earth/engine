@@ -55,3 +55,28 @@ export const DEFAULT_GROUND_FOLLOW: GroundFollow = Object.freeze({
   zoomStepMeters: 750,
   retryMs: 1500,
 });
+
+/**
+ * Experimental: the eye's altitude is a velocity. The ground pushes up only
+ * while the eye is inside the clearance. `camera.eyeContact`,
+ * `camera.eyeContactAcceleration` and `camera.eyeClearance`. Vertical speed
+ * left after the push slows by `camera.inertiaDecay`.
+ */
+export interface EyeContact {
+  /** Off: the orbit point follows the ground. On: pan, grab and zoom keep altitude. */
+  enabled: boolean;
+  /** The fastest the ground may accelerate the eye upward, m/s². */
+  maxAccelerationMetersPerSecondSquared: number;
+  /** How close the eye may come to the ground under it before the push starts, m. */
+  clearanceMeters: number;
+  /** Share of upward speed kept each 60 Hz frame once the eye is clear of the ground. */
+  glideKeepPerFrame: number;
+}
+
+/** Off, so the orbit point keeps following the ground. 30 m/s² and 2 m are the tunings while it is on. */
+export const DEFAULT_EYE_CONTACT: EyeContact = Object.freeze({
+  enabled: false,
+  maxAccelerationMetersPerSecondSquared: 30,
+  clearanceMeters: 2,
+  glideKeepPerFrame: 0.82,
+});

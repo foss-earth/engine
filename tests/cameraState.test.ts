@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { Vector3 } from "@babylonjs/core";
 import type { GeospatialCamera } from "@babylonjs/core";
 import { DEG_TO_RAD, ecefToGeodetic, geodeticToEcef } from "../src/camera/cameraMath.js";
-import { CameraController, MIN_ZOOM_METERS } from "../src/babylon/cameraState.js";
+import { CameraController, DEFAULT_EYE_CONTACT, MIN_ZOOM_METERS } from "../src/babylon/cameraState.js";
 
 function createCamera(latDeg: number, lonDeg: number, heightMeters: number, radius = 600): GeospatialCamera {
   const center = geodeticToEcef(latDeg * DEG_TO_RAD, lonDeg * DEG_TO_RAD, heightMeters);
@@ -174,6 +174,137 @@ describe("CameraController orbit target height", () => {
     expect(centerHeight(camera)).toBeCloseTo(initialHeight, 1);
   });
 });
+
+describe("CameraController eye contact", () => {
+  function rig(radius = 80) {
+    let now = 0;
+    let surface = 200;
+    const camera = createCamera(44.977753, -93.265011, 0, radius);
+    const controller = new CameraController(camera, { nowMs: () => now, hasPickablePointAt: () => false });
+    controller.configureOrbitTargetHeight({ resolveSurfaceHeightMeters: () => surface });
+    const contact = { ...DEFAULT_EYE_CONTACT, enabled: true };
+    return {
+      camera, controller, contact,
+      get surface() { return surface; },
+      set surface(next: number) { surface = next; },
+      at(ms: number) { now = ms; },
+    };
+  }
+
+  it("keeps its altitude while panning over a hill or a valley", () => {
+    const view = rig();
+    view.controller.setEyeContact(view.contact);
+    const height = centerHeight(view.camera);
+
+    view.surface = 250;
+    view.at(1000);
+    view.controller.panBy(12, 8, 800);
+    view.controller.stepEyeContact();
+    expect(centerHeight(view.camera)).toBeCloseTo(height, 1);
+
+    view.surface = 40;
+    view.at(2000);
+    view.controller.panBy(12, 8, 800);
+    view.controller.stepEyeContact();
+    expect(centerHeight(view.camera)).toBeCloseTo(height, 1);
+  });
+
+  it("still follows the ground across a pan while eye contact is off", () => {
+    const view = rig();
+    const height = centerHeight(view.camera);
+    view.surface = 400;
+    view.at(1000);
+    view.controller.panBy(12, 8, 800);
+    // 160 m/s for the 100 ms a step may cover: toward the hill, not onto it at once.
+    expect(centerHeight(view.camera)).toBeCloseTo(height + 16, 0);
+  });
+
+  it("pushes the eye up while it is inside the ground, by much less than the penetration", () => {
+    const view = rig(50);
+    view.controller.setEyeContact(view.contact);
+    view.surface = 400;
+    const before = centerHeight(view.camera);
+    view.at(100);
+    expect(view.controller.stepEyeContact()).toBe(true);
+    const rose = centerHeight(view.camera) - before;
+    expect(rose).toBeGreaterThan(0.2);
+    expect(rose).toBeLessThan(0.5);
+  });
+
+  it("adds only a small speed for one frame of ground that then disappears", () => {
+    const view = rig(80);
+    view.controller.setEyeContact(view.contact);
+    const before = centerHeight(view.camera);
+    view.surface = 5_000;
+    view.at(16);
+    view.controller.stepEyeContact();
+    view.surface = 0;
+    for (let frame = 0; frame < 30; frame += 1) {
+      view.at(16 + (frame + 1) * 16);
+      view.controller.stepEyeContact();
+    }
+    expect(centerHeight(view.camera) - before).toBeLessThan(0.2);
+  });
+
+  it("does not pull the camera down when the ground falls away", () => {
+    const view = rig();
+    view.controller.setEyeContact(view.contact);
+    const height = centerHeight(view.camera);
+    view.surface = 0;
+    for (let frame = 1; frame <= 10; frame += 1) {
+      view.at(frame * 100);
+      view.controller.stepEyeContact();
+    }
+    expect(centerHeight(view.camera)).toBeCloseTo(height, 2);
+  });
+
+  it("does not snap a resting view onto ground that rose past the eye", () => {
+    const view = rig(200);
+    view.controller.setEyeContact(view.contact);
+    const height = centerHeight(view.camera);
+    view.surface = 1_000;
+    expect(view.controller.settleOnGround(2)).toBe(false);
+    expect(centerHeight(view.camera)).toBeCloseTo(height, 1);
+  });
+
+  it("keeps altitude while zooming, and still places a view set over a point on the ground there", () => {
+    const view = rig();
+    view.controller.setEyeContact(view.contact);
+    const height = centerHeight(view.camera);
+    view.surface = 900;
+    view.controller.zoomBy(0.5);
+    expect(centerHeight(view.camera)).toBeCloseTo(height, 1);
+    expect(view.camera.radius).toBeLessThan(80);
+
+    view.controller.setViewState({ latDeg: 39.7392, lonDeg: -104.9903 });
+    expect(centerHeight(view.camera)).toBeCloseTo(900, 1);
+  });
+
+  it("follows the ground again from where it is once eye contact is turned off", () => {
+    const view = rig();
+    view.controller.setEyeContact(view.contact);
+    view.surface = 400;
+    view.at(1000);
+    view.controller.panBy(12, 8, 800);
+    const held = centerHeight(view.camera);
+    view.at(1000);
+    view.controller.setEyeContact({ ...view.contact, enabled: false });
+    view.at(2000);
+    view.controller.panBy(12, 8, 800);
+    expect(centerHeight(view.camera)).toBeCloseTo(held + 16, 0);
+  });
+
+  it("leaves mesh collision as it found it", () => {
+    const view = rig(50);
+    view.camera.checkCollisions = true;
+    view.controller.setEyeContact(view.contact);
+    view.surface = 400;
+    view.at(100);
+    view.controller.stepEyeContact();
+    expect(view.camera.checkCollisions).toBe(true);
+  });
+});
+
 describe("CameraController after a view handed back nearer than the zoom limit", () => {
   function nearCamera(radius: number): GeospatialCamera {
     return Object.assign(createCamera(44.977753, -93.265011, 0, radius), { limits: { radiusMin: MIN_ZOOM_METERS, radiusMax: 1e8 } });

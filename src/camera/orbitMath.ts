@@ -1,4 +1,5 @@
 /** Globe GeospatialCamera conventions split from the mixed viewer flight module. */
+import { DEG_TO_RAD } from "./cameraMath.js";
 import { add, cross, dot, length, normalize, scale, sub, type Vec3 } from "./geographicFrames.js";
 
 /** The globe camera's basis at `center`: geocentric up, then east and north as Babylon's right-handed globe has them. */
@@ -9,6 +10,12 @@ export function orbitBasis(center: Vec3): { up: Vec3; east: Vec3; north: Vec3 } 
   if (length(east) < 1e-12) east = cross([1, 0, 0], up);
   east = normalize(east);
   return { up, east, north: cross(up, east) };
+}
+
+/** The look after a clockwise heading and a downward tilt, about `origin`. */
+export function turnLook(origin: Vec3, forward: Vec3, headingDeg: number, pitchDownDeg: number, fallbackYaw: number): Vec3 {
+  const angles = orbitAngles(origin, forward, fallbackYaw);
+  return orbitLook(origin, angles.yaw + headingDeg * DEG_TO_RAD, angles.pitch - pitchDownDeg * DEG_TO_RAD);
 }
 
 /** The look direction of orbit angles at `center`. */

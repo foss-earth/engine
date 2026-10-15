@@ -630,13 +630,13 @@ describe("runtime navigation anchors", () => {
       host.settings.set("input.nonPointer.zoomAnchor", "pinned");
       const held = host.service.acquire({ ...nonPointerZoom, hold: true }).zoom!;
       expect(held).toMatchObject({ source: "pinned", fallback: null, point: pin.point });
-      expect(host.service.markerPoints(noGlide)).toEqual([{ point: pin.point, zoom: true, orbit: false, grab: false, pinned: true }]);
+      expect(host.service.markerPoints(noGlide)).toEqual([{ point: pin.point, zoom: true, orbit: false, grab: false, pinned: true, held: false, zoomHeld: true }]);
       host.anchors.subscribe(changed);
 
       host.runtime.setViewState(host.runtime.getViewState()!);
       expect(retire).toHaveBeenCalledOnce(); expect(changed).toHaveBeenCalledOnce();
       expect(host.service.isCurrent(held)).toBe(false);
-      expect(host.service.markerPoints(noGlide)).toEqual([{ point: pin.point, zoom: false, orbit: false, grab: false, pinned: true }]);
+      expect(host.service.markerPoints(noGlide)).toEqual([{ point: pin.point, zoom: false, orbit: false, grab: false, pinned: true, held: false, zoomHeld: false }]);
       expect(host.anchors.status().pin).toBe(pin);
 
       const next = host.service.acquire(nonPointerZoom).zoom!;
@@ -738,7 +738,7 @@ describe("runtime navigation anchors", () => {
       expect(host.settings.get(SHOW_NAVIGATION_ANCHORS_ID)).toBe(true);
       expect(frame(10)).toEqual([]);
       expect(host.anchors.pinTarget()).toBe(true);
-      expect(frame(20)).toEqual([expect.objectContaining({ pinned: true, zoom: false, orbit: false })]);
+      expect(frame(20)).toEqual([expect.objectContaining({ pinned: true, held: false, zoom: false, orbit: false })]);
 
       const requests = host.requestCount();
       host.settings.set(SHOW_NAVIGATION_ANCHORS_ID, false);
@@ -779,7 +779,7 @@ describe("runtime navigation anchors", () => {
       pointer("pointerdown", 400, 360);
       const held = frame(30);
       const grab = held.find(marker => marker.grab && !marker.zoom && !marker.orbit);
-      expect(grab).toEqual(expect.objectContaining({ grab: true, pinned: false }));
+      expect(grab).toEqual(expect.objectContaining({ grab: true, held: true, pinned: false }));
       expect(Math.hypot(grab!.x - 400, grab!.y - 360)).toBeLessThan(2);
       pointer("pointerup", 400, 360);
       for (let at = 50; at < 8000 && frame(at).some(marker => marker.grab); at += 20) { /* the glide, if a still press left any */ }

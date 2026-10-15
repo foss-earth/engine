@@ -40,6 +40,10 @@ export interface AnchorMarkerPoint {
   readonly orbit: boolean;
   /** A grab pan holds this ground, or is still gliding from having held it. */
   readonly grab: boolean;
+  /** The finger is still down. False while this grab only waits out its glide. */
+  readonly held: boolean;
+  /** Zoom events are still arriving. False while this zoom only waits out its glide. */
+  readonly zoomHeld: boolean;
   readonly pinned: boolean;
 }
 
@@ -300,27 +304,32 @@ export function createNavigationAnchorService(ports: NavigationAnchorServicePort
       return () => { listeners.delete(listener); };
     },
     markerPoints(gliding) {
-      const points: { point: Readonly<EcefCoord>; zoom: boolean; orbit: boolean; grab: boolean; pinned: boolean }[] = [];
-      const add = (anchor: NavigationAnchor | null | undefined): void => {
-        if (!anchor?.point || anchor.session < firstCurrentSession) return;
+      const points: { point: Readonly<EcefCoord>; zoom: boolean; orbit: boolean; grab: boolean; held: boolean; zoomHeld: boolean; pinned: boolean }[] = [];
+      const add = (anchor: NavigationAnchor | null | undefined) => {
+        if (!anchor?.point || anchor.session < firstCurrentSession) return null;
         const same = points.find(entry => samePoint(entry.point, anchor.point));
-        const entry = same ?? { point: anchor.point, zoom: false, orbit: false, grab: false, pinned: false };
+        const entry = same ?? { point: anchor.point, zoom: false, orbit: false, grab: false, held: false, zoomHeld: false, pinned: false };
         if (!same) points.push(entry);
         if (anchor.operation === "zoom") entry.zoom = true; else entry.orbit = true;
         if (anchor.source === "pinned") entry.pinned = true;
+        return entry;
       };
-      for (const anchor of held) add(anchor);
+      for (const anchor of held) {
+        const entry = add(anchor);
+        if (entry && anchor.operation === "zoom") entry.zoomHeld = true;
+      }
       add(gliding.orbit);
-      add(gliding.zoom);
+      const zooming = add(gliding.zoom);
+      if (zooming && gliding.zoomHeld) zooming.zoomHeld = true;
       if (gliding.pan) {
         const at = points.find(entry => samePoint(entry.point, gliding.pan));
-        if (at) at.grab = true;
-        else points.push({ point: gliding.pan, zoom: false, orbit: false, grab: true, pinned: false });
+        if (at) { at.grab = true; at.held = gliding.panHeld === true; }
+        else points.push({ point: gliding.pan, zoom: false, orbit: false, grab: true, held: gliding.panHeld === true, zoomHeld: false, pinned: false });
       }
       if (pin) {
         const at = points.find(entry => samePoint(entry.point, pin!.point));
         if (at) at.pinned = true;
-        else points.push({ point: pin.point, zoom: false, orbit: false, grab: false, pinned: true });
+        else points.push({ point: pin.point, zoom: false, orbit: false, grab: false, held: false, zoomHeld: false, pinned: true });
       }
       return points;
     },

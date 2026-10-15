@@ -230,7 +230,7 @@ describe("candidate, held and released anchors", () => {
     f.service.hold(acquisition);
     expect(f.service.status().last.mouse).toEqual({ zoom: acquisition.zoom, orbit: acquisition.orbit });
     expect(f.changed).toHaveBeenCalledTimes(1);
-    expect(f.service.markerPoints(NO_GLIDE)).toEqual([{ point: acquisition.zoom!.point, zoom: true, orbit: false, grab: false, pinned: false }]);
+    expect(f.service.markerPoints(NO_GLIDE)).toEqual([{ point: acquisition.zoom!.point, zoom: true, orbit: false, grab: false, pinned: false, held: false, zoomHeld: true }]);
     f.service.release(acquisition);
     expect(f.changed).toHaveBeenCalledTimes(2);
     expect(f.service.markerPoints(NO_GLIDE)).toEqual([]);
@@ -246,14 +246,15 @@ describe("candidate, held and released anchors", () => {
     expect(f.service.status().last.mouse).toEqual({});
     expect(f.changed).toHaveBeenCalledTimes(1);
     expect(f.service.markerPoints(NO_GLIDE)).toEqual([]);
-    expect(f.service.markerPoints({ orbit: null, zoom: acquisition.zoom! })).toHaveLength(1);
+    expect(f.service.markerPoints({ orbit: null, zoom: acquisition.zoom!, zoomHeld: true })).toEqual([{ point: acquisition.zoom!.point, zoom: true, orbit: false, grab: false, pinned: false, held: false, zoomHeld: true }]);
+    expect(f.service.markerPoints({ orbit: null, zoom: acquisition.zoom! })).toEqual([{ point: acquisition.zoom!.point, zoom: true, orbit: false, grab: false, pinned: false, held: false, zoomHeld: false }]);
   });
 
   it("holds an acquisition that asks to, and holds no compass target", () => {
     const f = fixture();
     const acquisition = f.service.acquire(mouse({ hold: true }));
     expect(acquisition.orbit).toMatchObject({ source: "target", point: null });
-    expect(f.service.markerPoints(NO_GLIDE)).toEqual([{ point: acquisition.zoom!.point, zoom: true, orbit: false, grab: false, pinned: false }]);
+    expect(f.service.markerPoints(NO_GLIDE)).toEqual([{ point: acquisition.zoom!.point, zoom: true, orbit: false, grab: false, pinned: false, held: false, zoomHeld: true }]);
     f.prefer({ mouse: { zoom: "target" } });
     f.service.release(acquisition);
     f.service.acquire(mouse({ hold: true }));
@@ -285,7 +286,7 @@ describe("retire and reset", () => {
     expect(f.changed).toHaveBeenCalledTimes(1);
     expect(f.service.status()).toMatchObject({ selection: "armed" });
     expect(f.service.status().pin?.point).toEqual(point);
-    expect(f.service.markerPoints({ orbit: before.orbit!, zoom: before.zoom! })).toEqual([{ point, zoom: false, orbit: false, grab: false, pinned: true }]);
+    expect(f.service.markerPoints({ orbit: before.orbit!, zoom: before.zoom! })).toEqual([{ point, zoom: false, orbit: false, grab: false, pinned: true, held: false, zoomHeld: false }]);
     const after = f.service.acquire(mouse());
     expect(f.service.isCurrent(after.zoom!)).toBe(true);
     f.changed.mockClear();
@@ -317,7 +318,7 @@ describe("retire and reset", () => {
     expect(f.service.status().selection).toBe("off");
     expect(f.service.selection.armed()).toBe(false);
     expect(f.service.status().pin?.point).toEqual(point);
-    expect(f.service.markerPoints(NO_GLIDE)).toEqual([{ point, zoom: false, orbit: false, grab: false, pinned: true }]);
+    expect(f.service.markerPoints(NO_GLIDE)).toEqual([{ point, zoom: false, orbit: false, grab: false, pinned: true, held: false, zoomHeld: false }]);
   });
 });
 
@@ -428,7 +429,7 @@ describe("marker points", () => {
     pin(f, point);
     f.prefer({ mouse: { zoom: "pinned" } });
     f.service.acquire(mouse({ hold: true }));
-    expect(f.service.markerPoints(NO_GLIDE)).toEqual([{ point, zoom: true, orbit: false, grab: false, pinned: true }]);
+    expect(f.service.markerPoints(NO_GLIDE)).toEqual([{ point, zoom: true, orbit: false, grab: false, pinned: true, held: false, zoomHeld: true }]);
   });
 
   it("shows separate points, gliding ones, and the pin apart from them", () => {
@@ -439,9 +440,9 @@ describe("marker points", () => {
     const gliding = f.service.acquire({ family: "trackpad", operations: ["zoom"], client: { x: 100, y: 500 } });
     const points = f.service.markerPoints({ orbit: held.orbit!, zoom: gliding.zoom! });
     expect(points).toEqual([
-      { point: held.zoom!.point, zoom: true, orbit: false, grab: false, pinned: false },
-      { point: gliding.zoom!.point, zoom: true, orbit: false, grab: false, pinned: false },
-      { point: pinPoint, zoom: false, orbit: false, grab: false, pinned: true },
+      { point: held.zoom!.point, zoom: true, orbit: false, grab: false, pinned: false, held: false, zoomHeld: true },
+      { point: gliding.zoom!.point, zoom: true, orbit: false, grab: false, pinned: false, held: false, zoomHeld: false },
+      { point: pinPoint, zoom: false, orbit: false, grab: false, pinned: true, held: false, zoomHeld: false },
     ]);
   });
 
@@ -451,13 +452,17 @@ describe("marker points", () => {
     pin(f, point);
     const elsewhere = geodeticToEcef(44.01 * DEG_TO_RAD, -93.02 * DEG_TO_RAD, 0);
     expect(f.service.markerPoints({ orbit: null, zoom: null, pan: elsewhere })).toEqual([
-      { point: elsewhere, zoom: false, orbit: false, grab: true, pinned: false },
-      { point, zoom: false, orbit: false, grab: false, pinned: true },
+      { point: elsewhere, zoom: false, orbit: false, grab: true, pinned: false, held: false, zoomHeld: false },
+      { point, zoom: false, orbit: false, grab: false, pinned: true, held: false, zoomHeld: false },
+    ]);
+    expect(f.service.markerPoints({ orbit: null, zoom: null, pan: elsewhere, panHeld: true })).toEqual([
+      { point: elsewhere, zoom: false, orbit: false, grab: true, pinned: false, held: true, zoomHeld: false },
+      { point, zoom: false, orbit: false, grab: false, pinned: true, held: false, zoomHeld: false },
     ]);
     expect(f.service.markerPoints({ orbit: null, zoom: null, pan: point })).toEqual([
-      { point, zoom: false, orbit: false, grab: true, pinned: true },
+      { point, zoom: false, orbit: false, grab: true, pinned: true, held: false, zoomHeld: false },
     ]);
-    expect(f.service.markerPoints(NO_GLIDE)).toEqual([{ point, zoom: false, orbit: false, grab: false, pinned: true }]);
+    expect(f.service.markerPoints(NO_GLIDE)).toEqual([{ point, zoom: false, orbit: false, grab: false, pinned: true, held: false, zoomHeld: false }]);
   });
 });
 

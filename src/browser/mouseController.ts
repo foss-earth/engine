@@ -231,6 +231,8 @@ export function attachMouseController(
       const sensitivity = options.getSettings?.().sensitivity.mouse.pan ?? 1;
       const rate = rates().mousePanRate * sensitivity;
       camera.panBy(-dx * rate, -dy * rate, worldViewportHeight(canvas));
+      // A click-drag is not a swipe: the trackpad will not keep sending it.
+      camera.armReleaseMomentum?.("pan");
     } else {
       // The press is a drag now: its anchor is in use.
       if (orbitAnchors && !orbitAnchorsHeld) {
@@ -245,6 +247,8 @@ export function attachMouseController(
         dx * rates().mouseOrbitDegPerPx * sensitivity,
         orbitAnchors?.orbit,
       );
+      // A button drag is not a swipe: the trackpad will not keep sending it.
+      camera.armReleaseMomentum?.("orbit");
     }
   }
 
@@ -269,6 +273,8 @@ export function attachMouseController(
       anchorPanDebugOverlay.hide();
     }
     releaseOrbitAnchors();
+    camera.releaseMomentum?.("orbit");
+    camera.releaseMomentum?.("pan");
     isDragging = false;
     activeButton = null;
     pressPointerId = null;

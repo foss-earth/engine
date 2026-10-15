@@ -147,8 +147,15 @@ export function attachTouchController(
    * A one-finger pan that ends lets go of the ground it grabbed, as a pair lands or the finger lifts.
    */
   function setSession(next: Session): void {
-    if (session?.kind === "transform" && session !== next && session.anchors) camera.releaseAnchors?.(session.anchors);
-    if (session?.kind === "pan" && session !== next && session.anchorPanActive) camera.endAnchorPan?.();
+    if (session?.kind === "transform" && session !== next) {
+      camera.releaseMomentum?.("orbit");
+      camera.releaseMomentum?.("zoom");
+      if (session.anchors) camera.releaseAnchors?.(session.anchors);
+    }
+    if (session?.kind === "pan" && session !== next) {
+      if (session.anchorPanActive) camera.endAnchorPan?.();
+      camera.releaseMomentum?.("pan");
+    }
     session = next;
   }
 
@@ -300,6 +307,8 @@ export function attachTouchController(
       -dy * sensitivity * rates().touchPanRate,
       worldViewportHeight(canvas),
     );
+    // A one-finger drag is not a swipe: the trackpad will not keep sending it.
+    camera.armReleaseMomentum?.("pan");
   }
 
   function applyTransform(touches: TouchList, timestamp: number): void {
@@ -375,6 +384,7 @@ export function attachTouchController(
         dCx * rates().touchOrbitDegPerPx * sensitivity,
         session.anchors?.orbit,
       );
+      camera.armReleaseMomentum?.("orbit");
     }
     if (session.zoomActive && Math.abs(clampedLogScaleStep) > 0.0001) {
       // zoomBy is multiplicative; factor < 1 zooms in, > 1 zooms out.
@@ -383,6 +393,7 @@ export function attachTouchController(
       const sensitivity = options.getSettings?.().sensitivity.touch.zoom ?? 1;
       const factor = 1 / clampedScaleStep;
       zoomWith(camera, Math.pow(factor, sensitivity * rates().touchZoomExponent), session.anchors?.zoom);
+      camera.armReleaseMomentum?.("zoom");
     }
 
     session.previousCentroid = c;
