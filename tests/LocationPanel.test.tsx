@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { LocationPanel } from "../fixtures/composition/locationPanelHost.js";
+import type { DeviceLocationFix, DeviceLocationPort } from "../src/location/deviceLocation.js";
 
 beforeEach(() => {
   const values = new Map<string, string>();
@@ -121,6 +122,89 @@ it("keeps Location usable when device storage is denied", async () => {
     await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Go to location"]')!.click());
     expect(apply).toHaveBeenCalledExactlyOnceWith({ latDeg: 45, lonDeg: 0 });
   } finally { await act(async () => root.unmount()); }
+});
+
+function devicePort(): { port: DeviceLocationPort; emit(fix: DeviceLocationFix): void; fail(message: string): void; stop: ReturnType<typeof vi.fn> } {
+  let onFix: (fix: DeviceLocationFix) => void = () => {};
+  let onError: (message: string) => void = () => {};
+  const stop = vi.fn();
+  return {
+    stop,
+    port: { watch(fix, error) { onFix = fix; onError = error; return stop; } },
+    emit(fix) { onFix(fix); },
+    fail(message) { onError(message); },
+  };
+}
+
+it("uses a device fix once, keeps following it, and stops", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const host = document.createElement("div");
+  const root = createRoot(host);
+  const gps = devicePort();
+  const onApply = vi.fn();
+  const onDeviceLocation = vi.fn();
+  await act(async () => root.render(<LocationPanel initialLocation={{ latDeg: 0, lonDeg: 0, zoomMeters: 400 }} onApply={onApply}
+    deviceLocation={gps.port} onDeviceLocation={onDeviceLocation} />));
+  try {
+    const button = () => host.querySelector<HTMLButtonElement>(".foss-earth-location-gps")!;
+    expect(button().getAttribute("aria-label")).toBe("Use device location");
+    await act(async () => button().click());
+    expect(button().getAttribute("aria-pressed")).toBe("true");
+    expect(host.querySelector('[role="status"]')!.textContent).toBe("Waiting for device location…");
+    const fix = { latDeg: 44.97, lonDeg: -93.23, accuracyMeters: 12.2 };
+    await act(async () => gps.emit(fix));
+    expect(onDeviceLocation).toHaveBeenLastCalledWith(fix);
+    expect(onApply).toHaveBeenCalledExactlyOnceWith({ latDeg: 44.97, lonDeg: -93.23 });
+    expect(host.querySelector('[role="status"]')!.textContent).toBe("Showing your position, ±12 m.");
+    await act(async () => gps.emit({ latDeg: 44.98, lonDeg: -93.22, accuracyMeters: 9 }));
+    expect(onApply).toHaveBeenCalledOnce();
+    expect(onDeviceLocation).toHaveBeenLastCalledWith({ latDeg: 44.98, lonDeg: -93.22, accuracyMeters: 9 });
+    await act(async () => button().click());
+    expect(gps.stop).toHaveBeenCalledOnce();
+    expect(onDeviceLocation).toHaveBeenLastCalledWith(null);
+    expect(button().getAttribute("aria-pressed")).toBe("false");
+    expect(host.querySelector('[role="status"]')!.textContent).toBe("");
+  } finally { await act(async () => root.unmount()); }
+});
+
+it("brings a distant view to the device and reports a denied reading", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const host = document.createElement("div");
+  const root = createRoot(host);
+  const gps = devicePort();
+  const onApply = vi.fn();
+  await act(async () => root.render(<LocationPanel initialLocation={{ latDeg: 0, lonDeg: 0 }} onApply={onApply} deviceLocation={gps.port} />));
+  try {
+    await act(async () => host.querySelector<HTMLButtonElement>(".foss-earth-location-gps")!.click());
+    await act(async () => gps.emit({ latDeg: 45, lonDeg: -93, accuracyMeters: 20_400 }));
+    expect(onApply).toHaveBeenCalledExactlyOnceWith({ latDeg: 45, lonDeg: -93, zoomMeters: 1500 });
+    expect(host.querySelector('[role="status"]')!.textContent).toBe("Showing your position, ±20 km.");
+    await act(async () => gps.fail("Location permission was denied."));
+    expect(gps.stop).toHaveBeenCalledOnce();
+    expect(host.querySelector('[role="status"]')!.textContent).toBe("Location permission was denied.");
+    expect(host.querySelector(".foss-earth-location-gps")!.getAttribute("aria-pressed")).toBe("false");
+  } finally { await act(async () => root.unmount()); }
+});
+
+it("says device location is unavailable until a source is supplied, and stops on unmount", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const host = document.createElement("div");
+  let root = createRoot(host);
+  await act(async () => root.render(<LocationPanel initialLocation={{ latDeg: 0, lonDeg: 0 }} onApply={() => {}} />));
+  try {
+    await act(async () => host.querySelector<HTMLButtonElement>(".foss-earth-location-gps")!.click());
+    expect(host.querySelector('[role="status"]')!.textContent).toBe("Device location is unavailable.");
+  } finally { await act(async () => root.unmount()); }
+  const gps = devicePort();
+  const onDeviceLocation = vi.fn();
+  root = createRoot(host);
+  await act(async () => root.render(<LocationPanel initialLocation={{ latDeg: 0, lonDeg: 0 }} onApply={() => {}} deviceLocation={gps.port} onDeviceLocation={onDeviceLocation} />));
+  try {
+    await act(async () => host.querySelector<HTMLButtonElement>(".foss-earth-location-gps")!.click());
+    await act(async () => root.unmount());
+    expect(gps.stop).toHaveBeenCalledOnce();
+    expect(onDeviceLocation).toHaveBeenLastCalledWith(null);
+  } finally { host.replaceChildren(); }
 });
 
 it("keeps coordinates off the Location tab while the readout is showing them", async () => {

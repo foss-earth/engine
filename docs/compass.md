@@ -2,8 +2,9 @@
 
 Two drawings share one control, Interface → Compass (`visualization.compass.mode`). Horizon is the
 default. Legacy is the compass on the ground. There is no off position: one of them is always
-drawn. The toolbar's north button is neither of them. It resets heading and pitch on its own, and
-it stays in the bar when the view is fitted.
+drawn. The toolbar's north button is neither of them. On the globe it resets heading to north and
+pitch to look down. Inside a spherical image it turns that view to face north, level, and
+leaves the globe camera alone. It stays in the bar when the view is fitted.
 
 `visualization.compass.heightOffset` is still Controls → Camera. It moves the orbit target, which
 is the point the camera turns about, whether or not the ground compass is the drawing on screen.

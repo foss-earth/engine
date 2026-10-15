@@ -24,6 +24,19 @@ function boxOf(element: Element): CssBox | null {
   return { x: rect.left, y: rect.top, width: rect.width, height: rect.height };
 }
 
+/**
+ * The toolbar's items, which are opaque only while the windows and the
+ * toolbar are flush with the screen's edges (`data-world-edges="flush"`).
+ */
+export const FLUSH_TOOLBAR_COVERS = ".hud-bar :is(.hud-chip, .hud-circle-button)";
+
+/** Shown on the page: an item the toolbar keeps measurable but hidden covers nothing. */
+function shown(element: Element): boolean {
+  const check = (element as Element & { checkVisibility?: (options?: { visibilityProperty?: boolean }) => boolean }).checkVisibility;
+  if (typeof check === "function") return check.call(element, { visibilityProperty: true });
+  return !element.closest("[data-hud-overflow-hidden], [hidden]");
+}
+
 /** The world's part of the canvas, on the page. */
 function worldBoxOf(canvas: HTMLCanvasElement): CssBox | null {
   if (!boxOf(canvas)) return null;
@@ -34,8 +47,8 @@ function worldBoxOf(canvas: HTMLCanvasElement): CssBox | null {
 
 /**
  * Opaque windows and the floating log over the world, in the clip space of
- * the world's viewport. In the split presentation the world is only the
- * uncovered area, so nothing covers it.
+ * the world's viewport, and the toolbar's items while they are flush. In the
+ * split presentation the world is only the uncovered area, so nothing covers it.
  */
 export function coveredWorldClips(canvas: HTMLCanvasElement): ClipRect[] {
   const doc = canvas.ownerDocument;
@@ -45,6 +58,9 @@ export function coveredWorldClips(canvas: HTMLCanvasElement): ClipRect[] {
   const elements = [...doc.querySelectorAll("[data-occlude-world]")];
   const log = doc.querySelector("#app-log");
   if (log && !log.closest("[data-occlude-world]")) elements.push(log);
+  if (doc.documentElement.dataset.worldEdges === "flush") {
+    for (const item of doc.querySelectorAll(FLUSH_TOOLBAR_COVERS)) if (shown(item)) elements.push(item);
+  }
   const clips: ClipRect[] = [];
   for (const element of elements) {
     const box = boxOf(element);

@@ -5,6 +5,7 @@ import { LocationSearchResults } from "./LocationSearchResults.js";
 import { type LatitudeHemisphere, type LocationDraftStore, type LongitudeHemisphere } from "../locationDraft.js";
 import { createLocationResults, restoreLocationResults, snapshotLocationResults, updateLocationResult, type LocationResultNode } from "../locationResults.js";
 import type { GeodeticLocation, LocationHostDataCodec, LocationSearchProvider } from "../contracts.js";
+import { deviceLocationView, formatDeviceAccuracy, type DeviceLocationFix, type DeviceLocationPort } from "../deviceLocation.js";
 export type { GeodeticLocation, LocationSearchResult, LocationSearchProvider } from "../contracts.js";
 
 export interface LocationContributionContext {
@@ -55,6 +56,10 @@ export interface LocationPanelProps {
   /** Host subscribes to its existing current-view authority; original refresh cadence was 100 ms. */
   observeLocation(listener: () => void): () => void;
   onApply(location: GeodeticLocation): void;
+  /** Readings from the device showing this page. Without it, the GPS button reports that location is unavailable. */
+  deviceLocation?: DeviceLocationPort;
+  /** A fix while GPS is on, or `null` when it is turned off or fails. The host draws the position. */
+  onDeviceLocation?(fix: DeviceLocationFix | null): void;
   searchProvider?: LocationSearchProvider<AbortSignal>;
   searchAttribution: ReactNode;
   createAbortController(): AbortController;
@@ -68,7 +73,7 @@ export interface LocationPanelProps {
 }
 
 /** Shared location editor; the host owns navigation or simulation commands. */
-export function LocationPanel({ initialLocation, getCurrentLocation, onApply, searchProvider, observeLocation, searchAttribution, createAbortController, draft, hostDataCodec, contribution, showCoordinates = true, altitudeReference: altitudeReferenceProp, onAltitudeReferenceChange }: LocationPanelProps) {
+export function LocationPanel({ initialLocation, getCurrentLocation, onApply, deviceLocation, onDeviceLocation, searchProvider, observeLocation, searchAttribution, createAbortController, draft, hostDataCodec, contribution, showCoordinates = true, altitudeReference: altitudeReferenceProp, onAltitudeReferenceChange }: LocationPanelProps) {
   const [currentLocation, setCurrentLocation] = useState(initialLocation);
   const refreshLocation = useEffectEvent(() => {
     const next = getCurrentLocation?.() ?? initialLocation;
@@ -96,7 +101,25 @@ export function LocationPanel({ initialLocation, getCurrentLocation, onApply, se
   const [results, setResults] = useState(() => restoreLocationResults<AbortSignal>(saved.results ?? [], saved.resultQuery ?? saved.query, searchProvider, hostDataCodec));
   const [message, setMessage] = useState("");
   const request = useRef<AbortController | null>(null);
+  const [gpsOn, setGpsOn] = useState(false);
+  const stopGps = useRef<(() => void) | null>(null);
+  const deviceActive = useRef(false);
+  const centeredOnDevice = useRef(false);
+  const locationRef = useRef(currentLocation);
+  const onApplyRef = useRef(onApply);
+  const onDeviceRef = useRef(onDeviceLocation);
+  locationRef.current = currentLocation;
+  onApplyRef.current = onApply;
+  onDeviceRef.current = onDeviceLocation;
   useEffect(() => () => request.current?.abort(), []);
+  useEffect(() => () => {
+    deviceActive.current = false;
+    const stop = stopGps.current;
+    stopGps.current = null;
+    if (!stop) return;
+    stop();
+    onDeviceRef.current?.(null);
+  }, []);
   useEffect(() => {
     draft.write({ query, lat, lon, altitude, latHemisphere, lonHemisphere, hostData,
       resultQuery, results: snapshotLocationResults(results, hostDataCodec) });
@@ -160,6 +183,67 @@ export function LocationPanel({ initialLocation, getCurrentLocation, onApply, se
     }
   };
 
+  const releaseDevice = (message: string | null) => {
+    if (!deviceActive.current) return;
+    deviceActive.current = false;
+    const stop = stopGps.current;
+    stopGps.current = null;
+    centeredOnDevice.current = false;
+    stop?.();
+    setGpsOn(false);
+    onDeviceRef.current?.(null);
+    setMessage(message ?? "");
+  };
+  const startDevice = () => {
+    if (!deviceLocation) {
+      setMessage("Device location is unavailable.");
+      return;
+    }
+    deviceActive.current = true;
+    centeredOnDevice.current = false;
+    setGpsOn(true);
+    setMessage("Waiting for device location…");
+    let syncFailure: string | null = null;
+    const clear = deviceLocation.watch((fix) => {
+      if (!deviceActive.current) return;
+      try { onDeviceRef.current?.(fix); }
+      catch (error) {
+        syncFailure = error instanceof Error ? error.message : "Unable to show device location.";
+        if (stopGps.current) releaseDevice(syncFailure);
+        return;
+      }
+      if (!deviceActive.current) return;
+      if (!centeredOnDevice.current) {
+        try { onApplyRef.current(deviceLocationView(fix, locationRef.current.zoomMeters)); }
+        catch (error) {
+          setMessage(error instanceof Error ? error.message : "Unable to apply location.");
+          return;
+        }
+        centeredOnDevice.current = true;
+      }
+      const accuracy = formatDeviceAccuracy(fix.accuracyMeters);
+      setMessage(accuracy ? `Showing your position, ±${accuracy}.` : "Showing your position.");
+    }, (message) => {
+      if (!deviceActive.current) return;
+      if (stopGps.current) releaseDevice(message);
+      else syncFailure = message;
+    });
+    if (!deviceActive.current || syncFailure) {
+      deviceActive.current = false;
+      clear();
+      stopGps.current = null;
+      centeredOnDevice.current = false;
+      setGpsOn(false);
+      onDeviceRef.current?.(null);
+      if (syncFailure) setMessage(syncFailure);
+      return;
+    }
+    stopGps.current = clear;
+  };
+  const toggleDevice = () => {
+    if (stopGps.current) releaseDevice(null);
+    else startDevice();
+  };
   const reference = altitudeReferenceProp ?? altitudeReference;
   const chooseReference = (value: AltitudeReferenceChoice) => {
     setAltitudeReference(value);
@@ -186,6 +270,17 @@ export function LocationPanel({ initialLocation, getCurrentLocation, onApply, se
         onChange={(result, patch) => setResults(current => updateLocationResult(current, result, patch))} />
       {results.length > 0 && <p className="foss-earth-location-attribution">{searchAttribution}</p>}
     </form>
+    <button type="button" className="foss-earth-location-gps" aria-pressed={gpsOn}
+      aria-label={gpsOn ? "Stop using device location" : "Use device location"}
+      title={gpsOn ? "Stop using device location" : "Use device location"}
+      onClick={toggleDevice}>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="3" fill="currentColor" stroke="none" />
+        <circle cx="12" cy="12" r="7.2" />
+        <path d="M12 2.5v3M12 18.5V22M2.5 12h3M18.5 12H22" />
+      </svg>
+      GPS
+    </button>
     {showFields || contribution ? <form className="foss-earth-location-coordinates" onSubmit={(event) => {
       event.preventDefault();
       if (contribution) {

@@ -7,18 +7,27 @@ height of the ground under it plus `visualization.compass.heightOffset`. Two pie
   and longitude (cells of 0.002° by default key its cache and retries), and moves the compass toward
   a new height no faster than `camera.surfaceFollowSpeed`, so the compass does not snap between street level and rooftops.
   Where the provider has no height yet, the cell reads as the WGS84 ellipsoid (height 0) until it
-  is asked again after `camera.surfaceRetry`; the compass moves toward that at the same bounded
-  speed.
+  is asked again after `camera.surfaceRetry`, or sooner once the displayed surface changes
+  (`surfaceRevision`); the compass moves toward that at the same bounded speed. `knownHeight` is
+  the same lookup with null in place of that 0.
 - `CameraController` (`src/babylon/cameraState.ts`) moves the orbit target to that height as a pan
-  or an orbit carries it across the ground, at the same bounded speed. While a tracked point is the
-  centre, it does not follow the ground: the tracked point's own height is the target's.
+  or an orbit carries it across the ground, at the same bounded speed. A view set over a point,
+  the starting view or `setViewState` with a latitude or longitude, goes straight onto the ground
+  there. Until something moves it, the runtime keeps its target on the ground the map shows before
+  each frame it draws (`settleOnGround`): 2D map tiles appear flat and then take their terrain, and
+  the view rises with them at `camera.surfaceFollowSpeed` rather than being left under them. Two
+  cases go straight onto the ground instead: a target placed before any ground was known, once it
+  is (even after the view has moved), and ground that came up past the eye, which would otherwise
+  leave the view under it until it caught up. While a tracked point is the centre, it does not
+  follow the ground: the tracked point's own height is the target's.
 
 ## Where the height comes from
 
 The FOSS Earth app's provider is the displayed surface: `options.getSurfaceHeightMeters` when a
 host supplies one, otherwise `runtime.surface.sample(lat, lon)`, the streamed terrain or 3D tiles
 on screen. Because that geometry changes with its level of detail, the app creates the resolver
-with `cacheProviderSamples: false`, so a cell is read again rather than kept from coarser tiles.
+with `cacheProviderSamples: false`, so a cell is read again rather than kept from coarser tiles,
+and gives the camera its `knownHeight`, so ground not loaded yet is not taken for ground at sea level.
 Layers can give precomputed `anchorHeightSamples` in their layer state. A resolver that caches
 uses them in place of its provider; the app's does not cache, so in the app they are not read:
 

@@ -149,6 +149,47 @@
   align-self: stretch;
 }
 
+/*
+ * The rail as the chip's first part: the chip's border and background hold it,
+ * and its hover lights only the provider and credit halves. In the expanded
+ * layout the rail takes the chip's first row.
+ */
+/* Over the chip's 1 px borders, so the rail does not make the chip taller than the bar's buttons. */
+.map-source-hud__chip > .map-detail-control {
+  margin: -1px 2px -1px 6px;
+}
+
+.map-source-hud__chip > .map-detail-control ~ .map-source-hud__provider {
+  border-radius: 0;
+}
+
+.map-source-hud[data-map-hud-layout="expanded"] .map-source-hud__chip:has(> .map-detail-control) {
+  flex-wrap: wrap;
+}
+
+.map-source-hud[data-map-hud-layout="expanded"] .map-source-hud__chip > .map-detail-control {
+  flex: 1 0 100%;
+  margin: 0 6px;
+}
+
+.map-source-hud[data-map-hud-layout="expanded"] .map-source-hud__chip > .map-detail-control ~ .map-source-hud__provider {
+  flex: 1 1 auto;
+  border-radius: 0 0 0 7px;
+}
+
+.map-source-hud[data-map-hud-layout="expanded"] .map-source-hud__chip > .map-detail-control ~ .map-source-hud__credit {
+  border-radius: 0 0 7px 0;
+}
+
+/* Flush with the screen's edges, the parts of the corner meet. */
+html[data-world-edges="flush"] .map-source-hud {
+  gap: 0;
+}
+
+html[data-world-edges="flush"] .map-source-hud :is(.map-source-hud__provider, .map-source-hud__credit) {
+  border-radius: 0;
+}
+
 .map-detail-control {
   --map-detail-loaded-colour: var(--globe-accent-bright, #38bdf8);
   --map-detail-loaded-outline: #061422;

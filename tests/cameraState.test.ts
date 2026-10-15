@@ -79,6 +79,85 @@ describe("CameraController orbit target height", () => {
     expect(centerHeight(camera)).toBeCloseTo(initialHeight, 1);
   });
 
+  it("keeps a view set before its terrain arrived on the ground the map shows until it is moved", () => {
+    let surface: number | null = null, now = 0;
+    const camera = createCamera(44.977753, -93.265011, 0);
+    const controller = new CameraController(camera, { nowMs: () => now, hasPickablePointAt: () => false });
+    controller.configureOrbitTargetHeight({ resolveSurfaceHeightMeters: () => surface, initialOffsetMeters: 3 });
+    expect(centerHeight(camera)).toBeCloseTo(0, 1);
+    expect(controller.settleOnGround(1)).toBe(false);
+
+    // Placed before any ground was known: straight onto the first there is, a tile still flat.
+    surface = 0;
+    expect(controller.settleOnGround(2)).toBe(true);
+    expect(centerHeight(camera)).toBeCloseTo(3, 1);
+    // An unchanged surface is not looked up again.
+    surface = 255;
+    expect(controller.settleOnGround(2)).toBe(false);
+    // Its terrain: at the ground following's speed, a frame at a time.
+    now = 100;
+    expect(controller.settleOnGround(3)).toBe(true);
+    expect(centerHeight(camera)).toBeCloseTo(19, 1);
+    for (let frame = 0; frame < 20; frame++) { now += 100; controller.settleOnGround(3); }
+    expect(centerHeight(camera)).toBeCloseTo(258, 1);
+    expect(controller.settleOnGround(3)).toBe(false);
+    expect(camera.radius).toBe(600);
+
+    // Moved, it is the person's view: the ground under it is followed as they move it, not at rest.
+    controller.orbitBy(0, 5);
+    surface = 300;
+    expect(controller.settleOnGround(4)).toBe(false);
+    expect(centerHeight(camera)).toBeLessThan(270);
+  });
+
+  it("puts a resting target straight onto ground that came up past the eye", () => {
+    let surface = 0;
+    const camera = createCamera(44.977753, -93.265011, 0, 200);
+    const controller = new CameraController(camera, { nowMs: () => performance.now(), hasPickablePointAt: () => false });
+    controller.configureOrbitTargetHeight({ resolveSurfaceHeightMeters: () => surface });
+
+    surface = 255;
+    expect(controller.settleOnGround(2)).toBe(true);
+    expect(centerHeight(camera)).toBeCloseTo(255, 1);
+  });
+
+  it("puts a target placed before any ground was known onto it once, even after the view was moved", () => {
+    let surface: number | null = null;
+    const camera = createCamera(44.977753, -93.265011, 0);
+    const controller = new CameraController(camera, { nowMs: () => performance.now(), hasPickablePointAt: () => false });
+    controller.configureOrbitTargetHeight({ resolveSurfaceHeightMeters: () => surface });
+    controller.orbitBy(0, 5);
+
+    surface = 255;
+    expect(controller.settleOnGround(1)).toBe(true);
+    expect(centerHeight(camera)).toBeCloseTo(255, 1);
+    surface = 300;
+    expect(controller.settleOnGround(2)).toBe(false);
+  });
+
+  it("starts a view set over another point on the ground there", () => {
+    let surface = 255;
+    const camera = createCamera(44.977753, -93.265011, 0);
+    const controller = new CameraController(camera, { nowMs: () => performance.now(), hasPickablePointAt: () => false });
+    controller.configureOrbitTargetHeight({ resolveSurfaceHeightMeters: () => surface });
+
+    surface = 1_609;
+    controller.setViewState({ latDeg: 39.7392, lonDeg: -104.9903 });
+    expect(centerHeight(camera)).toBeCloseTo(1_609, 1);
+  });
+
+  it("leaves a tracked point's height to the point", () => {
+    let surface: number | null = null;
+    const camera = createCamera(44.977753, -93.265011, 0);
+    const controller = new CameraController(camera, { nowMs: () => performance.now(), hasPickablePointAt: () => false });
+    controller.configureOrbitTargetHeight({ resolveSurfaceHeightMeters: () => surface });
+    controller.setCenterFollowsGround(false);
+
+    surface = 255;
+    expect(controller.settleOnGround()).toBe(false);
+    expect(centerHeight(camera)).toBeCloseTo(0, 1);
+  });
+
   it("preserves orbit center height while orbiting", () => {
     let surfaceHeightMeters = 264;
     const camera = createCamera(44.977753, -93.265011, 0, 80);

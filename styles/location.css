@@ -126,6 +126,22 @@
   appearance: none;
 }
 
+.foss-earth-location-gps {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: max-content;
+}
+
+.foss-earth-location-gps svg {
+  display: block;
+}
+
+.foss-earth-location-gps[aria-pressed="true"] {
+  border-color: var(--globe-accent, #60a5fa);
+  background: rgba(66, 133, 244, 0.28);
+}
+
 .foss-earth-location-panel .foss-earth-location-play {
   flex: none;
   border-color: var(--globe-accent, #60a5fa);

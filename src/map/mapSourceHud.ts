@@ -39,7 +39,15 @@ export interface MapSourceHudOptions {
   onProviderClick(): void;
   /** The detail rail, driven by the app's detail controller. Left out, there is none. */
   detail?: MapDetailSliderOptions;
+  /**
+   * Beside puts the rail left of the chip. Inside makes it the chip's first
+   * part, so the bar's corner is one block, as when the windows and the
+   * toolbar are flush with the screen's edges. Beside is the default.
+   */
+  detailPlacement?: MapDetailPlacement;
 }
+
+export type MapDetailPlacement = "beside" | "inside";
 
 export type MapSourceHudStatus = Pick<MapRuntimeStatus, "mode" | "rasterBaseMap" | "lastError" | "displayedRasterBaseMap">;
 
@@ -47,6 +55,8 @@ export interface MapSourceHudHandle {
   element: HTMLElement;
   /** Changes presentation only; retains the controller, rail and resource lifetime. */
   setLayout(layout: MapSourceHudLayout): void;
+  /** Moves the detail rail beside the chip or into it. */
+  setDetailPlacement(placement: MapDetailPlacement): void;
   /** Shows the runtime's provider and refreshes the detail rail. Cheap enough for every frame. */
   update(status: MapSourceHudStatus): void;
   destroy(): void;
@@ -84,7 +94,7 @@ function providerFor(status: MapSourceHudStatus): Provider {
  * halves. The first is one button, the download speed and the basemap's logo
  * and name, that toggles the Map tab; the second links to how the provider
  * asks to be credited. Mount it in the bar's last slot so the bar wraps
- * around it.
+ * around it. The rail can instead be the chip's first part.
  */
 export function createMapSourceHud(container: HTMLElement, options: MapSourceHudOptions): MapSourceHudHandle {
   const document = options.document;
@@ -146,8 +156,13 @@ export function createMapSourceHud(container: HTMLElement, options: MapSourceHud
   if (speed) provider.prepend(speed);
   const detachStreaming = attachTileStreamingActivity(chip, options.activity);
   const detail: MapDetailSliderHandle | null = options.detail ? createMapDetailSlider(options.detail) : null;
-  // The rail sits left of the chip, so the chip ends flush in the corner.
-  if (detail) element.prepend(detail.element);
+  // Either way the rail is left of the basemap, so the chip ends flush in the corner.
+  const setDetailPlacement = (placement: MapDetailPlacement): void => {
+    if (placement !== "beside" && placement !== "inside") throw new RangeError("Unknown detail rail placement.");
+    element.dataset.mapDetailPlacement = placement;
+    if (detail) (placement === "inside" ? chip : element).prepend(detail.element);
+  };
+  setDetailPlacement(options.detailPlacement ?? "beside");
 
   let shown = "";
   const update = (status: MapSourceHudStatus): void => {
@@ -187,6 +202,7 @@ export function createMapSourceHud(container: HTMLElement, options: MapSourceHud
   return {
     element,
     setLayout,
+    setDetailPlacement,
     update,
     destroy(): void {
       provider.removeEventListener("click", options.onProviderClick);

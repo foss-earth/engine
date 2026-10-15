@@ -35,6 +35,7 @@ export * from "./camera/geographicView.js";
 export * from "./location/contracts.js";
 export * from "./location/locationResults.js";
 export * from "./location/locationDraft.js";
+export * from "./location/deviceLocation.js";
 export * from "./camera/orbitView.js";
 export * from "./camera/cameraDefaults.js";
 export * from "./input/globeIntentMotion.js";

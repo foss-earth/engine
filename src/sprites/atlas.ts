@@ -10,16 +10,20 @@ export function drawCircleAtlasCell(
   cellSize: number = DEFAULT_DOT_TEXTURE_SIZE,
 ): void {
   const r = cellSize / 2;
+  const strokeWidth = style.strokeWidth ?? 7;
+  const inset = style.strokeWidth === 0 ? 1 : 5;
   ctx.save();
   ctx.translate(originX, originY);
   ctx.clearRect(0, 0, cellSize, cellSize);
   ctx.beginPath();
-  ctx.arc(r, r, r - 5, 0, Math.PI * 2);
+  ctx.arc(r, r, Math.max(1, r - inset), 0, Math.PI * 2);
   ctx.fillStyle = rgbToCss(style.fill);
   ctx.fill();
-  ctx.lineWidth = 7;
-  ctx.strokeStyle = rgbToCss(style.stroke);
-  ctx.stroke();
+  if (strokeWidth > 0) {
+    ctx.lineWidth = strokeWidth;
+    ctx.strokeStyle = rgbToCss(style.stroke);
+    ctx.stroke();
+  }
   ctx.restore();
 }
 

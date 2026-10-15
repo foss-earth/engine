@@ -50,6 +50,21 @@ describe("createAnchorHeightResolver", () => {
     expect(resolver.getCachedHeight(10, 20)).toBe(456);
   });
 
+  it("knows no height before the ground is found, and looks again as soon as the surface changes", () => {
+    let revision = 1;
+    const provider = vi.fn(() => null as number | null);
+    const resolver = createAnchorHeightResolver({ provider, nowMs: () => 0, providerMissRetryMs: 1000, surfaceRevision: () => revision });
+
+    expect(resolver.knownHeight(10, 20)).toBeNull();
+    expect(resolver.resolveHeight(10, 20)).toBe(0);
+    expect(provider).toHaveBeenCalledTimes(1);
+
+    revision = 2;
+    provider.mockReturnValue(456);
+    expect(resolver.knownHeight(10, 20)).toBe(456);
+    expect(provider).toHaveBeenCalledTimes(2);
+  });
+
   it("slews between cached height targets instead of jumping vertically", () => {
     let nowMs = 0;
     const resolver = createAnchorHeightResolver({

@@ -90,6 +90,12 @@ interface OrbitFields {
   radius: number;
 }
 
+/** The same pose to well under what can be seen: a millimetre, and angles to their rounding. */
+function sameOrbitFields(a: OrbitFields, b: OrbitFields): boolean {
+  return Math.hypot(a.center[0] - b.center[0], a.center[1] - b.center[1], a.center[2] - b.center[2]) < 1e-3
+    && Math.abs(a.yaw - b.yaw) < 1e-9 && Math.abs(a.pitch - b.pitch) < 1e-9 && Math.abs(a.radius - b.radius) < 1e-6;
+}
+
 interface AnchoredPlan {
   fields: OrbitFields | null;
   constrained: AnchoredMotionConstraint | null;
@@ -160,6 +166,18 @@ export class CameraController {
   private orbitTargetOffsetMeters = 0;
   private smoothedSurfaceHeightMeters: number | null = null;
   private lastSurfaceHeightResolveMs: number | null = null;
+  /** The orbit target was placed before the ground under it was known: `settleOnGround` puts it there once it is. */
+  private groundPending = false;
+  /**
+   * Where a view set over a point was left: while the camera is still there,
+   * `settleOnGround` keeps its target on the ground the map shows, which
+   * rises as terrain arrives and refines. Null once anything else moves it.
+   */
+  private restingPose: OrbitFields | null = null;
+  /** The surface the resting target's ground was last looked up on: unchanged, it is not looked up again. */
+  private restingRevision: number | null = null;
+  /** The ground the resting target is on its way to, null once it is there. */
+  private restingGroundMeters: number | null = null;
   /** A grab pan under way: the ground point held, where it was grabbed and where the pointer is, and the centre's velocity. */
   private grab: GrabPan | null = null;
 
@@ -281,6 +299,7 @@ export class CameraController {
     this.smoothedSurfaceHeightMeters = null;
     this.lastSurfaceHeightResolveMs = null;
     this.applyViewState(this.syncFromCamera());
+    this.rest();
   }
 
   private smoothSurfaceHeightMeters(targetHeightMeters: number): number {
@@ -304,9 +323,25 @@ export class CameraController {
     return this.smoothedSurfaceHeightMeters;
   }
 
+  /**
+   * The orbit target's height for a view set over a point: the ground there
+   * and the offset. Before that ground is known the target keeps the height
+   * it has, and `settleOnGround` puts it on the ground once it is.
+   */
   private resolveOrbitTargetHeightMeters(latDeg: number, lonDeg: number): number {
-    const surfaceHeightMeters = this.smoothSurfaceHeightMeters(this.resolveSurfaceHeightMeters?.(latDeg, lonDeg) ?? 0);
-    return surfaceHeightMeters + this.orbitTargetOffsetMeters;
+    const surface = this.resolveSurfaceHeightMeters?.(latDeg, lonDeg);
+    if (this.resolveSurfaceHeightMeters !== null && typeof surface !== "number") {
+      this.groundPending = true;
+      return this.getCurrentCenterHeightMeters();
+    }
+    return this.landedOrbitTargetHeightMeters(surface ?? 0);
+  }
+
+  /** The ground and offset, at the following's speed; straight onto it when the target was placed before the ground was known. */
+  private landedOrbitTargetHeightMeters(surfaceHeightMeters: number): number {
+    if (this.groundPending) this.smoothedSurfaceHeightMeters = null;
+    this.groundPending = false;
+    return this.smoothSurfaceHeightMeters(surfaceHeightMeters) + this.orbitTargetOffsetMeters;
   }
 
   /**
@@ -320,7 +355,68 @@ export class CameraController {
     const current = this.getCurrentCenterHeightMeters() - this.orbitTargetOffsetMeters;
     // Start from where the target is: an anchored move or a handback may have left it off the smoothed height.
     if (this.smoothedSurfaceHeightMeters === null) this.smoothedSurfaceHeightMeters = current;
-    return this.smoothSurfaceHeightMeters(typeof surface === "number" ? surface : current) + this.orbitTargetOffsetMeters;
+    return typeof surface === "number" ? this.landedOrbitTargetHeightMeters(surface) : this.smoothSurfaceHeightMeters(current) + this.orbitTargetOffsetMeters;
+  }
+
+  /** A view set over a point rests where it was left, its target on the ground the map shows there. */
+  private rest(): void {
+    this.restingPose = this.currentFields();
+    this.restingRevision = null;
+    this.restingGroundMeters = null;
+  }
+
+  /**
+   * Keeps the orbit target on the ground the map shows under it, as the map's
+   * tiles arrive flat and take their terrain: the view keeps its turn, tilt
+   * and distance and rises or sinks with the target. A view set over a point
+   * follows its ground this way until something moves it, at the ground
+   * following's speed. A target placed before any ground was known goes
+   * straight onto it once it is, even after the view has moved, and so does
+   * one whose ground came up past the eye. True while the camera moves, so
+   * the runtime draws another frame. The runtime asks before each frame it
+   * draws, with the displayed surface's revision: an unchanged surface under
+   * a resting view is not looked up again.
+   */
+  settleOnGround(surfaceRevision?: number): boolean {
+    if (!this.centerFollowsGround || this.resolveSurfaceHeightMeters === null) return false;
+    if (this.restingPose && !sameOrbitFields(this.currentFields(), this.restingPose)) {
+      this.restingPose = null;
+      this.restingGroundMeters = null;
+    }
+    const lookUp = this.groundPending
+      || (this.restingPose !== null && (surfaceRevision === undefined || surfaceRevision !== this.restingRevision));
+    if (!lookUp && this.restingGroundMeters === null) return false;
+    const fields = this.currentFields();
+    const { latRad, lonRad, altMeters } = ecefToGeodetic(...fields.center);
+    const surface = lookUp ? this.resolveSurfaceHeightMeters(latRad * RAD_TO_DEG, lonRad * RAD_TO_DEG) : null;
+    if (typeof surface === "number") {
+      this.restingRevision = surfaceRevision ?? null;
+      this.restingGroundMeters = surface;
+    }
+    const ground = this.restingGroundMeters;
+    if (ground === null) return false;
+    const eyeMeters = ecefToGeodetic(...this.poseOf(fields).eye).altMeters;
+    let groundMeters = ground;
+    if (this.groundPending || eyeMeters < ground) {
+      this.smoothedSurfaceHeightMeters = ground;
+      this.lastSurfaceHeightResolveMs = this.ports.nowMs();
+    } else {
+      this.smoothedSurfaceHeightMeters = altMeters - this.orbitTargetOffsetMeters;
+      this.lastSurfaceHeightResolveMs ??= this.ports.nowMs();
+      groundMeters = this.smoothSurfaceHeightMeters(ground);
+    }
+    this.groundPending = false;
+    if (groundMeters === ground) this.restingGroundMeters = null;
+    const heightMeters = groundMeters + this.orbitTargetOffsetMeters;
+    if (Math.abs(heightMeters - altMeters) >= 0.01) {
+      const { x, y, z } = geodeticToEcef(latRad, lonRad, heightMeters);
+      // A placement, not a motion: Babylon's collision sweep would hold an eye under the ground there.
+      const collisions = this.camera.checkCollisions;
+      this.camera.checkCollisions = false;
+      try { this.camera.center = new Vector3(x, y, z); } finally { this.camera.checkCollisions = collisions; }
+    }
+    if (this.restingPose) this.restingPose = this.currentFields();
+    return this.restingGroundMeters !== null || Math.abs(heightMeters - altMeters) >= 0.01;
   }
 
   private getCurrentCenterHeightMeters(): number {
@@ -358,7 +454,11 @@ export class CameraController {
    */
   setViewState(partial: Partial<GlobeViewState>): void {
     const next: GlobeViewState = { ...this.syncFromCamera(), ...partial };
+    // A view set over another point starts on the ground there, not from the last point's, and rests on it.
+    const moved = partial.latDeg !== undefined || partial.lonDeg !== undefined;
+    if (moved) this.smoothedSurfaceHeightMeters = null;
     this.applyViewState(next);
+    if (moved) this.rest();
   }
 
   /**
@@ -442,6 +542,9 @@ export class CameraController {
    */
   setCenterFollowsGround(follows: boolean): void {
     this.centerFollowsGround = follows;
+    // The tracked point's height is a known one.
+    this.groundPending = false;
+    this.restingPose = null;
     if (follows) this.followGroundFromHere();
   }
 

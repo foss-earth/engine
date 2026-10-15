@@ -2,13 +2,14 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createExternalLinkIcon } from "@foss-earth/ui/browser";
 import { RASTER_BASE_MAP_SOURCES } from "../src/map/rasterBaseMaps.js";
-import { createMapSourceHud, type MapSourceHudStatus } from "../src/map/mapSourceHud.js";
+import { createMapSourceHud, type MapSourceHudOptions, type MapSourceHudStatus } from "../src/map/mapSourceHud.js";
+import { createMapDetailController } from "../fixtures/composition/mapPanelHost.js";
 
 afterEach(() => document.body.replaceChildren());
 
 const TOPO = RASTER_BASE_MAP_SOURCES.find(source => source.id === "usgs-imagery-topo")!;
 
-function mount() {
+function mount(extra: Partial<MapSourceHudOptions> = {}) {
   const slot = document.createElement("span");
   document.body.append(slot);
   const hud = createMapSourceHud(slot, {
@@ -24,6 +25,7 @@ function mount() {
       isStreamingTiles: () => false, onTilesStreamingChange: () => () => {},
     },
     onProviderClick: () => {},
+    ...extra,
   });
   const provider = slot.querySelector<HTMLButtonElement>(".map-source-hud__provider")!;
   return { hud, provider, label: provider.querySelector(".map-source-label")!, warning: provider.querySelector<HTMLElement>(".map-source-hud__warning")! };
@@ -64,6 +66,26 @@ describe("the map source HUD", () => {
     expect(logo.getAttribute("src")).toContain("4285F4");
     expect(provider.getAttribute("aria-label")).toBe("Basemap: Google 3D Tiles. Show or hide the Map tab");
     expect(provider.textContent).not.toContain("Google");
+    hud.destroy();
+  });
+
+  it("puts the detail rail beside the chip, or inside it before the basemap", () => {
+    const controller = createMapDetailController({ storage: null });
+    const { hud, provider } = mount({ detail: { document, controller } });
+    const chip = provider.parentElement!;
+    const rail = () => hud.element.querySelector(".map-detail-control")!;
+    expect(hud.element.firstElementChild).toBe(rail());
+    expect(rail().nextElementSibling).toBe(chip);
+
+    hud.setDetailPlacement("inside");
+    expect(chip.firstElementChild).toBe(rail());
+    expect(rail().nextElementSibling).toBe(provider);
+    expect(hud.element.dataset.mapDetailPlacement).toBe("inside");
+
+    hud.setDetailPlacement("beside");
+    expect(hud.element.firstElementChild).toBe(rail());
+    expect(chip.contains(rail())).toBe(false);
+    expect(() => hud.setDetailPlacement("above" as never)).toThrow(RangeError);
     hud.destroy();
   });
 });

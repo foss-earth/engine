@@ -34,6 +34,7 @@ function canvasAt(box = { left: 0, top: 0, width: WIDTH, height: HEIGHT }, width
 afterEach(() => {
   document.body.replaceChildren();
   delete document.documentElement.dataset.worldPresentation;
+  delete document.documentElement.dataset.worldEdges;
 });
 
 describe("world viewport source", () => {
@@ -254,5 +255,32 @@ describe("coveredWorldClips", () => {
     panel.getBoundingClientRect = () => ({ left: 0, top: 0, width: 400, height: 400, x: 0, y: 0, right: 400, bottom: 400, toJSON() {} }) as DOMRect;
     document.body.append(panel);
     expect(coveredWorldClips(canvas)).toEqual([]);
+  });
+
+  it("covers the toolbar's shown items only while the edges are flush", () => {
+    const canvas = canvasAt();
+    const bar = document.createElement("div");
+    bar.className = "hud-bar";
+    const at = (left: number) => () => ({ left, top: 572, width: 40, height: 28, x: left, y: 572, right: left + 40, bottom: HEIGHT, toJSON() {} }) as DOMRect;
+    const north = document.createElement("button");
+    north.className = "hud-circle-button";
+    north.getBoundingClientRect = at(0);
+    const status = document.createElement("span");
+    status.className = "hud-chip";
+    status.getBoundingClientRect = at(40);
+    // Kept measurable by the toolbar's fit, but not shown.
+    const omitted = document.createElement("span");
+    omitted.className = "hud-chip";
+    omitted.dataset.hudOverflowHidden = "";
+    omitted.getBoundingClientRect = at(80);
+    bar.append(north, status, omitted);
+    document.body.append(bar);
+    expect(coveredWorldClips(canvas)).toEqual([]);
+    document.documentElement.dataset.worldEdges = "flush";
+    const clips = coveredWorldClips(canvas);
+    expect(clips).toHaveLength(2);
+    expect(clips[0]!.x).toBeCloseTo(-1);
+    expect(clips[0]!.y).toBeCloseTo(-1);
+    expect(clips[1]!.x).toBeCloseTo(-1 + 80 / WIDTH);
   });
 });

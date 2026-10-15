@@ -27,6 +27,8 @@ export interface AnchorHeightResolverOptions {
   providerMissRetryMs?: number;
   /** The host shared monotonic clock, milliseconds. */
   nowMs: () => number;
+  /** The displayed surface's revision: a miss is looked up again as soon as it changes, without waiting for the retry. */
+  surfaceRevision?: () => number;
   /** Optional seed samples for known locations. */
   samples?: AnchorHeightSample[];
 }
@@ -34,6 +36,8 @@ export interface AnchorHeightResolverOptions {
 export interface AnchorHeightResolver {
   resolve(anchor: Vector3 | null): Vector3 | null;
   resolveHeight(latDeg: number, lonDeg: number): number;
+  /** The ground height there, or null before it is known: no fallback. */
+  knownHeight(latDeg: number, lonDeg: number): number | null;
   setSample(sample: AnchorHeightSample): void;
   getCachedHeight(latDeg: number, lonDeg: number): number | null;
   clear(): void;
@@ -73,14 +77,14 @@ export function createAnchorHeightResolver(options: AnchorHeightResolverOptions)
   let maxVerticalSpeedMetersPerSecond = options.maxVerticalSpeedMetersPerSecond ?? DEFAULT_GROUND_FOLLOW.speedMetersPerSecond;
   const nowMs = options.nowMs;
   const heightCache = new Map<string, number>();
-  const missRetryAtByCell = new Map<string, number>();
+  const missRetryByCell = new Map<string, { atMs: number; revision: number | undefined }>();
   let smoothedHeightMeters: number | null = null;
   let lastResolveMs: number | null = null;
 
   function setSample(sample: AnchorHeightSample): void {
     const key = getCellKey(sample.latDeg, sample.lonDeg, cellSizeDeg);
     heightCache.set(key, sample.heightMeters);
-    missRetryAtByCell.delete(key);
+    missRetryByCell.delete(key);
   }
 
   for (const sample of options.samples ?? []) {
@@ -91,7 +95,7 @@ export function createAnchorHeightResolver(options: AnchorHeightResolverOptions)
     return heightCache.get(getCellKey(latDeg, lonDeg, cellSizeDeg)) ?? null;
   }
 
-  function resolveBaseHeight(latDeg: number, lonDeg: number): number {
+  function knownHeight(latDeg: number, lonDeg: number): number | null {
     const key = getCellKey(latDeg, lonDeg, cellSizeDeg);
     const cached = heightCache.get(key);
     if (cached !== undefined && options.cacheProviderSamples !== false) {
@@ -99,23 +103,28 @@ export function createAnchorHeightResolver(options: AnchorHeightResolverOptions)
     }
 
     if (!options.provider) {
-      return fallbackHeightMeters;
+      return null;
     }
 
-    const retryAt = missRetryAtByCell.get(key) ?? 0;
-    if (nowMs() < retryAt) {
-      return fallbackHeightMeters;
+    const revision = options.surfaceRevision?.();
+    const miss = missRetryByCell.get(key);
+    if (miss && nowMs() < miss.atMs && miss.revision === revision) {
+      return null;
     }
 
     const provided = options.provider(latDeg, lonDeg);
     if (provided !== null) {
       if (options.cacheProviderSamples !== false) heightCache.set(key, provided);
-      missRetryAtByCell.delete(key);
+      missRetryByCell.delete(key);
       return provided;
     }
 
-    missRetryAtByCell.set(key, nowMs() + providerMissRetryMs);
-    return fallbackHeightMeters;
+    missRetryByCell.set(key, { atMs: nowMs() + providerMissRetryMs, revision });
+    return null;
+  }
+
+  function resolveBaseHeight(latDeg: number, lonDeg: number): number {
+    return knownHeight(latDeg, lonDeg) ?? fallbackHeightMeters;
   }
 
   function smoothHeight(targetHeightMeters: number): number {
@@ -151,7 +160,7 @@ export function createAnchorHeightResolver(options: AnchorHeightResolverOptions)
 
   function clear(): void {
     heightCache.clear();
-    missRetryAtByCell.clear();
+    missRetryByCell.clear();
     smoothedHeightMeters = null;
     lastResolveMs = null;
     for (const sample of options.samples ?? []) {
@@ -168,7 +177,7 @@ export function createAnchorHeightResolver(options: AnchorHeightResolverOptions)
     providerMissRetryMs = tuning.providerMissRetryMs ?? providerMissRetryMs;
   }
 
-  return { resolve, resolveHeight: resolveBaseHeight, setSample, getCachedHeight, clear, setHeightOffset, setTuning };
+  return { resolve, resolveHeight: resolveBaseHeight, knownHeight, setSample, getCachedHeight, clear, setHeightOffset, setTuning };
 }
 
 export function sampleToAnchor(sample: AnchorHeightSample): Vector3 {

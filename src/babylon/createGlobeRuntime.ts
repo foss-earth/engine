@@ -490,6 +490,8 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
   let requestedRenderPause = false;
   // The maps can call this during initialization, before the query is created.
   let refreshCurrentSurface = (): void => {};
+  /** The displayed surface's revision, once the query exists. */
+  let surfaceRevision = (): number | undefined => undefined;
   let afterSurfaceSettlement: (() => void) | null = null;
   const currentSurfaceChanged = (change: SurfaceOwnerChange): void => {
     if (disposed) return;
@@ -691,6 +693,8 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
     profiler.add("map/raster tiles", started);
     adoptRasterCoverage();
     refreshCurrentSurface();
+    // A view set before the ground under it was known goes onto it now it is; the next frame picks tiles for it there.
+    if (!simMode && !mapsSuspended && cameraController?.settleOnGround(surfaceRevision())) scheduler.requestRender();
     // The host renderer lifecycle has begun this frame before preparing it.
     const deltaSeconds = Math.max(renderer.engine.getDeltaTime() / 1000, 1 / 240);
     simTick?.(deltaSeconds);
@@ -1810,7 +1814,9 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
   const displayedSurface = createCurrentDisplayedSurface(surface, readCurrentSurfaceState);
   // A tile failure that has ended is gone from the state the surface reports.
   refreshCurrentSurface = () => { clearSettledRasterError(); readCurrentSurfaceState(); displayedSurface.refresh(); };
-  authority.own(() => { refreshCurrentSurface = () => {}; displayedSurface.dispose(); });
+  // Current once refreshCurrentSurface has read the state this frame.
+  surfaceRevision = () => displayedRevision;
+  authority.own(() => { refreshCurrentSurface = () => {}; surfaceRevision = () => undefined; displayedSurface.dispose(); });
 
   function prepareTerrain(request: TerrainPreparationOptions): Promise<TerrainPreparationResult> {
     if (disposed) return Promise.reject(platform.abortError("Globe runtime destroyed."));
