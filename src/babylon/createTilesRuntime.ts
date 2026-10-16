@@ -406,7 +406,17 @@ export function createGoogleTilesRuntime(options: GoogleTilesRuntimeOptions): Se
   });
   setupCleanup.push(unsubscribeSettings);
   tiles.fetchOptions.mode = "cors";
-  tiles.fetchOptions.cache = "default";
+  // A reload reuses the browser's copies of models and child tilesets. Their
+  // URLs carry the session the root issued, so the root is revalidated instead
+  // (Google answers 304 for an unchanged dataset, keeping the cached root and
+  // its session) and everything else comes from the cache first. The browser
+  // still owns HTTP storage and no-store.
+  tiles.fetchOptions.cache = "force-cache";
+  // Traverse directly to the requested detail, so cached leaf models draw
+  // without loading every coarse parent first. Experimental in 0.4; compatible
+  // here because nothing splits tiles or shares this cache or its queues, and
+  // traversal still uses the view-error and parse hooks above.
+  tiles.optimizedLoadStrategy = true;
 
   const authPlugin = options.createAuthPlugin({
     apiToken: apiKey,
@@ -418,11 +428,21 @@ export function createGoogleTilesRuntime(options: GoogleTilesRuntimeOptions): Se
   const downloader = authPlugin as GoogleCloudAuthPlugin & {
     fetchData(uri: string, options: RequestInit): Promise<Response>;
   };
+  // A cached session expires while the browser still holds the root that
+  // issued it. Renewal fetches that root with the failed request's options, so
+  // it must skip the cache, or it gets the expired session back and every
+  // uncached model keeps failing.
+  const auth = (authPlugin as { auth?: { refreshToken?: (init: RequestInit) => Promise<unknown> } }).auth;
+  if (auth?.refreshToken) {
+    const refreshToken = auth.refreshToken.bind(auth);
+    auth.refreshToken = init => refreshToken({ ...init, cache: "reload" });
+  }
   const fetchFailures = new Map<string, GoogleTileHttpFailure>();
   const fetchData = downloader.fetchData.bind(downloader);
   downloader.fetchData = (uri, fetchOptions) => work.run(async () => {
     options.recordMapRequest(uri);
-    const response = await fetchData(uri, { ...fetchOptions, signal: options.combineSignals([drawableLifetime.signal, ...(fetchOptions.signal ? [fetchOptions.signal] : [])]) });
+    const cache: RequestCache | undefined = uri === GOOGLE_3D_TILES_ROOT_URL ? "no-cache" : fetchOptions.cache;
+    const response = await fetchData(uri, { ...fetchOptions, cache, signal: options.combineSignals([drawableLifetime.signal, ...(fetchOptions.signal ? [fetchOptions.signal] : [])]) });
     if (response instanceof options.responseRealm.Response && !response.ok) {
       try {
         const pathname = new URL(uri, "https://tile.googleapis.com").pathname;

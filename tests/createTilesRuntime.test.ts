@@ -67,6 +67,24 @@ describe("Google drawable tile publication", () => {
     return { runtime, renderer, tile, model, ready: (index: number) => { ready[index] = true; } };
   };
 
+  it("reuses cached models after a reload, revalidates the root, and renews an expired session from the network", async () => {
+    const fetchData = vi.fn<(uri: string, init: RequestInit) => Promise<Response>>(async () => new Response("{}"));
+    const refreshToken = vi.fn<(init: RequestInit) => Promise<unknown>>(async () => ({}));
+    const plugin = { fetchData, auth: { refreshToken } };
+    const runtime = createGoogleTilesRuntime({ scene: {} as Scene, apiKey: "test", createAuthPlugin: () => plugin as unknown as GoogleCloudAuthPlugin });
+    try {
+      expect(runtime.tiles.optimizedLoadStrategy).toBe(true);
+      const options = runtime.tiles.fetchOptions;
+      expect(options.cache).toBe("force-cache");
+      await plugin.fetchData("https://tile.googleapis.com/v1/3dtiles/root.json", options);
+      await plugin.fetchData("https://tile.googleapis.com/v1/3dtiles/datasets/a/files/b.glb?session=s", options);
+      expect(fetchData.mock.calls.map(([, init]) => init.cache)).toEqual(["no-cache", "force-cache"]);
+      await plugin.auth.refreshToken(options);
+      expect(refreshToken).toHaveBeenCalledWith(expect.objectContaining({ cache: "reload", mode: "cors" }));
+      expect(options.cache).toBe("force-cache");
+    } finally { runtime.dispose(); }
+  });
+
   it("keeps parsing pending until hidden tile meshes can draw, so traversal retains the previous LOD", async () => {
     vi.useFakeTimers();
     const fixture = setup();
