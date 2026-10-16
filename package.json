@@ -91,6 +91,10 @@
       "source": "./src/browser-globe.ts",
       "types": "./dist/browser-globe.d.ts",
       "import": "./dist/browser-globe.js"
+    },
+    "./prepare-heights": {
+      "types": "./scripts/prepare-heights.d.mts",
+      "default": "./scripts/prepare-heights.mjs"
     }
   },
   "files": [
@@ -171,5 +175,8 @@
   },
   "dependencies": {
     "@foss-earth/images": "0.1.0"
+  },
+  "bin": {
+    "foss-earth-prepare-heights": "./scripts/prepare-heights.mjs"
   }
 }

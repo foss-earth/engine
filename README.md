@@ -22,6 +22,7 @@ Root, `/core` and `/imagery` are pure. Everything else is an explicit optional e
 | `/visualization` | Pure source defaults, point math, migrations and horizon culling. |
 | `/visualization-tuners` | Visualization tuner HUD. |
 | `/location-provider` | Location provider and cache. |
+| `/prepare-heights` | Node only, at build time, also as the `foss-earth-prepare-heights` command. Fixed heights above the WGS84 ellipsoid: the top of Google Photorealistic 3D Tiles' finest geometry on the vertical, or USGS 3DEP with GEOID18 where Google can't serve a point, with the reason recorded. Reads `FOSS_EARTH_GOOGLE_KEY`, sends it as a header and keeps no Google responses. |
 | `/input-mode.css`, `/map.css`, `/map-cache.css`, `/location.css`, `/visualization-tuners.css` | Engine-owned styles. Generic cache-section styles belong to [`@foss-earth/ui`](https://github.com/foss-earth/ui). |
 
 Other optional peers: `@foss-earth/renderer`, `@foss-earth/ui`, `@foss-earth/sky` and `3d-tiles-renderer`. Terrain and imagery code uses [`@foss-earth/images`](https://github.com/foss-earth/images). Terrain covers sources, grids, download, selection, refinement and displayed-height queries, plus Google and raster streaming runtimes.
@@ -39,6 +40,8 @@ A displayed geometry coordinate height does not establish a physical terrain dat
 - [Bounded atlas page producer](docs/bounded-atlas-producer.md). It uses the public images acquisition and readback broker and returns explicitly held pages. Managed pages need the optional owned atlas runtime below; legacy void stores are refused before allocation.
 - [Managed atlas runtime](docs/owned-atlas-runtime.md). It uses the renderer's whole-batch admission, completion and retirement with explicit GPU, table and copy grants from the same broker. Transactional tables reserve two physical blocks per logical patch inside the GPU budget.
 - [Retained engine specifications](docs/retained-specifications.md): nine specifications kept with their proposal limits.
+- [Build-time height preparation](docs/height-preparation.md): Google-first fixed heights, the USGS fallback, what a height means and the first real run.
+- [Google tiles across a reload](docs/google-tile-reload.md): which requests use the browser cache, why the root is revalidated and a session renewal skips the cache.
 - [Performance notes](docs/performance-notes.md): where the tour's first view spends its time, what was measured and how, and the rules a speedup must keep.
 
 ## Assets
