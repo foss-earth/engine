@@ -83,6 +83,30 @@ function createGoogleKeyHost(initialKey: string | null = null) {
 }
 
 describe("live Google key activation", () => {
+  it("streams the map behind a see-through panorama without releasing navigation", () => {
+    const update = vi.spyOn(TerrainTilesFixture.prototype, "update");
+    const host = createTerrainHost(() => ({ external: undefined }));
+    const frame = (at: number) => { host.runtime.prepareFrame(at); host.runtime.afterFrame(at); };
+    try {
+      const acquired = host.runtime.acquireNavigation({ owner: "fixture.panorama", inputContext: "viewer" });
+      if (!acquired.ok) throw new Error(acquired.message);
+      update.mockClear();
+      frame(10);
+      expect(update).not.toHaveBeenCalled();
+      host.runtime.setPresentedWorldVisible(true);
+      frame(20);
+      expect(update).toHaveBeenCalled();
+      expect(acquired.lease.released).toBe(false);
+      update.mockClear();
+      host.runtime.setPresentedWorldVisible(false);
+      frame(30);
+      expect(update).not.toHaveBeenCalled();
+      acquired.lease.release("exit");
+      frame(40);
+      expect(update).toHaveBeenCalled();
+    } finally { host.disposeHost(); update.mockRestore(); }
+  });
+
   it("uses a key saved after startup when Google is selected, without replacing the host", () => {
     const host = createGoogleKeyHost();
     const control = createParameterControl(host.settings, "map.source.googleKey", document);

@@ -692,7 +692,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
     adoptGoogleCoverage();
     profiler.add("map/google tiles", started);
     started = profiler.clock();
-    // Frames drawn while a lease holds navigation are not map frames.
+    // Opaque presentations suspend map work; see-through presentations still draw map frames.
     rasterTilesRuntime?.reportFrame(frameNow, frameNow - lastRasterFrameAt, platform.isHidden() || mapsSuspended);
     lastRasterFrameAt = frameNow;
     rasterTilesRuntime?.update();
@@ -701,7 +701,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
     refreshCurrentSurface();
     // A view set before the ground under it was known goes onto it now it is; the next frame picks tiles for it there.
     // Eye contact, when it is on, pushes the eye up instead of copying the ground height.
-    if (!simMode && !mapsSuspended) {
+    if (!simMode && !navigationHeld) {
       const followingGround = cameraController?.settleOnGround(surfaceRevision()) ?? false;
       const eyeContact = cameraController?.stepEyeContact() ?? false;
       if (followingGround || eyeContact) scheduler.requestRender();
@@ -808,9 +808,9 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
   }
 
   let streamingHeld = false;
-  // While a lease holds navigation the maps start nothing, so a load in
-  // progress would hold continuous rendering until the lease ends.
+  // An opaque presentation pauses map loading and its continuous-render holds.
   let mapsSuspended = false;
+  let navigationHeld = false;
   const beginStreaming = (): void => {
     if (streamingHeld || mapsSuspended) return;
     streamingHeld = true;
@@ -962,7 +962,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
   function showAnchorMarkers(): void {
     if (!anchorMarkers) return;
     const camera = geospatialCamera, pose = cameraController?.getPose() ?? null, anchors = navigationAnchors;
-    const shown = !mapsSuspended && (!settings.has(SHOW_NAVIGATION_ANCHORS_ID) || settings.get(SHOW_NAVIGATION_ANCHORS_ID) !== false);
+    const shown = !navigationHeld && (!settings.has(SHOW_NAVIGATION_ANCHORS_ID) || settings.get(SHOW_NAVIGATION_ANCHORS_ID) !== false);
     const markers: NavigationAnchorMarkerView[] = [];
     if (camera && pose && anchors && shown) {
       for (const marker of anchors.markerPoints(inertialCameraController?.anchors() ?? { orbit: null, zoom: null })) {
@@ -1422,32 +1422,20 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
   let streamingBeforeSuspension = false;
   let startupHoldBeforeSuspension = false;
   let intentHandler: { lease: NavigationLease; handler: (frame: ActionIntentFrame) => void } | null = null;
-  const navigation = createNavigationOwner({
-    ...platform.navigation,
-    unavailable: () => (simMode ? "A simulation owns the camera." : geospatialCamera ? null : "The globe camera is not ready."),
-    snapshot: captureNavigationSnapshot,
-    suspend() {
-      inputController?.setSuspended(true);
-      navigationCamera.suspendCamera();
-      // The owner's view is not the globe's: no gesture's anchors or Pick point outlast the lease. The pin does.
-      navigationAnchors?.reset();
-      mapsSuspended = true;
+  // A presentation still owns input/camera while see-through streams the map behind it.
+  function syncMapSuspension(): void {
+    const suspend = navigationHeld && !presentedWorldVisible;
+    if (suspend === mapsSuspended) return;
+    mapsSuspended = suspend;
+    if (suspend) {
       streamingBeforeSuspension = streamingHeld;
       startupHoldBeforeSuspension = startupHeld;
       endStreaming();
       releaseStartupHold();
-      tilesRuntime?.setSuspended(true);
-      rasterTilesRuntime?.setSuspended(true);
-      refreshCurrentSurface();
-    },
-    resume() {
-      intentHandler = null;
-      restoreCameraLimits();
-      mapsSuspended = false;
-      tilesRuntime?.setSuspended(false);
-      rasterTilesRuntime?.setSuspended(false);
-      inputController?.setSuspended(false, navigationCamera.takeInputHandback() ?? undefined);
-      navigationAnchors?.refresh();
+    }
+    tilesRuntime?.setSuspended(suspend);
+    rasterTilesRuntime?.setSuspended(suspend);
+    if (!suspend) {
       // Continue a load the lease interrupted, if it still has work.
       const google = tilesRuntime?.getLoadingState();
       const googlePending = google ? google.queued + google.downloading + google.parsing + google.waitingToParse > 0 : false;
@@ -1459,6 +1447,29 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
       }
       streamingBeforeSuspension = false;
       startupHoldBeforeSuspension = false;
+    }
+    refreshCurrentSurface();
+    scheduler.requestRender();
+  }
+  const navigation = createNavigationOwner({
+    ...platform.navigation,
+    unavailable: () => (simMode ? "A simulation owns the camera." : geospatialCamera ? null : "The globe camera is not ready."),
+    snapshot: captureNavigationSnapshot,
+    suspend() {
+      inputController?.setSuspended(true);
+      navigationCamera.suspendCamera();
+      // The owner's view is not the globe's: no gesture's anchors or Pick point outlast the lease. The pin does.
+      navigationAnchors?.reset();
+      navigationHeld = true;
+      syncMapSuspension();
+    },
+    resume() {
+      intentHandler = null;
+      restoreCameraLimits();
+      navigationHeld = false;
+      syncMapSuspension();
+      inputController?.setSuspended(false, navigationCamera.takeInputHandback() ?? undefined);
+      navigationAnchors?.refresh();
       refreshCurrentSurface();
     },
     present(view) { applyPresentedMask(view); },
@@ -2223,6 +2234,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
     setPresentedWorldVisible(visible: boolean): void {
       if (disposed) return;
       presentedWorldVisible = visible;
+      syncMapSuspension();
       applyPresentedMask(navigation.current()?.getPresentationView() ?? null);
       scheduler.requestRender();
     },
