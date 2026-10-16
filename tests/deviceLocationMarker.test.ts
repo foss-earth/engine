@@ -6,8 +6,9 @@ import {
   accuracySpriteSize, DEVICE_LOCATION_ACCURACY_LIFT_M, DEVICE_LOCATION_ACCURACY_OPACITY, DEVICE_LOCATION_DOT_LIFT_M,
   DEVICE_LOCATION_DOT_PX, screenConstantSpriteSize,
 } from "../src/location/deviceLocation.js";
+import { drawCircleAtlasCell } from "../src/sprites/atlas.js";
 import { createDeviceLocationMarker } from "../src/sprites/deviceLocationMarker.js";
-import { DEFAULT_DOT_TEXTURE_SIZE } from "../src/sprites/types.js";
+import { DEFAULT_DOT_TEXTURE_SIZE, type MarkerStyle } from "../src/sprites/types.js";
 import { canvasRealm } from "../fixtures/composition/canvasRealm.js";
 
 function markerScene() {
@@ -108,5 +109,79 @@ describe("device location marker", () => {
       const distance = Vector3.Distance(camera.globalPosition, dot.position);
       expect(dot.size).toBeCloseTo(screenConstantSpriteSize(distance, camera.fov, engine.getRenderHeight(), DEVICE_LOCATION_DOT_PX), 3);
     } finally { marker.destroy(); scene.dispose(); engine.dispose(); }
+  });
+
+  it("paints an X on the dot when the ground hides it", () => {
+    const { engine, scene, camera, requestRender, device, sprite } = markerScene();
+    const root = new TransformNode("origin", scene);
+    root.position.set(100, -20, 5);
+    camera.position.set(100, -20, 5);
+    let hidden = true;
+    let reach = 0;
+    let eye = { x: Number.NaN, y: Number.NaN, z: Number.NaN };
+    const marker = createDeviceLocationMarker({
+      scene, device, requestRender,
+      getWorldRoot: () => root,
+      sampleSurface: () => ({ point: { x: 10, y: 0, z: 0 }, normal: { x: 1, y: 0, z: 0 } }),
+      raycastSurface: (origin, _direction, length) => {
+        eye = origin;
+        reach = length;
+        return hidden ? { hit: true } : null;
+      },
+    });
+    try {
+      marker.show({ latDeg: 1, lonDeg: 2, accuracyMeters: 8 });
+      const dot = sprite("device-location");
+      expect(dot.cellIndex).toBe(2);
+      expect(eye.x).toBeCloseTo(0, 4);
+      expect(eye.y).toBeCloseTo(0, 4);
+      expect(eye.z).toBeCloseTo(0, 4);
+      expect(reach).toBeCloseTo(10 * 0.995 - 1, 4);
+      expect(reach).toBeLessThan(10);
+      hidden = false;
+      scene.onBeforeRenderObservable.notifyObservers(scene);
+      expect(dot.cellIndex).toBe(1);
+    } finally { marker.destroy(); scene.dispose(); engine.dispose(); }
+  });
+
+  it("keeps the solid dot when a ground query fails", () => {
+    const { engine, scene, requestRender, device, sprite } = markerScene();
+    const marker = createDeviceLocationMarker({
+      scene, device, requestRender,
+      raycastSurface: () => { throw new Error("surface busy"); },
+    });
+    try {
+      marker.show({ latDeg: 44.97, lonDeg: -93.23, accuracyMeters: 12 });
+      expect(sprite("device-location").cellIndex).toBe(1);
+      expect(sprite("device-location").isVisible).toBe(true);
+    } finally { marker.destroy(); scene.dispose(); engine.dispose(); }
+  });
+});
+
+describe("occluded location ink", () => {
+  it("draws the anchor X over the fill and leaves an ordinary disc plain", () => {
+    const record = (): { ctx: CanvasRenderingContext2D; calls: string[] } => {
+      const calls: string[] = [];
+      const ctx = {
+        save: () => calls.push("save"), restore: () => calls.push("restore"), translate() {}, clearRect() {},
+        beginPath: () => calls.push("begin"), arc: () => calls.push("arc"), fill: () => calls.push("fill"),
+        stroke: () => calls.push("stroke"), clip: () => calls.push("clip"),
+        moveTo: () => calls.push("move"), lineTo: () => calls.push("line"),
+        fillStyle: "", strokeStyle: "", lineWidth: 1, lineCap: "",
+      };
+      return { ctx: ctx as unknown as CanvasRenderingContext2D, calls };
+    };
+    const plain = record();
+    drawCircleAtlasCell(plain.ctx, { fill: [66, 133, 244], stroke: [255, 255, 255] }, 0, 0, 64);
+    expect(plain.calls).not.toContain("clip");
+    const hidden = record();
+    const style: MarkerStyle = { fill: [66, 133, 244], stroke: [255, 255, 255], obscuredSizePx: 36 };
+    drawCircleAtlasCell(hidden.ctx, style, 0, 0, 64);
+    expect(hidden.calls).toContain("clip");
+    expect(hidden.calls.filter(call => call === "move").length).toBeGreaterThan(4);
+    const clipAt = hidden.calls.indexOf("clip");
+    const strokeAt = hidden.calls.lastIndexOf("stroke");
+    expect(clipAt).toBeGreaterThan(-1);
+    expect(strokeAt).toBeGreaterThan(clipAt);
   });
 });

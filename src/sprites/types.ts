@@ -5,6 +5,11 @@ export interface MarkerStyle {
   stroke: RgbColor;
   /** Pixel width of the ring. `0` fills the cell with a disc and draws no ring. */
   strokeWidth?: number;
+  /**
+   * Paint the navigation-anchor X over the fill. The number is the cell's size
+   * on screen, so the X keeps the anchors' spacing.
+   */
+  obscuredSizePx?: number;
 }
 
 export const DEFAULT_DOT_TEXTURE_SIZE = 64;
@@ -17,5 +22,6 @@ export function rgbToCss(rgb: RgbColor): string {
 
 export function markerStyleKey(style: MarkerStyle): string {
   const key = `${style.fill.join('-')}_${style.stroke.join('-')}`;
-  return style.strokeWidth === undefined ? key : `${key}_${style.strokeWidth}`;
+  const stroked = style.strokeWidth === undefined ? key : `${key}_${style.strokeWidth}`;
+  return style.obscuredSizePx === undefined ? stroked : `${stroked}_x${style.obscuredSizePx}`;
 }

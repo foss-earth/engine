@@ -40,7 +40,7 @@ export const DEVICE_LOCATION_ARRIVAL_ZOOM_METERS = 1_500;
 export const DEVICE_LOCATION_BLUE: [number, number, number] = [66, 133, 244];
 export const DEVICE_LOCATION_DOT_STROKE: [number, number, number] = [255, 255, 255];
 /** Position dot diameter in screen pixels. It stays this size as the camera moves. */
-export const DEVICE_LOCATION_DOT_PX = 18;
+export const DEVICE_LOCATION_DOT_PX = 36;
 export const DEVICE_LOCATION_ACCURACY_OPACITY = 0.25;
 /** Metres the accuracy disc and the dot sit above the surface so they clear the ground. */
 export const DEVICE_LOCATION_ACCURACY_LIFT_M = 2;
