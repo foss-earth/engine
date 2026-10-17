@@ -72,7 +72,7 @@ function kindOf(marker: NavigationAnchorMarkerView): string {
   return `${marker.zoom ? (marker.zoomHeld ? "Z" : "z") : ""}${marker.orbit ? "o" : ""}${marker.grab ? (marker.held ? "H" : "g") : ""}${marker.pinned ? "p" : ""}${marker.occluded ? "-" : ""}`;
 }
 
-export function attachNavigationAnchorMarkers(canvas: HTMLCanvasElement): NavigationAnchorMarkers {
+export function attachNavigationAnchorMarkers(canvas: HTMLElement): NavigationAnchorMarkers {
   const doc = canvas.ownerDocument;
   const host = canvas.parentElement ?? doc.body;
   const root = doc.createElement("div");
