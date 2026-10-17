@@ -72,6 +72,8 @@ export const NAVIGATION_ANCHOR_SETTING_IDS: readonly string[] = ANCHOR_FAMILIES.
 
 /** Whether markers show the grabbed ground and the points zoom acts about. */
 export const SHOW_NAVIGATION_ANCHORS_ID = "input.showNavigationAnchors";
+/** Whether a faint ball stands at the compass center while the view turns about it. */
+export const SHOW_COMPASS_CENTER_ID = "input.showCompassCenter";
 
 /** Zoom toward the ground anchor (`anchor`) or the compass at the centre of the view (`view`). */
 export const ZOOM_CENTER_ID = "input.zoomCenter";

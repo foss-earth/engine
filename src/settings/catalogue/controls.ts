@@ -5,7 +5,7 @@ import { DEFAULT_TOUCH_TWIST, TOUCH_TWIST_ID, TOUCH_TWIST_THRESHOLD_BOUNDS, TOUC
 import { DEFAULT_GLOBE_INTENT_RATES } from "../../input/globeIntentMotion.js";
 import { DEFAULT_GLOBE_STICK_DEADZONE } from "../../input/gamepadDefaults.js";
 import {
-  DEFAULT_NAVIGATION_ANCHORS, NAVIGATION_ANCHOR_CHOICES, NAVIGATION_ANCHOR_PRESET_VALUES, SHOW_NAVIGATION_ANCHORS_ID, ZOOM_CENTER_ID,
+  DEFAULT_NAVIGATION_ANCHORS, NAVIGATION_ANCHOR_CHOICES, NAVIGATION_ANCHOR_PRESET_VALUES, SHOW_COMPASS_CENTER_ID, SHOW_NAVIGATION_ANCHORS_ID, ZOOM_CENTER_ID,
   navigationAnchorSettingId, type AnchorChoice, type AnchorFamily,
 } from "../../input/navigationAnchors.js";
 import type { ParameterSpec, ParameterUnit, SettingsPreset } from "@foss-earth/ui/settings";
@@ -483,6 +483,27 @@ export const NAVIGATION_ANCHOR_PARAMETERS: readonly ParameterSpec[] = [
     home: { tab: CONTROLS_TAB, section: "orbit", level: "main" },
     appliesLive: true,
     source: "src/browser/navigationAnchorMarkers.ts",
+  },
+];
+
+
+/**
+ * Developer tools, registered only on a page opened with `?dev=1`: a visitor's
+ * settings never list them, and the code they switch on is fetched only when
+ * one is turned on.
+ */
+export const DEV_CONTROLS_PARAMETERS: readonly ParameterSpec[] = [
+  {
+    id: SHOW_COMPASS_CENTER_ID,
+    label: "Show compass center",
+    description: "A developer tool: a faint ball stands in the world at the compass center while the view turns or tilts about it. It fades from the moment the input lets go, and is gone when the turn stops. Buildings and hills in front of it hide it.",
+    unit: "none",
+    kind: "boolean",
+    default: false,
+    defaultReason: "Off: the turn about the middle of the view reads without it, and the compass already shows the heading.",
+    home: { tab: CONTROLS_TAB, section: "orbit", level: "main" },
+    appliesLive: true,
+    source: "src/visualization/compassCenterSphere.ts",
   },
 ];
 

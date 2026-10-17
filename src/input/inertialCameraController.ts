@@ -43,6 +43,13 @@ export interface GlideAnchors {
    * only stays up for the glide.
    */
   readonly zoomHeld?: boolean;
+  /**
+   * Present while the orbit under way turns the view about the compass target:
+   * its anchor is the target itself, not a point of the ground. 1 while the
+   * input still arrives, then the share of that speed the glide has left, so
+   * it falls from the release to 0 as the orbit stops. Absent otherwise.
+   */
+  readonly compass?: number;
 }
 
 export interface CameraInputTarget<TCanvas = unknown> {
@@ -123,6 +130,8 @@ export function zoomWith<TCanvas>(target: CameraInputTarget<TCanvas>, factor: nu
 }
 
 const FRAME_MS = 1000 / 60;
+/** How long after its last event an orbit still counts as held, ms: a few frames, so a pointer between events is. */
+const ORBIT_HELD_MS = 100;
 /** How much velocity a 60 Hz frame keeps: `camera.inertiaDecay`'s default. */
 export const DEFAULT_INERTIA_DECAY_PER_FRAME = 0.82;
 /** `camera.grabFollowMs`: how long a grabbed point takes to catch up with the pointer, as a spring's time constant. */
@@ -193,6 +202,12 @@ export function createInertialCameraController<TCanvas = unknown>(target: Camera
   let panTail: { xPerMs: number; yPerMs: number; startedMs: number } | null = null;
 
   const panMoving = (): boolean => Math.abs(panVelocityX) > STOP_EPSILON_PX || Math.abs(panVelocityY) > STOP_EPSILON_PX;
+  /** The orbit's speed, degrees per frame, when its input last arrived: what the glide after the release is measured against. */
+  let orbitHeldSpeed = 0;
+  /** The share of that speed left since the release, never rising: a release tail's feed can lift the speed a little. */
+  let orbitFade = 1;
+  const orbitHeld = (): boolean => orbitTail === null && lastOrbit !== null && options.nowMs() - lastOrbit.t <= ORBIT_HELD_MS;
+  const orbitSpeed = (): number => Math.hypot(orbitVelocityPitch, orbitVelocityHeading);
   const orbitMoving = (): boolean => Math.abs(orbitVelocityPitch) > STOP_EPSILON_DEG || Math.abs(orbitVelocityHeading) > STOP_EPSILON_DEG;
   const zoomMoving = (): boolean => Math.abs(zoomLogVelocity) > STOP_EPSILON_ZOOM_LOG;
 
@@ -421,12 +436,14 @@ export function createInertialCameraController<TCanvas = unknown>(target: Camera
       }
     }
 
+    if (orbitHeld()) orbitHeldSpeed = orbitSpeed();
     const decay = decayForDeltaTime(deltaMs || FRAME_MS);
     panVelocityX *= decay;
     panVelocityY *= decay;
     orbitVelocityPitch *= decay;
     orbitVelocityHeading *= decay;
     zoomLogVelocity *= decay;
+    orbitFade = orbitHeld() || orbitHeldSpeed <= 0 ? 1 : Math.min(orbitFade, orbitSpeed() / orbitHeldSpeed);
     // A channel at rest lets go of its anchor: the next input acquires afresh.
     if (!orbitMoving()) orbitAnchor = null;
     if (!zoomMoving()) zoomAnchor = null;
@@ -444,7 +461,11 @@ export function createInertialCameraController<TCanvas = unknown>(target: Camera
       // Armed while a pinch is still in the fingers. A wheel zoom stays live for
       // the gesture's own idle, and a tail means the fingers have already left.
       const zoomHeld = zoom !== null && (zoomArmed || (zoomTail === null && lastZoom !== null && now - lastZoom.t <= WHEEL_GESTURE_IDLE_MS));
-      return { orbit: orbitMoving() ? orbitAnchor : null, zoom, ...(zoomHeld ? { zoomHeld: true } : {}) };
+      return {
+        orbit: orbitMoving() ? orbitAnchor : null, zoom, ...(zoomHeld ? { zoomHeld: true } : {}),
+        ...(orbitMoving() && !orbitAnchor?.point
+          ? { compass: orbitHeld() ? 1 : orbitFade } : {}),
+      };
     },
     rebaseTo: switchAnchors,
     ...(target.acquireAnchors ? { acquireAnchors: (request: AnchorRequest<TCanvas>) => target.acquireAnchors!(request) } : {}),

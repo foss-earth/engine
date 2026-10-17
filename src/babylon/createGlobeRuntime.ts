@@ -40,7 +40,8 @@ import { createCameraClipping } from "./cameraClipping.js";
 import { createNavigationCameraAdapter } from "./navigationCamera.js";
 import { createGlobeIntentMotion } from "../input/globeIntentMotion.js";
 import { createNavigationAnchorService, type GlobeNavigationAnchors, type NavigationAnchorService, type NavigationAnchorStatus } from "./navigationAnchorService.js";
-import { ANCHOR_FALLBACK_MESSAGES, ANCHOR_FAMILIES, NAVIGATION_ANCHOR_SETTING_IDS, SHOW_NAVIGATION_ANCHORS_ID, ZOOM_CENTER_ID, navigationAnchorSettingId, navigationAnchorsFromSettings, type AnchorFamily, type NavigationAnchorPreferences } from "../input/navigationAnchors.js";
+import type { CompassCenterSphere } from "../visualization/compassCenterSphere.js";
+import { ANCHOR_FALLBACK_MESSAGES, ANCHOR_FAMILIES, NAVIGATION_ANCHOR_SETTING_IDS, SHOW_COMPASS_CENTER_ID, SHOW_NAVIGATION_ANCHORS_ID, ZOOM_CENTER_ID, navigationAnchorSettingId, navigationAnchorsFromSettings, type AnchorFamily, type NavigationAnchorPreferences } from "../input/navigationAnchors.js";
 import { pointInViewProblem } from "../camera/anchoredMotion.js";
 import { ecefToVector3, projectEcefToClient } from "./anchorPan.js";
 import type { NavigationAnchorMarkers, NavigationAnchorMarkerView } from "../browser/navigationAnchorMarkers.js";
@@ -492,6 +493,9 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
   // Where zoom acts, the pin and Pick point (navigationAnchorService.ts), made with the camera, and their markers.
   let navigationAnchors: NavigationAnchorService | null = null;
   let anchorMarkers: NavigationAnchorMarkers | null = null;
+  // The compass center's ball (input.showCompassCenter, a developer tool), made only while it is switched on.
+  let compassSphere: CompassCenterSphere | null = null;
+  let compassSphereLoading = false;
   const anchorListeners = new Set<() => void>();
   let simRunning = simMode && options.external?.running !== false;
   let simTick: ((deltaSeconds: number) => void) | null = options.external?.onFrame ?? null;
@@ -560,6 +564,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
   authority.own(() => { retireMap(rasterTilesRuntime); rasterTilesRuntime = null; });
   authority.own(() => { inputController?.destroy(); inputController = null; });
   authority.own(() => { inertialCameraController?.cancel(); inertialCameraController = null; });
+  authority.own(() => { const owned = compassSphere; compassSphere = null; owned?.dispose(); });
   authority.own(() => {
     // The pin, Pick point, gestures' anchors and markers go with the runtime; Controls says nothing of them after.
     const owned = navigationAnchors, markers = anchorMarkers;
@@ -726,6 +731,8 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
     started = profiler.clock();
     sky.update();
     profiler.add("sky", started);
+    // After the camera has moved this frame, so the ball is drawn where the view turns about now.
+    showCompassSphere();
     } catch (error) {
       // A failed map operation can have partially changed actual triangles.
       // Publish that owner's new evidence before retiring this frame boundary.
@@ -965,6 +972,39 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
     pinTarget: () => navigationAnchors?.pinTarget() ?? false,
     clearPin: () => navigationAnchors?.clearPin(),
   };
+
+  /**
+   * `input.showCompassCenter`: the ball is made when it is switched on, and goes when it is switched off.
+   * It is a developer tool, so its module is fetched only then: a visitor's page never downloads it.
+   */
+  function syncCompassSphere(): void {
+    const wanted = (): boolean => !simMode && !disposed && settings.has(SHOW_COMPASS_CENTER_ID) && settings.get(SHOW_COMPASS_CENTER_ID) === true;
+    if (wanted() && !compassSphere) {
+      if (compassSphereLoading) return;
+      compassSphereLoading = true;
+      void import("../visualization/compassCenterSphere.js").then(({ createCompassCenterSphere }) => {
+        compassSphereLoading = false;
+        // Switched off, or the runtime gone, while it was fetched.
+        if (compassSphere || !wanted()) return;
+        compassSphere = createCompassCenterSphere(scene, canvas);
+      }, (error: unknown) => {
+        compassSphereLoading = false;
+        console.warn("The compass center's ball could not be loaded.", error);
+      });
+    } else if (!wanted() && compassSphere) {
+      const owned = compassSphere;
+      compassSphere = null;
+      owned.dispose();
+      scheduler.requestRender();
+    }
+  }
+
+  /** Stands the compass center's ball while the view turns about the compass, as faint as the turn has slowed. */
+  function showCompassSphere(): void {
+    if (!compassSphere) return;
+    const level = navigationHeld ? undefined : inertialCameraController?.anchors().compass;
+    compassSphere.show(level ? geospatialCamera?.center ?? null : null, level ?? 0);
+  }
 
   /**
    * Shows the grabbed ground and the point a zoom acts about where
@@ -1630,8 +1670,10 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
       scheduler.requestRender();
     })] : []),
     ...(settings.has(SHOW_NAVIGATION_ANCHORS_ID) ? [watch(SHOW_NAVIGATION_ANCHORS_ID, () => scheduler.requestRender())] : []),
+    ...(settings.has(SHOW_COMPASS_CENTER_ID) ? [watch(SHOW_COMPASS_CENTER_ID, syncCompassSphere)] : []),
   ];
   updateAnchorNotes();
+  syncCompassSphere();
 
   // The HTTP tile cache is shared by every map on the page; its limits are parameters.
   const MiB = 1024 * 1024;

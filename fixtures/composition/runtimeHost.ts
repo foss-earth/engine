@@ -6,14 +6,15 @@ import { RENDERER_PARAMETERS } from "@foss-earth/renderer/settings";
 import { CameraController as EngineCameraController } from "../../src/babylon/cameraState.js";
 import type { ImageryAtlasDevicePorts } from "../../src/babylon/imagery/imageryAtlas.js";
 import {
-  CONTROLS_PARAMETERS, MAP_SOURCE_PARAMETERS, MAP_DETAIL_PARAMETERS, MAP_LOADING_PARAMETERS,
+  CONTROLS_PARAMETERS, DEV_CONTROLS_PARAMETERS, MAP_SOURCE_PARAMETERS, MAP_DETAIL_PARAMETERS, MAP_LOADING_PARAMETERS,
   MAP_SELECTION_PARAMETERS, MAP_TERRAIN_SELECTION_PARAMETERS, MAP_AUTO_PARAMETERS, GLOBE_RUNTIME_PARAMETERS,
 } from "../../src/settings/index.js";
 
-export function createEngineSettings() {
+/** `dev`: as a page opened with ?dev=1, with the developer tools' settings too. */
+export function createEngineSettings({ dev = false }: { dev?: boolean } = {}) {
   const settings = createSettingsRegistry({ storage: null });
   settings.register([
-    ...CONTROLS_PARAMETERS, ...MAP_SOURCE_PARAMETERS, ...MAP_DETAIL_PARAMETERS, ...MAP_LOADING_PARAMETERS,
+    ...CONTROLS_PARAMETERS, ...(dev ? DEV_CONTROLS_PARAMETERS : []), ...MAP_SOURCE_PARAMETERS, ...MAP_DETAIL_PARAMETERS, ...MAP_LOADING_PARAMETERS,
     ...MAP_SELECTION_PARAMETERS, ...MAP_TERRAIN_SELECTION_PARAMETERS, ...MAP_AUTO_PARAMETERS, ...RENDERER_PARAMETERS, ...GLOBE_RUNTIME_PARAMETERS,
   ]);
   return settings;

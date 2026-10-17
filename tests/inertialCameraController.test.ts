@@ -263,6 +263,46 @@ const P1 = { x: 1, y: 2, z: 3 };
 const P2 = { x: 4, y: 5, z: 6 };
 const P3 = { x: 7, y: 8, z: 9 };
 
+describe("createInertialCameraController: orbit about the compass", () => {
+  it("says the orbit turns about the compass while it moves without an anchor point, and not about a point or at rest", () => {
+    const target = { panBy: vi.fn(), orbitBy: vi.fn(), zoomBy: vi.fn() };
+    const { controller, step } = glideOf(target);
+    expect(controller.anchors().compass).toBeUndefined();
+
+    controller.orbitBy(2, 0);
+    expect(controller.anchors().compass).toBe(1);
+    for (let i = 0; i < 80; i += 1) step();
+    expect(controller.anchors().compass).toBeUndefined();
+
+    // A target with no point of the ground is the compass target itself.
+    controller.orbitBy(2, 0, { ...anchorOf(1, "orbit", P1), point: null });
+    expect(controller.anchors().compass).toBe(1);
+    for (let i = 0; i < 80; i += 1) step();
+    controller.orbitBy(2, 0, anchorOf(1, "orbit", P1));
+    expect(controller.anchors().compass).toBeUndefined();
+    expect(controller.anchors().orbit).not.toBeNull();
+  });
+
+  it("is 1 while the input arrives, and falls from the release to 0 with the speed of the glide", () => {
+    const target = { panBy: vi.fn(), orbitBy: vi.fn(), zoomBy: vi.fn() };
+    let now = 0;
+    const controller = createInertialCameraController(target, { nowMs: () => now, decayPerFrame: () => 0.5 });
+    const frame = () => { now += 1000 / 60; controller.update(now); };
+    for (let i = 0; i < 10; i += 1) { controller.orbitBy(2, 0); frame(); }
+    expect(controller.anchors().compass).toBe(1);
+
+    // Input has stopped: the level is the share of the speed it had.
+    for (let i = 0; i < 6; i += 1) frame();
+    const levels: number[] = [];
+    while (controller.anchors().compass !== undefined && levels.length < 200) { levels.push(controller.anchors().compass!); frame(); }
+    expect(levels[0]).toBeLessThan(1);
+    expect(levels.length).toBeGreaterThan(3);
+    for (let i = 1; i < levels.length; i += 1) expect(levels[i]).toBeLessThan(levels[i - 1]!);
+    expect(levels.at(-1)!).toBeLessThan(0.05);
+    expect(controller.anchors().compass).toBeUndefined();
+  });
+});
+
 describe("createInertialCameraController: anchored glide", () => {
   it("glides orbit and zoom on about the anchors they were set moving with, and lets go of each as it settles", () => {
     const target = anchoredTarget();
@@ -353,7 +393,7 @@ describe("createInertialCameraController: anchored glide", () => {
 
     expect(target.orbitBy.mock.lastCall).toEqual([1, 2]);
     expect(target.zoomBy.mock.lastCall).toEqual([expect.closeTo(0.9, 12)]);
-    expect(controller.anchors()).toEqual({ orbit: null, zoom: null });
+    expect(controller.anchors()).toEqual({ orbit: null, zoom: null, compass: 1 });
   });
 
   it("stops only a channel whose step the target could not take, and lets go of its anchor", () => {
@@ -583,7 +623,7 @@ describe("createInertialCameraController: rebaseTo", () => {
     expect(controller.motion()).toEqual({
       pan: { x: 80, y: -80, canvasHeight: 1 }, orbit: { pitch: 12, heading: -12, anchor: null }, zoom: { log: MAX_ZOOM_LOG_DELTA_PER_FRAME, anchor: null },
     });
-    expect(controller.anchors()).toEqual({ orbit: null, zoom: null });
+    expect(controller.anchors()).toEqual({ orbit: null, zoom: null, compass: 1 });
 
     // About the orbit target: the target's own orbit and zoom, as before anchors.
     step();
@@ -640,7 +680,7 @@ describe("createGlobeInertia: anchors", () => {
     inertia.update(2000);
     expect(camera.orbitBy.mock.lastCall).toEqual([1, 0]);
     expect(camera.zoomBy.mock.lastCall).toEqual([expect.closeTo(0.9, 12)]);
-    expect(inertia.anchors()).toEqual({ orbit: null, zoom: null });
+    expect(inertia.anchors()).toEqual({ orbit: null, zoom: null, compass: 1 });
   });
 
   it("acquires, holds and releases through the anchor service, and wakes the renderer for a rebase", () => {

@@ -1,13 +1,14 @@
 // @vitest-environment jsdom
 import { describe,expect,it,vi } from "vitest";
 import { createGlobeHostFixture } from "../fixtures/composition/globeHost.js";
+import { createEngineSettings } from "../fixtures/composition/runtimeHost.js";
 import { createGlobeRuntime } from "../src/babylon/createGlobeRuntime.js";
 import { createBorrowedRuntimeAuthority } from "../src/babylon/borrowedRuntimeAuthority.js";
 import { createTerrainPerformanceCapture } from "../src/terrain/terrainPerformanceCapture.js";
-import { TransformNode, Color3, MeshBuilder, StandardMaterial, type Scene } from "@babylonjs/core";
+import { TransformNode, Color3, Vector3, MeshBuilder, StandardMaterial, type Scene } from "@babylonjs/core";
 import type { GlobeRuntimeOptions } from "../src/babylon/globeRuntimePorts.js";
 import { createParameterControl } from "@foss-earth/ui/browser";
-import { ANCHOR_FALLBACK_MESSAGES, NAVIGATION_ANCHOR_SETTING_IDS, SHOW_NAVIGATION_ANCHORS_ID } from "../src/input/navigationAnchors.js";
+import { ANCHOR_FALLBACK_MESSAGES, NAVIGATION_ANCHOR_SETTING_IDS, SHOW_COMPASS_CENTER_ID, SHOW_NAVIGATION_ANCHORS_ID } from "../src/input/navigationAnchors.js";
 import { ecefToGeodetic } from "../src/camera/cameraMath.js";
 import type { NavigationAnchorService } from "../src/babylon/navigationAnchorService.js";
 import type { NavigationAnchorMarkers } from "../src/browser/navigationAnchorMarkers.js";
@@ -843,6 +844,75 @@ describe("runtime navigation anchors", () => {
       const after = centre();
       const north = (after.latRad - before.latRad) * 6_378_137, east = (after.lonRad - before.lonRad) * 6_378_137 * Math.cos(before.latRad);
       expect(Math.hypot(north, east)).toBeLessThan(0.01);
+    } finally { host.disposeHost(); }
+  });
+
+  it("has no compass center's ball on a page without the developer tools, however the view turns", () => {
+    const host = createAnchorHost();
+    try {
+      expect(host.settings.has(SHOW_COMPASS_CENTER_ID)).toBe(false);
+      host.runtime.setViewState({ latDeg: 44, lonDeg: -93, headingDeg: 0, pitchDeg: 30, zoomMeters: 3000 });
+      host.runtime.prepareFrame(16);
+      expect(host.runtime.scene.getMeshByName("compass-center-sphere")).toBeNull();
+    } finally { host.disposeHost(); }
+  });
+
+  it("fetches the compass center's ball when the developer tool is switched on, and stands it while the view turns about it, fading from the release", async () => {
+    const host = createGlobeHostFixture(document, { settings: createEngineSettings({ dev: true }), external: undefined });
+    const canvas = host.canvas;
+    Object.defineProperty(canvas, "clientWidth", { configurable: true, value: 800 });
+    Object.defineProperty(canvas, "clientHeight", { configurable: true, value: 600 });
+    Object.assign(canvas, { setPointerCapture() {}, releasePointerCapture() {}, hasPointerCapture: () => false });
+    canvas.getBoundingClientRect = () => ({ left: 0, top: 0, width: 800, height: 600, right: 800, bottom: 600, x: 0, y: 0, toJSON: () => ({}) });
+    let at = 0;
+    const frame = () => { at += 16; host.setTime(at); host.runtime.prepareFrame(at); host.runtime.afterFrame(at); };
+    const pointer = (type: string, x: number, y: number) => canvas.dispatchEvent(new PointerEvent(type, {
+      pointerId: 1, pointerType: "mouse", isPrimary: true, button: 2, buttons: type === "pointerup" ? 0 : 2, clientX: x, clientY: y, bubbles: true, cancelable: true,
+    }));
+    const ball = () => host.runtime.scene.getMeshByName("compass-center-sphere");
+    const opacity = () => (ball()!.material as unknown as { _colors4: Record<string, { a: number }> })._colors4.color?.a ?? 0;
+    try {
+      host.runtime.setViewState({ latDeg: 44, lonDeg: -93, headingDeg: 0, pitchDeg: 30, zoomMeters: 3000 });
+      expect(host.settings.get(SHOW_COMPASS_CENTER_ID)).toBe(false);
+      expect(ball()).toBeNull();
+      host.settings.set(SHOW_COMPASS_CENTER_ID, true);
+      // Its module is fetched only now.
+      await vi.waitFor(() => expect(ball()).not.toBeNull());
+      expect(ball()!.isEnabled()).toBe(false);
+
+      let x = 650, y = 520;
+      pointer("pointerdown", x, y);
+      for (let step = 0; step < 20; step += 1) { x += 5; y -= 5; pointer("pointermove", x, y); frame(); }
+      expect(ball()!.isEnabled()).toBe(true);
+      const held = opacity();
+      const center = host.runtime.geospatialCamera!.center;
+      expect(Vector3.Distance(ball()!.position, center)).toBeLessThan(1e-6);
+      pointer("pointerup", x, y);
+      const levels: number[] = [];
+      for (let step = 0; step < 1200 && ball()!.isEnabled(); step += 1) { frame(); if (ball()!.isEnabled()) levels.push(opacity()); }
+      expect(ball()!.isEnabled()).toBe(false);
+      expect(levels.length).toBeGreaterThan(3);
+      expect(levels.at(-1)!).toBeLessThan(held * 0.2);
+      for (let i = 1; i < levels.length; i += 1) expect(levels[i]).toBeLessThanOrEqual(levels[i - 1]! + 1e-12);
+
+      // A drag that grabs the ground turns nothing about the compass.
+      canvas.dispatchEvent(new PointerEvent("pointerdown", { pointerId: 2, pointerType: "mouse", isPrimary: true, button: 0, buttons: 1, clientX: 400, clientY: 300, bubbles: true, cancelable: true }));
+      for (let step = 0; step < 5; step += 1) {
+        canvas.dispatchEvent(new PointerEvent("pointermove", { pointerId: 2, pointerType: "mouse", isPrimary: true, button: 0, buttons: 1, clientX: 400 + 10 * step, clientY: 300, bubbles: true, cancelable: true }));
+        frame();
+        expect(ball()!.isEnabled()).toBe(false);
+      }
+      canvas.dispatchEvent(new PointerEvent("pointerup", { pointerId: 2, pointerType: "mouse", isPrimary: true, button: 0, buttons: 0, clientX: 440, clientY: 300, bubbles: true, cancelable: true }));
+
+      const requests = host.requestCount();
+      host.settings.set(SHOW_COMPASS_CENTER_ID, false);
+      expect(ball()).toBeNull();
+      expect(host.requestCount()).toBeGreaterThan(requests);
+      // Switched on again and the runtime gone before the fetch answers: no ball is left behind.
+      host.settings.set(SHOW_COMPASS_CENTER_ID, true);
+      host.runtime.destroy();
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(ball()).toBeNull();
     } finally { host.disposeHost(); }
   });
 
