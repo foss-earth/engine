@@ -7,6 +7,8 @@ import {
   Vector3,
 } from "@babylonjs/core";
 import type { LinesMesh, Scene } from "@babylonjs/core";
+// enableEdgesRendering, which a build of only the Babylon modules used would otherwise leave as a stub that throws.
+import "@babylonjs/core/Rendering/edgesRenderer.js";
 
 import { compassLabelMeters, compassLineFade, compassRadiusMeters, DEFAULT_ORBIT_COMPASS_SCALE_PARAMS, DEFAULT_COMPASS_LABEL_TEXTURE_SIZE, type OrbitCompassScaleParams } from "./defaults.js";
 import { horizonCompassPlacements } from "./horizonPlacement.js";

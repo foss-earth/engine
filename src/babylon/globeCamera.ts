@@ -1,4 +1,7 @@
 import { GeospatialCamera, Vector3, type Scene } from "@babylonjs/core";
+// The collision coordinator the camera's checkCollisions uses, which a build of only the Babylon modules
+// used would otherwise leave as a stand-in that throws on the first camera move.
+import "@babylonjs/core/Collisions/collisionCoordinator.js";
 import { DEFAULT_GLOBE_CAMERA } from "../camera/cameraDefaults.js";
 import { DEG_TO_RAD, geodeticToEcef } from "../camera/cameraMath.js";
 export interface GlobeCameraInitialView {
