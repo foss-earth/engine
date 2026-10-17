@@ -247,14 +247,37 @@ describe("coveredWorldClips", () => {
     expect(clip).toEqual({ x: -1, y: 0, w: 1, h: 1 });
   });
 
-  it("covers nothing in the split presentation, whose world is only the uncovered part", () => {
+  it("covers only the flush bottom toolbar in split, in the world's remaining viewport", () => {
     document.documentElement.dataset.worldPresentation = "split";
     const canvas = canvasAt();
+    setWorldViewportSource(canvas, () => ({ x: 0, y: 200, width: WIDTH, height: 400 }));
     const panel = document.createElement("div");
     panel.dataset.occludeWorld = "true";
-    panel.getBoundingClientRect = () => ({ left: 0, top: 0, width: 400, height: 400, x: 0, y: 0, right: 400, bottom: 400, toJSON() {} }) as DOMRect;
-    document.body.append(panel);
+    const log = document.createElement("div");
+    log.id = "app-log";
+    // Split's top band and log need no depth mask, including during a resize
+    // whose drawing buffer has not yet caught up to the window's current height.
+    panel.getBoundingClientRect = log.getBoundingClientRect = () => { throw new Error("Split must not measure the window band or log for occlusion."); };
+    const bar = document.createElement("div");
+    bar.className = "hud-bar";
+    const at = (left: number, width: number) => () => ({ left, top: 572, width, height: 28, x: left, y: 572, right: left + width, bottom: HEIGHT, toJSON() {} }) as DOMRect;
+    const north = document.createElement("button");
+    north.className = "hud-circle-button";
+    north.getBoundingClientRect = at(0, 40);
+    const provider = document.createElement("button");
+    provider.className = "hud-chip";
+    provider.getBoundingClientRect = at(700, 100);
+    bar.append(north, provider);
+    document.body.append(panel, log, bar);
+    document.documentElement.dataset.worldEdges = "inset";
     expect(coveredWorldClips(canvas)).toEqual([]);
+    document.documentElement.dataset.worldEdges = "flush";
+    const clips = coveredWorldClips(canvas);
+    expect(clips).toHaveLength(2);
+    expect(clips[0]).toMatchObject({ x: -1, y: -1 });
+    expect(clips[0]!.w).toBeCloseTo(0.1);
+    expect(clips[1]).toMatchObject({ x: 0.75, y: -1, w: 0.25 });
+    for (const clip of clips) expect(clip.h).toBeCloseTo(28 / 400 * 2);
   });
 
   it("covers the toolbar's shown items only while the edges are flush", () => {

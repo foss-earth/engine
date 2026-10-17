@@ -69,18 +69,23 @@ function worldBoxOf(canvas: HTMLCanvasElement): CssBox | null {
 
 /**
  * Opaque windows and the floating log over the world, in the clip space of
- * the world's viewport, and the toolbar's items while they are flush. In the
- * split presentation the world is only the uncovered area, so nothing covers it.
+ * the world's viewport, and the toolbar's items while they are flush. Split
+ * keeps the windows above the world, with only the bottom toolbar covering it.
  */
 export function coveredWorldClips(canvas: HTMLCanvasElement): ClipRect[] {
   const doc = canvas.ownerDocument;
-  if (!doc || doc.documentElement.dataset.worldPresentation === "split") return [];
+  if (!doc) return [];
+  const split = doc.documentElement.dataset.worldPresentation === "split";
+  const flush = doc.documentElement.dataset.worldEdges === "flush";
+  if (split && !flush) return [];
   const worldBox = worldBoxOf(canvas);
   if (!worldBox) return [];
-  const elements = [...doc.querySelectorAll("[data-occlude-world]")];
-  const log = doc.querySelector("#app-log");
-  if (log && !log.closest("[data-occlude-world]")) elements.push(log);
-  if (doc.documentElement.dataset.worldEdges === "flush") {
+  const elements: Element[] = split ? [] : [...doc.querySelectorAll("[data-occlude-world]")];
+  if (!split) {
+    const log = doc.querySelector("#app-log");
+    if (log && !log.closest("[data-occlude-world]")) elements.push(log);
+  }
+  if (flush) {
     for (const item of doc.querySelectorAll(FLUSH_TOOLBAR_COVERS)) if (shown(item)) elements.push(item);
   }
   const clips: ClipRect[] = [];
@@ -96,8 +101,8 @@ export function coveredWorldClips(canvas: HTMLCanvasElement): ClipRect[] {
 /**
  * Draws the opaque UI into the depth buffer before the world, so fragments under those windows are rejected.
  * A camera viewport is one rectangle and cannot punch several windows out of a full-screen pass.
- * The split presentation does not use this: its world viewport is already only the uncovered area.
- * Nor does a stereo camera, such as a VR headset's eyes: the page's windows cover none of what it sees.
+ * Split's world viewport excludes its windows; only its opaque bottom toolbar needs this mask.
+ * A stereo camera, such as a VR headset's eyes, sees past the page's windows and toolbar.
  */
 export function attachWorldOcclusion(scene: Scene, canvas: HTMLCanvasElement): { dispose(): void } {
   const draws = scene.onBeforeDrawPhaseObservable;
