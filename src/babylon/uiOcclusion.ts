@@ -97,6 +97,7 @@ export function coveredWorldClips(canvas: HTMLCanvasElement): ClipRect[] {
  * Draws the opaque UI into the depth buffer before the world, so fragments under those windows are rejected.
  * A camera viewport is one rectangle and cannot punch several windows out of a full-screen pass.
  * The split presentation does not use this: its world viewport is already only the uncovered area.
+ * Nor does a stereo camera, such as a VR headset's eyes: the page's windows cover none of what it sees.
  */
 export function attachWorldOcclusion(scene: Scene, canvas: HTMLCanvasElement): { dispose(): void } {
   const draws = scene.onBeforeDrawPhaseObservable;
@@ -127,6 +128,8 @@ export function attachWorldOcclusion(scene: Scene, canvas: HTMLCanvasElement): {
   let failed = false;
   const observer = draws.add(() => {
     if (failed) return;
+    const camera = scene.activeCamera;
+    if (camera && (camera.isRigCamera || camera.rigCameras.length > 0)) return;
     try {
       const covers = coveredWorldClips(canvas);
       if (covers.length === 0 || !material.isReady(mesh)) return;

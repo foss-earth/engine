@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { GeospatialCamera, NullEngine, NullEngineOptions, Scene, ShaderLanguage, ShaderMaterial, Vector3, Viewport } from "@babylonjs/core";
+import { FreeCamera, GeospatialCamera, NullEngine, NullEngineOptions, Scene, ShaderLanguage, ShaderMaterial, Vector3, Viewport } from "@babylonjs/core";
 import { afterEach, describe, expect, it } from "vitest";
 import { clientRay, projectEcefToClient } from "../src/babylon/anchorPan.js";
 import { attachWorldOcclusion, coveredWorldClips } from "../src/babylon/uiOcclusion.js";
@@ -310,5 +310,28 @@ describe("attachWorldOcclusion", () => {
         expect([material.options.attributes, material.options.uniforms]).toEqual([["position"], ["rect", "depthSign"]]);
       } finally { occlusion.dispose(); scene.dispose(); engine.dispose(); }
     }
+  });
+
+  it("covers nothing for a stereo camera, whose eyes see past the page's windows", () => {
+    const engine = new NullEngine(), scene = new Scene(engine), canvas = canvasAt();
+    const panel = document.createElement("div");
+    panel.dataset.occludeWorld = "";
+    panel.getBoundingClientRect = () => ({ left: 600, top: 0, width: 200, height: 300, x: 600, y: 0, right: 800, bottom: 300, toJSON() {} }) as DOMRect;
+    document.body.append(panel);
+    let reads = 0;
+    const read = canvas.getBoundingClientRect.bind(canvas);
+    canvas.getBoundingClientRect = () => { reads += 1; return read(); };
+    const occlusion = attachWorldOcclusion(scene, canvas);
+    try {
+      const page = new FreeCamera("page", Vector3.Zero(), scene);
+      const headset = new FreeCamera("headset", Vector3.Zero(), scene);
+      const eye = new FreeCamera("eye", Vector3.Zero(), scene);
+      eye.isRigCamera = true;
+      headset.rigCameras.push(eye);
+      const drawFor = (camera: FreeCamera): number => { reads = 0; scene.activeCamera = camera; scene.onBeforeDrawPhaseObservable.notifyObservers(scene); return reads; };
+      expect(drawFor(page)).toBeGreaterThan(0);
+      expect(drawFor(headset)).toBe(0);
+      expect(drawFor(eye)).toBe(0);
+    } finally { occlusion.dispose(); scene.dispose(); engine.dispose(); }
   });
 });
