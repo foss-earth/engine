@@ -1,6 +1,7 @@
 import type { TerrainImageDecodeLimits } from "./terrainImageDecoder.js";
 import { createWorkerPool, WorkerPoolUnavailableError, type WorkerPoolStats, type WorkerPoolTimers } from "./workerPool.js";
 import { terrainDecodeError, type TerrainDecodeWorkerPort, type TerrainDecodeWorkerReply, type TerrainDecodeWorkerRequest } from "./terrainDecodeWorkerProtocol.js";
+import type { TerrainNativeDecoderStatus } from "./terrainNativeDecoder.js";
 
 export interface TerrainDecodeWorkersOptions {
   /** A worker running installTerrainDecodeWorkerKernel; null or a throw: decode on the page. */
@@ -26,7 +27,7 @@ export type TerrainDecodeParity = "unchecked" | "checking" | "same" | "different
 export interface TerrainDecodeWorkers {
   /** `onPage`: the page's own decoder, used whenever no worker can decode this tile. */
   decode(blob: Blob, onPage: TerrainPageDecoder, request?: TerrainDecodeRequestOptions): Promise<{ size: number; heights: Float32Array }>;
-  stats(): WorkerPoolStats & { pageDecodes: number; parity: TerrainDecodeParity };
+  stats(): WorkerPoolStats & { pageDecodes: number; parity: TerrainDecodeParity; nativeWorkers: TerrainNativeDecoderStatus[] };
   /** Tiles workers can decode at once: 0 once every tile decodes on the page. */
   capacity(): number;
   dispose(): void;
@@ -38,6 +39,8 @@ export interface TerrainDecodeWorkers {
  */
 export function createTerrainDecodeWorkers(options: TerrainDecodeWorkersOptions): TerrainDecodeWorkers {
   let unsupported = false, pageDecodes = 0;
+  // Bounded history also records recently retired workers and their fallback.
+  const nativeWorkers = new Map<string, TerrainNativeDecoderStatus>();
   // Settles true once one tile's worker heights matched the page's bit for bit.
   let parity: Promise<boolean> | null = null, paritySeen: TerrainDecodeParity = "unchecked";
   const pool = createWorkerPool<TerrainDecodeWorkerRequest, TerrainDecodeWorkerReply>({
@@ -54,6 +57,11 @@ export function createTerrainDecodeWorkers(options: TerrainDecodeWorkersOptions)
     } catch (error) {
       if (error instanceof WorkerPoolUnavailableError) { request.signal?.throwIfAborted(); return null; }
       throw error;
+    }
+    if (reply.backend) {
+      nativeWorkers.delete(reply.backend.workerId);
+      nativeWorkers.set(reply.backend.workerId, { ...reply.backend });
+      if (nativeWorkers.size > 64) nativeWorkers.delete(nativeWorkers.keys().next().value!);
     }
     if (reply.kind === "decoded-terrain") {
       const { size, heights } = reply;
@@ -119,7 +127,7 @@ export function createTerrainDecodeWorkers(options: TerrainDecodeWorkersOptions)
       if (!await parity) { request.signal?.throwIfAborted(); return page(); }
       return await onWorker(blob, request) ?? page();
     },
-    stats: () => ({ ...pool.stats(), pageDecodes, parity: paritySeen }),
+    stats: () => ({ ...pool.stats(), pageDecodes, parity: paritySeen, nativeWorkers: [...nativeWorkers.values()].map(status => ({ ...status })) }),
     // The pool's own bound on its size.
     capacity: () => pool.available() ? Math.min(16, Math.floor(options.workers())) : 0,
     dispose: () => pool.dispose(),

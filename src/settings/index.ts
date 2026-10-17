@@ -19,3 +19,4 @@ export * from "../map/mapCachePresentation.js";
 
 export * from "./catalogue/positionGeoid.js";
 export * from "./catalogue/terrainImageDecode.js";
+export * from "./catalogue/native.js";

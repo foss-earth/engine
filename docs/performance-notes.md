@@ -128,7 +128,9 @@ next. Before relying on a number, check it against the current code.
   both.
 - A decode worker is used only after its heights match the page's, bit for bit,
   for one tile (`d95411a`). Keep that check for any new worker path.
-- Don't use `SharedArrayBuffer`.
+- Use `SharedArrayBuffer` only when `crossOriginIsolated` is true, and keep the
+  transferred-buffer path for pages that are not isolated
+  ([WebAssembly builds](https://github.com/foss-earth/docs/blob/main/docs/proposals/webassembly.md)).
 - `Math.sin` and `Math.cos` stay in JavaScript. Moving them to WebAssembly or a
   table changes bits.
 - Nothing reads terrain-tile vertex normals, so they are no longer built

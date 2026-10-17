@@ -2,7 +2,7 @@ export { createSurfaceQuery } from "./surfaceQuery.js";
 export type { CurrentDisplayedSurface, CurrentSurfaceObservation, CurrentSurfaceReadiness, SurfaceLocality, SurfaceLocation } from "../surface/currentReadiness.js";
 export { CameraController, type CameraControllerPorts, type OrbitTargetHeightOptions } from "./cameraState.js";
 export * from "./anchorPan.js";
-export { createTerrainMesh, type TerrainMeshOptions } from "./terrainMesh.js";
+export { createTerrainMesh, createTerrainMeshFromGeometry, type TerrainMeshOptions, type TerrainGeometryAdmission } from "./terrainMesh.js";
 export { createNavigationCameraAdapter, type NavigationCameraPorts } from "./navigationCamera.js";
 export * from "./meshRefinement.js";
 export * from "./rasterSurfaceSampler.js";

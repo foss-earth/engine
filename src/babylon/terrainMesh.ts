@@ -1,6 +1,7 @@
 import { Mesh, VertexData, Vector3, type Scene, type TransformNode } from "@babylonjs/core";
 import { DEG_TO_RAD, ecefOnParallel, geodeticParallel, geodeticToEcef, type EcefCoord } from "../camera/cameraMath.js";
 import { sampleTerrainGridRow, terrainGridColumns, type TerrainGrid, type TerrainTile } from "../terrain/terrainGrid.js";
+import { copyTerrainNumericGeometry, type TerrainNumericGeometry } from "../terrain/terrainNumericGeometry.js";
 export interface TerrainMeshOptions {
   scene: Scene;
   source: { id: string };
@@ -10,6 +11,11 @@ export interface TerrainMeshOptions {
   nowMs(): number;
   performanceCapture?: { counters: { preparationCpuMs: number; geometryWrites: number } };
 }
+/** Explicit host admission; native worker success alone never grants rendering admission. */
+export type TerrainGeometryAdmission =
+  | { backend: "typescript"; validationStatus: "reference" }
+  | { backend: "wasm-single"; validationStatus: "validated"; evidence: string }
+  | { backend: "wasm-single"; validationStatus: "unvalidated"; experimental: true; reason: string };
 type TileCoord = TerrainTile;
 export const DEFAULT_TILE_SEGMENTS = 64;
 function tileXToLon(x: number, z: number): number {
@@ -127,6 +133,47 @@ export function createTerrainMesh(options: TerrainMeshOptions, tile: TileCoord, 
     mesh.freezeWorldMatrix();
   }
 
+  if (options.performanceCapture) {
+    options.performanceCapture.counters.preparationCpuMs += options.nowMs() - started;
+    options.performanceCapture.counters.geometryWrites++;
+  }
+  return mesh;
+}
+
+/**
+ * Explicit opt-in preparation boundary. Nothing in the existing raster runtime
+ * calls this helper. Native results still need later functional parity before
+ * a host enables them; structural checks here do not establish that parity.
+ */
+export function createTerrainMeshFromGeometry(options: TerrainMeshOptions, tile: TerrainTile, geometry: TerrainNumericGeometry, admission: TerrainGeometryAdmission): Mesh {
+  const reference = admission?.backend === "typescript" && admission.validationStatus === "reference";
+  const accepted = admission?.backend === "wasm-single" && admission.validationStatus === "validated"
+    && typeof admission.evidence === "string" && admission.evidence.trim().length > 0;
+  const experiment = admission?.backend === "wasm-single" && admission.validationStatus === "unvalidated"
+    && admission.experimental === true && typeof admission.reason === "string" && admission.reason.trim().length > 0;
+  if (!reference && !accepted && !experiment) throw new Error("Prepared terrain mesh needs explicit host validation or experimental admission.");
+  const started = options.performanceCapture ? options.nowMs() : 0;
+  const prepared = copyTerrainNumericGeometry(geometry);
+  if (!prepared.uvs || !prepared.positions.every(Number.isFinite) || !prepared.targetPositions.every(Number.isFinite)
+    || !prepared.uvs.every(Number.isFinite)
+    || !Number.isFinite(prepared.heightBounds.min) || !Number.isFinite(prepared.heightBounds.max)
+    || prepared.heightBounds.min > prepared.heightBounds.max) throw new Error("Prepared terrain mesh lacks finite geometry, height bounds, or UVs.");
+  const mesh = new Mesh(`raster-basemap-tile-${options.source.id}-${tileKey(tile)}`, options.scene);
+  const data = new VertexData();
+  // These are newly owned copies. Babylon must never retain a worker/WASM
+  // publication buffer that another generation could reuse.
+  data.positions = prepared.targetPositions;
+  data.indices = prepared.indices;
+  data.uvs = Float32Array.from(prepared.uvs);
+  data.applyToMesh(mesh, true);
+  mesh.position = new Vector3(prepared.center.x, prepared.center.y, prepared.center.z);
+  mesh.metadata = { mapSurface: true, terrainZoom: prepared.terrainZoom, segments: prepared.segments,
+    heightBounds: { ...prepared.heightBounds }, preparationAdmission: { ...admission } };
+  mesh.isPickable = true;
+  mesh.renderingGroupId = 0;
+  mesh.setEnabled(false);
+  if (options.worldRoot) mesh.parent = options.worldRoot;
+  else mesh.freezeWorldMatrix();
   if (options.performanceCapture) {
     options.performanceCapture.counters.preparationCpuMs += options.nowMs() - started;
     options.performanceCapture.counters.geometryWrites++;

@@ -1,13 +1,14 @@
 import type { PoolWorkerPort } from "./workerPool.js";
+import type { TerrainNativeDecoderStatus } from "./terrainNativeDecoder.js";
 
 export interface TerrainDecodeFailure { name: string; message: string; errors?: TerrainDecodeFailure[] }
 /** The Blob is copied by structured clone; its bytes are not read on the page. */
 export interface TerrainDecodeWorkerRequest { kind: "decode-terrain"; id: number; blob: Blob; maxTileSide: number }
 export type TerrainDecodeWorkerReply =
-  | { kind: "decoded-terrain"; id: number; size: number; heights: Float32Array }
+  | { kind: "decoded-terrain"; id: number; size: number; heights: Float32Array; backend?: TerrainNativeDecoderStatus }
   /** `unsupported`: this worker realm cannot decode at all (no OffscreenCanvas 2D or
    * createImageBitmap); the page decodes instead. Otherwise the tile itself failed. */
-  | { kind: "failed"; id: number; error: TerrainDecodeFailure; unsupported: boolean };
+  | { kind: "failed"; id: number; error: TerrainDecodeFailure; unsupported: boolean; backend?: TerrainNativeDecoderStatus };
 export type TerrainDecodeWorkerPort = PoolWorkerPort<TerrainDecodeWorkerRequest, TerrainDecodeWorkerReply>;
 export interface TerrainDecodeWorkerScope {
   onmessage: ((event: MessageEvent<TerrainDecodeWorkerRequest>) => void) | null;

@@ -35,4 +35,13 @@ describe("original native Terrarium decode with explicit host ports", () => {
     const f=fixture();f.ports.limits=()=>({maxTileSide:1025});await expect(f.decode(new Blob())).rejects.toThrow("1–1024");expect(f.createImageBitmap).not.toHaveBeenCalled();
     const nowMs=vi.fn(()=>0);await createTerrainImageDecoder({...fixture().ports,nowMs,onDecodeCpu:undefined})(new Blob());expect(nowMs).not.toHaveBeenCalled();
   });
+  it("awaits the optional numeric port before bitmap cleanup and leaves image readback unchanged", async () => {
+    const f = fixture(); let finish!: (heights: Float32Array) => void;
+    const decodeTerrarium = vi.fn(() => new Promise<Float32Array>(resolve => { finish = resolve; }));
+    const decoding = createTerrainImageDecoder({ ...f.ports, decodeTerrarium })(new Blob());
+    await Promise.resolve();
+    expect(decodeTerrarium).toHaveBeenCalledWith(f.data, 1); expect(f.close).not.toHaveBeenCalled();
+    const heights = new Float32Array([-0.5]); finish(heights);
+    expect((await decoding).heights).toBe(heights); expect(f.close).toHaveBeenCalledOnce();
+  });
 });

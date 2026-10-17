@@ -1,5 +1,6 @@
-import { createTerrainImageDecoder } from "./terrainImageDecoder.js";
+import { createTerrainImageDecoder, type TerrainImageDecoderPorts } from "./terrainImageDecoder.js";
 import { terrainDecodeFailure, type TerrainDecodeWorkerRequest, type TerrainDecodeWorkerScope } from "./terrainDecodeWorkerProtocol.js";
+import type { TerrainNativeDecoderStatus } from "./terrainNativeDecoder.js";
 
 export interface TerrainDecodeWorkerKernelPorts {
   scope: TerrainDecodeWorkerScope;
@@ -7,6 +8,8 @@ export interface TerrainDecodeWorkerKernelPorts {
   createImageBitmap: ((blob: Blob, options: ImageBitmapOptions) => Promise<ImageBitmap>) | null;
   /** A canvas in this worker realm; null when it has no OffscreenCanvas. */
   createCanvas(width: number, height: number): OffscreenCanvas | null;
+  decodeTerrarium?: TerrainImageDecoderPorts["decodeTerrarium"];
+  decodeBackendStatus?(): TerrainNativeDecoderStatus;
   onError(error: unknown): void;
 }
 class UnsupportedRealm extends Error {}
@@ -18,6 +21,10 @@ export function installTerrainDecodeWorkerKernel(ports: TerrainDecodeWorkerKerne
   const { scope } = ports;
   let disposed = false, canvas: OffscreenCanvas | null = null;
   const report = (error: unknown): void => { try { ports.onError(error); } catch { /* Host error port attempted. */ } };
+  const backend = (): { backend?: TerrainNativeDecoderStatus } => {
+    try { return ports.decodeBackendStatus ? { backend: ports.decodeBackendStatus() } : {}; }
+    catch (error) { report(error); return {}; }
+  };
   const reuseCanvas = (width: number, height: number): OffscreenCanvas => {
     canvas ??= ports.createCanvas(width, height);
     if (!canvas) throw new UnsupportedRealm("This worker has no OffscreenCanvas.");
@@ -36,10 +43,10 @@ export function installTerrainDecodeWorkerKernel(ports: TerrainDecodeWorkerKerne
       const createImageBitmap = ports.createImageBitmap;
       if (!createImageBitmap) throw new UnsupportedRealm("This worker has no createImageBitmap.");
       const { size, heights } = await createTerrainImageDecoder({ createImageBitmap, createCanvas: reuseCanvas,
-        nowMs: () => 0, limits: () => ({ maxTileSide }) })(blob);
-      scope.postMessage({ kind: "decoded-terrain", id, size, heights }, [heights.buffer as ArrayBuffer]);
+        nowMs: () => 0, limits: () => ({ maxTileSide }), decodeTerrarium: ports.decodeTerrarium })(blob);
+      scope.postMessage({ kind: "decoded-terrain", id, size, heights, ...backend() }, [heights.buffer as ArrayBuffer]);
     } catch (error) {
-      scope.postMessage({ kind: "failed", id, error: terrainDecodeFailure(error), unsupported: error instanceof UnsupportedRealm });
+      scope.postMessage({ kind: "failed", id, error: terrainDecodeFailure(error), unsupported: error instanceof UnsupportedRealm, ...backend() });
     }
   }
   const receive = (event: MessageEvent<TerrainDecodeWorkerRequest>): void => { void run(event.data).catch(report); };

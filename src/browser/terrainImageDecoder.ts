@@ -8,6 +8,8 @@ export interface TerrainImageDecoderPorts {
   createCanvas(width: number, height: number): HTMLCanvasElement | OffscreenCanvas;
   nowMs(): number;
   limits(): TerrainImageDecodeLimits;
+  /** Optional worker-only numeric decoder; it owns native parity and JS fallback. */
+  decodeTerrarium?(data: Uint8ClampedArray, size: number): Promise<Float32Array>;
   onDecodeCpu?(milliseconds: number): void;
 }
 /** Original native WebP/PNG Terrarium path: raw RGB, square bound, close finally. */
@@ -26,7 +28,9 @@ export function createTerrainImageDecoder(ports: TerrainImageDecoderPorts): (blo
       const context = canvas.getContext("2d", { willReadFrequently: true }) as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null;
       if (!context) throw new Error("Terrain image decoder unavailable");
       context.drawImage(bitmap, 0, 0);
-      result = { size: bitmap.width, heights: decodeTerrarium(context.getImageData(0, 0, bitmap.width, bitmap.height).data, bitmap.width) };
+      const data = context.getImageData(0, 0, bitmap.width, bitmap.height).data;
+      result = { size: bitmap.width, heights: ports.decodeTerrarium
+        ? await ports.decodeTerrarium(data, bitmap.width) : decodeTerrarium(data, bitmap.width) };
     } catch (error) { failures.push(error); }
     finally {
       try { bitmap.close(); } catch (error) { failures.push(error); }

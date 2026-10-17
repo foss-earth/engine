@@ -3,6 +3,8 @@ import { createTerrainImageDecoder, type TerrainImageDecodeLimits } from "../src
 import { installTerrainDecodeWorkerKernel, type TerrainDecodeWorkerKernelPorts } from "../src/browser/terrainDecodeWorkerKernel.js";
 import { createTerrainDecodeWorkers, type TerrainDecodeWorkersOptions } from "../src/browser/terrainDecodeWorkers.js";
 import type { TerrainDecodeWorkerPort, TerrainDecodeWorkerReply, TerrainDecodeWorkerRequest } from "../src/browser/terrainDecodeWorkerProtocol.js";
+import { createTerrainNativeDecoder } from "../src/browser/terrainNativeDecoder.js";
+import { decodeTerrarium } from "../src/terrain/terrainGrid.js";
 
 /** Fake native image realm: each Blob stands for a tile whose RGBA pixels are known. */
 function imageRealm(tiles: Map<Blob, { width: number; height: number; rgba: Uint8ClampedArray }>) {
@@ -74,6 +76,23 @@ async function failure(decoding: Promise<unknown>): Promise<Error> {
 }
 
 describe("terrain decode workers", () => {
+  it("retains page-vs-worker parity and reports native admission/fallback for the individual worker", async () => {
+    const native = vi.fn(decodeTerrarium);
+    const backend = createTerrainNativeDecoder({ workerId: "worker-test", requestedTier: "single", start: async () => ({ decodeTerrarium: native }),
+      timers: { setTimeout: (callback, ms) => setTimeout(callback, ms), clearTimeout: handle => clearTimeout(handle as ReturnType<typeof setTimeout>) } });
+    const f = fixture({ kernel: { decodeTerrarium: backend.decode, decodeBackendStatus: backend.status } }); f.setSize(1);
+    const blob = f.add(tile(2, index => [index, 2, 3, 255]));
+    for (let index = 0; index < 2; index++) expect(await f.workers.decode(blob, f.onPage)).toEqual(await f.reference(blob));
+    expect(f.onPage).toHaveBeenCalledOnce();
+    expect(f.workers.stats()).toMatchObject({ parity: "same", nativeWorkers: [{ workerId: "worker-test", actualTier: "single", nativeDecodes: 1, typescriptDecodes: 1 }] });
+    native.mockImplementationOnce(() => { throw new Error("native trap"); });
+    expect(await f.workers.decode(blob, f.onPage)).toEqual(await f.reference(blob));
+    const stats = f.workers.stats();
+    expect(stats.nativeWorkers).toMatchObject([{ actualTier: "typescript", fallbackReason: "decode-failed" }]);
+    stats.nativeWorkers[0].actualTier = "single";
+    expect(f.workers.stats().nativeWorkers[0].actualTier).toBe("typescript");
+    expect(f.onPage).toHaveBeenCalledOnce(); expect(f.onError).not.toHaveBeenCalled(); f.workers.dispose();
+  });
   it("return the page decoder's exact heights, transfer them, and reuse one cleared canvas per worker", async () => {
     const f = fixture(); f.setSize(1);
     const blobs = [f.add(tile(4, index => [index * 37 % 256, index * 91 % 256, index * 53 % 256, 255])),
