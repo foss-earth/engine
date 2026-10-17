@@ -1,6 +1,7 @@
 import { DEFAULT_CAMERA_LIMITS, DEFAULT_EYE_CONTACT, DEFAULT_GROUND_FOLLOW } from "../../camera/cameraLimits.js";
 import { DEFAULT_GRAB_FOLLOW_MS, DEFAULT_INERTIA_DECAY_PER_FRAME, GRAB_FOLLOW_ID } from "../../input/inertialCameraController.js";
 import { DEFAULT_INPUT_RATES, type InputRates } from "../../input/inputRates.js";
+import { DEFAULT_TOUCH_TWIST, TOUCH_TWIST_ID, TOUCH_TWIST_THRESHOLD_BOUNDS, TOUCH_TWIST_THRESHOLD_ID } from "../../input/inputSettings.js";
 import { DEFAULT_GLOBE_INTENT_RATES } from "../../input/globeIntentMotion.js";
 import { DEFAULT_GLOBE_STICK_DEADZONE } from "../../input/gamepadDefaults.js";
 import {
@@ -357,6 +358,34 @@ export const INPUT_RATE_PARAMETERS: readonly ParameterSpec[] = [
     "ratio", DEFAULT_INPUT_RATES.touchPanRate, { min: 0.05, max: 5 }, "touch", "src/browser/touchController.ts"),
   rate("input.touch.zoomExponent", "Pinch zoom", "How strongly a pinch zooms: the pinch's ratio is raised to this power.",
     "none", DEFAULT_INPUT_RATES.touchZoomExponent, { min: 0.02, max: 4 }, "touch", "src/browser/touchController.ts"),
+  {
+    id: TOUCH_TWIST_ID,
+    label: "Twist to turn",
+    description: "Two fingers that twist in place hold the ground between them, as in Google Maps: until they lift, the twist turns the view about that ground, spreading or closing them zooms toward it, and moving them drags it along. A two-finger swipe still turns and tilts the view about the compass.",
+    unit: "none",
+    kind: "boolean",
+    default: DEFAULT_TOUCH_TWIST.enabled,
+    defaultReason: "On: a twist is how Google Maps turns, and a swipe or pinch that turns a little is still a swipe and pinch.",
+    home: { tab: CONTROLS_TAB, section: "touch", level: "main" },
+    appliesLive: true,
+    source: "src/browser/touchController.ts",
+  },
+  {
+    id: TOUCH_TWIST_THRESHOLD_ID,
+    label: "Twist threshold",
+    description: "How far two fingers must twist in place before they hold the ground. Smaller catches a twist sooner, and catches more swipes and pinches that twist a little.",
+    unit: "deg",
+    kind: "number",
+    bounds: () => TOUCH_TWIST_THRESHOLD_BOUNDS,
+    step: 1,
+    scale: "linear",
+    default: DEFAULT_TOUCH_TWIST.thresholdDeg,
+    defaultReason: "Past the few degrees two fingers turn in a swipe or a pinch, and well short of a deliberate twist.",
+    visibleWhen: { id: TOUCH_TWIST_ID, value: true },
+    home: { tab: CONTROLS_TAB, section: "touch", level: "main" },
+    appliesLive: true,
+    source: "src/browser/touchController.ts",
+  },
   {
     id: "input.gamepad.deadzone",
     label: "Stick deadzone",

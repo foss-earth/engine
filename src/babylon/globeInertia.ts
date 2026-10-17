@@ -1,6 +1,12 @@
 import type { RenderScheduler } from "@foss-earth/renderer";
 import type { EcefCoord } from "../camera/cameraMath.js";
-import { createInertialCameraController, DEFAULT_INERTIA_DECAY_PER_FRAME, type InertialCameraController } from "../input/inertialCameraController.js";
+import {
+  createInertialCameraController,
+  DEFAULT_INERTIA_DECAY_PER_FRAME,
+  MAX_ZOOM_LOG_DELTA_PER_FRAME,
+  ORBIT_GLIDE_REST_DEG,
+  type InertialCameraController,
+} from "../input/inertialCameraController.js";
 import { trackpadMomentumFraction } from "../input/trackpadMomentum.js";
 import type { NavigationAnchor } from "../input/navigationAnchors.js";
 import type { CameraController } from "./cameraState.js";
@@ -26,6 +32,12 @@ const FRAME_MS = 1000 / 60;
 const MAX_STEP_MS = 100;
 /** The inertial pan's cap for one 60 Hz frame. A grab's fling is capped the same way, then kept as a speed. */
 const MAX_PAN_PX_PER_FRAME = 80;
+/** The inertial turn's cap for one 60 Hz frame, degrees. A twist's fling is capped the same way. */
+const MAX_TWIST_DEG_PER_FRAME = 12;
+/** A zoom slower than this, natural log a 60 Hz frame, has stopped: the same rest as the inertial controller. */
+const TWIST_REST_LOG = 0.00005;
+/** Recent twist kept for its release speed, as the inertial controller keeps a turn's or a pinch's. */
+const TWIST_WINDOW_MS = 120;
 
 /**
  * The grab's release, in screen pixels per second, so a faster display does not
@@ -38,6 +50,20 @@ interface GrabGlide {
   height: number;
   releaseX: number;
   releaseY: number;
+  startedMs: number;
+}
+
+/**
+ * A twist's release: the turn about the grabbed point, degrees per second,
+ * and the zoom toward it, natural log of the distance per second. As with a
+ * grab's glide, the release speeds feed it, then shrink.
+ */
+interface TwistGlide {
+  point: Readonly<EcefCoord>;
+  heading: number;
+  log: number;
+  releaseHeading: number;
+  releaseLog: number;
   startedMs: number;
 }
 
@@ -57,6 +83,7 @@ export function createGlobeInertia(controller: CameraController, ports: GlobeIne
     base.cancel();
     grabGlide = null;
     grabGlideSteppedMs = null;
+    endTwistGlide();
     unifiedOn = on;
   };
   const anchors = ports.anchors;
@@ -69,6 +96,15 @@ export function createGlobeInertia(controller: CameraController, ports: GlobeIne
   // The release glide, in px/s. It is not the shared pan channel: that one applies a 60 Hz frame once per update.
   let grabGlide: GrabGlide | null = null;
   let grabGlideSteppedMs: number | null = null;
+  // A held grab's twist, kept for its release speed, and the glide letting go starts about the grabbed point.
+  let twistSamples: { t: number; heading: number; log: number }[] = [];
+  let twistGlide: TwistGlide | null = null;
+  let twistGlideSteppedMs: number | null = null;
+  function endTwistGlide(): void {
+    twistSamples = [];
+    twistGlide = null;
+    twistGlideSteppedMs = null;
+  }
   const rememberGrab = (): void => {
     const point = controller.grabbedPoint();
     grabbed = point ? Object.freeze({ x: point.x, y: point.y, z: point.z }) : null;
@@ -76,6 +112,44 @@ export function createGlobeInertia(controller: CameraController, ports: GlobeIne
   const panGliding = (): boolean => {
     const pan = base.motion().pan;
     return Math.abs(pan.x) > PAN_REST_PX || Math.abs(pan.y) > PAN_REST_PX;
+  };
+  /**
+   * A twist let go at speed glides on about the grabbed point at that speed,
+   * fed and slowed as a grab's glide is. What moved in the last moments is
+   * that speed: fingers held still before they lift leave none.
+   */
+  const startTwistGlide = (point: Readonly<EcefCoord> | null, nowMs: number, steppedMs: number | null): void => {
+    const samples = twistSamples.filter(sample => sample.t >= nowMs - TWIST_WINDOW_MS);
+    endTwistGlide();
+    // Each sample is the twist since the one before, so the first only marks when the span starts.
+    if (!point || samples.length < 2) return;
+    const span = Math.max(FRAME_MS, Math.max(nowMs, samples[samples.length - 1].t) - samples[0].t);
+    let heading = 0, log = 0;
+    for (const sample of samples.slice(1)) { heading += sample.heading; log += sample.log; }
+    const cap = (value: number, perFrame: number): number => Math.max(-perFrame * 60, Math.min(perFrame * 60, value));
+    heading = cap(heading / span * 1000 * strength("orbit"), MAX_TWIST_DEG_PER_FRAME);
+    log = cap(log / span * 1000 * strength("zoom"), MAX_ZOOM_LOG_DELTA_PER_FRAME);
+    if (!Number.isFinite(heading) || !Number.isFinite(log) || twistResting(heading, log)) return;
+    twistGlide = { point, heading, log, releaseHeading: heading, releaseLog: log, startedMs: nowMs };
+    twistGlideSteppedMs = steppedMs;
+  };
+  const twistResting = (heading: number, log: number): boolean => Math.abs(heading) / 60 <= ORBIT_GLIDE_REST_DEG && Math.abs(log) / 60 <= TWIST_REST_LOG;
+  const stepTwistGlide = (nowMs: number): void => {
+    const glide = twistGlide;
+    if (!glide) return;
+    const dtMs = twistGlideSteppedMs === null ? FRAME_MS : Math.max(0, Math.min(MAX_STEP_MS, nowMs - twistGlideSteppedMs));
+    twistGlideSteppedMs = nowMs;
+    if (dtMs > 0) {
+      // The grab glide's feed and friction, for a turn and a zoom.
+      const share = decayShare(dtMs);
+      const fraction = trackpadMomentumFraction(nowMs - glide.startedMs);
+      glide.heading = glide.heading * share + glide.releaseHeading * (1 - share) * fraction;
+      glide.log = glide.log * share + glide.releaseLog * (1 - share) * fraction;
+      const step = controller.twistAbout(glide.point, glide.heading * dtMs / 1000, Math.exp(glide.log * dtMs / 1000));
+      // Stopped where a limit or the pole lets it go no further.
+      if (!step.moved && step.constrained) { endTwistGlide(); return; }
+    }
+    if (trackpadMomentumFraction(nowMs - glide.startedMs) === 0 && twistResting(glide.heading, glide.log)) endTwistGlide();
   };
   /** A released grab's marker ends when other input arrives. A grab still held keeps its point. */
   const endRememberedGrab = (): void => {
@@ -158,6 +232,7 @@ export function createGlobeInertia(controller: CameraController, ports: GlobeIne
     beginAnchorPan(pick) {
       grabGlide = null;
       grabGlideSteppedMs = null;
+      endTwistGlide();
       base.cancel();
       grabSteppedMs = null;
       const began = controller.beginAnchorPan(pick);
@@ -166,16 +241,30 @@ export function createGlobeInertia(controller: CameraController, ports: GlobeIne
     },
     panAnchorTo(pick) { const held = controller.panAnchorTo(pick); if (held) ports.renderer.requestRender(); return held; },
     getAnchorPanScreenError: pick => controller.getAnchorPanScreenError(pick),
+    // Two fingers holding the ground twist and spread: the view turns and zooms about the point they hold.
+    twistAnchorPan(headingDeltaDeg, factor) {
+      const step = controller.twistAnchorPan(headingDeltaDeg, factor);
+      if (step.moved) {
+        const now = ports.nowMs();
+        twistSamples = [...twistSamples.filter(sample => sample.t >= now - TWIST_WINDOW_MS), { t: now, heading: headingDeltaDeg, log: Math.log(factor) }];
+        ports.renderer.requestRender();
+      }
+      return step;
+    },
     endAnchorPan() {
       // Let go: the speed it had, in pixels per second, keeps being fed for as long as a
       // swipe's wheel events, shrinking the same way, and camera.inertiaDecay slows it.
-      // A press that never moved, or that had already settled, leaves no glide and no marker.
+      // A twist's turn and zoom glide on the same way about the point. A press that
+      // never moved, or that had already settled, leaves no glide and no marker.
+      const point = controller.grabbedPoint();
       const fling = controller.endAnchorPan();
       const stepped = grabSteppedMs;
       grabSteppedMs = null;
-      if (!fling) { grabbed = null; grabGlide = null; grabGlideSteppedMs = null; return; }
-      const cap = (px: number): number => Math.max(-MAX_PAN_PX_PER_FRAME, Math.min(MAX_PAN_PX_PER_FRAME, px));
       syncUnified();
+      startTwistGlide(point, ports.nowMs(), stepped);
+      if (twistGlide) ports.renderer.requestRender();
+      if (!fling) { if (!twistGlide) grabbed = null; grabGlide = null; grabGlideSteppedMs = null; return; }
+      const cap = (px: number): number => Math.max(-MAX_PAN_PX_PER_FRAME, Math.min(MAX_PAN_PX_PER_FRAME, px));
       const scale = strength("pan");
       const x = cap(fling.screenDxPx) * scale * 60;
       const y = cap(fling.screenDyPx) * scale * 60;
@@ -186,14 +275,15 @@ export function createGlobeInertia(controller: CameraController, ports: GlobeIne
     update(nowMs = ports.nowMs()) {
       stepGrab(nowMs);
       stepGrabGlide(nowMs);
+      stepTwistGlide(nowMs);
       syncUnified();
       base.update(nowMs);
       // The frame the pan glide comes to rest reports no grabbed point, as a zoom or turn at rest reports no anchor.
-      if (grabbed && !controller.isAnchorPanActive() && !grabGlide && !panGliding()) grabbed = null;
+      if (grabbed && !controller.isAnchorPanActive() && !grabGlide && !twistGlide && !panGliding()) grabbed = null;
     },
-    cancelInertial() { base.cancel(); grabGlide = null; grabGlideSteppedMs = null; endRememberedGrab(); },
-    cancel() { base.cancel(); controller.cancelAnchorPan(); grabSteppedMs = null; grabGlide = null; grabGlideSteppedMs = null; grabbed = null; },
-    isActive: () => base.isActive() || controller.isAnchorPanMoving() || grabGlide !== null,
+    cancelInertial() { base.cancel(); grabGlide = null; grabGlideSteppedMs = null; endTwistGlide(); endRememberedGrab(); },
+    cancel() { base.cancel(); controller.cancelAnchorPan(); grabSteppedMs = null; grabGlide = null; grabGlideSteppedMs = null; endTwistGlide(); grabbed = null; },
+    isActive: () => base.isActive() || controller.isAnchorPanMoving() || grabGlide !== null || twistGlide !== null,
     // The point stays for the glide. panHeld is the finger: once it is up, the marker is only showing where the grab was.
     anchors: () => (grabbed ? { ...base.anchors(), pan: grabbed, panHeld: controller.isAnchorPanActive() } : base.anchors()),
     motion() {

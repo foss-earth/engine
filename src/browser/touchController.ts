@@ -1,5 +1,5 @@
 import { orbitWith, zoomWith, type CameraInputTarget } from "../input/inertialCameraController.js";
-import { DEFAULT_INPUT_RATES, type InputSettings } from "../input/inputSettings.js";
+import { DEFAULT_INPUT_RATES, DEFAULT_TOUCH_TWIST, type InputSettings } from "../input/inputSettings.js";
 import type { AnchorAcquisition } from "../input/navigationAnchors.js";
 import type { TouchDebugEvent, TouchDebugOverlayHandle } from "../input/touchDiagnostics.js";
 import { worldViewportHeight } from "./worldViewport.js";
@@ -38,6 +38,23 @@ const ORBIT_ACTIVATION_PX = 4;
  * ln(1.05) ≈ 0.0488 — fingers must spread/contract ~5% before zoom kicks in.
  */
 const ZOOM_ACTIVATION_LOG = Math.log(1.05);
+/**
+ * How much of a pair's motion its twist evidence remembers, px of fingertip
+ * travel, or the span between the fingers when that is more, so that a wide
+ * pair can twist as far as a close one. Older motion fades as new arrives.
+ */
+const TWIST_MEMORY_PX = 100;
+/**
+ * A twist is in place while the fingertips travel at least this share as
+ * far turning as the midpoint travels. A twist about one still finger moves
+ * the midpoint as far as it turns them; a swipe hardly turns them at all.
+ */
+const TWIST_IN_PLACE_RATIO = 0.5;
+/** A pair turning more than this in one frame, radians, is a glitch (≈ 2700°/s at 60 Hz). */
+const TWIST_MAX_STEP_RAD = Math.PI / 4;
+/** Fingers closer than this, px, do not say which way they point. */
+const TWIST_MIN_SPAN_PX = 40;
+const RAD_TO_DEG = 180 / Math.PI;
 
 // ─── Types ────────────────────────────────────────────────────────────
 
@@ -75,6 +92,18 @@ interface TransformSession {
   /** Where this pair zooms and turns: picked under its first midpoint, and held once it moves. */
   anchors: AnchorAcquisition | null;
   anchorsHeld: boolean;
+  /** The direction from finger A to finger B on screen last frame, radians, clockwise from screen right. */
+  previousAngle: number;
+  /**
+   * `input.touch.twistTurn`'s evidence over the pair's recent motion: the
+   * signed twist, radians, and the fingertips' travel turning, the midpoint's
+   * travel, and the fingertips' travel spreading, px.
+   */
+  twist: { turn: number; turnPx: number; swipePx: number; pinchPx: number };
+  /** The pair holds the ground under its midpoint: its twist turns the view about it and its spread zooms toward it. */
+  twisting: boolean;
+  /** Where the pair twisted, there was no ground to hold (sky, a point of interest): it stays a swipe and pinch until it lifts. */
+  twistRefused: boolean;
 }
 
 type Session = PanSession | TransformSession | null;
@@ -90,6 +119,17 @@ function centroid(a: Point2D, b: Point2D): Point2D {
 
 function distance(a: Point2D, b: Point2D): number {
   return Math.hypot(b.x - a.x, b.y - a.y);
+}
+
+/** The direction from `a` to `b` on screen, radians: clockwise from screen right, as y grows down. */
+function angle(a: Point2D, b: Point2D): number {
+  return Math.atan2(b.y - a.y, b.x - a.x);
+}
+
+/** An angle's change wrapped to (-π, π]. */
+function wrapAngle(radians: number): number {
+  const turns = Math.round(radians / (2 * Math.PI));
+  return radians - turns * 2 * Math.PI;
 }
 
 // ─── Controller ──────────────────────────────────────────────────────
@@ -120,6 +160,12 @@ function distance(a: Point2D, b: Point2D): number {
  * under its midpoint when it lands and kept until it lifts: the midpoint
  * moving turns the view, it does not move the anchor. `heldTouches`, down
  * before the handler attached, go on as the gesture they were.
+ *
+ * With `input.touch.twistTurn`, a pair that twists in place past
+ * `input.touch.twistThreshold` holds the ground under its midpoint instead,
+ * as in Google Maps, until it lifts: the twist turns the view about that
+ * ground one for one, the spread zooms toward it one for one, and the
+ * midpoint drags it along. It no longer tilts.
  *
  * @returns Cleanup function that removes all registered listeners.
  */
@@ -154,6 +200,7 @@ export function attachTouchController(
    */
   function setSession(next: Session): void {
     if (session?.kind === "transform" && session !== next) {
+      if (session.twisting) camera.endAnchorPan?.();
       camera.releaseMomentum?.("orbit");
       camera.releaseMomentum?.("zoom");
       if (session.anchors) camera.releaseAnchors?.(session.anchors);
@@ -197,6 +244,27 @@ export function attachTouchController(
   function firstTwo(touches: ArrayLike<Contact>): [Contact, Contact] | null {
     if (touches.length < 2) return null;
     return [touches[0], touches[1]];
+  }
+
+  /** The pair's direction, finger A to finger B, whichever order the list has them in. */
+  function pairAngle(s: TransformSession, a: Contact, b: Contact): number {
+    return a.identifier === s.identifierA ? angle(pointFromTouch(a), pointFromTouch(b)) : angle(pointFromTouch(b), pointFromTouch(a));
+  }
+
+  /** A pair that moved the camera leaves it coasting: the finger left after it must not grab while it is still. */
+  function coasting(s: Session): boolean {
+    return s?.kind === "transform" && (s.orbitActive || s.zoomActive || s.twisting);
+  }
+
+  /** Twist to turn is on, and the camera can hold the ground and twist about it. */
+  function twistAvailable(): boolean {
+    return (options.getSettings?.().touchTwist?.enabled ?? DEFAULT_TOUCH_TWIST.enabled)
+      && !!camera.beginAnchorPan && !!camera.panAnchorTo && !!camera.twistAnchorPan;
+  }
+
+  function twistThresholdRad(): number {
+    const degrees = options.getSettings?.().touchTwist?.thresholdDeg;
+    return (typeof degrees === "number" && Number.isFinite(degrees) && degrees > 0 ? degrees : DEFAULT_TOUCH_TWIST.thresholdDeg) / RAD_TO_DEG;
   }
 
   // ── Session transitions ─────────────────────────────────────────
@@ -266,6 +334,10 @@ export function attachTouchController(
       // Zoom's point is picked under the first midpoint; rotation's is the compass target.
       anchors: camera.acquireAnchors?.({ family: "touch", operations: ["zoom", "orbit"], client: midpoint, canvas, candidate: true }) ?? null,
       anchorsHeld: false,
+      previousAngle: angle(pa, pb),
+      twist: { turn: 0, turnPx: 0, swipePx: 0, pinchPx: 0 },
+      twisting: false,
+      twistRefused: false,
     });
   }
 
@@ -276,8 +348,7 @@ export function attachTouchController(
     }
     if (touches.length === 1) {
       if (!session || session.kind !== "pan" || session.identifier !== touches[0].identifier) {
-        const coast = session?.kind === "transform" && (session.orbitActive || session.zoomActive);
-        startPanSession(touches, coast);
+        startPanSession(touches, coasting(session));
       } else {
         // Re-baseline previous to current to avoid jumps after multi-touch end.
         session.previous = pointFromTouch(touches[0]);
@@ -302,6 +373,7 @@ export function attachTouchController(
       const pb = pointFromTouch(b);
       session.previousCentroid = centroid(pa, pb);
       session.previousDistance = distance(pa, pb);
+      session.previousAngle = pairAngle(session, a, b);
     }
   }
 
@@ -378,9 +450,11 @@ export function attachTouchController(
     const pb = pointFromTouch(b);
     const c = centroid(pa, pb);
     const d = distance(pa, pb);
+    const theta = pairAngle(session, a, b);
     if (d <= 0 || session.previousDistance <= 0) {
       session.previousCentroid = c;
       session.previousDistance = d;
+      session.previousAngle = theta;
       return;
     }
 
@@ -396,6 +470,13 @@ export function attachTouchController(
       return;
     }
 
+    // ── Twist ──────────────────────────────────────────────────────────────
+    // How far the pair turned this frame. Too close, or too fast to be a
+    // hand, it is no turn; the baseline still advances.
+    const rawTurn = wrapAngle(theta - session.previousAngle);
+    const dTheta = d >= TWIST_MIN_SPAN_PX && session.previousDistance >= TWIST_MIN_SPAN_PX && Math.abs(rawTurn) <= TWIST_MAX_STEP_RAD ? rawTurn : 0;
+    session.previousAngle = theta;
+
     // ── Distance clamp (zoom) ──────────────────────────────────────────────
     // A fast pinch can legitimately produce large per-frame distance changes.
     // Instead of dropping those frames (which would cascade-reject a whole
@@ -408,6 +489,25 @@ export function attachTouchController(
         : d;
     const clampedScaleStep = clampedD / session.previousDistance;
     const clampedLogScaleStep = Math.log(clampedScaleStep);
+
+    if (session.twisting) {
+      applyTwist(session, touches, timestamp, { c, d, dTheta, factor: session.previousDistance / clampedD, centroidStepPx });
+      return;
+    }
+    if (twistAvailable() && !session.twistRefused && detectTwist(session, { d, dTheta, centroidStepPx, spreadPx: Math.abs(clampedD - session.previousDistance) / 2 })) {
+      // The fingers hold the ground under their midpoint now: what the swipe and pinch set moving stops there.
+      const pick = { clientX: c.x, clientY: c.y, canvas };
+      if (camera.beginAnchorPan?.(pick)) {
+        session.twisting = true;
+        if (session.anchors) camera.releaseAnchors?.(session.anchors);
+        session.anchors = null;
+        session.previousCentroid = c;
+        session.previousDistance = d;
+        emitTwistDebug(session, touches, timestamp, "twist begins");
+        return;
+      }
+      session.twistRefused = true;
+    }
 
     session.accumulatedCentroidTravelPx += centroidStepPx;
     session.accumulatedAbsLogScale += Math.abs(clampedLogScaleStep);
@@ -472,6 +572,63 @@ export function attachTouchController(
     }
   }
 
+  /**
+   * Adds a frame to the pair's twist evidence, fading what came before as
+   * new motion arrives, and says whether it is a twist in place now: turned
+   * past the threshold, its fingertips travelling far enough turning for
+   * the midpoint's travel.
+   */
+  function detectTwist(s: TransformSession, step: { d: number; dTheta: number; centroidStepPx: number; spreadPx: number }): boolean {
+    const evidence = s.twist;
+    evidence.turn += step.dTheta;
+    evidence.turnPx += Math.abs(step.dTheta) * step.d / 2;
+    evidence.swipePx += step.centroidStepPx;
+    evidence.pinchPx += step.spreadPx;
+    const memoryPx = Math.max(TWIST_MEMORY_PX, step.d);
+    const travelPx = evidence.turnPx + evidence.swipePx + evidence.pinchPx;
+    if (travelPx > memoryPx) {
+      const keep = memoryPx / travelPx;
+      evidence.turn *= keep;
+      evidence.turnPx *= keep;
+      evidence.swipePx *= keep;
+      evidence.pinchPx *= keep;
+    }
+    return Math.abs(evidence.turn) >= twistThresholdRad() && evidence.turnPx >= evidence.swipePx * TWIST_IN_PLACE_RATIO;
+  }
+
+  /**
+   * A frame of a pair holding the ground: its twist turns the view about the
+   * held ground, a clockwise twist turning the ground clockwise, its spread
+   * zooms toward it, both one for one, and its midpoint carries it along. A
+   * hold lost under it, as when another finger lands, is taken again here.
+   */
+  function applyTwist(s: TransformSession, touches: TouchList, timestamp: number,
+    step: { c: Point2D; d: number; dTheta: number; factor: number; centroidStepPx: number }): void {
+    if (step.dTheta !== 0 || step.factor !== 1) camera.twistAnchorPan?.(-step.dTheta * RAD_TO_DEG, step.factor);
+    const pick = { clientX: step.c.x, clientY: step.c.y, canvas };
+    if (!(camera.panAnchorTo?.(pick) ?? false) && !(camera.beginAnchorPan?.(pick) ?? false)) {
+      s.twisting = false;
+      s.twistRefused = true;
+    }
+    s.previousCentroid = step.c;
+    s.previousDistance = step.d;
+    emitTwistDebug(s, touches, timestamp, `twist=${s.twisting ? 1 : 0} dDeg=${(step.dTheta * RAD_TO_DEG).toFixed(2)} sStep=${(1 / step.factor).toFixed(3)} cStep=${step.centroidStepPx.toFixed(1)}`);
+  }
+
+  function emitTwistDebug(s: TransformSession, touches: TouchList, timestamp: number, note: string): void {
+    if (!debugSink) return;
+    emitDebug({
+      type: "classify",
+      timestamp,
+      centroidTranslationPx: s.accumulatedCentroidTravelPx,
+      distanceDeltaPx: s.accumulatedAbsLogScale,
+      hasTwoMovingTouches: true,
+      touchesMovingTogether: false,
+      intent: "twist",
+      note,
+    }, touches);
+  }
+
   // ── Event handlers ──────────────────────────────────────────────
 
   function stop(e: TouchEvent): void {
@@ -511,7 +668,7 @@ export function attachTouchController(
       }, e.touches);
     }
     if (e.touches.length === 1) {
-      if (!session || session.kind !== "pan") startPanSession(e.touches, session?.kind === "transform" && (session.orbitActive || session.zoomActive));
+      if (!session || session.kind !== "pan") startPanSession(e.touches, coasting(session));
       applyPan(e.touches);
     } else if (e.touches.length >= 2) {
       if (!session || session.kind !== "transform") startTransformSession(e.touches);

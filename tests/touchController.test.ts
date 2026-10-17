@@ -523,3 +523,178 @@ describe("attachTouchController: a finger's grab of the ground", () => {
     cleanup();
   });
 });
+
+describe("attachTouchController: a twist that holds the ground (input.touch.twistTurn)", () => {
+  const centre = { x: 300, y: 400 };
+  /** Two fingers `radius` px either side of `at`, finger 2 at `deg` clockwise from screen right of finger 1. */
+  function pair(deg: number, radius = 100, at = centre): TouchLike[] {
+    const rad = (deg * Math.PI) / 180;
+    const dx = radius * Math.cos(rad), dy = radius * Math.sin(rad);
+    return [
+      { identifier: 1, clientX: at.x - dx, clientY: at.y - dy },
+      { identifier: 2, clientX: at.x + dx, clientY: at.y + dy },
+    ];
+  }
+  function twistingCamera(began = true) {
+    return {
+      ...makeCamera(),
+      beginAnchorPan: vi.fn<(pick: { clientX: number; clientY: number }) => boolean>(() => began),
+      panAnchorTo: vi.fn<(pick: { clientX: number; clientY: number }, sensitivity?: number) => boolean>(() => began),
+      twistAnchorPan: vi.fn<(headingDeltaDeg: number, factor: number) => void>(),
+      endAnchorPan: vi.fn(),
+      releaseMomentum: vi.fn(),
+      armReleaseMomentum: vi.fn(),
+    };
+  }
+  const twist = (enabled: boolean, thresholdDeg = 15) => ({
+    getSettings: () => ({ ...DEFAULT_INPUT_SETTINGS, globeAnchorRotation: false, touchTwist: { enabled, thresholdDeg } }),
+  });
+  function land(canvas: HTMLCanvasElement, touches: TouchLike[]): void {
+    dispatchTouch(canvas, "touchstart", [touches[0]], [touches[0]], 0);
+    dispatchTouch(canvas, "touchstart", touches, [touches[1]], 0);
+  }
+  function move(canvas: HTMLCanvasElement, touches: TouchLike[], t: number): void {
+    dispatchTouch(canvas, "touchmove", touches, touches, t);
+  }
+
+  it("holds the ground under the midpoint once a pair twists in place past the threshold, and turns about it one for one", () => {
+    const canvas = createCanvas();
+    const camera = twistingCamera();
+    const cleanup = attachTouchController(canvas, camera, twist(true));
+    land(canvas, pair(0));
+    for (let i = 1; i <= 3; i += 1) move(canvas, pair(4 * i), 16 * i);
+    // 12°: not yet.
+    expect(camera.beginAnchorPan).not.toHaveBeenCalled();
+    move(canvas, pair(16), 64);
+    expect(camera.beginAnchorPan).toHaveBeenCalledTimes(1);
+    expect(camera.beginAnchorPan.mock.lastCall?.[0]).toEqual(expect.objectContaining({ clientX: expect.closeTo(300, 6), clientY: expect.closeTo(400, 6) }));
+    // The twist before the threshold is not applied: the hold starts from here.
+    expect(camera.twistAnchorPan).not.toHaveBeenCalled();
+
+    move(canvas, pair(20), 80);
+    // A clockwise twist on screen turns the ground clockwise: the heading turns back.
+    expect(camera.twistAnchorPan).toHaveBeenCalledTimes(1);
+    expect(camera.twistAnchorPan.mock.lastCall?.[0]).toBeCloseTo(-4, 6);
+    expect(camera.twistAnchorPan.mock.lastCall?.[1]).toBeCloseTo(1, 9);
+    expect(camera.panAnchorTo.mock.lastCall?.[0]).toEqual(expect.objectContaining({ clientX: expect.closeTo(300, 6), clientY: expect.closeTo(400, 6) }));
+    move(canvas, pair(12), 96);
+    expect(camera.twistAnchorPan.mock.lastCall?.[0]).toBeCloseTo(8, 6);
+    // It no longer tilts or turns about the compass.
+    expect(camera.orbitBy).not.toHaveBeenCalled();
+    expect(camera.zoomBy).not.toHaveBeenCalled();
+
+    dispatchTouch(canvas, "touchend", [], pair(12), 112);
+    expect(camera.endAnchorPan).toHaveBeenCalledTimes(1);
+    cleanup();
+  });
+
+  it("zooms one for one with the spread, and drags the held ground with the midpoint", () => {
+    const canvas = createCanvas();
+    const camera = twistingCamera();
+    const cleanup = attachTouchController(canvas, camera, twist(true));
+    land(canvas, pair(0));
+    for (let i = 1; i <= 4; i += 1) move(canvas, pair(4 * i), 16 * i);
+    expect(camera.beginAnchorPan).toHaveBeenCalledTimes(1);
+
+    // Spread from 200 px to 250 px apart: the ground between them grows by as much.
+    move(canvas, pair(16, 125), 80);
+    expect(camera.twistAnchorPan.mock.lastCall?.[0]).toBeCloseTo(0, 9);
+    expect(camera.twistAnchorPan.mock.lastCall?.[1]).toBeCloseTo(200 / 250, 9);
+
+    move(canvas, pair(16, 125, { x: 330, y: 380 }), 96);
+    expect(camera.panAnchorTo.mock.lastCall?.[0]).toEqual(expect.objectContaining({ clientX: expect.closeTo(330, 6), clientY: expect.closeTo(380, 6) }));
+    expect(camera.panBy).not.toHaveBeenCalled();
+    cleanup();
+  });
+
+  it("catches a twist about one still finger", () => {
+    const canvas = createCanvas();
+    const camera = twistingCamera();
+    const cleanup = attachTouchController(canvas, camera, twist(true));
+    const pivot = { identifier: 1, clientX: 200, clientY: 400 };
+    const around = (deg: number): TouchLike[] => {
+      const rad = (deg * Math.PI) / 180;
+      return [pivot, { identifier: 2, clientX: 200 + 200 * Math.cos(rad), clientY: 400 + 200 * Math.sin(rad) }];
+    };
+    land(canvas, around(0));
+    for (let i = 1; i <= 6; i += 1) move(canvas, around(4 * i), 16 * i);
+    expect(camera.beginAnchorPan).toHaveBeenCalledTimes(1);
+    cleanup();
+  });
+
+  it("leaves a two-finger swipe and a pinch that turn a little as they were", () => {
+    const canvas = createCanvas();
+    const camera = twistingCamera();
+    const cleanup = attachTouchController(canvas, camera, twist(true));
+    // A swipe right that turns 0.3° a frame, 6° in all.
+    land(canvas, pair(90, 50, { x: 100, y: 250 }));
+    for (let i = 1; i <= 20; i += 1) move(canvas, pair(90 + 0.3 * i, 50, { x: 100 + 10 * i, y: 250 }), 16 * i);
+    dispatchTouch(canvas, "touchend", [], pair(96, 50, { x: 300, y: 250 }), 400);
+    // A pinch from 100 px to 300 px apart that turns 0.4° a frame, 8° in all.
+    land(canvas, pair(90, 50));
+    for (let i = 1; i <= 20; i += 1) move(canvas, pair(90 + 0.4 * i, 50 + 5 * i), 500 + 16 * i);
+    expect(camera.beginAnchorPan).not.toHaveBeenCalled();
+    expect(camera.twistAnchorPan).not.toHaveBeenCalled();
+    expect(camera.orbitBy).toHaveBeenCalled();
+    expect(camera.zoomBy).toHaveBeenCalled();
+    cleanup();
+  });
+
+  it("when off, a twist is the swipe and pinch it also is", () => {
+    const canvas = createCanvas();
+    const camera = twistingCamera();
+    const cleanup = attachTouchController(canvas, camera, twist(false));
+    land(canvas, pair(0));
+    for (let i = 1; i <= 15; i += 1) move(canvas, pair(6 * i), 16 * i);
+    expect(camera.beginAnchorPan).not.toHaveBeenCalled();
+    expect(camera.twistAnchorPan).not.toHaveBeenCalled();
+    cleanup();
+  });
+
+  it("is on by default", () => {
+    const canvas = createCanvas();
+    const camera = twistingCamera();
+    const cleanup = attachTouchController(canvas, camera, { getSettings: () => ({ ...DEFAULT_INPUT_SETTINGS, globeAnchorRotation: false }) });
+    land(canvas, pair(0));
+    for (let i = 1; i <= 15; i += 1) move(canvas, pair(6 * i), 16 * i);
+    expect(camera.twistAnchorPan).toHaveBeenCalled();
+    cleanup();
+  });
+
+  it("stays a swipe and pinch where there is no ground to hold, without asking again", () => {
+    const canvas = createCanvas();
+    const camera = twistingCamera(false);
+    const cleanup = attachTouchController(canvas, camera, twist(true));
+    land(canvas, pair(0));
+    for (let i = 1; i <= 10; i += 1) move(canvas, pair(4 * i, 100 + 4 * i), 16 * i);
+    expect(camera.beginAnchorPan).toHaveBeenCalledTimes(1);
+    expect(camera.twistAnchorPan).not.toHaveBeenCalled();
+    expect(camera.zoomBy).toHaveBeenCalled();
+    dispatchTouch(canvas, "touchend", [], pair(40, 140), 200);
+    expect(camera.endAnchorPan).not.toHaveBeenCalled();
+    cleanup();
+  });
+
+  it("lets go of the ground when one finger lifts, and that finger grabs only once it drags", () => {
+    const canvas = createCanvas();
+    const camera = twistingCamera();
+    const cleanup = attachTouchController(canvas, camera, { getSettings: () => ({ ...twist(true).getSettings(), globeAnchorRotation: true }) });
+    land(canvas, pair(0));
+    // The first finger to land grabbed on its own, and let go as the second landed.
+    expect(camera.beginAnchorPan).toHaveBeenCalledTimes(1);
+    expect(camera.endAnchorPan).toHaveBeenCalledTimes(1);
+    for (let i = 1; i <= 5; i += 1) move(canvas, pair(4 * i), 16 * i);
+    expect(camera.beginAnchorPan).toHaveBeenCalledTimes(2);
+    const cancels = camera.cancel.mock.calls.length;
+    const [left, lifted] = pair(20);
+    dispatchTouch(canvas, "touchend", [left], [lifted], 100);
+    expect(camera.endAnchorPan).toHaveBeenCalledTimes(2);
+    // Still, the finger left lets the twist glide on.
+    expect(camera.beginAnchorPan).toHaveBeenCalledTimes(2);
+    expect(camera.cancel).toHaveBeenCalledTimes(cancels);
+    dispatchTouch(canvas, "touchmove", [{ ...left, clientX: left.clientX + 8 }], [{ ...left, clientX: left.clientX + 8 }], 116);
+    expect(camera.cancel).toHaveBeenCalledTimes(cancels + 1);
+    expect(camera.beginAnchorPan).toHaveBeenCalledTimes(3);
+    cleanup();
+  });
+});

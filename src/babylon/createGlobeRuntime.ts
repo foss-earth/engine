@@ -25,7 +25,10 @@ import { passUnusedInputToWorld } from "../browser/passToWorld.js";
 import { DEFAULT_GRAB_FOLLOW_MS, DEFAULT_INERTIA_DECAY_PER_FRAME, GRAB_FOLLOW_ID, type InertialCameraController } from "../input/inertialCameraController.js";
 import type { CameraHandling } from "../camera/cameraLimits.js";
 import type { GlobeNavigationIntentFrame } from "../input/globeNavigationTypes.js";
-import type { InputModePreference, InputSensitivitySettings } from "../input/inputSettings.js";
+import {
+  DEFAULT_TOUCH_TWIST, TOUCH_TWIST_ID, TOUCH_TWIST_THRESHOLD_ID,
+  type InputModePreference, type InputSensitivitySettings, type TouchTwistSettings,
+} from "../input/inputSettings.js";
 import { INPUT_RATE_IDS } from "../settings/catalogue/controls.js";
 import { createCameraSettings } from "../settings/cameraSettings.js";
 import type { GlobeViewState } from "../view.js";
@@ -443,6 +446,14 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
   const cameraLimits = cameraSettings.limits;
   const groundFollow = cameraSettings.groundFollow;
   const inputRates = cameraSettings.inputRates;
+  // A pair twisted in place holds the ground, where the host has the parameter; off where it has not.
+  const touchTwist = (): TouchTwistSettings => {
+    const threshold = settings.has(TOUCH_TWIST_THRESHOLD_ID) ? settings.get(TOUCH_TWIST_THRESHOLD_ID) : null;
+    return {
+      enabled: settings.has(TOUCH_TWIST_ID) && settings.get(TOUCH_TWIST_ID) === true,
+      thresholdDeg: typeof threshold === "number" && Number.isFinite(threshold) ? threshold : DEFAULT_TOUCH_TWIST.thresholdDeg,
+    };
+  };
   // A swipe or pinch over a panel or the HUD that none of them uses moves
   // whichever camera has the canvas, the globe's or the application's, and
   // never reaches the browser as Back or a page zoom.
@@ -888,6 +899,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
       ? null
       : createInputController(canvas, inertialCameraController, { ...platform.input, isOrbitMode: () => orbitModeActive, pointSelection: anchors.selection });
     inputController?.setRates(inputRates());
+    inputController?.setTouchTwist(touchTwist());
 
     return geospatialCamera;
   }
@@ -1610,6 +1622,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
     ...["camera.safeSpace", "camera.safeSpace.acceleration", "camera.safeSpace.clearance", "camera.inertiaDecay"].map(id => watch(id, () => cameraController?.setEyeContact(cameraSettings.eyeContact()))),
     watch("camera.orbitInPlace", () => { cameraController?.setOrbitInPlace(settings.get("camera.orbitInPlace") === true); scheduler.requestRender(); }),
     ...Object.values(INPUT_RATE_IDS).map(id => watch(id, () => inputController?.setRates(inputRates()))),
+    ...[TOUCH_TWIST_ID, TOUCH_TWIST_THRESHOLD_ID].filter(id => settings.has(id)).map(id => watch(id, () => inputController?.setTouchTwist(touchTwist()))),
     // The notes under the anchor choices say what each choice last did; the markers follow the switch.
     ...NAVIGATION_ANCHOR_SETTING_IDS.filter(id => settings.has(id)).map(id => watch(id, updateAnchorNotes)),
     ...(settings.has(ZOOM_CENTER_ID) ? [watch(ZOOM_CENTER_ID, () => {

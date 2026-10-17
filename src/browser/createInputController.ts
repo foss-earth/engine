@@ -6,11 +6,13 @@ import { attachMouseController, type HeldPress, type PointSelection } from "./mo
 import {
   DEFAULT_INPUT_RATES,
   DEFAULT_INPUT_SETTINGS,
+  DEFAULT_TOUCH_TWIST,
   normalizeSensitivitySettings,
   type InputModePreference,
   type InputRates,
   type InputSensitivitySettings,
   type InputSettings,
+  type TouchTwistSettings,
 } from "../input/inputSettings.js";
 
 export interface EngineInputRealm {
@@ -40,6 +42,9 @@ export interface InputController {
   /** The devices' rates before sensitivity: `input.mouse.*`, `input.wheel.*` and `input.touch.*`. */
   setRates(rates: Partial<InputRates>): void;
   getRates(): InputRates;
+  /** `input.touch.twistTurn` and `input.touch.twistThreshold`: whether a pair twisted in place holds the ground. */
+  setTouchTwist(twist: Partial<TouchTwistSettings>): void;
+  getTouchTwist(): TouchTwistSettings;
   /**
    * While suspended, the globe's controllers are detached: a navigation lease
    * owns input, and every event reaches its listeners untouched. Suspending
@@ -92,6 +97,7 @@ export function createInputController(
     sensitivity: normalizeSensitivitySettings(DEFAULT_INPUT_SETTINGS.sensitivity),
     globeAnchorRotation: options.loadGlobeAnchorRotationPreference(),
     rates: { ...DEFAULT_INPUT_RATES },
+    touchTwist: { ...DEFAULT_TOUCH_TWIST },
   };
 
   // ── Document-level prevention ────────────────────────────────────
@@ -167,6 +173,12 @@ export function createInputController(
     },
     getRates(): InputRates {
       return { ...(settings.rates ?? DEFAULT_INPUT_RATES) };
+    },
+    setTouchTwist(twist: Partial<TouchTwistSettings>): void {
+      settings.touchTwist = { ...(settings.touchTwist ?? DEFAULT_TOUCH_TWIST), ...twist };
+    },
+    getTouchTwist(): TouchTwistSettings {
+      return { ...(settings.touchTwist ?? DEFAULT_TOUCH_TWIST) };
     },
     setSuspended(next: boolean, handback?: InputHandback): void {
       if (suspended === next) return;

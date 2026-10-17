@@ -15,7 +15,7 @@ export interface TouchDebugEvent {
   clientY?: number;
   activePointerIds?: number[];
   sessionKind?: "none" | "single" | "multi";
-  intent?: "swipe" | "pinch" | null;
+  intent?: "swipe" | "pinch" | "twist" | null;
   /** Total centroid translation from the (re-baselined) session start. */
   centroidTranslationPx?: number;
   /** Total distance change from the (re-baselined) session start. */

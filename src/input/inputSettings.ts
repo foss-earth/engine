@@ -16,6 +16,24 @@ export interface InputSensitivitySettings {
 
 export { DEFAULT_INPUT_RATES, type InputRates } from "./inputRates.js";
 
+/**
+ * Two fingers that twist in place, as in Google Maps: the pair holds the
+ * ground between them, its twist turns the view about that ground, its
+ * spread zooms toward it, and moving it drags that ground along, until it
+ * lifts. A two-finger swipe still turns and tilts the view about the compass.
+ */
+export interface TouchTwistSettings {
+  /** `input.touch.twistTurn`. */
+  enabled: boolean;
+  /** `input.touch.twistThreshold`: how far, degrees, a pair twists in place before it holds the ground. */
+  thresholdDeg: number;
+}
+
+export const TOUCH_TWIST_ID = "input.touch.twistTurn";
+export const TOUCH_TWIST_THRESHOLD_ID = "input.touch.twistThreshold";
+export const DEFAULT_TOUCH_TWIST: TouchTwistSettings = Object.freeze({ enabled: true, thresholdDeg: 15 });
+export const TOUCH_TWIST_THRESHOLD_BOUNDS = Object.freeze({ min: 3, max: 45 });
+
 export interface InputSettings {
   mode: InputModePreference;
   sensitivity: InputSensitivitySettings;
@@ -23,6 +41,8 @@ export interface InputSettings {
   globeAnchorRotation: boolean;
   /** The devices' rates; DEFAULT_INPUT_RATES when omitted. */
   rates?: InputRates;
+  /** A two-finger twist that holds the ground; DEFAULT_TOUCH_TWIST (off) when omitted. */
+  touchTwist?: TouchTwistSettings;
 }
 
 export const DEFAULT_INPUT_SENSITIVITY: InputSensitivitySettings = {

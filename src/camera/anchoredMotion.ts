@@ -158,6 +158,22 @@ function orbitAboutAxis(pose: CameraPose, pivot: Vec3, view: ViewDirection, pitc
   return look ? { eye, forward: look } : null;
 }
 
+/**
+ * The pose after turning the heading about the vertical through the Earth's
+ * centre and `pivot`, clockwise seen from above. A level look turned about
+ * that axis stays level, so the view turns exactly as far as asked, as a
+ * twist of two fingers does, even looking straight down, where turning about
+ * the WGS84 vertical (`orbitAbout`) also rolls the look a little, and
+ * levelling it again turns it further. The pivot keeps its place on screen.
+ * Null when the pivot is not ahead.
+ */
+export function turnAbout(pose: CameraPose, pivot: Vec3, headingDeltaDeg: number): CameraPose | null {
+  if (!viewDirection(pose, pivot)) return null;
+  const axis = normalize(pivot);
+  const angle = -headingDeltaDeg * DEG_TO_RAD;
+  return { eye: add(pivot, rotateAbout(sub(pose.eye, pivot), axis, angle)), forward: rotateAbout(pose.forward, axis, angle) };
+}
+
 /** How far a look dips below the horizontal at `point`, degrees: the globe's tilt there, 0 level and 90 straight down. */
 export function tiltAt(point: Vec3, forward: Vec3): number {
   return Math.asin(Math.max(-1, Math.min(1, -dot(forward, normalize(point))))) * RAD_TO_DEG;

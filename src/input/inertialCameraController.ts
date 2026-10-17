@@ -85,6 +85,12 @@ export interface CameraInputTarget<TCanvas = unknown> {
   beginAnchorPan?(pick: AnchorPanPick<TCanvas>): boolean;
   panAnchorTo?(pick: AnchorPanPick<TCanvas>, sensitivity?: number): boolean;
   getAnchorPanScreenError?(pick: AnchorPanPick<TCanvas>): AnchorPanScreenError | null;
+  /**
+   * The fingers of a grab pan twist and spread: turn by `headingDeltaDeg` about
+   * the grabbed point's vertical and zoom to `factor` of the distance toward
+   * it, the point kept where it is on screen. Letting go glides on about it.
+   */
+  twistAnchorPan?(headingDeltaDeg: number, factor: number): void | AnchoredMotionResult;
   endAnchorPan?(): void;
 }
 

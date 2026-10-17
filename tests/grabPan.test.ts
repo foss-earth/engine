@@ -473,3 +473,119 @@ describe("createGlobeInertia grab pan", () => {
     } finally { f.dispose(); }
   });
 });
+
+describe("a two-finger twist about the held ground on the real globe camera", () => {
+  const turned = (from: number, to: number): number => ((to - from + 540) % 360) - 180;
+  const TOP_DOWN: View = { name: "a city from above", state: { latDeg: 44.9778, lonDeg: -93.265, headingDeg: 30, pitchDeg: 90, zoomMeters: 2000 }, heightMeters: 260 };
+
+  it("turns the heading by the twist and zooms toward the point, which keeps its pixel and the tilt", () => {
+    for (const view of [VIEWS[0], VIEWS[1], VIEWS[2], TOP_DOWN]) {
+      const f = rig(view);
+      try {
+        const point = f.groundUnder(700, 500)!;
+        const at = f.pixel(point);
+        const before = f.controller.getViewState();
+        const distance = length(sub(point, [f.camera.position.x, f.camera.position.y, f.camera.position.z]));
+        const step = f.controller.twistAbout({ x: point[0], y: point[1], z: point[2] }, -10, 0.8);
+        expect(step.moved, view.name).toBe(true);
+        const after = f.controller.getViewState();
+        expect(gap(f.pixel(point), at), view.name).toBeLessThan(1e-3);
+        // The heading is the WGS84 one at the centre of the view: within a tenth of a degree of the turn about the point.
+        expect(Math.abs(turned(before.headingDeg, after.headingDeg) + 10), view.name).toBeLessThan(0.1);
+        expect(after.pitchDeg, view.name).toBeCloseTo(before.pitchDeg, 1);
+        const nearer = length(sub(point, [f.camera.position.x, f.camera.position.y, f.camera.position.z]));
+        expect(nearer / distance, view.name).toBeCloseTo(0.8, 6);
+      } finally { f.dispose(); }
+    }
+  });
+
+  it("keeps the ground under each finger from above as the pair twists, spreads and moves", () => {
+    const f = rig(TOP_DOWN);
+    const inertia = createGlobeInertia(f.controller, { nowMs: f.now, decayPerFrame: () => 0.82, renderer: { requestRender: vi.fn() }, grabFollowMs: () => 0 });
+    const fingers = (deg: number, radius: number, x: number, y: number): [{ x: number; y: number }, { x: number; y: number }] => {
+      const rad = (deg * Math.PI) / 180;
+      return [{ x: x - radius * Math.cos(rad), y: y - radius * Math.sin(rad) }, { x: x + radius * Math.cos(rad), y: y + radius * Math.sin(rad) }];
+    };
+    try {
+      let deg = 10, radius = 120, x = 640, y = 360;
+      const [a, b] = fingers(deg, radius, x, y);
+      const groundA = f.groundUnder(a.x, a.y)!, groundB = f.groundUnder(b.x, b.y)!;
+      expect(inertia.beginAnchorPan!(f.pick(x, y))).toBe(true);
+      let worst = 0;
+      for (let i = 0; i < 30; i += 1) {
+        const nextDeg = deg + 3, nextRadius = radius * 1.01;
+        inertia.twistAnchorPan!(-(nextDeg - deg), radius / nextRadius);
+        deg = nextDeg; radius = nextRadius; x += 4; y -= 2;
+        inertia.panAnchorTo!(f.pick(x, y));
+        f.advance(FRAME_MS);
+        inertia.update(f.now());
+        const [nowA, nowB] = fingers(deg, radius, x, y);
+        worst = Math.max(worst, gap(f.pixel(groundA), nowA), gap(f.pixel(groundB), nowB));
+      }
+      // 90° of twist, a third more spread and 130 px of drag, 120 px out from the midpoint, which is held exactly.
+      // The camera stops a degree short of straight down: what is left is that tilt's perspective.
+      expect(worst).toBeLessThan(1.5);
+    } finally { f.dispose(); }
+  });
+
+  it("glides on turning about the point after a quick twist lets go, and not after a twist held still", () => {
+    const f = rig(VIEWS[0]);
+    const inertia = createGlobeInertia(f.controller, { nowMs: f.now, decayPerFrame: () => 0.82, renderer: { requestRender: vi.fn() }, grabFollowMs: () => 0 });
+    try {
+      expect(inertia.beginAnchorPan!(f.pick(640, 500))).toBe(true);
+      const point = f.groundUnder(640, 500)!;
+      for (let i = 0; i < 10; i += 1) {
+        inertia.twistAnchorPan!(-2, 1);
+        inertia.panAnchorTo!(f.pick(640, 500));
+        f.advance(FRAME_MS);
+        inertia.update(f.now());
+      }
+      const released = f.controller.getViewState().headingDeg;
+      inertia.endAnchorPan!();
+      expect(inertia.isActive()).toBe(true);
+      expect(inertia.anchors().pan).toBeTruthy();
+      f.advance(FRAME_MS);
+      inertia.update(f.now());
+      // The first frame goes on at about the speed it was let go at.
+      expect(turned(released, f.controller.getViewState().headingDeg)).toBeCloseTo(-2, 0);
+      for (let i = 0; i < 400 && inertia.isActive(); i += 1) {
+        f.advance(FRAME_MS);
+        inertia.update(f.now());
+        expect(gap(f.pixel(point), { x: 640, y: 500 })).toBeLessThan(1e-3);
+      }
+      expect(inertia.isActive()).toBe(false);
+      expect(inertia.anchors().pan).toBeFalsy();
+      const glided = turned(released, f.controller.getViewState().headingDeg);
+      expect(glided).toBeLessThan(-10);
+      expect(glided).toBeGreaterThan(-200);
+
+      // A twist held still for a moment before the fingers lift leaves nothing turning.
+      expect(inertia.beginAnchorPan!(f.pick(640, 500))).toBe(true);
+      for (let i = 0; i < 10; i += 1) { inertia.twistAnchorPan!(-2, 1); f.advance(FRAME_MS); inertia.update(f.now()); }
+      for (let i = 0; i < 10; i += 1) { f.advance(FRAME_MS); inertia.update(f.now()); }
+      const still = f.controller.getViewState().headingDeg;
+      inertia.endAnchorPan!();
+      for (let i = 0; i < 10; i += 1) { f.advance(FRAME_MS); inertia.update(f.now()); }
+      expect(turned(still, f.controller.getViewState().headingDeg)).toBeCloseTo(0, 6);
+      expect(inertia.isActive()).toBe(false);
+    } finally { f.dispose(); }
+  });
+
+  it("stops the twist's glide when a finger lands", () => {
+    const f = rig(VIEWS[0]);
+    const inertia = createGlobeInertia(f.controller, { nowMs: f.now, decayPerFrame: () => 0.82, renderer: { requestRender: vi.fn() }, grabFollowMs: () => 0 });
+    try {
+      inertia.beginAnchorPan!(f.pick(640, 500));
+      for (let i = 0; i < 10; i += 1) { inertia.twistAnchorPan!(-2, 0.99); f.advance(FRAME_MS); inertia.update(f.now()); }
+      inertia.endAnchorPan!();
+      f.advance(FRAME_MS); inertia.update(f.now());
+      expect(inertia.isActive()).toBe(true);
+      inertia.cancel();
+      const stopped = f.controller.getViewState();
+      f.advance(FRAME_MS); inertia.update(f.now());
+      expect(inertia.isActive()).toBe(false);
+      expect(f.controller.getViewState().headingDeg).toBeCloseTo(stopped.headingDeg, 9);
+      expect(f.controller.getViewState().zoomMeters).toBeCloseTo(stopped.zoomMeters, 6);
+    } finally { f.dispose(); }
+  });
+});

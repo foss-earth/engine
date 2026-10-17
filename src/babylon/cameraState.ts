@@ -22,7 +22,7 @@ import {
 } from "../camera/cameraMath.js";
 import { add, cross, dot, length, normalize, scale, sub, type Vec3 } from "../camera/geographicFrames.js";
 import { orbitAngles, turnLook } from "../camera/orbitMath.js";
-import { cameraAxes, lineOfSightTarget, orbitAbout, tiltAt, viewDirection, zoomAbout, type CameraPose, type ViewDirection } from "../camera/anchoredMotion.js";
+import { cameraAxes, lineOfSightTarget, orbitAbout, rotateAbout, tiltAt, turnAbout, viewDirection, zoomAbout, type CameraPose, type ViewDirection } from "../camera/anchoredMotion.js";
 import type { AnchoredMotionConstraint, AnchoredMotionResult, GlideMotion, NavigationAnchor } from "../input/navigationAnchors.js";
 import { ORBIT_GLIDE_REST_DEG, type GlideAnchors } from "../input/inertialCameraController.js";
 import { worldViewportHeight } from "../browser/worldViewport.js";
@@ -798,6 +798,27 @@ export class CameraController {
     return { screenDxPx, screenDyPx, canvasHeight };
   }
 
+  /**
+   * The fingers of a grab pan twist and spread: turn and zoom about the
+   * grabbed point (`twistAbout`), which keeps its place on screen while
+   * `stepAnchorPan` keeps bringing it to the pointer. The pan's speed turns
+   * and scales with the view, so letting go flings the way the ground was
+   * moving on screen. Refused with no grab.
+   */
+  twistAnchorPan(headingDeltaDeg: number, factor: number): AnchoredMotionResult {
+    const grab = this.grab;
+    if (!grab) return { moved: false, constrained: "invalid" };
+    const radius = this.currentFieldsSettled().radius;
+    const result = this.twistAbout({ x: grab.point[0], y: grab.point[1], z: grab.point[2] }, headingDeltaDeg, factor);
+    if (result.moved) {
+      // turnAbout's turn of the view, given to the speed the pan measured in it.
+      const turned = rotateAbout(grab.velocity, normalize(grab.point), -headingDeltaDeg * DEG_TO_RAD);
+      const grown = radius > 0 ? this.currentFieldsSettled().radius / radius : 1;
+      grab.velocity = scale(turned, Number.isFinite(grown) ? grown : 1);
+    }
+    return result;
+  }
+
   /** Drop a grab pan without a glide: the view was replaced, or input cancelled. */
   cancelAnchorPan(): void {
     this.grab = null;
@@ -1028,6 +1049,20 @@ export class CameraController {
     return this.commitPlan(this.planAnchored(this.currentFieldsSettled(), point, { pitchDeltaDeg: ep, headingDeltaDeg: eh, factor: 1 }));
   }
 
+  /**
+   * Turn about `point` and zoom toward it in one step, as two fingers twist
+   * and spread over the ground: the heading by exactly as much about the
+   * point's vertical (`turnAbout`), the tilt kept, and the point keeps its
+   * place on screen. It is the pivot whatever
+   * `camera.orbitInPlace` and zoom about the view centre say, and the compass
+   * goes where the new look meets the orbit target's height. Within the zoom
+   * limits, measured to the point. A non-finite point is refused.
+   */
+  twistAbout(point: EcefCoord, headingDeltaDeg: number, factor: number): AnchoredMotionResult {
+    if (headingDeltaDeg === 0 && factor === 1) return { moved: false, constrained: null };
+    return this.commitPlan(this.planAnchored(this.currentFieldsSettled(), point, { pitchDeltaDeg: 0, headingDeltaDeg, factor }, "point"));
+  }
+
   /** Turn about the compass and zoom about `point` in one step. */
   orbitZoomAbout(point: EcefCoord, pitchDeltaDeg: number, headingDeltaDeg: number, factor: number): AnchoredMotionResult {
     const ep = Math.abs(pitchDeltaDeg) >= ORBIT_DEADZONE_DEG ? pitchDeltaDeg : 0;
@@ -1150,17 +1185,20 @@ export class CameraController {
    * point, or about the compass when zoom is centred on the view. A turn leaves
    * the centre where it is. A zoom about a ground point puts the centre where
    * the new look meets the orbit target's height, so that point stays on
-   * screen. A step a limit or the pole would not allow is shortened to the
-   * most it allows.
+   * screen. `about` "point" turns and zooms about the ground point instead,
+   * and the centre goes where the new look meets that height. A step a limit
+   * or the pole would not allow is shortened to the most it allows.
    */
-  private planAnchored(fields: OrbitFields, point: EcefCoord, step: { pitchDeltaDeg: number; headingDeltaDeg: number; factor: number }): AnchoredPlan {
-    const orbitPivot: Vec3 = fields.center;
+  private planAnchored(fields: OrbitFields, point: EcefCoord, step: { pitchDeltaDeg: number; headingDeltaDeg: number; factor: number },
+    about: "compass" | "point" = "compass"): AnchoredPlan {
     const ground: Vec3 = [point.x, point.y, point.z];
-    if (!orbitPivot.every(Number.isFinite) || !ground.every(Number.isFinite) || !(step.factor > 0) || !Number.isFinite(step.factor)
+    if (!fields.center.every(Number.isFinite) || !ground.every(Number.isFinite) || !(step.factor > 0) || !Number.isFinite(step.factor)
       || !Number.isFinite(step.pitchDeltaDeg) || !Number.isFinite(step.headingDeltaDeg)) {
       return { fields: null, constrained: "invalid" };
     }
-    const zoomPivot: Vec3 = this.zoomAboutViewCenter ? orbitPivot : ground;
+    const onPoint = about === "point";
+    const orbitPivot: Vec3 = onPoint ? ground : fields.center;
+    const zoomPivot: Vec3 = this.zoomAboutViewCenter && !onPoint ? orbitPivot : ground;
     const before = this.poseOf(fields);
     // The zoom limits, measured to the point zoom moves toward: never further outside them than the eye is now.
     const distance = length(sub(step.factor === 1 ? orbitPivot : zoomPivot, before.eye));
@@ -1171,7 +1209,7 @@ export class CameraController {
     let constrained: AnchoredMotionConstraint | null = allowed !== wanted ? "distance-limit" : null;
     const factor = distance > 0 ? allowed / distance : 1;
     // A zoom that the limits reduced to nothing is a turn: the compass stays.
-    const keepCenter = factor === 1 || this.zoomAboutViewCenter;
+    const keepCenter = !onPoint && (factor === 1 || this.zoomAboutViewCenter);
     const correctionPivot: Vec3 = keepCenter ? orbitPivot : zoomPivot;
     // The tilt limits at the centre of the view, bent to where the tilt is now.
     const tiltNow = tiltAt(fields.center, before.forward);
@@ -1182,7 +1220,9 @@ export class CameraController {
     if (pitchDeltaDeg !== step.pitchDeltaDeg) constrained = "tilt-limit";
     const attempt = (share: number): AnchoredPlan => {
       let pose: CameraPose | null = before;
-      if (pitchDeltaDeg !== 0 || step.headingDeltaDeg !== 0) {
+      if (onPoint && pitchDeltaDeg === 0 && step.headingDeltaDeg !== 0) {
+        pose = turnAbout(pose, orbitPivot, step.headingDeltaDeg * share);
+      } else if (pitchDeltaDeg !== 0 || step.headingDeltaDeg !== 0) {
         pose = orbitAbout(pose, orbitPivot, pitchDeltaDeg * share, step.headingDeltaDeg * share);
       }
       if (pose && factor !== 1) pose = zoomAbout(pose, zoomPivot, Math.pow(factor, share));
