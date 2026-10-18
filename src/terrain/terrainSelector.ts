@@ -78,6 +78,8 @@ export interface TerrainSelectionInput {
   previous: { split: ReadonlySet<string>; leaves: ReadonlySet<string> } | null;
   /** The lowest and highest heights a tile may have, in metres. */
   boundsFor(tile: TileId): { min: number; max: number };
+  /** Opt-in: Keep tiles directly under the camera eye refined so safe-space checks have fine elevation. */
+  robustOrbitLOD?: boolean;
 }
 
 export interface TerrainLeaf {
@@ -144,6 +146,16 @@ function lowestGround(bounds: { min: number; max: number }, altitude: number): n
 
 function distance(a: Vec3, b: Vec3): number {
   return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+}
+
+function tileContainsMercator(tile: TileId, world: { x: number; y: number }): boolean {
+  const n = 2 ** tile.z;
+  const tx = Math.floor(world.x * n);
+  const ty = Math.floor(world.y * n);
+  const maxCoord = n - 1;
+  const clampedTx = Math.max(0, Math.min(maxCoord, tx));
+  const clampedTy = Math.max(0, Math.min(maxCoord, ty));
+  return tile.x === clampedTx && tile.y === clampedTy;
 }
 
 /**
@@ -217,9 +229,15 @@ export function selectTerrain(input: TerrainSelectionInput): TerrainSelection {
       visit(nearest.u, nearest.v);
       const center = hull.reduce((sum, p) => ({ x: sum.x + p.x / hull.length, y: sum.y + p.y / hull.length, z: sum.z + p.z / hull.length }), { x: 0, y: 0, z: 0 });
       const radius = Math.max(...hull.map(p => distance(p, center))) * 1.1;
-      const hidden = allOutside !== 0
+      const underEye = Boolean(
+        input.robustOrbitLOD &&
+        cameraWorld &&
+        tileContainsMercator(tile, cameraWorld) &&
+        !isSphereBelowHorizon(view.camera, center, radius)
+      );
+      const hidden = !underEye && (allOutside !== 0
         || (!anyAboveHorizon && span < TERRAIN_SELECTION_CONSTANTS.horizonTileSpan)
-        || isSphereBelowHorizon(view.camera, center, radius);
+        || isSphereBelowHorizon(view.camera, center, radius));
       if (!hidden && refine) {
         // Seen by the camera, measured from the point: its distance alone sets the level.
         const nearest = refineDistance(tile, bounds, GRID_POINTS);

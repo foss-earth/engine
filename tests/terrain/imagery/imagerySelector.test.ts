@@ -74,6 +74,26 @@ const OBLIQUE: TestViewOptions = { latDeg: 36.1, lonDeg: -112.1, altitudeMeters:
 const HORIZON: TestViewOptions = { latDeg: 47.6, lonDeg: -122.3, altitudeMeters: 300, pitchDeg: 88, headingDeg: 90 };
 
 describe("projected imagery selection", () => {
+  it("keeps complete plans bit-identical with packed height/slope probes, including unknown heights", () => {
+    for (const view of [OVERHEAD, OBLIQUE, HORIZON, { ...OVERHEAD, lonDeg: 179.999, altitudeMeters: 8000000 }]) {
+      for (const unknown of [false, true]) {
+        const heightAt = (lat: number, lon: number): number | null => unknown && Math.sin(lat + lon) > 0.7 ? null
+          : Math.sin(lat * 0.13) * 1200 + Math.cos(lon * 0.07) * 200 + lat * 0.000000123;
+        const surface = { heightAt, boundsFor: () => ({ min: -1600, max: 1600 }) };
+        let largest = 0;
+        const heightsAt = (coordinates: Float64Array): Float64Array => {
+          largest = Math.max(largest, coordinates.length / 2);
+          const heights = new Float64Array(coordinates.length / 2);
+          for (let i = 0; i < heights.length; i++) heights[i] = heightAt(coordinates[i * 2], coordinates[i * 2 + 1]) ?? NaN;
+          return heights;
+        };
+        const expected = select(input(view, { surface }));
+        const actual = select(input(view, { surface: { ...surface, heightsAt } }));
+        expect({ ...actual, cpuMs: 0 }).toEqual({ ...expected, cpuMs: 0 });
+        expect(largest).toBeGreaterThanOrEqual(30);
+      }
+    }
+  });
   it("measures disjoint root fallback outside selected leaves without a new selection", () => {
     const root = { z: 2, x: 0, y: 0 };
     const leaf = { z: 4, x: 1, y: 1 };

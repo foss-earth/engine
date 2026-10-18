@@ -5,8 +5,15 @@ import type { HeaderImageRequest } from "@foss-earth/images/browser";
 import { finishOwnedCleanup } from "./ownedCleanup.js";
 import { createTerrainMesh, DEFAULT_TILE_SEGMENTS, terrainMeshTarget } from "./terrainMesh.js";
 import { createTerrainInterest, type createTerrainTileLoader, type TerrainInterest } from "../terrain/terrainLoader.js";
+import { createTerrainMeshWorkers, type TerrainMeshWorkerPoolStats } from "../browser/terrainMeshWorkers.js";
+import type { TerrainMeshWorkerPort } from "../browser/terrainMeshWorkerProtocol.js";
+import { createTerrainHeightBatches, type TerrainHeightBatchStats } from "../browser/terrainHeightBatches.js";
+import type { HeightBatchWorkerPort } from "../browser/terrainHeightBatchProtocol.js";
+import { nativeCorePlan } from "../settings/catalogue/native.js";
+import type { WorkerPoolTimers } from "../browser/workerPool.js";
 import {
   Color3,
+  Frustum,
   Mesh,
   StandardMaterial,
   Texture,
@@ -141,6 +148,18 @@ export interface RasterTilesRuntimeOptions {
   /** Called after displayed/query commits and asynchronous or suspended status changes. */
   onSurfaceChange?: (change: SurfaceOwnerChange) => void;
   onDebugEvent?: (event: string, detail?: Record<string, unknown>) => void;
+  /** Worker factory for preparing terrain mesh geometry off the main thread. */
+  createTerrainMeshWorker?: () => TerrainMeshWorkerPort | null;
+  /** Maximum number of terrain mesh workers. 0 or absent: prepare on page. */
+  terrainMeshWorkers?: () => number;
+  /** One lazy worker for immutable imagery height batches, separate from mesh preparation. */
+  createTerrainHeightWorker?: () => HeightBatchWorkerPort | null;
+  /**
+   * Opt-in: Robust orbit LOD, preventing coarse stand-in elevation overwrites,
+   * retaining orbit cache, avoiding frustum-edge ancestor blocking, and refining
+   * terrain under the camera eye to avoid safe-space upward jolts.
+   */
+  robustOrbitLOD?: boolean;
 }
 
 export interface RasterTilesRuntime {
@@ -182,6 +201,9 @@ export interface RasterTilesRuntime {
   /** The source whose imagery is on screen; it lags a switch until the new source can cover the globe. */
   getDisplayedSourceId(): string;
   reportFrame(now: number, frameMs: number, suspended: boolean): void;
+  /** Background terrain mesh target geometry preparation pool statistics, if workers are active. */
+  getTerrainMeshStats?(): TerrainMeshWorkerPoolStats | null;
+  getTerrainHeightStats?(): TerrainHeightBatchStats | null;
   dispose(): void;
 }
 export interface SettledRasterTilesRuntime extends RasterTilesRuntime { whenSettled(): Promise<void> }
@@ -205,7 +227,7 @@ interface RasterTileRecord {
   failed: boolean;
   settled: boolean;
   grid?: TerrainGrid;
-  target: number[];
+  target: number[] | Float32Array;
   /** Incoming grid quality, published only beside its committed positions. */
   targetTerrainZoom: number;
   imageryGeneration: number;
@@ -257,6 +279,8 @@ function createTileRecord(
   onRetryScheduled: (at: number) => void,
   imagery: ImageryRuntime | null,
   work: ReturnType<typeof createNativeMapSettlement>,
+  meshWorkers?: ReturnType<typeof createTerrainMeshWorkers> | null,
+  checkPageParity?: (checkTile: TileCoord, checkGrid: TerrainGrid, preparedPositions: Float32Array) => void,
 ): RasterTileRecord {
   const { scene } = options;
   const key = tileKey(tile);
@@ -293,24 +317,69 @@ function createTileRecord(
 
   let imageryReady = false;
   let terrainReady = false;
+  let applyInFlight = 0;
   const finish = () => {
     if (record.settled) return;
     if (imageryReady) { record.loaded = true; onChanged(record); }
-    if (imageryReady && terrainReady) onSettled(record);
+    if (imageryReady && terrainReady && applyInFlight === 0) onSettled(record);
   };
-  const applyGrid = (grid: TerrainGrid | undefined, generation: number) => {
+  let targetSeq = 0;
+  const applyGrid = (grid: TerrainGrid | undefined, generation: number): Promise<void> | void => {
     if (record.mesh.isDisposed() || generation !== record.terrainGeneration) return;
-    if (grid && record.appliedTerrainGeneration === generation && grid.z <= record.mesh.metadata.terrainZoom) return;
+    const currentZoom = Math.max(record.mesh.metadata.terrainZoom, record.targetTerrainZoom);
+    if (grid && record.appliedTerrainGeneration === generation && grid.z <= currentZoom) return;
+    const seq = ++targetSeq;
     const started = options.performanceCapture ? options.nowMs() : 0;
-    // The displayed mesh takes only these positions at its next commit.
-    const target = terrainMeshTarget(options, tile, grid);
-    record.target = target.positions;
-    record.grid = grid;
-    record.heightBounds = target.heightBounds;
-    record.appliedTerrainGeneration = generation;
-    record.targetTerrainZoom = grid?.z ?? -1;
-    if (options.performanceCapture) options.performanceCapture.counters.preparationCpuMs += options.nowMs() - started;
-    onChanged(record);
+    const target = options.getSurfaceHeightMeters ? undefined : terrainMeshTarget(options, tile, grid);
+    if (!meshWorkers || !grid || options.getSurfaceHeightMeters) {
+      if (target) {
+        record.target = target.positions;
+        record.grid = grid;
+        record.heightBounds = target.heightBounds;
+        record.appliedTerrainGeneration = generation;
+        record.targetTerrainZoom = grid?.z ?? -1;
+        if (started && options.performanceCapture) {
+          options.performanceCapture.counters.preparationCpuMs += options.nowMs() - started;
+        }
+        onChanged(record);
+      }
+      return;
+    }
+    applyInFlight++;
+    return meshWorkers.prepare({
+      tile,
+      grid,
+      segments: options.segments ?? DEFAULT_TILE_SEGMENTS,
+      withUvs: false,
+    }).then(prepared => {
+      if (record.mesh.isDisposed() || generation !== record.terrainGeneration || seq !== targetSeq) return;
+      record.target = prepared.geometry.targetPositions;
+      record.grid = grid;
+      record.heightBounds = prepared.geometry.heightBounds;
+      record.appliedTerrainGeneration = generation;
+      record.targetTerrainZoom = grid.z;
+      if (started && options.performanceCapture) {
+        options.performanceCapture.counters.preparationCpuMs += options.nowMs() - started;
+      }
+      if (checkPageParity) checkPageParity(tile, grid, prepared.geometry.targetPositions);
+      onChanged(record);
+    }).catch(() => {
+      if (record.mesh.isDisposed() || generation !== record.terrainGeneration || seq !== targetSeq) return;
+      if (target) {
+        record.target = target.positions;
+        record.grid = grid;
+        record.heightBounds = target.heightBounds;
+        record.appliedTerrainGeneration = generation;
+        record.targetTerrainZoom = grid.z;
+        if (started && options.performanceCapture) {
+          options.performanceCapture.counters.preparationCpuMs += options.nowMs() - started;
+        }
+        onChanged(record);
+      }
+    }).finally(() => {
+      applyInFlight--;
+      finish();
+    });
   };
   // A provider or setting can change before the first elevation arrives,
   // and its completion is then discarded. The replacement is still
@@ -326,10 +395,16 @@ function createTileRecord(
     const terrain = options.getSurfaceHeightMeters ? Promise.resolve(undefined)
       : nextLoadTerrain(tile, grid => applyGrid(grid, generation), record.terrainInterest);
     void work.track(terrain.then(grid => {
-      applyGrid(grid, generation);
-      if (record.mesh.isDisposed() || generation !== record.terrainGeneration) return;
-      record.terrainFailures = 0;
-      settleTerrain();
+      const maybePromise = applyGrid(grid, generation);
+      const afterApply = () => {
+        if (record.mesh.isDisposed() || generation !== record.terrainGeneration) return;
+        record.terrainFailures = 0;
+        settleTerrain();
+      };
+      if (maybePromise && typeof (maybePromise as Promise<void>).then === "function") {
+        return (maybePromise as Promise<void>).then(afterApply);
+      }
+      afterApply();
     }).catch(error => {
       if (record.mesh.isDisposed() || generation !== record.terrainGeneration) return;
       options.onLoadError?.(error instanceof Error ? error : new Error(String(error)), `terrain:${key}`);
@@ -534,6 +609,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
   if (options.imagery !== "atlas" && !hasTileAcquisition) throw new Error("Raster maps need an explicit legacy or async texture acquisition port.");
   const capture = options.performanceCapture;
   const settings = options.settings;
+  const isRobustOrbitLOD = (): boolean => Boolean(options.robustOrbitLOD ?? settings.get("map.terrain.robustOrbitLOD"));
   const setting = (id: string): number => {
     const value = settings.get(id);
     return typeof value === "number" ? value : Number.NaN;
@@ -548,6 +624,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
   // reaches meshes prepared after the change.
   const meshOptions: RasterTilesRuntimeOptions = {
     ...options,
+    robustOrbitLOD: isRobustOrbitLOD(),
     segments: Math.round(setting("map.terrain.tileSegments")),
     anisotropy: () => Math.round(setting("map.imagery.anisotropy")),
     retryDelay: () => {
@@ -610,6 +687,54 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
   };
   let terrain = createTerrainLoader();
   let terrainGeneration = 0;
+  const terrainPlan = options.settings && options.settings.has("native.tier")
+    ? nativeCorePlan(options.settings, "terrain")
+    : null;
+  const useMeshWorker = terrainPlan?.placement === "worker" && Boolean(options.createTerrainMeshWorker);
+  const activeTimers = new Map<number, () => void>();
+  let nextTimerId = 0;
+  const poolTimers: WorkerPoolTimers = {
+    setTimeout(cb, ms) {
+      const id = ++nextTimerId;
+      const cancel = options.after(() => {
+        activeTimers.delete(id);
+        cb();
+      }, ms);
+      activeTimers.set(id, cancel);
+      return id;
+    },
+    clearTimeout(id) {
+      const cancel = activeTimers.get(id as number);
+      if (cancel) {
+        activeTimers.delete(id as number);
+        cancel();
+      }
+    },
+  };
+  const meshWorkers = useMeshWorker
+    ? createTerrainMeshWorkers({
+        createWorker: options.createTerrainMeshWorker!,
+        workers: options.terrainMeshWorkers ?? (() => 2),
+        generation: () => terrainGeneration,
+        requestedBackend: () => (terrainPlan!.kernel === "single" ? "wasm" : "typescript"),
+        timers: poolTimers,
+        nowMs: options.nowMs,
+        idleMs: 30_000,
+        onError: err => options.log?.warn?.("Terrain mesh worker error", err),
+      })
+    : null;
+
+  let pageParityChecked = false;
+  const checkPageParity = (checkTile: TileCoord, checkGrid: TerrainGrid, preparedPositions: Float32Array) => {
+    if (pageParityChecked) return;
+    pageParityChecked = true;
+    const ref = terrainMeshTarget(options, checkTile, checkGrid);
+    const matches = preparedPositions.length === ref.positions.length
+      && Array.from(preparedPositions).every((v, i) => Object.is(v, ref.positions[i]));
+    if (!matches) {
+      options.log?.warn?.("[terrain native] Page-level parity mismatch between terrainMeshTarget and worker geometry");
+    }
+  };
   const coarserElevation = (): number => Math.max(0, Math.round(setting("map.terrain.coarserElevation")) || 0);
   let appliedCoarserElevation = coarserElevation();
   // Persistent cache: tiles stay alive after they leave the desired set so we
@@ -631,6 +756,10 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
   let disposed = false;
   let revision = 0;
   const surfaceSampler = createRasterSurfaceSampler(() => revision, capture?.counters);
+  const heightPlan = settings.has("native.tier") ? nativeCorePlan(settings, "imagery") : null;
+  const heightBatches = heightPlan?.placement === "worker" && options.createTerrainHeightWorker
+    ? createTerrainHeightBatches({ kernel: heightPlan.kernel, createWorker: options.createTerrainHeightWorker,
+        now: options.nowMs, schedule: callback => { options.after(callback, 0); }, after: options.after }) : null;
   let geometryDirty = false;
   const dirtyGeometryKeys = new Set<string>();
   let visibilityDirty = false;
@@ -644,6 +773,8 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
   let selectedRefine: TerrainRefinePoint | null = null;
   let selectedAt = -Infinity;
   let selection: TerrainSelection | null = null;
+  let neededLeafKeys = new Set<string>();
+  let frustumPlanes: ReturnType<typeof Frustum.GetPlanes> | null = null;
   let selectedTarget = Number.NaN;
   // A tile's heights arrived since the last selection, which may measure it differently now.
   let heightsArrived = false;
@@ -699,6 +830,42 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
   // What imagery selection may know about the surface: adopted terrain only.
   // It never asks for finer heights to decide imagery.
   const imagerySurface = {
+    ...(heightBatches ? { heightsAt(coordinates: Float64Array): Float64Array {
+      const result = new Float64Array(coordinates.length / 2); result.fill(NaN);
+      const groups = new Map<TerrainGrid, { xy: number[]; indices: number[] }>();
+      const levels = indexedVisibleCells();
+      // Repeated grid rows/columns share the exact same Mercator conversion.
+      const worldX = new Map<number, number>(), worldY = new Map<number, number>();
+      for (let i = 0; i < result.length; i++) {
+        const lat = coordinates[i * 2], lon = coordinates[i * 2 + 1];
+        let wx = worldX.get(lon), wy = worldY.get(lat);
+        if (wx === undefined || wy === undefined) {
+          const world = lonLatToMercator(lon, lat);
+          wx ??= world.x; wy ??= world.y; worldX.set(lon, wx); worldY.set(lat, wy);
+        }
+        let grid: TerrainGrid | undefined;
+        for (const { z, n, cells } of levels) {
+          const x = wx * n, y = wy * n, column = Math.floor(x), row = Math.floor(y);
+          if (cells ? !(column >= 0 && column < n && row >= 0 && row < n && cells.has(row * n + column)) : !visibleTileKeys.has(`${z}/${column}/${row}`)) continue;
+          const record = cache.get(`${z}/${column}/${row}`);
+          if (!record) continue;
+          grid = record.grid;
+          if (grid) {
+            const scale = 2 ** (grid.z - z);
+            let group = groups.get(grid);
+            if (!group) { group = { xy: [], indices: [] }; groups.set(grid, group); }
+            group.xy.push(x * scale, y * scale); group.indices.push(i);
+          }
+          break;
+        }
+        if (!grid) result[i] = options.getSurfaceHeightMeters?.(lat, lon) ?? NaN;
+      }
+      for (const [grid, group] of groups) {
+        const heights = heightBatches.sample(grid, new Float64Array(group.xy));
+        group.indices.forEach((at, i) => { result[at] = heights[i]; });
+      }
+      return result;
+    } } : {}),
     heightAt(latDeg: number, lonDeg: number): number | null {
       // One Mercator position, scaled to each level: lonLatToTileXY's bits.
       let world: { x: number; y: number } | null = null;
@@ -924,7 +1091,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
       heightsArrived = true;
       options.requestRender?.();
       options.onSurfaceChange?.("loading");
-    }, scheduleRetry, imageryRuntime, work);
+    }, scheduleRetry, imageryRuntime, work, meshWorkers, checkPageParity);
     cache.set(key, record);
   }
 
@@ -1011,6 +1178,13 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
     const key = tileKey(tile);
     const loaded = isLoadedTile(key);
     if (!internalKeys.has(key)) {
+      if (isRobustOrbitLOD() && leafKeys.has(key)) {
+        const rec = cache.get(key);
+        const outOfFrustum = frustumPlanes && rec ? !rec.mesh.isInFrustum(frustumPlanes) : !neededLeafKeys.has(key);
+        if (outOfFrustum) {
+          return { covered: true, keys: [key] };
+        }
+      }
       return leafKeys.has(key) && loaded ? { covered: true, keys: [key] } : { covered: false, keys: [] };
     }
 
@@ -1026,14 +1200,20 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
     const childKeys = children.flatMap((child) => child.keys);
     if (children.every((child) => child.covered)) {
       const quality = cache.get(key)?.mesh.metadata.terrainZoom ?? -1;
-      // Never replace a known parent with less accurate startup geometry. Nor
-      // patches already shown with a parent whose elevation arrived before
-      // theirs: its page table reaches fewer imagery levels, so the imagery
-      // they show would coarsen with nothing moved. They keep their place and
-      // take their own elevation as it arrives.
-      if (!loaded || childKeys.every(child => cache.get(child)!.mesh.metadata.terrainZoom >= quality)
-        || childKeys.some(child => visibleTileKeys.has(child))) {
-        return { covered: true, keys: childKeys };
+      if (isRobustOrbitLOD()) {
+        const inFrustumKeys = childKeys.filter(child => neededLeafKeys.has(child));
+        const hasReadyChild = inFrustumKeys.length > 0
+          ? inFrustumKeys.some(child => (cache.get(child)?.mesh.metadata.terrainZoom ?? -1) >= quality)
+          : childKeys.every(child => (cache.get(child)?.mesh.metadata.terrainZoom ?? -1) >= quality);
+        const inFrustumZeroLeak = quality > 0 && inFrustumKeys.some(child => (cache.get(child)?.mesh.metadata.terrainZoom ?? -1) === 0);
+        if (!loaded || (hasReadyChild && !inFrustumZeroLeak) || (childKeys.some(child => visibleTileKeys.has(child)) && !inFrustumZeroLeak)) {
+          return { covered: true, keys: childKeys };
+        }
+      } else {
+        if (!loaded || childKeys.every(child => cache.get(child)!.mesh.metadata.terrainZoom >= quality)
+          || childKeys.some(child => visibleTileKeys.has(child))) {
+          return { covered: true, keys: childKeys };
+        }
       }
     }
     return loaded ? { covered: true, keys: [key] } : { covered: false, keys: childKeys };
@@ -1041,6 +1221,9 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
 
   function recomputeVisibility(): void {
     visibilityDirty = false;
+    frustumPlanes = isRobustOrbitLOD() && options.scene.activeCamera
+      ? Frustum.GetPlanes(options.scene.activeCamera.getTransformationMatrix())
+      : null;
     const { leafKeys, internalKeys, baseZoom } = buildTargetSets();
     const representatives = new Set<string>();
     if (baseZoom !== null) {
@@ -1096,7 +1279,10 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
   }
 
   function evictIfNeeded(): void {
-    const maxCachedTiles = Math.round(setting("map.terrain.cachedTiles"));
+    const baseMax = Math.round(setting("map.terrain.cachedTiles"));
+    const maxCachedTiles = isRobustOrbitLOD()
+      ? Math.max(baseMax, Math.round(setting("map.terrain.maxTiles") * 2))
+      : baseMax;
     if (cache.size <= maxCachedTiles) return;
     const candidates: Array<{ key: string; tick: number }> = [];
     for (const [key, record] of cache) {
@@ -1275,11 +1461,13 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
       maxTiles: Math.round(setting("map.terrain.maxTiles")),
       hysteresis: { refineAbove: setting("map.terrain.refineAbove"), coarsenBelow: setting("map.terrain.coarsenBelow") },
       previous: previous && { split: previous.split, leaves: new Set(previous.leaves.map(leaf => leaf.key)) },
+      robustOrbitLOD: isRobustOrbitLOD(),
       boundsFor: tile => {
         const bounds = knownHeightBounds(tile);
         return bounds ? { min: bounds.min - 50, max: bounds.max + 50 } : { min: -500, max: 9000 };
       },
     });
+    neededLeafKeys = new Set(selection.leaves.filter(leaf => leaf.needed).map(leaf => leaf.key));
     const baseZoom = selection.rootLevel;
     // Nearest needed first, so a flight does not wait behind distant tiles.
     lastDesired = selection.leaves.map(leaf => ({ tile: leaf.tile, key: leaf.key, baseZoom }));
@@ -1485,6 +1673,8 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
       capture.counters.sampleCpuMs += options.nowMs() - started;
       return hit;
     },
+    getTerrainMeshStats: () => meshWorkers?.stats() ?? null,
+    getTerrainHeightStats: () => heightBatches?.stats() ?? null,
     whenSettled: () => work.whenSettled(),
     dispose(): void {
       if (disposed) return;
@@ -1503,10 +1693,11 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
       meshRebuildQueue.clear();
       lastDesired = [];
       neededKeys = new Set();
+      neededLeafKeys.clear();
       loadingCount = 0;
       loadCycleActive = false;
       try { finishOwnedCleanup([
-        unsubscribeSettings, () => terrain.dispose(), () => ownedImagery?.dispose(),
+        unsubscribeSettings, () => terrain.dispose(), () => ownedImagery?.dispose(), () => meshWorkers?.dispose(), () => heightBatches?.dispose(),
         ...records.map(record => () => disposeTile(record)),
         ...retired.map(mesh => () => mesh.dispose()),
         () => surfaceSampler.setCoverage([]), () => stopRetry?.(),

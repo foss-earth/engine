@@ -4,7 +4,7 @@ import type { PoolWorkerPort } from "./workerPool.js";
 export const TERRAIN_MESH_PROTOCOL = 1;
 export type TerrainMeshRequestedBackend = "typescript" | "wasm";
 export type TerrainMeshActualBackend = "typescript" | "wasm-single";
-export type TerrainMeshValidation = "reference" | "unvalidated";
+export type TerrainMeshValidation = "reference" | "validated" | "unvalidated";
 export type TerrainMeshNumericInput = Omit<TerrainNumericRequest, "getSurfaceHeightMeters">;
 export interface TerrainMeshWorkerRequest {
   kind: "prepare-terrain-mesh";
@@ -21,6 +21,8 @@ interface ReplyIdentity {
   requestedBackend: TerrainMeshRequestedBackend;
   actualBackend: TerrainMeshActualBackend | null;
   validationStatus: TerrainMeshValidation;
+  parity?: "unchecked" | "same" | "different" | "not compared";
+  fallbackReason?: string | null;
 }
 export type TerrainMeshWorkerReply =
   | (ReplyIdentity & { kind: "prepared-terrain-mesh"; geometry: TerrainNumericGeometry; actualBackend: TerrainMeshActualBackend })

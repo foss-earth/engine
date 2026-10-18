@@ -66,6 +66,9 @@ export interface ImagerySourceCapabilities {
 export interface ImagerySurface {
   /** Height of the adopted surface, or null where only coarse bounds are known. */
   heightAt(latDeg: number, lonDeg: number): number | null;
+  /** Packed lat/lon pairs; NaN represents unknown. Float64 preserves the
+   * reference interpolation and the slopes derived from it. */
+  heightsAt?(coordinates: Float64Array): Float64Array;
   /** Conservative height bounds of a region from adopted terrain or coarse data. */
   boundsFor(tile: TileId): { min: number; max: number };
 }
@@ -412,6 +415,7 @@ function latLonAt(tile: TileId, u: number, v: number): { latDeg: number; lonDeg:
 
 /** A surface sample at the adopted height, tilted by the local slope. */
 function surfaceSample(input: Pick<ImagerySelectionInput, "surface">, tile: TileId, u: number, v: number, fallbackHeight: number): SurfaceSample {
+  if (input.surface.heightsAt) return surfaceSamples(input, tile, [{ u, v }], fallbackHeight)[0];
   const heightAt = (uu: number, vv: number): number | null => {
     const { latDeg, lonDeg } = latLonAt(tile, uu, vv);
     return input.surface.heightAt(latDeg, lonDeg);
@@ -428,6 +432,32 @@ function surfaceSample(input: Pick<ImagerySelectionInput, "surface">, tile: Tile
     if (south !== null) slopeV = (south - h) / vStep;
   }
   return sampleTileSurface(tile, u, v, h, slopeU, slopeV);
+}
+
+/** All centre/east/south probes cross the height-query seam as one contiguous
+ * batch. The complete scalar path remains the reference for other surfaces. */
+function surfaceSamples(input: Pick<ImagerySelectionInput, "surface">, tile: TileId,
+  points: ReadonlyArray<{ u: number; v: number }>, fallbackHeight: number): SurfaceSample[] {
+  if (!input.surface.heightsAt) return points.map(({ u, v }) => surfaceSample(input, tile, u, v, fallbackHeight));
+  const coordinates = new Float64Array(points.length * 6);
+  points.forEach(({ u, v }, i) => {
+    const uStep = u + SLOPE_STEP <= 1 ? SLOPE_STEP : -SLOPE_STEP;
+    const vStep = v + SLOPE_STEP <= 1 ? SLOPE_STEP : -SLOPE_STEP;
+    [[u, v], [u + uStep, v], [u, v + vStep]].forEach(([uu, vv], j) => {
+      const at = latLonAt(tile, uu, vv);
+      coordinates[i * 6 + j * 2] = at.latDeg; coordinates[i * 6 + j * 2 + 1] = at.lonDeg;
+    });
+  });
+  const heights = input.surface.heightsAt(coordinates);
+  if (heights.length !== points.length * 3) throw new Error("Imagery height batch has the wrong length");
+  return points.map(({ u, v }, i) => {
+    const height = heights[i * 3], east = heights[i * 3 + 1], south = heights[i * 3 + 2];
+    const known = !Number.isNaN(height), h = known ? height : fallbackHeight;
+    const uStep = u + SLOPE_STEP <= 1 ? SLOPE_STEP : -SLOPE_STEP;
+    const vStep = v + SLOPE_STEP <= 1 ? SLOPE_STEP : -SLOPE_STEP;
+    return sampleTileSurface(tile, u, v, h, known && !Number.isNaN(east) ? (east - h) / uStep : 0,
+      known && !Number.isNaN(south) ? (south - h) / vStep : 0);
+  });
 }
 
 /** A refine point and where it lies, worked out once per traversal. */
@@ -457,8 +487,7 @@ function footprintFrom(
 ): { nearest: number; worst: number } {
   let nearest = Infinity;
   let worst = 0;
-  for (const { u, v } of points) {
-    const sample = surfaceSample(input, tile, u, v, fallbackHeight);
+  for (const sample of surfaceSamples(input, tile, points, fallbackHeight)) {
     const d = Math.hypot(sample.position.x - point.position.x, sample.position.y - point.position.y, sample.position.z - point.position.z);
     nearest = Math.min(nearest, d);
     const pixelMeters = Math.max(
@@ -636,8 +665,9 @@ function evaluateView(job: ViewMeasurementContext, tile: TileId): Evaluated {
 
   const selectionWidth = job.cartographic ? view.logicalWidth : view.renderWidth;
   const selectionHeight = job.cartographic ? view.logicalHeight : view.renderHeight;
-  const measured = hullPoints.map(point => {
-    const surface = surfaceSample(input, tile, point.u, point.v, bounds.max);
+  const surfaces = surfaceSamples(input, tile, hullPoints, bounds.max);
+  const measured = hullPoints.map((point, i) => {
+    const surface = surfaces[i];
     const clip = toClip(m, surface.position);
     return { ...point, surface, clip, inside: outcode(view, clip) === 0 };
   });

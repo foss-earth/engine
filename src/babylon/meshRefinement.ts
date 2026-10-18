@@ -2,7 +2,7 @@ import { VertexBuffer, type Mesh } from "@babylonjs/core";
 import type { TerrainTile } from "../terrain/terrainGrid.js";
 
 export interface TerrainPatch { mesh: Mesh; tile: TerrainTile }
-export interface MeshRefinement { from: number[]; to: number[]; started: number; duration: number }
+export interface MeshRefinement { from: number[]; to: number[] | Float32Array; started: number; duration: number }
 export interface GeometryWriteCounters { geometryWrites: number; seamPasses: number }
 const order = (a: TerrainPatch, b: TerrainPatch) => a.tile.z - b.tile.z || a.tile.x - b.tile.x || a.tile.y - b.tile.y;
 export function meshPositions(mesh: Mesh): number[] {
@@ -14,8 +14,8 @@ export function meshPositions(mesh: Mesh): number[] {
   for (let index = 0; index < data.length; index++) positions[index] = data[index];
   return positions;
 }
-export function updateTerrainPositions(mesh: Mesh, positions: number[]): void {
-  mesh.updateVerticesData(VertexBuffer.PositionKind, positions, true);
+export function updateTerrainPositions(mesh: Mesh, positions: number[] | Float32Array): void {
+  mesh.updateVerticesData(VertexBuffer.PositionKind, positions as number[], true);
   // Babylon rebuilds the bounds in local space on a position upload. Frozen
   // tile transforms will not run the usual world-bounds update at render time.
   // Reapply the transform to those bounds without scanning the vertices again.
@@ -25,7 +25,7 @@ export function updateTerrainPositions(mesh: Mesh, positions: number[]): void {
     if (!subMesh.IsGlobal) subMesh.updateBoundingInfo(world);
   }
 }
-export function refineMesh(mesh: Mesh, to: number[], now: number, duration = 1200): MeshRefinement {
+export function refineMesh(mesh: Mesh, to: number[] | Float32Array, now: number, duration = 1200): MeshRefinement {
   return { from: meshPositions(mesh), to, started: now, duration };
 }
 export function advanceRefinement(mesh: Mesh, refinement: MeshRefinement, now: number, counters?: GeometryWriteCounters): boolean {

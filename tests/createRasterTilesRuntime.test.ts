@@ -1,6 +1,7 @@
 import { Frustum, GeospatialCamera, GeospatialClippingBehavior, NullEngine, Scene, StandardMaterial, Texture, VertexBuffer } from "@babylonjs/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HostCameraController as CameraController } from "../fixtures/composition/runtimeHost.js";
+import { ecefToGeodetic } from "../src/camera/cameraMath.js";
 import * as refinement from "../src/babylon/meshRefinement.js";
 import * as selector from "../src/terrain/terrainSelector.js";
 import { createTerrainMesh } from "../src/babylon/terrainMesh.js";
@@ -620,4 +621,326 @@ describe("raster imagery and terrain lifecycle", () => {
     expect(pending.dispose).toHaveBeenCalledOnce();
     engine.dispose();
   });
+
+  describe("orbiting LOD retention, local uniformity, and safe space", () => {
+    const tileKeyOfMesh = (meshName: string) => meshName.split("-").at(-1)!;
+    const zoomOfKey = (key: string) => Number(key.split("/")[0]);
+    const createHdEngine = () => {
+      const engine = new NullEngine({ renderWidth: 1280, renderHeight: 720, textureSize: 8192, deterministicLockstep: false, lockstepMaxSteps: 1 });
+      Object.assign(engine, { updateTextureData: vi.fn() });
+      return engine;
+    };
+
+    it("does not overwrite a tile's own HD elevation with its z-4 coarse stand-in when both resolve before mesh commit", async () => {
+      getAppSettings().set("map.terrain.reselectWhileMoving", 0);
+      getAppSettings().set("map.terrain.robustOrbitLOD", true);
+      const engine = createHdEngine(), scene = new Scene(engine);
+      scene.useRightHandedSystem = true;
+      const camera = new GeospatialCamera("raster-camera", scene, { planetRadius: 6378137 });
+      camera.addBehavior(new GeospatialClippingBehavior());
+      const controller = new CameraController(camera);
+      const currentView = { latDeg: 36.1, lonDeg: -112.14, zoomMeters: 300, pitchDeg: 20, headingDeg: 0 };
+      const runtime = createRasterTilesRuntime({
+        scene,
+        source: RASTER_BASE_MAP_SOURCES[0],
+        imagery: "atlas",
+        getViewState: () => currentView,
+        getRefinePoint: () => ({ x: camera.center.x, y: camera.center.y, z: camera.center.z }),
+      });
+      try {
+        controller.applyViewState(currentView, 0);
+        controller.applyViewState(currentView, 0);
+        scene.render();
+        runtime.update();
+
+        getAppSettings().set("map.terrain.meshRebuildTimePerFrame", 50);
+        // Settle terrain with detail (fine) tiles resolving before their coarse stand-ins (b - a).
+        // Under robustOrbitLOD, a tile's own HD elevation must not be overwritten by its z-4 stand-in.
+        for (let round = 0; round < 6 && pending.terrain.length; round++) {
+          const batch = pending.terrain.splice(0);
+          const zooms = [...new Set(batch.map(load => load.tile.z))].sort((a, b) => b - a);
+          for (const z of zooms) {
+            for (const load of batch.filter(item => item.tile.z === z)) {
+              load.resolve({ ...load.tile, size: 2, heights: new Float32Array([150, 150, 150, 150]) });
+            }
+            await flush();
+            scene.render();
+            runtime.update();
+          }
+        }
+        const visibleFine = scene.meshes.filter(
+          mesh => mesh.isEnabled() && mesh.metadata?.mapSurface && zoomOfKey(tileKeyOfMesh(mesh.name)) >= 12,
+        );
+        expect(visibleFine.length).toBeGreaterThan(0);
+        for (const mesh of visibleFine) {
+          const z = zoomOfKey(tileKeyOfMesh(mesh.name));
+          expect(mesh.metadata.terrainZoom, mesh.name).toBe(z);
+        }
+      } finally {
+        getAppSettings().set("map.terrain.robustOrbitLOD", false);
+        runtime.dispose();
+        engine.dispose();
+      }
+    });
+
+    it("retains recently viewed HD tiles in cache across a 360-degree orbit instead of evicting them", async () => {
+      getAppSettings().set("map.terrain.reselectWhileMoving", 0);
+      getAppSettings().set("map.terrain.meshRebuildTimePerFrame", 500);
+      getAppSettings().set("map.terrain.robustOrbitLOD", true);
+      const engine = createHdEngine(), scene = new Scene(engine);
+      scene.useRightHandedSystem = true;
+      const camera = new GeospatialCamera("raster-camera", scene, { planetRadius: 6378137 });
+      camera.addBehavior(new GeospatialClippingBehavior());
+      const controller = new CameraController(camera);
+      // In GlobeViewState, pitchDeg=20 is 20deg above the horizon (70deg tilt from nadir).
+      const currentView = { latDeg: 36.1, lonDeg: -112.14, zoomMeters: 300, pitchDeg: 20, headingDeg: 0 };
+      const runtime = createRasterTilesRuntime({
+        scene,
+        source: RASTER_BASE_MAP_SOURCES[0],
+        imagery: "atlas",
+        getViewState: () => currentView,
+        getRefinePoint: () => ({ x: camera.center.x, y: camera.center.y, z: camera.center.z }),
+      });
+      const settleTerrain = async () => {
+        for (let round = 0; round < 10 && pending.terrain.length; round++) {
+          const batch = pending.terrain.splice(0);
+          const zooms = [...new Set(batch.map(load => load.tile.z))].sort((a, b) => a - b);
+          for (const z of zooms) {
+            for (const load of batch.filter(item => item.tile.z === z)) {
+              load.resolve({ ...load.tile, size: 2, heights: new Float32Array([150, 150, 150, 150]) });
+            }
+            await flush();
+            scene.render();
+            runtime.update();
+          }
+        }
+      };
+      try {
+        controller.applyViewState(currentView, 0);
+        controller.applyViewState(currentView, 0);
+        scene.render();
+        runtime.update();
+        await settleTerrain();
+
+        const initialHdMeshes = scene.meshes.filter(
+          mesh => mesh.isEnabled() && mesh.metadata?.mapSurface && zoomOfKey(tileKeyOfMesh(mesh.name)) >= 12,
+        );
+        expect(initialHdMeshes.length).toBeGreaterThan(0);
+
+        // Orbit around the target through 90, 180, 270 and back to 0.
+        for (const headingDeg of [90, 180, 270, 0]) {
+          currentView.headingDeg = headingDeg;
+          controller.applyViewState(currentView, 0);
+          scene.render();
+          runtime.update();
+          if (headingDeg !== 0) await settleTerrain();
+        }
+
+        // Settled HD tiles from heading=0 should still be in cache when completing the orbit back to heading=0.
+        const disposedCount = initialHdMeshes.filter(mesh => mesh.isDisposed()).length;
+        expect(disposedCount).toBe(0);
+      } finally {
+        getAppSettings().set("map.terrain.robustOrbitLOD", false);
+        runtime.dispose();
+        engine.dispose();
+      }
+    });
+
+    it("does not hold back settled in-frustum HD tiles behind a coarse ancestor while an out-of-frustum sibling leaf waits at the back of the queue", async () => {
+      getAppSettings().set("map.terrain.reselectWhileMoving", 0);
+      getAppSettings().set("map.terrain.meshRebuildTimePerFrame", 500);
+      getAppSettings().set("map.terrain.cachedTiles", 2000);
+      getAppSettings().set("map.terrain.robustOrbitLOD", true);
+      const engine = createHdEngine(), scene = new Scene(engine);
+      scene.useRightHandedSystem = true;
+      const camera = new GeospatialCamera("raster-camera", scene, { planetRadius: 6378137 });
+      camera.addBehavior(new GeospatialClippingBehavior());
+      const controller = new CameraController(camera);
+      // Start at heading=180deg (looking South) so the Northern tiles behind the camera settle as coarse z=8..10 leaves.
+      const currentView = { latDeg: 36.1, lonDeg: -112.14, zoomMeters: 1200, pitchDeg: 15, headingDeg: 180 };
+      const runtime = createRasterTilesRuntime({
+        scene,
+        source: RASTER_BASE_MAP_SOURCES[0],
+        imagery: "atlas",
+        getViewState: () => currentView,
+        getRefinePoint: () => ({ x: camera.center.x, y: camera.center.y, z: camera.center.z }),
+      });
+      const settleTerrain = async () => {
+        for (let round = 0; round < 10 && pending.terrain.length; round++) {
+          const batch = pending.terrain.splice(0);
+          const zooms = [...new Set(batch.map(load => load.tile.z))].sort((a, b) => a - b);
+          for (const z of zooms) {
+            for (const load of batch.filter(item => item.tile.z === z)) {
+              load.resolve({ ...load.tile, size: 2, heights: new Float32Array([200, 200, 200, 200]) });
+            }
+            await flush();
+            scene.render();
+            runtime.update();
+          }
+        }
+      };
+      try {
+        controller.applyViewState(currentView, 0);
+        controller.applyViewState(currentView, 0);
+        scene.render();
+        runtime.update();
+        await settleTerrain();
+
+        // Orbit to heading=0deg (looking North): the coarse Northern leaves (z=8..10) split down to z=14.
+        // In-frustum children (needed=true) are queued first, while out-of-frustum sibling leaves (needed=false)
+        // created by the quadtree splits are queued at the very back of lastDesired.
+        currentView.headingDeg = 0;
+        controller.applyViewState(currentView, 0);
+        scene.render();
+        runtime.update();
+
+        // Resolve 100% of terrain loads for tiles inside the camera frustum, leaving only out-of-frustum
+        // sibling leaves waiting at the back of the elevation queue.
+        for (let round = 0; round < 12; round++) {
+          const currentPlanes = Frustum.GetPlanes(camera.getTransformationMatrix());
+          const ready = pending.terrain.filter(load => {
+            const mesh = scene.meshes.find(m => tileKeyOfMesh(m.name) === `${load.tile.z}/${load.tile.x}/${load.tile.y}`);
+            return !mesh || mesh.isInFrustum(currentPlanes);
+          });
+          if (!ready.length) break;
+          for (const load of ready) {
+            const idx = pending.terrain.indexOf(load);
+            if (idx >= 0) pending.terrain.splice(idx, 1);
+          }
+          const zooms = [...new Set(ready.map(load => load.tile.z))].sort((a, b) => a - b);
+          for (const z of zooms) {
+            for (const load of ready.filter(item => item.tile.z === z)) {
+              load.resolve({ ...load.tile, size: 2, heights: new Float32Array([200, 200, 200, 200]) });
+            }
+            await flush();
+            scene.render();
+            runtime.update();
+          }
+        }
+
+        const visibleWhileOutOfFrustumPending = new Set(
+          scene.meshes
+            .filter(mesh => mesh.isEnabled() && mesh.metadata?.mapSurface && zoomOfKey(tileKeyOfMesh(mesh.name)) >= 12)
+            .map(mesh => tileKeyOfMesh(mesh.name)),
+        );
+
+        // Now resolve the remaining out-of-frustum sibling leaves.
+        await settleTerrain();
+        const visibleAfterAllSettle = new Set(
+          scene.meshes
+            .filter(mesh => mesh.isEnabled() && mesh.metadata?.mapSurface && zoomOfKey(tileKeyOfMesh(mesh.name)) >= 12)
+            .map(mesh => tileKeyOfMesh(mesh.name)),
+        );
+
+        const finalPlanes = Frustum.GetPlanes(camera.getTransformationMatrix());
+        const inFrustumHdTiles = [...visibleAfterAllSettle].filter(key => {
+          const mesh = scene.meshes.find(m => tileKeyOfMesh(m.name) === key);
+          return mesh ? mesh.isInFrustum(finalPlanes) : false;
+        });
+        expect(inFrustumHdTiles.length).toBeGreaterThan(0);
+        const heldBackInFrustumHdTiles = inFrustumHdTiles.filter(key => !visibleWhileOutOfFrustumPending.has(key));
+        expect(heldBackInFrustumHdTiles).toEqual([]);
+      } finally {
+        getAppSettings().set("map.terrain.robustOrbitLOD", false);
+        runtime.dispose();
+        engine.dispose();
+      }
+    });
+
+    it("does not jolt the camera upward via safe space when orbiting places the camera eye over recently viewed valley terrain", async () => {
+      let now = 0;
+      vi.spyOn(performance, "now").mockImplementation(() => now);
+      getAppSettings().set("map.terrain.reselectWhileMoving", 0);
+      getAppSettings().set("map.terrain.meshRebuildTimePerFrame", 50);
+      getAppSettings().set("map.terrain.cachedTiles", 2000);
+      getAppSettings().set("map.terrain.robustOrbitLOD", true);
+      const engine = createHdEngine(), scene = new Scene(engine);
+      scene.useRightHandedSystem = true;
+      const camera = new GeospatialCamera("raster-camera", scene, { planetRadius: 6378137 });
+      camera.addBehavior(new GeospatialClippingBehavior());
+      const controller = new CameraController(camera, () => now);
+      // Target is in a valley at 0m; coarse tiles (z <= 10) bridge the canyon walls at 20m
+      // (so at z=10, bounds.max + lift = 20 + 50 + 12 = 82m < 87m eye altitude, causing selectTerrain to cull 10/193/511
+      // below the bottom frustum plane when the eye is over it), while fine tiles (z >= 11) resolve the valley floor at 0m.
+      const heightForLevel = (z: number) => (z >= 11 ? 0 : 20);
+
+      const runtime = createRasterTilesRuntime({
+        scene,
+        source: RASTER_BASE_MAP_SOURCES[0],
+        imagery: "atlas",
+        nowMs: () => now,
+        getViewState: () => controller.syncFromCamera(),
+      });
+      controller.configureOrbitTargetHeight({
+        resolveSurfaceHeightMeters: (latDeg, lonDeg) => runtime.sample(latDeg, lonDeg)?.heightMeters ?? null,
+      });
+      controller.setEyeContact({
+        enabled: true,
+        clearanceMeters: 70,
+        maxAccelerationMetersPerSecondSquared: 200,
+        glideKeepPerFrame: 0.9,
+      });
+
+      const resolveAllPending = async () => {
+        for (let round = 0; round < 6 && pending.terrain.length; round++) {
+          const batch = pending.terrain.splice(0);
+          const zooms = [...new Set(batch.map(load => load.tile.z))].sort((a, b) => a - b);
+          for (const z of zooms) {
+            for (const load of batch.filter(item => item.tile.z === z)) {
+              const h = heightForLevel(load.tile.z);
+              load.resolve({ ...load.tile, size: 2, heights: new Float32Array([h, h, h, h]) });
+            }
+            await flush();
+            runtime.update();
+          }
+        }
+      };
+
+      try {
+        // 1. Start at heading=0, pitch=5 (85deg tilt from nadir), zoom=1000m looking North across the valley near the equator boundary.
+        //    The camera eye is at ~87m altitude (1000*sin(5deg)), well above the 0m valley floor + 70m safe-space clearance.
+        controller.applyViewState({ latDeg: -0.00895, lonDeg: -112.0, zoomMeters: 1000, pitchDeg: 5, headingDeg: 0 }, 0);
+        controller.applyViewState({ latDeg: -0.00895, lonDeg: -112.0, zoomMeters: 1000, pitchDeg: 5, headingDeg: 0 }, 0);
+        scene.render();
+        runtime.update();
+        await resolveAllPending();
+
+        // Prime the safe-space clock at heading=0.
+        controller.stepEyeContact();
+        now += 16;
+        expect(controller.stepEyeContact()).toBe(false);
+        const centerAltBeforeOrbit = ecefToGeodetic(camera.center.x, camera.center.y, camera.center.z).altMeters;
+        expect(centerAltBeforeOrbit).toBeCloseTo(0, 1);
+
+        // 2. Orbit 180deg so the camera eye swings around to the North side of the target (lat ~ +0.00006deg, inside 10/193/511)—
+        //    the exact valley region that was just in front of the camera in HD at heading=0!
+        controller.applyViewState({ latDeg: -0.00895, lonDeg: -112.0, zoomMeters: 1000, pitchDeg: 5, headingDeg: 180 }, 0);
+        scene.render();
+        now += 16;
+        runtime.update();
+        await resolveAllPending();
+
+        const eyeGeodetic = ecefToGeodetic(camera.position.x, camera.position.y, camera.position.z);
+        const eyeLatDeg = (eyeGeodetic.latRad * 180) / Math.PI;
+        const eyeLonDeg = (eyeGeodetic.lonRad * 180) / Math.PI;
+        const sampledUnderEye = runtime.sample(eyeLatDeg, eyeLonDeg);
+        expect(sampledUnderEye).not.toBeNull();
+
+        // Stepping safe space while hovering over the valley should NOT jolt the camera upward!
+        now += 16;
+        controller.stepEyeContact();
+        now += 16;
+        controller.stepEyeContact();
+        const centerAltAfterOrbit = ecefToGeodetic(camera.center.x, camera.center.y, camera.center.z).altMeters;
+        expect(centerAltAfterOrbit).toBeCloseTo(centerAltBeforeOrbit, 1);
+        // Ground directly under the camera eye must sample the fine 0m valley floor, not the coarse 20m canyon-wall mesh!
+        expect(sampledUnderEye!.heightMeters).toBeLessThan(10);
+      } finally {
+        getAppSettings().set("map.terrain.robustOrbitLOD", false);
+        runtime.dispose();
+        engine.dispose();
+      }
+    });
+  });
 });
+

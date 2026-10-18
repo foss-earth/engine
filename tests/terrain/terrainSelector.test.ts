@@ -170,4 +170,43 @@ describe("terrain measured from a point", () => {
     expect(finest(measured)).toBe(levelAt(measured, 36.1, -112.1));
     expectCover(measured);
   });
+
+  it("refines terrain directly beneath the pitched camera eye so safe-space ground sampling does not fall back to coarse tiles", () => {
+    // Target is ~1.2km south of the equator (a z=2 root tile boundary).
+    // When orbiting at heading=180, pitch=75, distance=1500m, the camera eye is ~250m north of the equator
+    // at ~388m altitude, looking south. Because the bottom plane of the 60deg vertical frustum is angled 45deg
+    // south of nadir, it intersects the ground ~388m south of the eye (south of the equator), leaving the
+    // northern z=2 tile directly beneath the camera eye outside the view frustum.
+    const nearBoundaryLat = (-0.011 * Math.PI) / 180, nearBoundaryLon = (-112.1 * Math.PI) / 180;
+    const boundaryTarget = geodeticToEcef(nearBoundaryLat, nearBoundaryLon, 0);
+    const up = { x: Math.cos(nearBoundaryLat) * Math.cos(nearBoundaryLon), y: Math.cos(nearBoundaryLat) * Math.sin(nearBoundaryLon), z: Math.sin(nearBoundaryLat) };
+    const east = { x: -Math.sin(nearBoundaryLon), y: Math.cos(nearBoundaryLon), z: 0 };
+    const north = { x: up.y * east.z - up.z * east.y, y: up.z * east.x - up.x * east.z, z: up.x * east.y - up.y * east.x };
+    const h = Math.PI, p = (75 * Math.PI) / 180, distanceMeters = 1500;
+    const toTarget = (axis: "x" | "y" | "z") => -up[axis] * Math.cos(p) + (north[axis] * Math.cos(h) + east[axis] * Math.sin(h)) * Math.sin(p);
+    const eye = ecefToGeodetic(
+      boundaryTarget.x - distanceMeters * toTarget("x"),
+      boundaryTarget.y - distanceMeters * toTarget("y"),
+      boundaryTarget.z - distanceMeters * toTarget("z"),
+    );
+    const viewAtHeading: TestViewOptions = {
+      latDeg: (eye.latRad * 180) / Math.PI,
+      lonDeg: (eye.lonRad * 180) / Math.PI,
+      altitudeMeters: eye.altMeters,
+      pitchDeg: 75,
+      headingDeg: 180,
+    };
+    // Baseline (robustOrbitLOD: false / default): under-eye tile stays coarse outside view frustum
+    const baseline = selectTerrain(input(viewAtHeading, { refineFrom: { position: boundaryTarget, minDistanceMeters: distanceMeters } }));
+    const underEyeBaseline = levelAt(baseline, viewAtHeading.latDeg, viewAtHeading.lonDeg);
+    expect(underEyeBaseline).toBeLessThan(14);
+
+    // Opt-in (robustOrbitLOD: true): under-eye tile refines to match target detail
+    const selection = selectTerrain(input(viewAtHeading, { refineFrom: { position: boundaryTarget, minDistanceMeters: distanceMeters }, robustOrbitLOD: true }));
+    const targetLevel = levelAt(selection, -0.011, -112.1);
+    const underEyeLevel = levelAt(selection, viewAtHeading.latDeg, viewAtHeading.lonDeg);
+    expect(underEyeLevel).toBeGreaterThanOrEqual(targetLevel - 1);
+  });
 });
+
+

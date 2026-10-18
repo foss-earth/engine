@@ -353,6 +353,9 @@ export interface GlobeRuntime {
    * apply as before.
    */
   sky: Pick<SkyRuntime, "getEnvironment" | "subscribe" | "setGroundLights" | "setGroundLightReceiver">;
+  /** Background terrain mesh target geometry preparation pool statistics, if workers are active. */
+  getTerrainMeshStats?(): import("../browser/terrainMeshWorkers.js").TerrainMeshWorkerPoolStats | null;
+  getTerrainHeightStats?(): import("../browser/terrainHeightBatches.js").TerrainHeightBatchStats | null;
   destroy(): void;
 }
 /** Factory guarantee; legacy structural GlobeRuntime ports remain compatible. */
@@ -1889,7 +1892,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
       // A source transition can still display outgoing Google triangles. Query
       // those real triangles until the ordinary adoption path retires them.
       return (tilesRuntime?.tiles.visibleTiles.size ?? 0) > 0 ? undefined : null;
-    });
+    }, options.groundAcceleration);
   const displayedSurface = createCurrentDisplayedSurface(surface, readCurrentSurfaceState);
   // A tile failure that has ended is gone from the state the surface reports.
   refreshCurrentSurface = () => { clearSettledRasterError(); readCurrentSurfaceState(); displayedSurface.refresh(); };
@@ -2319,6 +2322,8 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
       subscribe(listener) { if (disposed) return () => undefined; return authority.own(sky.subscribe(listener)); },
       setGroundLights(lights) { if (!disposed) sky.setGroundLights(lights); },
       setGroundLightReceiver(receiver) { if (!disposed) sky.setGroundLightReceiver(receiver); } },
+    getTerrainMeshStats: () => rasterTilesRuntime?.getTerrainMeshStats?.() ?? null,
+    getTerrainHeightStats: () => rasterTilesRuntime?.getTerrainHeightStats?.() ?? null,
     destroy() {
       if (disposed) return; disposed = true;
       try { authority.dispose(); } catch (error) { retirementErrors.push(error); throw error; }

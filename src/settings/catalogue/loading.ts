@@ -324,4 +324,16 @@ export const MAP_TERRAIN_SELECTION_PARAMETERS: readonly ParameterSpec[] = [
     description: "Split terrain gives way to its parent once the parent's error is this far under the target.",
     reason: "The value 2D imagery starts from.", source: TERRAIN_SELECTOR,
   }),
+  {
+    id: "map.terrain.robustOrbitLOD",
+    label: "Robust orbit LOD",
+    description: "Retains recently viewed HD terrain tiles across camera orbits, prevents coarse stand-in elevation from overwriting fine meshes, refines terrain under the camera eye to avoid safe-space elevation jolts, and keeps in-frustum tiles from being blocked by out-of-frustum sibling leaves.",
+    kind: "boolean",
+    unit: "none",
+    default: false,
+    defaultReason: "Opt-in fix for low-LOD retention and upward camera jolts during orbital camera motion.",
+    home: { tab: MAP_TAB, section: "terrain-selection", level: "all" },
+    appliesLive: true,
+    source: RASTER_RUNTIME,
+  },
 ];

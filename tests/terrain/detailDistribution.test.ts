@@ -94,7 +94,7 @@ describe("detail distribution", () => {
     expect(fine).toMatchObject({ unknownCount: 1, tileCount: 4 });
     const laid = layoutDetailDistribution({
       kind: "google", finer: GOOGLE_ERROR_TARGET_BOUNDS.finest, coarser: GOOGLE_ERROR_TARGET_BOUNDS.coarsest,
-      widthPx: 41, distribution: fine, previousCeiling: null, resetCeiling: true,
+      widthPx: 41, distribution: fine,
     });
     expect(laid.finerOverflow).toBe(0);
     expect(laid.bars[0].count).toBe(2);

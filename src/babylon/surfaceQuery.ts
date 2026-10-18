@@ -2,6 +2,7 @@ import { Matrix, Ray, Vector3, type AbstractMesh, type Scene, type TransformNode
 import { DEG_TO_RAD, ecefToGeodetic, geodeticToEcef, type EcefCoord } from "../camera/cameraMath.js";
 
 import type { SurfaceHit, SurfaceQuery } from "../surface/contracts.js";
+import type { GroundAcceleration } from "./groundAcceleration.js";
 
 const AXES = ["x", "y", "z"] as const;
 
@@ -34,7 +35,7 @@ function intersectsSegmentBounds(ray: Ray, minimum: Vector3, maximum: Vector3): 
  * even when a consumer moves the map under a floating origin. No cached heights. */
 export function createSurfaceQuery(scene: Scene, getWorldRoot: () => TransformNode | null,
   isSurface: (mesh: AbstractMesh) => boolean, getRevision: () => number = () => 0,
-  sampleOverride?: (latDeg: number, lonDeg: number) => SurfaceHit | null | undefined): Required<SurfaceQuery> {
+  sampleOverride?: (latDeg: number, lonDeg: number) => SurfaceHit | null | undefined, acceleration?: GroundAcceleration | null): Required<SurfaceQuery> {
   function raycast(origin: EcefCoord, direction: EcefCoord, lengthMeters: number): SurfaceHit | null {
     if (![origin.x, origin.y, origin.z, direction.x, direction.y, direction.z, lengthMeters].every(Number.isFinite)
       || lengthMeters <= 0) return null;
@@ -44,7 +45,7 @@ export function createSurfaceQuery(scene: Scene, getWorldRoot: () => TransformNo
     const inverse = Matrix.Invert(transform);
     const ecefRay = new Ray(new Vector3(origin.x, origin.y, origin.z), dir.normalize(), lengthMeters);
     const ray = Ray.Transform(ecefRay, transform);
-    const pick = scene.pickWithRay(ray, mesh => {
+    const predicate = (mesh: AbstractMesh): boolean => {
       if (!mesh.isEnabled() || !mesh.isVisible || !isSurface(mesh)) return false;
       // Let Babylon select the picking camera for billboard/infinite-distance
       // meshes; their bounds can depend on a different camera from rendering.
@@ -53,7 +54,8 @@ export function createSurfaceQuery(scene: Scene, getWorldRoot: () => TransformNo
       mesh.computeWorldMatrix();
       const bounds = mesh.getBoundingInfo().boundingBox;
       return intersectsSegmentBounds(ray, bounds.minimumWorld, bounds.maximumWorld);
-    }, false);
+    };
+    const pick = acceleration ? acceleration.pick(scene, ray, predicate) : scene.pickWithRay(ray, predicate, false);
     if (!pick?.hit || !pick.pickedPoint || !pick.pickedMesh) return null;
     const point = Vector3.TransformCoordinates(pick.pickedPoint, inverse);
     const normal = Vector3.TransformNormal(pick.getNormal(true, false) ?? Vector3.Up(), inverse).normalize();

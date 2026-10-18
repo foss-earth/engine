@@ -3,8 +3,11 @@ import type { AbstractMesh, Scene, Sprite } from "@babylonjs/core";
 /**
  * What the ground and its tiles record on a mesh. A point of interest has
  * something else: the displayed surface is not one, so a drag can grab it.
+ * `preparationAdmission` is a prepared terrain tile's provenance: which
+ * backend built it and on what evidence. It stays on the mesh, and the tile
+ * stays ground.
  */
-const GROUND_METADATA_KEYS = new Set(["mapSurface", "terrainZoom", "segments", "heightBounds", "googleGeometricErrorMeters"]);
+const GROUND_METADATA_KEYS = new Set(["mapSurface", "terrainZoom", "segments", "heightBounds", "googleGeometricErrorMeters", "preparationAdmission"]);
 
 function isWorldPointMetadata(metadata: unknown): boolean {
   if (metadata == null || typeof metadata !== "object") return false;

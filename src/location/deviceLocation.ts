@@ -14,12 +14,18 @@ export interface DeviceLocationPort {
   watch(onFix: (fix: DeviceLocationFix) => void, onError: (message: string) => void): () => void;
 }
 
+export interface DeviceGeolocationOptions {
+  enableHighAccuracy?: boolean;
+  maximumAge?: number;
+  timeout?: number;
+}
+
 /** Structural view of `navigator.geolocation`, so a test can supply a fake. */
 export interface DeviceGeolocation {
   watchPosition(
     success: (position: { coords: DeviceGeolocationCoords }) => void,
     error?: ((error: { code: number }) => void) | null,
-    options?: PositionOptions,
+    options?: DeviceGeolocationOptions,
   ): number;
   clearWatch(id: number): void;
 }
@@ -46,7 +52,7 @@ export const DEVICE_LOCATION_ACCURACY_OPACITY = 0.25;
 export const DEVICE_LOCATION_ACCURACY_LIFT_M = 2;
 export const DEVICE_LOCATION_DOT_LIFT_M = 6;
 
-const WATCH: PositionOptions = { enableHighAccuracy: true, maximumAge: 1_000, timeout: 20_000 };
+const WATCH: DeviceGeolocationOptions = { enableHighAccuracy: true, maximumAge: 1_000, timeout: 20_000 };
 
 export function deviceLocationErrorMessage(code: number): string {
   if (code === 1) return "Location permission was denied.";

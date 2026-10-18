@@ -72,6 +72,8 @@ describe("supplied canvas and scene visualization",()=>{
     const ground = { metadata: { mapSurface: true, terrainZoom: 6, segments: 32, heightBounds: { min: 0, max: 1 } } };
     const tile = { metadata: { googleGeometricErrorMeters: 12 } };
     const point = { metadata: { id: "authored" } };
+    // A prepared tile keeps its admission provenance and is still the ground.
+    const prepared = { metadata: { ...ground.metadata, preparationAdmission: { backend: "wasm-single", validationStatus: "validated", evidence: "parity" } } };
     try {
       vi.spyOn(scene, "pickSprite").mockReturnValue({ hit: false } as never);
       const pick = vi.spyOn(scene, "pick").mockImplementation((_x, _y, predicate) => {
@@ -81,7 +83,7 @@ describe("supplied canvas and scene visualization",()=>{
       expect(pickPointMetadata(scene, 10, 20)).toEqual({ id: "authored" });
       expect(hasPickablePointAt(scene, 10, 20)).toBe(true);
       pick.mockImplementation((_x, _y, predicate) => {
-        const mesh = [ground, tile].find(candidate => predicate?.(candidate as never, 0));
+        const mesh = [ground, tile, prepared].find(candidate => predicate?.(candidate as never, 0));
         return { hit: Boolean(mesh), pickedMesh: mesh } as never;
       });
       expect(pickPointMetadata(scene, 10, 20)).toBeNull();

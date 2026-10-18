@@ -16,7 +16,8 @@ import type { BabylonRuntimeStatus } from "./createGlobeRuntime.js";
 import type { BorrowedGlobeScheduler } from "./borrowedRuntimeAuthority.js";
 import type { NavigationAnchorMarkers } from "../browser/navigationAnchorMarkers.js";
 
-export type BorrowedGlobeSky = Omit<SkyRuntime, "dispose">;
+/** The globe draws and reads the sky; where the host evaluates it is the host's to report. */
+export type BorrowedGlobeSky = Omit<SkyRuntime, "dispose" | "getEvaluation">;
 export interface GlobeSkyContext {
   isGround(mesh: AbstractMesh): boolean;
   getWorldMatrix(): Matrix | null;
@@ -39,7 +40,7 @@ export interface GlobeRuntimePlatform {
   /** Markers for the grabbed ground and the points zoom acts about, over the canvas (`input.showNavigationAnchors`); none without it. */
   navigationAnchorMarkers?(canvas: HTMLCanvasElement): NavigationAnchorMarkers;
 }
-export type GlobeRasterPorts = Pick<RasterTilesRuntimeOptions, "loadMapTexture" | "asyncMapTextures" | "attachTerrainLighting" | "createTerrainLoader" | "imageryPorts" | "meshRebuildCpuMs" | "log">;
+export type GlobeRasterPorts = Pick<RasterTilesRuntimeOptions, "loadMapTexture" | "asyncMapTextures" | "attachTerrainLighting" | "createTerrainLoader" | "createTerrainMeshWorker" | "terrainMeshWorkers" | "createTerrainHeightWorker" | "imageryPorts" | "meshRebuildCpuMs" | "log">;
 export type GlobeGooglePorts = Pick<GoogleTilesRuntimeOptions, "createTilesRenderer" | "createAuthPlugin" | "createAbortController" | "combineSignals" | "whenMeshesReady" | "lighting" | "responseRealm" | "recordMapRequest" | "resourceTiming" | "online" | "origin" | "log">;
 export interface GlobeMapPorts { raster: GlobeRasterPorts; google: GlobeGooglePorts; setCacheLimits(limits: MapCacheLimits): void }
 export interface GlobeExternalCamera {
@@ -80,6 +81,8 @@ export interface GlobeRuntimeOptions {
    * Ordinary globe hosts need no external/simulation mode. Method invocation
    * preserves the supplied contribution object's receiver. */
   framePreparation?: { prepare(frame: GlobeFramePreparation): void };
+  /** Borrowed optional index/query service; the host owns its worker lifetime. */
+  groundAcceleration?: import("./groundAcceleration.js").GroundAcceleration;
   /** Explicit acceptance/placement policy, never a hidden aircraft default. */
   terrainPreparation: TerrainPreparationPolicy;
   budgets: { fallbackSegments(): number; googleStartupTimeoutMs(external: boolean): number; debugEventCapacity(): number };

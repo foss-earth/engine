@@ -18,6 +18,8 @@ import { createAtlasImageryWorkerBridge } from "./atlasImageryWorkerBridge.js";
 import type { AtlasImageryWorkerPort } from "./atlasImageryWorkerProtocol.js";
 import { createTerrainDecodeWorkers } from "./terrainDecodeWorkers.js";
 import type { TerrainDecodeWorkerPort } from "./terrainDecodeWorkerProtocol.js";
+import type { TerrainMeshWorkerPort } from "./terrainMeshWorkerProtocol.js";
+import type { HeightBatchWorkerPort } from "./terrainHeightBatchProtocol.js";
 import { createBoundedAtlasImageryLoader, type BoundedAtlasImageryLoaderOptions } from "./boundedAtlasImageryLoader.js";
 import type { createMapCache } from "./mapCache.js";
 import { measureMapResponse } from "./mapDownloadMeter.js";
@@ -56,6 +58,11 @@ export interface BrowserGlobeBindingOptions {
   createTerrainWorker?(): TerrainDecodeWorkerPort | null;
   /** The most terrain decode workers at once, read at each decode. 0 or absent: terrain decodes on the page. */
   terrainDecodeWorkers?(): number;
+  /** A worker running installTerrainMeshWorkerKernel. Absent or null: terrain mesh targets prepare on page. */
+  createTerrainMeshWorker?(): TerrainMeshWorkerPort | null;
+  /** The most terrain mesh workers at once. */
+  terrainMeshWorkers?(): number;
+  createTerrainHeightWorker?(): HeightBatchWorkerPort | null;
   createCanvas(width: number, height: number): HTMLCanvasElement | OffscreenCanvas;
   decode(bytes: Uint8Array, mimeType: "image/jpeg" | "image/png"): Promise<ImageBitmap>;
   onError(error: unknown): void;
@@ -156,6 +163,9 @@ export function createBrowserGlobeBindings(options: BrowserGlobeBindingOptions) 
           createAbortController: () => new realm.AbortController(),
         },
         meshRebuildCpuMs: () => settings.get<number>("map.terrain.meshRebuildTimePerFrame"), log: options.log,
+        createTerrainMeshWorker: options.createTerrainMeshWorker,
+        terrainMeshWorkers: options.terrainMeshWorkers,
+        createTerrainHeightWorker: options.createTerrainHeightWorker,
         imageryPorts: {
           device: native.device, managedAtlas, restoreManagedDevice: native.restoreDevice,
           capabilities: { backend: renderer.mode, maxTextureSize: caps.maxTextureSize,
