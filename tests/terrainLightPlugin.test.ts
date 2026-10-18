@@ -1,9 +1,9 @@
-import { FreeCamera, NullEngine, PBRMaterial, Scene, ShaderLanguage, StandardMaterial, Vector3, type BaseTexture, type Material, type UniformBuffer } from "@babylonjs/core";
+import { FreeCamera, NullEngine, OpenPBRMaterial, PBRMaterial, PBRMetallicRoughnessMaterial, Scene, ShaderLanguage, StandardMaterial, Vector3, type BaseTexture, type Material, type UniformBuffer } from "@babylonjs/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEG_TO_RAD, geodeticToEcef, WGS84_E2 } from "../src/camera/cameraMath.js";
 import { mercatorXY, nightPixelAt } from "@foss-earth/sky";
 import { GROUND_LIGHT_LEAST_SINE, GROUND_LIGHT_SAMPLES, groundLightTableElevationDeg, groundLightWeight } from "@foss-earth/sky";
-import { type TerrainLighting, type TerrainLocalLight, type TerrainNightLighting, type TerrainNightLightMap } from "../src/babylon/imagery/terrainLightPlugin.js";
+import { isMaterialOfClass, type TerrainLighting, type TerrainLocalLight, type TerrainNightLighting, type TerrainNightLightMap } from "../src/babylon/imagery/terrainLightPlugin.js";
 import { GROUND_LIGHT_TABLE, MERCATOR_MAX_LAT_DEG, NIGHT_RADIANCE_UNITS, groundLightAt } from "@foss-earth/sky";
 import { createTerrainLightingFixture } from "../fixtures/composition/terrainLightHost.js";
 const { MaterialPlugin: TerrainLightMaterialPlugin, followTerrainLight, getTerrainLighting, getTerrainLocalLights,
@@ -266,6 +266,26 @@ describe("terrain light", () => {
     expect(followTerrainLight(lit)).toBe(false);
     expect(unlit.pluginManager?.getPlugin("TerrainLight")).toBeInstanceOf(TerrainLightMaterialPlugin);
     expect(lit.pluginManager?.getPlugin("TerrainLight") ?? null).toBeNull();
+  });
+
+  it("knows Babylon's PBR materials, and classes derived from them, by name without importing them", () => {
+    const target = scene();
+    class TileMaterial extends PBRMaterial { override getClassName(): string { return "TileMaterial"; } }
+    const derived = new TileMaterial("derived", target);
+    derived.unlit = true;
+    const cases: [Material, string, boolean][] = [
+      [new PBRMaterial("pbr", target), "PBRMaterial", true],
+      [new PBRMaterial("pbr", target), "PBRBaseMaterial", true],
+      [new PBRMetallicRoughnessMaterial("metallic", target), "PBRBaseMaterial", true],
+      [new PBRMetallicRoughnessMaterial("metallic", target), "PBRMaterial", false],
+      [new OpenPBRMaterial("open", target), "PBRBaseMaterial", false],
+      [new StandardMaterial("standard", target), "PBRBaseMaterial", false],
+      [derived, "PBRMaterial", true],
+      [derived, "PBRBaseMaterial", true],
+    ];
+    expect(cases.map(([material, name]) => isMaterialOfClass(material, name))).toEqual(cases.map(([, , expected]) => expected));
+    expect(isUnlitMaterial(derived)).toBe(true);
+    expect(isUnlitMaterial(new PBRMetallicRoughnessMaterial("metallic", target))).toBe(false);
   });
 
   it("reads night lights only with a light that has them and a map, and recompiles only when that changes", () => {

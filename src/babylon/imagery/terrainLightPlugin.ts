@@ -1,8 +1,6 @@
 import {
   MaterialDefines,
   MaterialPluginBase,
-  PBRBaseMaterial,
-  PBRMaterial,
   ShaderLanguage,
   StandardMaterial,
   type BaseTexture,
@@ -103,6 +101,19 @@ export interface TerrainLocalLight {
 }
 export const DISPLAY_GAMMA = 2.2;
 export const TERRAIN_LOCAL_LIGHTS_MAX = 4;
+/**
+ * Whether a material is of Babylon's class with this name, or of a class derived from it, by each class's own
+ * `getClassName()`. It stands for `instanceof` with the PBR classes, which imported here would bring all of
+ * Babylon's PBR material code into the page's startup, though only glTF models (3D Tiles, loaded later) use it.
+ */
+export function isMaterialOfClass(material: Material, className: string): boolean {
+  for (let proto: unknown = Object.getPrototypeOf(material); proto && proto !== Object.prototype; proto = Object.getPrototypeOf(proto)) {
+    const own = Object.getOwnPropertyDescriptor(proto, "getClassName")?.value as ((this: Material) => string) | undefined;
+    if (own?.call(material) === className) return true;
+  }
+  return false;
+}
+
 /** Host scope owns one scene-light registry; sky table math is injected, never imported. */
 export function createTerrainLightingAdapter(ports: TerrainLightTablePorts): TerrainLightingAdapter {
   const { GROUND_LIGHT_TABLE, GROUND_LIGHT_SAMPLES, GROUND_LIGHT_LEAST_SINE, MERCATOR_MAX_LAT_DEG, NIGHT_RADIANCE_UNITS, groundLightAt } = ports;
@@ -299,7 +310,8 @@ function terrainLightFactor(lighting: TerrainLighting, local: readonly TerrainLo
 
 /** Whether a material ignores the scene's lights: a standard material with its lighting off, or an unlit PBR one, as glTF's `KHR_materials_unlit` makes. */
 function isUnlitMaterial(material: Material): boolean {
-  return (material instanceof StandardMaterial && material.disableLighting) || (material instanceof PBRMaterial && material.unlit);
+  return (material instanceof StandardMaterial && material.disableLighting)
+    || (isMaterialOfClass(material, "PBRMaterial") && (material as Material & { unlit?: boolean }).unlit === true);
 }
 
 /**
@@ -509,7 +521,7 @@ class TerrainLightMaterialPlugin extends MaterialPluginBase {
    * standard material's injection point for every material, PBR included.
    */
   private get linearColour(): boolean {
-    return this._material instanceof PBRBaseMaterial;
+    return isMaterialOfClass(this._material, "PBRBaseMaterial");
   }
 
   override isCompatible(shaderLanguage: ShaderLanguage): boolean {
