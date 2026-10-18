@@ -5,7 +5,7 @@ import { createEngineSettings } from "../fixtures/composition/runtimeHost.js";
 import { createGlobeRuntime } from "../src/babylon/createGlobeRuntime.js";
 import { createBorrowedRuntimeAuthority } from "../src/babylon/borrowedRuntimeAuthority.js";
 import { createTerrainPerformanceCapture } from "../src/terrain/terrainPerformanceCapture.js";
-import { TransformNode, Color3, Vector3, MeshBuilder, StandardMaterial, type Scene } from "@babylonjs/core";
+import { TransformNode, Color3, Mesh, Vector3, StandardMaterial, type Scene } from "@babylonjs/core";
 import type { GlobeRuntimeOptions } from "../src/babylon/globeRuntimePorts.js";
 import { createParameterControl } from "@foss-earth/ui/browser";
 import { ANCHOR_FALLBACK_MESSAGES, NAVIGATION_ANCHOR_SETTING_IDS, SHOW_COMPASS_CENTER_ID, SHOW_NAVIGATION_ANCHORS_ID } from "../src/input/navigationAnchors.js";
@@ -509,10 +509,13 @@ describe("owned globe cleanup and ordinary host preparation", () => {
   it("retains fallback allocation failure while still releasing material and light after mesh cleanup fails", () => {
     const host = createGlobeHostFixture(document); host.runtime.destroy();
     const operation = new Error("fallback styling failed"), cleanup = new Error("fallback partial mesh cleanup failed");
-    const createSphere = MeshBuilder.CreateSphere; let partial: ReturnType<typeof createSphere> | undefined;
+    const failed: Mesh[] = [];
     const materialDispose = vi.spyOn(StandardMaterial.prototype, "dispose");
-    vi.spyOn(MeshBuilder, "CreateSphere").mockImplementation((...args) => {
-      partial = createSphere(...args); vi.spyOn(partial, "dispose").mockImplementationOnce(() => { throw cleanup; }); return partial;
+    // The fallback globe's sphere fails its first cleanup.
+    const meshDispose = Mesh.prototype.dispose;
+    vi.spyOn(Mesh.prototype, "dispose").mockImplementation(function (this: Mesh, ...args: Parameters<Mesh["dispose"]>) {
+      if (this.name === "fallback-globe" && !failed.length) { failed.push(this); throw cleanup; }
+      return meshDispose.apply(this, args);
     });
     vi.spyOn(Color3, "FromHexString").mockImplementationOnce(() => { throw operation; });
     try { let failure: unknown;
@@ -520,7 +523,7 @@ describe("owned globe cleanup and ordinary host preparation", () => {
       expect(failure).toBeInstanceOf(AggregateError); expect((failure as AggregateError).errors).toEqual([operation, cleanup]);
       expect(materialDispose).toHaveBeenCalled(); expect(host.scene.getMaterialByName("fallback-globe-material")).toBeNull();
       expect(host.scene.getLightByName("fallback-light")).toBeNull(); expect(host.camera.isDisposed()).toBe(false); expect(host.holdCount()).toBe(1);
-    } finally { vi.restoreAllMocks(); partial?.dispose(); host.disposeHost(); }
+    } finally { vi.restoreAllMocks(); for (const mesh of failed) mesh.dispose(); host.disposeHost(); }
   });
 });
 

@@ -2,7 +2,8 @@ import {
   Axis,
   Color3,
   Mesh,
-  MeshBuilder,
+  CreateLines,
+  CreatePlane,
   StandardMaterial,
   Vector3,
 } from "@babylonjs/core";
@@ -55,7 +56,7 @@ function normalizeScaleParams(params: OrbitCompassScaleParams): OrbitCompassScal
 }
 
 function createLine(name: string, color: Color3, scene: Scene, width = 1): LinesMesh {
-  const line = MeshBuilder.CreateLines(
+  const line = CreateLines(
     name,
     { points: [Vector3.Zero(), Vector3.Zero()], updatable: true },
     scene,
@@ -110,7 +111,7 @@ function createLabel(text: string, color: string, scene: Scene, ports: OrbitComp
   material.alpha = COMPASS_OPACITY;
   material.backFaceCulling = false;
 
-  const label = MeshBuilder.CreatePlane(`orbit-compass-label-${text}`, { size: 1 }, scene);
+  const label = CreatePlane(`orbit-compass-label-${text}`, { size: 1 }, scene);
   label.material = material;
   label.billboardMode = Mesh.BILLBOARDMODE_ALL;
   label.isPickable = false;
@@ -143,7 +144,7 @@ function offsetPoint(
 }
 
 function setLine(line: LinesMesh, start: Vector3, end: Vector3, scene: Scene): void {
-  MeshBuilder.CreateLines(line.name, { points: [start, end], instance: line }, scene);
+  CreateLines(line.name, { points: [start, end], instance: line }, scene);
 }
 
 export function createOrbitCompass(scene: Scene, ports: OrbitCompassPorts): OrbitCompassHandle {

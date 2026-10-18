@@ -1,4 +1,4 @@
-import { Color3, Color4, HemisphericLight, MeshBuilder, StandardMaterial, UniversalCamera, Vector3, type AbstractMesh, type Camera, type Engine, type GeospatialCamera, type Scene, type TransformNode, type WebGPUEngine } from "@babylonjs/core";
+import { Color3, Color4, HemisphericLight, CreateSphere, StandardMaterial, UniversalCamera, Vector3, type AbstractMesh, type Camera, type Engine, type GeospatialCamera, type Scene, type TransformNode, type WebGPUEngine } from "@babylonjs/core";
 import type { RendererMode } from "@foss-earth/renderer";
 import type { RendererSelection, FrameProfileSession } from "@foss-earth/renderer/babylon";
 import type { SkyRuntime } from "@foss-earth/sky/babylon";
@@ -384,7 +384,7 @@ function createFallbackExperience(scene: Scene, worldRoot: TransformNode | null,
   light.intensity = 0.95 * ambientFillMultiplier;
   light.setEnabled(fillLightsOn);
 
-  const globeMesh = MeshBuilder.CreateSphere(
+  const globeMesh = CreateSphere(
     "fallback-globe",
     { diameter: PLANET_RADIUS_METERS * 2, segments },
     scene,
