@@ -3,6 +3,8 @@ import type { NativeTierPreference } from "../../browser/terrainNativeDecoder.js
 
 export const NATIVE_TIER_ID = "native.tier";
 export const NATIVE_THREADS_ID = "native.threads";
+/** Sky → Shared memory: a sky that runs WebAssembly runs its shared-memory build. */
+export const NATIVE_SHARED_SKY_ID = "native.sharedSky";
 /** The shared builds' stack slots: a coordinator and at most seven helpers. */
 export const NATIVE_MAX_THREADS = 8;
 
@@ -15,6 +17,8 @@ export const NATIVE_MAX_THREADS = 8;
  * shared-memory WASM build, with `native.threads` cooperating threads over one
  * memory, where the core has one (sky) and the page is cross-origin isolated;
  * otherwise it reports its fallback and why, never a threaded backend.
+ * `native.sharedSky` also runs the sky's shared build when it would run
+ * single-threaded WASM, so a WASM selection can share memory without `threaded`.
  */
 export type NativeExecutionTier = "typescript" | "typescript-worker" | "single" | "auto" | "threaded" | "custom";
 export const NATIVE_EXECUTION_TIERS: readonly NativeExecutionTier[] = ["typescript", "typescript-worker", "single", "auto", "threaded", "custom"];
@@ -133,6 +137,15 @@ const manualParameters = (core?: NativeCoreId): ParameterSpec[] => NATIVE_MANUAL
   source: "src/settings/catalogue/native.ts",
 }));
 
+/** Shared-memory threads by default: the hardware threads but the page's own, at most 4. */
+const defaultSharedThreads = (threads: number | null): number => Math.max(1, Math.min(4, (threads ?? 2) - 1));
+/**
+ * The workers the default WebAssembly selection starts beside the elevation pool and the
+ * imagery worker: one each for the sky, imagery heights, Google tiles and the ground index,
+ * two terrain mesh workers, and the shared sky's helpers (used only on an isolated page).
+ */
+const defaultDedicatedWorkers = (threads: number | null): number => 6 + defaultSharedThreads(threads) - 1;
+
 const TIER_CHOICES = [
   { id: "typescript", label: "TypeScript, original placement" },
   { id: "typescript-worker", label: "TypeScript in workers (A/B reference)" },
@@ -146,19 +159,21 @@ export const NATIVE_PARAMETERS: readonly ParameterSpec[] = [{
   id: NATIVE_TIER_ID, label: "Execution selection", kind: "choice", unit: "none",
   description: "After a reload, chooses how every converted core runs. TypeScript keeps each core where it always ran. For an A/B, compare TypeScript in workers with single-threaded WASM: both use the same workers, inputs and quality. WASM is admitted only after its first result equals the TypeScript reference; a failed fetch, compile, start or comparison returns that core to TypeScript and says why. Threaded runs the sky's shared-memory build with cooperating threads where the page is cross-origin isolated, and otherwise its single-threaded core; the other cores have no shared build and report their fallback.",
   choices: [...TIER_CHOICES],
-  default: "typescript", defaultReason: "Keep the existing code paths until paired A/B evidence justifies a change.",
+  default: "single", defaultReason: "WebAssembly in worker pools, chosen on 19 October 2026 after it was tried on a Mac and an Android phone and judged to work well enough. It is not a speed claim: paired runs measured Terrain heights and Terrain geometry slower in WASM than in TypeScript, and Auto keeps each core's recorded choice. Each core is admitted only after its first result equals the TypeScript reference, and otherwise returns to TypeScript and says why.",
   home: { tab: "native", section: "selection", level: "main" }, appliesLive: false,
   source: "src/settings/catalogue/native.ts",
 }, {
   id: "native.workers", label: "Total preparation workers", kind: "number", unit: "count",
-  description: "After reload, limits the combined imagery decode, elevation, mesh, sky, imagery height, Google and ground worker factories. A full budget keeps the complete JavaScript fallback usable.",
+  description: "After reload, limits the combined imagery decode, elevation, mesh, sky, imagery height, Google and ground worker factories. The elevation pool gets what the other workers leave, so a smaller budget decodes more elevation tiles on the page. A full budget keeps the complete JavaScript fallback usable.",
   default: context => {
     const threads = context.hardwareConcurrency ?? 4;
-    const value = Math.max(2, Math.min(context.deviceMemoryGiB !== null && context.deviceMemoryGiB <= 1 ? 3 : 17, threads));
-    return { value, derivedFrom: "the existing elevation worker recommendation plus one imagery worker, capped at 17, or 3 with at most 1 GiB memory" };
+    const base = Math.max(2, Math.min(context.deviceMemoryGiB !== null && context.deviceMemoryGiB <= 1 ? 3 : 17, threads));
+    const dedicated = defaultDedicatedWorkers(context.hardwareConcurrency);
+    return { value: Math.min(32, base + dedicated),
+      derivedFrom: `the elevation worker recommendation plus one imagery worker (${base}, capped at 17, or 3 with at most 1 GiB memory), plus ${dedicated} for the default WebAssembly selection's own workers` };
   },
   bounds: () => ({ min: 1, max: 32 }), step: 1,
-  defaultReason: "Retains capacity for the existing elevation pool and imagery worker; optional cores share that host budget rather than each taking every CPU thread.",
+  defaultReason: "Keeps the elevation pool its recommended size beside the default WebAssembly selection's sky, imagery height, Google, ground and terrain mesh workers and the shared sky's helpers. Those are idle between bursts of work, so they are counted rather than taken from the elevation pool.",
   home: { tab: "native", section: "selection", level: "all" }, appliesLive: false,
   source: "src/settings/catalogue/native.ts",
 }, {
@@ -166,12 +181,19 @@ export const NATIVE_PARAMETERS: readonly ParameterSpec[] = [{
   description: "After reload, how many cooperating threads a threaded core uses over one shared memory, its coordinator included. Only a threaded request of a core with a shared build uses them; each helper thread is a worker taken from the total preparation workers.",
   default: context => {
     const threads = context.hardwareConcurrency;
-    const value = Math.max(1, Math.min(4, (threads ?? 2) - 1));
+    const value = defaultSharedThreads(threads);
     return { value, derivedFrom: threads ? `the ${threads} hardware threads the browser reports but the page's own, at most 4` : "1 helper beside the coordinator, because this browser does not say how many hardware threads the device has" };
   },
   bounds: () => ({ min: 1, max: NATIVE_MAX_THREADS }), step: 1,
   defaultReason: "Leaves the page a thread. In the measured app sky, 8 threads saved little worker time over 4 and used more CPU in all.",
   home: { tab: "native", section: "selection", level: "all" }, appliesLive: false,
+  source: "src/settings/catalogue/native.ts",
+}, {
+  id: NATIVE_SHARED_SKY_ID, label: "Sky in shared memory", kind: "boolean", unit: "none",
+  description: "After a reload, a sky that runs WebAssembly runs its shared-memory build: its worker coordinates helper threads over one shared memory, and Shared-memory threads says how many. Used only on a cross-origin isolated page; elsewhere the sky runs its single-threaded WASM core and says why. TypeScript selections are unchanged. Turn it off to compare single-threaded WASM with TypeScript in workers.",
+  default: true,
+  defaultReason: "On since 19 October 2026, with WebAssembly in worker pools, after the shared-memory sky was tried in isolated browsers and judged to work well enough. It is not a speed claim.",
+  home: { tab: "native", section: "cores", level: "all" }, appliesLive: false,
   source: "src/settings/catalogue/native.ts",
 }, ...(Object.keys(NATIVE_CORE_SETTING_IDS) as NativeCoreId[]).map((core): ParameterSpec => ({
   id: NATIVE_CORE_SETTING_IDS[core], label: NATIVE_CORES[core].label, kind: "choice", unit: "none",
@@ -193,7 +215,7 @@ export interface NativeCorePlan {
   resolved: Exclude<NativeExecutionTier, "auto" | "custom">;
   /** Original: the code and place the core always had. Worker: the A/B placement. */
   placement: "original" | "worker";
-  /** The numbers inside that placement. */
+  /** The numbers inside that placement; a single-threaded sky with native.sharedSky is threaded. */
   kernel: "typescript" | "single" | "threaded";
   /** Why `auto` chose as it did; null otherwise. */
   autoReason: string | null;
@@ -266,7 +288,9 @@ export function nativeCorePlan(settings: ExecutionSettings, core: NativeCoreId):
     ? base.implementation === "wasm" ? "single" : base.placement === "worker" ? "typescript-worker" : "typescript"
     : requested;
   const placement = resolved === "typescript" ? "original" : "worker";
-  const kernel = resolved === "single" ? "single" : resolved === "threaded" ? "threaded" : "typescript";
+  // Old host/test readers may not expose native.sharedSky: single-threaded WASM.
+  const sharedSky = core === "sky" && resolved === "single" && settings.get(NATIVE_SHARED_SKY_ID) === true;
+  const kernel = resolved === "single" ? sharedSky ? "threaded" : "single" : resolved === "threaded" ? "threaded" : "typescript";
   const sharedMemory = kernel === "threaded" && facts.sharedBuild;
   const asked = Number(settings.get(NATIVE_THREADS_ID));
   // Old host/test readers may not expose the thread count: the coordinator alone.

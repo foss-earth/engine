@@ -1,15 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
-  componentExecutionChoices, componentExecutionEdits, NATIVE_CORE_SETTING_IDS, NATIVE_EXECUTION_TIERS, NATIVE_MAX_THREADS, NATIVE_PARAMETERS, NATIVE_THREADS_ID, NATIVE_TIER_ID,
+  componentExecutionChoices, componentExecutionEdits, NATIVE_CORE_SETTING_IDS, NATIVE_EXECUTION_TIERS, NATIVE_MAX_THREADS, NATIVE_PARAMETERS, NATIVE_SHARED_SKY_ID, NATIVE_THREADS_ID, NATIVE_TIER_ID,
   nativeCorePlan, nativeTierPreference,
 } from "../src/settings/catalogue/native.js";
 
 const reading = (values: Record<string, unknown>) => ({ get: <T>(id: string) => (id in values ? values[id] : "inherit") as T });
 
 describe("native execution settings", () => {
-  it("are reload-only, in their own tab, with the original TypeScript default and every tier explicit", () => {
+  it("are reload-only, in their own tab, with WebAssembly in worker pools by default and every tier explicit", () => {
     const spec = NATIVE_PARAMETERS.find(parameter => parameter.id === NATIVE_TIER_ID)!;
-    expect(spec).toMatchObject({ kind: "choice", default: "typescript", appliesLive: false, home: { tab: "native" } });
+    expect(spec).toMatchObject({ kind: "choice", default: "single", appliesLive: false, home: { tab: "native" } });
+    expect(NATIVE_PARAMETERS.find(parameter => parameter.id === "native.parallelism")).toMatchObject({ default: "auto" });
     expect(spec.kind === "choice" && spec.choices?.map(choice => choice.id)).toEqual([...NATIVE_EXECUTION_TIERS]);
     for (const id of Object.values(NATIVE_CORE_SETTING_IDS)) {
       const core = NATIVE_PARAMETERS.find(parameter => parameter.id === id)!;
@@ -89,8 +90,26 @@ describe("native execution settings", () => {
     expect(nativeCorePlan(reading({ [NATIVE_TIER_ID]: "threaded" }), "sky")).toMatchObject({ sharedMemory: true, threads: 1 });
     const spec = NATIVE_PARAMETERS.find(parameter => parameter.id === NATIVE_THREADS_ID)!;
     expect(spec).toMatchObject({ kind: "number", appliesLive: false, home: { tab: "native" } });
+    expect(NATIVE_PARAMETERS.find(parameter => parameter.id === NATIVE_SHARED_SKY_ID)).toMatchObject({ kind: "boolean", default: true, appliesLive: false });
     const derive = spec.default as unknown as (context: { hardwareConcurrency: number | null; deviceMemoryGiB: number | null }) => { value: number };
     expect([null, 1, 2, 4, 16].map(hardwareConcurrency => derive({ hardwareConcurrency, deviceMemoryGiB: null }).value)).toEqual([1, 1, 1, 3, 4]);
+    // The budget keeps the elevation pool's recommendation beside the default selection's own workers.
+    const budget = NATIVE_PARAMETERS.find(parameter => parameter.id === "native.workers")!.default as unknown as typeof derive;
+    expect([[null, null], [2, null], [10, 8], [32, 8], [8, 1]].map(([hardwareConcurrency, deviceMemoryGiB]) => budget({ hardwareConcurrency, deviceMemoryGiB }).value))
+      .toEqual([4 + 6, 2 + 6, 10 + 9, 26, 3 + 9]);
   });
 
+  it("runs a WASM sky's shared build with native.sharedSky, and leaves TypeScript and the other cores as they were", () => {
+    const shared = (values: Record<string, unknown>) => reading({ [NATIVE_SHARED_SKY_ID]: true, [NATIVE_THREADS_ID]: 4, ...values });
+    expect(nativeCorePlan(shared({ [NATIVE_TIER_ID]: "single" }), "sky")).toMatchObject({ requested: "single", resolved: "single", kernel: "threaded", sharedMemory: true, threads: 4 });
+    expect(nativeCorePlan(shared({ [NATIVE_TIER_ID]: "custom", "native.implementation": "wasm", "native.placement": "worker" }), "sky"))
+      .toMatchObject({ kernel: "threaded", sharedMemory: true });
+    expect(nativeCorePlan(shared({ [NATIVE_TIER_ID]: "single", [NATIVE_SHARED_SKY_ID]: false }), "sky")).toMatchObject({ kernel: "single", sharedMemory: false, threads: 1 });
+    for (const tier of ["typescript", "typescript-worker", "auto"]) {
+      expect(nativeCorePlan(shared({ [NATIVE_TIER_ID]: tier }), "sky")).toMatchObject({ kernel: "typescript", sharedMemory: false });
+    }
+    for (const core of ["raster", "terrain", "imagery", "google", "ground"] as const) {
+      expect(nativeCorePlan(shared({ [NATIVE_TIER_ID]: "single" }), core)).toMatchObject({ kernel: "single", sharedMemory: false, threadedFallback: null });
+    }
+  });
 });
