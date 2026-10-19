@@ -1,4 +1,4 @@
-import { copyTerrainNumericGeometry, type TerrainNumericGeometry } from "../terrain/terrainNumericGeometry.js";
+import { adoptTerrainNumericGeometry, type TerrainNumericGeometry } from "../terrain/terrainNumericGeometry.js";
 import { createWorkerPool, type WorkerPoolStats, type WorkerPoolTimers } from "./workerPool.js";
 import { TERRAIN_MESH_PROTOCOL, type TerrainMeshActualBackend, type TerrainMeshNumericInput, type TerrainMeshRequestedBackend,
   type TerrainMeshValidation, type TerrainMeshWorkerPort, type TerrainMeshWorkerReply, type TerrainMeshWorkerRequest } from "./terrainMeshWorkerProtocol.js";
@@ -70,7 +70,8 @@ export function createTerrainMeshWorkers(options: TerrainMeshWorkersOptions): {
       if (reply.actualBackend) lastActualBackend = reply.actualBackend;
       if (reply.parity) lastParity = reply.parity;
       if (reply.fallbackReason) lastFallbackReason = reply.fallbackReason;
-      return { geometry: copyTerrainNumericGeometry(reply.geometry), generation, requestedBackend,
+      // The worker transferred these arrays; nothing else holds them.
+      return { geometry: adoptTerrainNumericGeometry(reply.geometry), generation, requestedBackend,
         actualBackend: reply.actualBackend, validationStatus: reply.validationStatus, parity: reply.parity, fallbackReason: reply.fallbackReason };
     },
     stats: () => ({

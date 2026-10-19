@@ -2,13 +2,25 @@ import { VertexBuffer, type Mesh } from "@babylonjs/core";
 import type { TerrainTile } from "../terrain/terrainGrid.js";
 
 export interface TerrainPatch { mesh: Mesh; tile: TerrainTile }
-export interface MeshRefinement { from: number[]; to: number[] | Float32Array; started: number; duration: number }
+export interface MeshRefinement { from: Float32Array; to: number[] | Float32Array; started: number; duration: number }
 export interface GeometryWriteCounters { geometryWrites: number; seamPasses: number }
 const order = (a: TerrainPatch, b: TerrainPatch) => a.tile.z - b.tile.z || a.tile.x - b.tile.x || a.tile.y - b.tile.y;
-export function meshPositions(mesh: Mesh): number[] {
+/** A copy of the positions a mesh draws with. */
+export function meshPositions(mesh: Mesh): Float32Array {
   const data = mesh.getVerticesData(VertexBuffer.PositionKind)!;
-  // A new mesh holds a Float32Array and an updated one the number[] it was
-  // given. Array.from is slow on the first; a copy loop gives the same numbers.
+  // Terrain meshes hold float32. A plain array another caller uploaded is
+  // rounded the way Babylon converts it for drawing.
+  return data instanceof Float32Array ? data.slice() : Float32Array.from(data);
+}
+/**
+ * Seams are stitched in float64 and kept so on the CPU. Neighbouring tiles
+ * have different origins, so rounding each side to float32 can move a seam
+ * lying in an axis plane, such as the antimeridian or the equator, just off
+ * it, where Babylon's exact bounding-box check no longer admits a ray along it.
+ */
+function storedPositions(mesh: Mesh): number[] {
+  const data = mesh.getVerticesData(VertexBuffer.PositionKind)!;
+  // Array.from is slow on a Float32Array; a copy loop gives the same numbers.
   if (Array.isArray(data)) return data.slice();
   const positions = new Array<number>(data.length);
   for (let index = 0; index < data.length; index++) positions[index] = data[index];
@@ -31,7 +43,8 @@ export function refineMesh(mesh: Mesh, to: number[] | Float32Array, now: number,
 export function advanceRefinement(mesh: Mesh, refinement: MeshRefinement, now: number, counters?: GeometryWriteCounters): boolean {
   const t = Math.max(0, Math.min(1, (now - refinement.started) / refinement.duration));
   const blend = t * t * (3 - 2 * t);
-  const positions = refinement.from.map((value, i) => value + (refinement.to[i] - value) * blend);
+  const { from, to } = refinement, positions = new Float32Array(from.length);
+  for (let i = 0; i < from.length; i++) positions[i] = from[i] + (to[i] - from[i]) * blend;
   updateTerrainPositions(mesh, positions);
   if (counters) counters.geometryWrites++;
   return t < 1;
@@ -127,7 +140,7 @@ export function stitchTerrainEdges(patches: TerrainPatch[], counters?: GeometryW
         neighbor = byKey.get(`${z}/${((Math.floor(x * factor) % n) + n) % n}/${Math.floor(y * factor)}`);
       }
       if (!neighbor || order(neighbor, patch) >= 0) continue;
-      positions ??= meshPositions(mesh);
+      positions ??= storedPositions(mesh);
       const origin = mesh.position.asArray();
       for (let i = 0; i <= segments; i++) {
         const col = side === 0 ? 0 : side === 1 ? segments : i;

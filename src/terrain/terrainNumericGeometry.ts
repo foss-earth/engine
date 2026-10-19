@@ -39,8 +39,9 @@ export function validateTerrainNumericRequest(request: TerrainNumericRequest): n
     let bytes = (7 + (neighbors.length + 1) * 6) * 8 + 56;
     for (const grid of [request.grid, ...neighbors]) {
       tile(grid);
+      // Heights may be shared: decode workers publish them once and nothing writes them after.
       if (!Number.isSafeInteger(grid.size) || grid.size < 1 || grid.size > 4096 || !(grid.heights instanceof Float32Array)
-        || grid.heights.length !== grid.size * grid.size || !(grid.heights.buffer instanceof ArrayBuffer)) throw new RangeError("Malformed or shared terrain numeric heights.");
+        || grid.heights.length !== grid.size * grid.size) throw new RangeError("Malformed terrain numeric heights.");
       bytes += grid.heights.byteLength;
     }
     const vertices = (segments + 1) ** 2;
@@ -100,8 +101,11 @@ export function prepareTerrainNumericGeometry(request: TerrainNumericRequest): T
     indices, center, segments, heightBounds: { min: minHeight, max: maxHeight }, terrainZoom: grid?.z ?? -1 };
 }
 
-/** Fresh ownership before transfer or Babylon, even when the producer already copied. */
-export function copyTerrainNumericGeometry(value: TerrainNumericGeometry): TerrainNumericGeometry {
+/**
+ * Validates geometry and keeps its arrays. Only for geometry the caller owns
+ * outright: arrays a worker transferred, or ones this thread just allocated.
+ */
+export function adoptTerrainNumericGeometry(value: TerrainNumericGeometry): TerrainNumericGeometry {
   if (!value || !Number.isInteger(value.segments) || value.segments < 1 || value.segments > 512) throw new RangeError("Invalid terrain geometry segments.");
   const vertices = (value.segments + 1) ** 2;
   if (!(value.positions instanceof Float64Array) || value.positions.length !== vertices * 3
@@ -113,6 +117,13 @@ export function copyTerrainNumericGeometry(value: TerrainNumericGeometry): Terra
     || typeof value.heightBounds?.min !== "number" || typeof value.heightBounds?.max !== "number") throw new Error("Malformed terrain numeric geometry.");
   if (value.indices.some(index => index >= vertices)) throw new RangeError("Terrain numeric indices exceed the vertex buffer.");
   for (const data of [value.positions, value.targetPositions, value.uvs, value.indices]) if (data && !(data.buffer instanceof ArrayBuffer)) throw new Error("Shared terrain outputs need an explicit publication protocol.");
-  return { positions: value.positions.slice(), targetPositions: value.targetPositions.slice(), uvs: value.uvs?.slice() ?? null,
-    indices: value.indices.slice(), center: { ...value.center }, segments: value.segments, heightBounds: { ...value.heightBounds }, terrainZoom: value.terrainZoom };
+  return { positions: value.positions, targetPositions: value.targetPositions, uvs: value.uvs, indices: value.indices,
+    center: { ...value.center }, segments: value.segments, heightBounds: { ...value.heightBounds }, terrainZoom: value.terrainZoom };
+}
+
+/** Fresh ownership before transfer or Babylon, even when the producer already copied. */
+export function copyTerrainNumericGeometry(value: TerrainNumericGeometry): TerrainNumericGeometry {
+  const adopted = adoptTerrainNumericGeometry(value);
+  return { ...adopted, positions: adopted.positions.slice(), targetPositions: adopted.targetPositions.slice(), uvs: adopted.uvs?.slice() ?? null,
+    indices: adopted.indices.slice() };
 }

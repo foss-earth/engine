@@ -4,12 +4,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTerrainMesh, terrainMeshTarget } from "../src/babylon/terrainMesh.js";
 import type { TerrainGrid, TerrainTile } from "../src/terrain/terrainGrid.js";
 
-// The arrays every terrain mesh is drawn with, before Babylon converts them,
-// for tiles at the poles, the antimeridian, parent and child grids, grid
+// The arrays every terrain mesh is drawn with, as Babylon stores them, for
+// tiles at the poles, the antimeridian, parent and child grids, grid
 // neighbours, and no grid at all. The digest was taken from the shipped
-// builder; a faster builder must give the same bits. Normals are not drawn
-// with: no terrain shader reads them (createRasterTilesRuntime.test.ts).
-const SHIPPED_DIGEST = "b105b5e75f8031acf9feb723662599fc20963bf34bd230481bcd18381781954a";
+// builder, which handed Babylon plain float64 arrays; a faster builder must
+// give the same stored bits. Normals are not drawn with: no terrain shader
+// reads them (createRasterTilesRuntime.test.ts).
+const SHIPPED_DIGEST = "e8ef6fb7b4ea754eaf932379781c227636038bc91d63ab38c8668e2ff3d6d1ac";
 
 const engines: NullEngine[] = [];
 afterEach(() => { for (const engine of engines.splice(0)) engine.dispose(); vi.restoreAllMocks(); });
@@ -59,8 +60,9 @@ function build(test: typeof CASES[number]) {
 }
 function digestOf(test: typeof CASES[number]): string {
   const { data, mesh } = build(test), hash = createHash("sha256");
-  // Every float64 bit Babylon was given, before it converts anything.
-  for (const values of [data.positions, data.uvs]) hash.update(new Uint8Array(Float64Array.from(values as ArrayLike<number>).buffer));
+  // Every bit Babylon stores and draws: an updatable mesh converts plain
+  // arrays to float32 on creation, and keeps float32 arrays as they are.
+  for (const values of [data.positions, data.uvs]) hash.update(new Uint8Array(Float32Array.from(values as ArrayLike<number>).buffer));
   hash.update(new Uint8Array(Uint32Array.from(data.indices as ArrayLike<number>).buffer));
   hash.update(new Uint8Array(Float64Array.from(mesh.position.asArray()).buffer));
   hash.update(JSON.stringify(mesh.metadata));

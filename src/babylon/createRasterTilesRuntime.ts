@@ -227,7 +227,7 @@ interface RasterTileRecord {
   failed: boolean;
   settled: boolean;
   grid?: TerrainGrid;
-  target: number[] | Float32Array;
+  target: Float32Array;
   /** Incoming grid quality, published only beside its committed positions. */
   targetTerrainZoom: number;
   imageryGeneration: number;
@@ -330,52 +330,48 @@ function createTileRecord(
     if (grid && record.appliedTerrainGeneration === generation && grid.z <= currentZoom) return;
     const seq = ++targetSeq;
     const started = options.performanceCapture ? options.nowMs() : 0;
-    const target = options.getSurfaceHeightMeters ? undefined : terrainMeshTarget(options, tile, grid);
-    if (!meshWorkers || !grid || options.getSurfaceHeightMeters) {
-      if (target) {
-        record.target = target.positions;
-        record.grid = grid;
-        record.heightBounds = target.heightBounds;
-        record.appliedTerrainGeneration = generation;
-        record.targetTerrainZoom = grid?.z ?? -1;
-        if (started && options.performanceCapture) {
-          options.performanceCapture.counters.preparationCpuMs += options.nowMs() - started;
-        }
-        onChanged(record);
+    // Callback elevation is sampled once, when the mesh is built.
+    if (options.getSurfaceHeightMeters) return;
+    const adopt = (positions: Float32Array, heightBounds: { min: number; max: number }, beforeChange?: () => void) => {
+      record.target = positions;
+      record.grid = grid;
+      record.heightBounds = heightBounds;
+      record.appliedTerrainGeneration = generation;
+      record.targetTerrainZoom = grid?.z ?? -1;
+      if (started && options.performanceCapture) {
+        options.performanceCapture.counters.preparationCpuMs += options.nowMs() - started;
       }
+      beforeChange?.();
+      onChanged(record);
+    };
+    // Targets follow the mesh they are uploaded to. After a segments change,
+    // a tile keeps its old mesh until its turn in the rebuild queue.
+    const meshSegments = () => record.mesh.metadata.segments as number;
+    // The page works a target out only when it uses it: without workers, or
+    // when a worker's answer fails or no longer fits the mesh.
+    const onPage = () => {
+      const target = terrainMeshTarget({ segments: meshSegments() }, tile, grid);
+      adopt(target.positions, target.heightBounds);
+    };
+    if (!meshWorkers || !grid) {
+      onPage();
       return;
     }
     applyInFlight++;
     return meshWorkers.prepare({
       tile,
       grid,
-      segments: options.segments ?? DEFAULT_TILE_SEGMENTS,
+      segments: meshSegments(),
       withUvs: false,
     }).then(prepared => {
       if (record.mesh.isDisposed() || generation !== record.terrainGeneration || seq !== targetSeq) return;
-      record.target = prepared.geometry.targetPositions;
-      record.grid = grid;
-      record.heightBounds = prepared.geometry.heightBounds;
-      record.appliedTerrainGeneration = generation;
-      record.targetTerrainZoom = grid.z;
-      if (started && options.performanceCapture) {
-        options.performanceCapture.counters.preparationCpuMs += options.nowMs() - started;
-      }
-      if (checkPageParity) checkPageParity(tile, grid, prepared.geometry.targetPositions);
-      onChanged(record);
+      // The mesh was rebuilt with other segments while this job ran.
+      if (prepared.geometry.segments !== meshSegments()) { onPage(); return; }
+      adopt(prepared.geometry.targetPositions, prepared.geometry.heightBounds,
+        checkPageParity ? () => checkPageParity(tile, grid, prepared.geometry.targetPositions) : undefined);
     }).catch(() => {
       if (record.mesh.isDisposed() || generation !== record.terrainGeneration || seq !== targetSeq) return;
-      if (target) {
-        record.target = target.positions;
-        record.grid = grid;
-        record.heightBounds = target.heightBounds;
-        record.appliedTerrainGeneration = generation;
-        record.targetTerrainZoom = grid.z;
-        if (started && options.performanceCapture) {
-          options.performanceCapture.counters.preparationCpuMs += options.nowMs() - started;
-        }
-        onChanged(record);
-      }
+      onPage();
     }).finally(() => {
       applyInFlight--;
       finish();
@@ -1505,7 +1501,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
       if (visibleTileKeys.has(record.key)) adoptedTriangles += triangles;
       // Conservative CPU + GPU estimate for position/normal/UV/index storage and
       // retained target/morph arrays. Decoder/driver allocations are unavailable.
-      meshBytes += record.mesh.getTotalVertices() * 8 * 12 + triangles * 3 * 12 + record.target.length * 8;
+      meshBytes += record.mesh.getTotalVertices() * 8 * 12 + triangles * 3 * 12 + record.target.byteLength;
       if (record.texture) {
         const size = record.texture.getSize();
         textureBytes += size.width * size.height * 4 * 4 / 3;

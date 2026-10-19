@@ -31,15 +31,57 @@ function tileKey(tile: TileCoord): string {
   return `${tile.z}/${tile.x}/${tile.y}`;
 }
 
-interface TerrainSurface { positions: number[]; uvs: number[] | null; center: EcefCoord; segments: number; minHeight: number; maxHeight: number }
-/** A tile's vertices relative to its centre, as float64. */
-function terrainSurface(options: Pick<TerrainMeshOptions, "segments" | "getSurfaceHeightMeters">, tile: TileCoord, grid: TerrainGrid | undefined, withUvs: boolean): TerrainSurface {
+/** The triangles and texture coordinates of every tile with the same segments. */
+export interface TerrainTopology { indices: Uint16Array | Uint32Array; uvs: Float32Array }
+// Tiles of one segment count share these arrays: Babylon keeps each mesh's
+// CPU indices and UVs for picking and context loss, and a copy per tile cost
+// a few hundred kilobytes at the default segments and megabytes at the most.
+// Nothing writes into them. Two counts coexist while a quality change
+// replaces meshes; older entries leave the cache and live on while a mesh
+// still holds them.
+const topologies = new Map<number, TerrainTopology>();
+const MAX_TOPOLOGIES = 4;
+export function terrainTopology(segments: number): TerrainTopology {
+  let topology = topologies.get(segments);
+  if (topology) {
+    topologies.delete(segments); topologies.set(segments, topology);
+    return topology;
+  }
+  const stride = segments + 1;
+  // 16-bit while every index is below 65535, as Babylon chooses for plain arrays.
+  const indices = stride * stride - 1 < 65535 ? new Uint16Array(segments * segments * 6) : new Uint32Array(segments * segments * 6);
+  let index = 0;
+  for (let row = 0; row < segments; row += 1) {
+    for (let col = 0; col < segments; col += 1) {
+      const a = row * stride + col;
+      const b = a + 1;
+      const c = a + stride;
+      const d = c + 1;
+      indices[index++] = a; indices[index++] = c; indices[index++] = b;
+      indices[index++] = b; indices[index++] = c; indices[index++] = d;
+    }
+  }
+  const uvs = new Float32Array(stride * stride * 2);
+  let uvIndex = 0;
+  for (let row = 0; row <= segments; row += 1) {
+    for (let col = 0; col <= segments; col += 1) { uvs[uvIndex++] = col / segments; uvs[uvIndex++] = row / segments; }
+  }
+  topology = { indices, uvs };
+  topologies.set(segments, topology);
+  if (topologies.size > MAX_TOPOLOGIES) topologies.delete(topologies.keys().next().value!);
+  return topology;
+}
+
+interface TerrainSurface { positions: Float32Array; center: EcefCoord; segments: number; minHeight: number; maxHeight: number }
+/**
+ * A tile's vertices relative to its centre. Each is worked out in float64 and
+ * stored as the float32 Babylon keeps for an updatable mesh.
+ */
+function terrainSurface(options: Pick<TerrainMeshOptions, "segments" | "getSurfaceHeightMeters">, tile: TileCoord, grid: TerrainGrid | undefined): TerrainSurface {
   const segments = Math.max(1, Math.round(options.segments ?? DEFAULT_TILE_SEGMENTS));
   const stride = segments + 1;
   const vertexCount = stride * stride;
-  // Sized once. Growing these with push copies them several times per tile.
-  const positions = new Array<number>(vertexCount * 3);
-  const uvs = withUvs ? new Array<number>(vertexCount * 2) : null;
+  const positions = new Float32Array(vertexCount * 3);
   const center = geodeticToEcef(tileYToLat(tile.y + 0.5, tile.z) * DEG_TO_RAD, tileXToLon(tile.x + 0.5, tile.z) * DEG_TO_RAD, 0);
   let minHeight = Infinity, maxHeight = -Infinity;
   // Every row has the same longitudes and every vertex of a row the same
@@ -55,7 +97,7 @@ function terrainSurface(options: Pick<TerrainMeshOptions, "segments" | "getSurfa
   const columns = grid ? terrainGridColumns(grid, Float64Array.from({ length: stride }, (_, col) => (tile.x + col / segments) * scale)) : null;
   const rowHeights = new Float64Array(stride);
   const ecef = { x: 0, y: 0, z: 0 };
-  let positionIndex = 0, uvIndex = 0;
+  let positionIndex = 0;
 
   for (let row = 0; row <= segments; row += 1) {
     const v = row / segments;
@@ -65,7 +107,6 @@ function terrainSurface(options: Pick<TerrainMeshOptions, "segments" | "getSurfa
     if (grid && columns) sampleTerrainGridRow(grid, columns, mercatorY * scale, rowHeights);
 
     for (let col = 0; col <= segments; col += 1) {
-      const u = col / segments;
       const altitudeMeters = columns
         ? rowHeights[col]
         : options.getSurfaceHeightMeters?.(latDeg, lonDegs[col]) ?? 0;
@@ -75,20 +116,17 @@ function terrainSurface(options: Pick<TerrainMeshOptions, "segments" | "getSurfa
       positions[positionIndex++] = ecef.x - center.x;
       positions[positionIndex++] = ecef.y - center.y;
       positions[positionIndex++] = ecef.z - center.z;
-      if (uvs) { uvs[uvIndex++] = u; uvs[uvIndex++] = v; }
     }
   }
-  return { positions, uvs, center, segments, minHeight, maxHeight };
+  return { positions, center, segments, minHeight, maxHeight };
 }
 
 /**
  * The positions a new terrain mesh holds and its height range, without
- * building the mesh. Babylon stores an updatable mesh's positions as float32,
- * so each is rounded the same way.
+ * building the mesh.
  */
-export function terrainMeshTarget(options: Pick<TerrainMeshOptions, "segments" | "getSurfaceHeightMeters">, tile: TileCoord, grid?: TerrainGrid): { positions: number[]; heightBounds: { min: number; max: number } } {
-  const { positions, minHeight, maxHeight } = terrainSurface(options, tile, grid, false);
-  for (let index = 0; index < positions.length; index++) positions[index] = Math.fround(positions[index]);
+export function terrainMeshTarget(options: Pick<TerrainMeshOptions, "segments" | "getSurfaceHeightMeters">, tile: TileCoord, grid?: TerrainGrid): { positions: Float32Array; heightBounds: { min: number; max: number } } {
+  const { positions, minHeight, maxHeight } = terrainSurface(options, tile, grid);
   return { positions, heightBounds: { min: minHeight, max: maxHeight } };
 }
 
@@ -96,20 +134,8 @@ export function createTerrainMesh(options: TerrainMeshOptions, tile: TileCoord, 
   const started = options.performanceCapture ? options.nowMs() : 0;
   const { scene, source } = options;
   const mesh = new Mesh(`raster-basemap-tile-${source.id}-${tileKey(tile)}`, scene);
-  const { positions, uvs, center, segments, minHeight, maxHeight } = terrainSurface(options, tile, grid, true);
-  const stride = segments + 1;
-  const indices = new Array<number>(segments * segments * 6);
-  let index = 0;
-  for (let row = 0; row < segments; row += 1) {
-    for (let col = 0; col < segments; col += 1) {
-      const a = row * stride + col;
-      const b = a + 1;
-      const c = a + stride;
-      const d = c + 1;
-      indices[index++] = a; indices[index++] = c; indices[index++] = b;
-      indices[index++] = b; indices[index++] = c; indices[index++] = d;
-    }
-  }
+  const { positions, center, segments, minHeight, maxHeight } = terrainSurface(options, tile, grid);
+  const { indices, uvs } = terrainTopology(segments);
 
   // No normal buffer. Tile materials disable scene lighting, and the terrain
   // light shades from the radial up direction, not vertex normals. Picking

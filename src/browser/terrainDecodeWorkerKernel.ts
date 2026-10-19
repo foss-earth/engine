@@ -10,12 +10,20 @@ export interface TerrainDecodeWorkerKernelPorts {
   createCanvas(width: number, height: number): OffscreenCanvas | null;
   decodeTerrarium?: TerrainImageDecoderPorts["decodeTerrarium"];
   decodeBackendStatus?(): TerrainNativeDecoderStatus;
+  /**
+   * Publish heights in shared memory instead of transferring them, so other
+   * workers the page sends a grid to read it without a copy. Hosts set this
+   * only in a cross-origin isolated realm; without SharedArrayBuffer heights
+   * are transferred as before.
+   */
+  sharedHeights?: boolean;
   onError(error: unknown): void;
 }
 class UnsupportedRealm extends Error {}
 /**
  * The page's own Terrarium decoder, run in a worker with one canvas reused for
- * every tile. Heights go back as a transferred buffer. No fetch or cache here.
+ * every tile. Heights go back as a transferred buffer, or a shared one when
+ * the host asks. No fetch or cache here.
  */
 export function installTerrainDecodeWorkerKernel(ports: TerrainDecodeWorkerKernelPorts): { dispose(): void } {
   const { scope } = ports;
@@ -24,6 +32,18 @@ export function installTerrainDecodeWorkerKernel(ports: TerrainDecodeWorkerKerne
   const backend = (): { backend?: TerrainNativeDecoderStatus } => {
     try { return ports.decodeBackendStatus ? { backend: ports.decodeBackendStatus() } : {}; }
     catch (error) { report(error); return {}; }
+  };
+  // Nothing writes a grid's heights after decoding, so one shared copy can
+  // be read by the page and every worker it is posted to.
+  const publish = (heights: Float32Array): { heights: Float32Array; transfer: Transferable[] } => {
+    if (ports.sharedHeights && typeof SharedArrayBuffer === "function") {
+      try {
+        const shared = new Float32Array(new SharedArrayBuffer(heights.byteLength));
+        shared.set(heights);
+        return { heights: shared, transfer: [] };
+      } catch { /* A realm without shared memory transfers instead. */ }
+    }
+    return { heights, transfer: [heights.buffer as ArrayBuffer] };
   };
   const reuseCanvas = (width: number, height: number): OffscreenCanvas => {
     canvas ??= ports.createCanvas(width, height);
@@ -44,7 +64,8 @@ export function installTerrainDecodeWorkerKernel(ports: TerrainDecodeWorkerKerne
       if (!createImageBitmap) throw new UnsupportedRealm("This worker has no createImageBitmap.");
       const { size, heights } = await createTerrainImageDecoder({ createImageBitmap, createCanvas: reuseCanvas,
         nowMs: () => 0, limits: () => ({ maxTileSide }), decodeTerrarium: ports.decodeTerrarium })(blob);
-      scope.postMessage({ kind: "decoded-terrain", id, size, heights, ...backend() }, [heights.buffer as ArrayBuffer]);
+      const published = publish(heights);
+      scope.postMessage({ kind: "decoded-terrain", id, size, heights: published.heights, ...backend() }, published.transfer);
     } catch (error) {
       scope.postMessage({ kind: "failed", id, error: terrainDecodeFailure(error), unsupported: error instanceof UnsupportedRealm, ...backend() });
     }

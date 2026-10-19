@@ -1,4 +1,4 @@
-import { copyTerrainNumericGeometry, prepareTerrainNumericGeometry, validateTerrainNumericRequest } from "../terrain/terrainNumericGeometry.js";
+import { adoptTerrainNumericGeometry, copyTerrainNumericGeometry, prepareTerrainNumericGeometry, validateTerrainNumericRequest } from "../terrain/terrainNumericGeometry.js";
 import { TERRAIN_MESH_PROTOCOL, type NativeTerrainGeometryPort, type TerrainMeshActualBackend,
   type TerrainMeshValidation, type TerrainMeshWorkerRequest, type TerrainMeshWorkerScope } from "./terrainMeshWorkerProtocol.js";
 
@@ -100,7 +100,9 @@ export function installTerrainMeshWorkerKernel(ports: TerrainMeshWorkerKernelPor
         }
       }
       if (disposed) return;
-      const geometry = copyTerrainNumericGeometry(produced);
+      // TypeScript geometry was allocated for this job; native output may be
+      // a view the core reuses, so it is copied before transfer.
+      const geometry = actualBackend === "typescript" ? adoptTerrainNumericGeometry(produced) : copyTerrainNumericGeometry(produced);
       const expectedSegments = Math.max(1, Math.round(request.input.segments ?? 64));
       if (geometry.segments !== expectedSegments || geometry.terrainZoom !== (request.input.grid?.z ?? -1)
         || (request.input.withUvs === false ? geometry.uvs !== null : geometry.uvs === null)) throw new Error("Terrain mesh output disagrees with its request.");

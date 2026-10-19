@@ -27,7 +27,8 @@ export type TerrainDecodeParity = "unchecked" | "checking" | "same" | "different
 export interface TerrainDecodeWorkers {
   /** `onPage`: the page's own decoder, used whenever no worker can decode this tile. */
   decode(blob: Blob, onPage: TerrainPageDecoder, request?: TerrainDecodeRequestOptions): Promise<{ size: number; heights: Float32Array }>;
-  stats(): WorkerPoolStats & { pageDecodes: number; parity: TerrainDecodeParity; nativeWorkers: TerrainNativeDecoderStatus[] };
+  /** `sharedHeights`: worker tiles whose heights arrived in shared memory. */
+  stats(): WorkerPoolStats & { pageDecodes: number; sharedHeights: number; parity: TerrainDecodeParity; nativeWorkers: TerrainNativeDecoderStatus[] };
   /** Tiles workers can decode at once: 0 once every tile decodes on the page. */
   capacity(): number;
   dispose(): void;
@@ -38,7 +39,7 @@ export interface TerrainDecodeWorkers {
  * reason other than the tile itself, is decoded on the page instead.
  */
 export function createTerrainDecodeWorkers(options: TerrainDecodeWorkersOptions): TerrainDecodeWorkers {
-  let unsupported = false, pageDecodes = 0;
+  let unsupported = false, pageDecodes = 0, sharedHeights = 0;
   // Bounded history also records recently retired workers and their fallback.
   const nativeWorkers = new Map<string, TerrainNativeDecoderStatus>();
   // Settles true once one tile's worker heights matched the page's bit for bit.
@@ -66,6 +67,7 @@ export function createTerrainDecodeWorkers(options: TerrainDecodeWorkersOptions)
     if (reply.kind === "decoded-terrain") {
       const { size, heights } = reply;
       if (!(heights instanceof Float32Array) || !Number.isSafeInteger(size) || heights.length !== size * size) throw new Error("A terrain decode worker returned malformed heights.");
+      if (typeof SharedArrayBuffer === "function" && heights.buffer instanceof SharedArrayBuffer) sharedHeights++;
       return { size, heights };
     }
     if (reply.unsupported) {
@@ -127,7 +129,7 @@ export function createTerrainDecodeWorkers(options: TerrainDecodeWorkersOptions)
       if (!await parity) { request.signal?.throwIfAborted(); return page(); }
       return await onWorker(blob, request) ?? page();
     },
-    stats: () => ({ ...pool.stats(), pageDecodes, parity: paritySeen, nativeWorkers: [...nativeWorkers.values()].map(status => ({ ...status })) }),
+    stats: () => ({ ...pool.stats(), pageDecodes, sharedHeights, parity: paritySeen, nativeWorkers: [...nativeWorkers.values()].map(status => ({ ...status })) }),
     // The pool's own bound on its size.
     capacity: () => pool.available() ? Math.min(16, Math.floor(options.workers())) : 0,
     dispose: () => pool.dispose(),

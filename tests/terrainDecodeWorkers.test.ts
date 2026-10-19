@@ -109,7 +109,28 @@ describe("terrain decode workers", () => {
     expect(f.worker.createCanvas).toHaveBeenCalledOnce();
     expect(f.worker.clears).toEqual([[0, 0, 4, 4], [0, 0, 4, 4], [0, 0, 2, 2], [0, 0, 2, 2]]);
     expect(f.worker.closes).toHaveBeenCalledTimes(4);
-    expect(f.workers.stats()).toMatchObject({ workers: 1, completed: 4, pageDecodes: 1, parity: "same" });
+    expect(f.workers.stats()).toMatchObject({ workers: 1, completed: 4, pageDecodes: 1, sharedHeights: 0, parity: "same" });
+  });
+  it("publish heights in shared memory when the host asks, and transfer them where it cannot", async () => {
+    const f = fixture({ kernel: { sharedHeights: true } }); f.setSize(1);
+    const blobs = [f.add(tile(4, index => [index * 37 % 256, 3, 5, 255])), f.add(tile(4, () => [127, 255, 128, 255])), f.add(tile(2, () => [0, 0, 0, 255]))];
+    const decoded = [];
+    for (const blob of blobs) {
+      const heights = (await f.workers.decode(blob, f.onPage)).heights;
+      expect(sameFloats(heights, (await f.reference(blob)).heights)).toBe(true); decoded.push(heights);
+    }
+    // The first tile is the page's own, decoded to compare the worker's against.
+    expect(decoded.map(heights => heights.buffer instanceof SharedArrayBuffer)).toEqual([false, true, true]);
+    expect(f.transfers).toEqual([[], [], []]);
+    expect(f.workers.stats()).toMatchObject({ completed: 3, pageDecodes: 1, sharedHeights: 3, parity: "same" });
+    vi.stubGlobal("SharedArrayBuffer", function NoSharedMemory() { throw new TypeError("Shared memory is unavailable."); });
+    try {
+      const heights = (await f.workers.decode(blobs[1], f.onPage)).heights;
+      expect(heights.buffer).toBeInstanceOf(ArrayBuffer); expect(sameFloats(heights, decoded[1])).toBe(true);
+      expect(f.transfers[3]).toEqual([heights.buffer]);
+    } finally { vi.unstubAllGlobals(); }
+    expect(f.workers.stats()).toMatchObject({ completed: 4, sharedHeights: 3 });
+    expect(f.kernelErrors).not.toHaveBeenCalled(); expect(f.onError).not.toHaveBeenCalled(); f.workers.dispose();
   });
   it("use workers only once the first tile's worker heights match the page's, and give that tile the page's heights", async () => {
     const f = fixture(); f.setSize(2);

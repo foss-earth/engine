@@ -44,9 +44,9 @@ function expectWorldBounds(mesh: Mesh): void {
 }
 
 describe("shared visible/collision refinement geometry", () => {
-  it("copies a mesh's stored positions with their exact values, as Babylon holds them before and after an update", () => {
+  it("copies the float32 positions a mesh draws with, before and after an update", () => {
     const scene = setup(), terrain = patch(scene, 2, 1, 1, 100.1);
-    // A new updatable mesh keeps float32; an update keeps the float64 numbers it was given.
+    // A new updatable mesh keeps float32; an update keeps the array it was given.
     const fresh = terrain.mesh.getVerticesData(VertexBuffer.PositionKind)!, freshCopy = meshPositions(terrain.mesh);
     expect(fresh).toBeInstanceOf(Float32Array);
     const updated = freshCopy.map(value => value + 0.1);
@@ -54,10 +54,14 @@ describe("shared visible/collision refinement geometry", () => {
     expect(terrain.mesh.getVerticesData(VertexBuffer.PositionKind)).toBe(updated);
     const updatedCopy = meshPositions(terrain.mesh);
     for (const [copy, stored] of [[freshCopy, fresh], [updatedCopy, updated]] as const) {
-      expect(Array.isArray(copy)).toBe(true); expect(copy).not.toBe(stored);
+      expect(copy).toBeInstanceOf(Float32Array); expect(copy).not.toBe(stored);
       expect(copy.length).toBe(stored.length); expect(copy.every((value, index) => Object.is(value, stored[index]))).toBe(true);
     }
-    updatedCopy[1] = -1; expect(updated[1]).toBe(Math.fround(100.1) + 0.1);
+    updatedCopy[1] = -1; expect(updated[1]).toBe(Math.fround(Math.fround(100.1) + 0.1));
+    // A plain array another caller uploads is copied as Babylon converts it for drawing.
+    const plain = Array.from(fresh, value => value + 0.1);
+    terrain.mesh.updateVerticesData(VertexBuffer.PositionKind, plain, true);
+    expect(meshPositions(terrain.mesh)).toEqual(Float32Array.from(plain));
   });
   it("starts on the old triangles and moves monotonically to the refined geometry", () => {
     const scene = setup(), parent = patch(scene, 2, 1, 1, 100), child = patch(scene, 3, 2, 2, 400);
@@ -128,7 +132,7 @@ describe("shared visible/collision refinement geometry", () => {
     const remote = patch(scene, 3, 6, 6, 700);
     const coarseBefore = meshPositions(coarse.mesh), remoteBefore = meshPositions(remote.mesh);
     const target = meshPositions(fine.mesh);
-    const expected = [...target]; expected[1] = 100;
+    const expected = target.slice(); expected[1] = 100;
     const counters = { geometryWrites: 0, seamPasses: 0 };
 
     stitchTerrainEdges([remote, fine, coarse], counters);
