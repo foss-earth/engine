@@ -1,8 +1,11 @@
+import type { createIconButton } from "@foss-earth/ui/browser";
 import type { GlobeNavigationAnchors, NavigationAnchorStatus, PinnedPoint } from "../input/navigationAnchors.js";
 
 export interface NavigationAnchorPinSectionPorts {
   document: Document;
   anchors: GlobeNavigationAnchors;
+  /** UI's compact icon action, for Pick point and Clear pin. */
+  createIconButton: typeof createIconButton;
 }
 
 export interface NavigationAnchorPinSectionHandle {
@@ -46,29 +49,27 @@ export function createNavigationAnchorPinSection(ports: NavigationAnchorPinSecti
   element.className = "foss-earth-navigation-pin-section";
   element.setAttribute("role", "group");
   element.setAttribute("aria-label", "Pinned point");
+  // "Pinned point [⌖] [Pin compass target] [×]": the title first in its row.
   const heading = document.createElement("div");
-  heading.className = "foss-earth-choices__heading";
+  heading.className = "foss-earth-choices__heading foss-earth-choices__heading--inline";
   heading.textContent = "Pinned point";
   const where = document.createElement("p");
   where.className = "foss-earth-choices__note";
-  const button = (text: string): HTMLButtonElement => {
-    const action = document.createElement("button");
-    action.type = "button";
-    action.className = "foss-earth-choice foss-earth-parameter__action";
-    action.textContent = text;
-    return action;
-  };
-  const pick = button("Pick point");
+  const pick = ports.createIconButton(document, { icon: "crosshair", label: "Pick point" });
   pick.setAttribute("aria-pressed", "false");
-  const pinTarget = button("Pin compass target");
-  const clear = button("Clear pin");
+  // Words, since no mark says "the compass target".
+  const pinTarget = document.createElement("button");
+  pinTarget.type = "button";
+  pinTarget.className = "foss-earth-choice foss-earth-parameter__action";
+  pinTarget.textContent = "Pin compass target";
+  const clear = ports.createIconButton(document, { icon: "close", label: "Clear pin" });
   const actions = document.createElement("div");
   actions.className = "foss-earth-choices";
-  actions.append(pick, pinTarget, clear);
+  actions.append(heading, pick, pinTarget, clear);
   const message = document.createElement("p");
   message.className = "foss-earth-choices__note";
   message.setAttribute("role", "status");
-  element.append(heading, where, actions, message);
+  element.append(actions, where, message);
 
   const render = (): void => {
     const status = anchors.status();

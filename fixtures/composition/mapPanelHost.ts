@@ -1,5 +1,5 @@
 import { createSettingsRegistry } from "@foss-earth/ui/settings";
-import { createTrack } from "@foss-earth/ui/browser";
+import { createChoiceGroup, createHelpTooltip, createIconButton, createTrack } from "@foss-earth/ui/browser";
 import { MAP_DETAIL_PARAMETERS } from "../../src/settings/catalogue/map.js";
 import { createEngineMigrations } from "../../src/settings/migrations.js";
 import { createMapDetailController as createCore, MAP_DETAIL_STORAGE_KEY, type MapDetailControllerOptions } from "../../src/map/mapDetailController.js";
@@ -16,5 +16,5 @@ export function createMapDetailController(options: Partial<MapDetailControllerOp
 let panelCount = 0;
 export function createMapDetailPanel(controller: Parameters<typeof createPanel>[0]) {
   const suffix = String(++panelCount);
-  return createPanel(controller, { document, createTrack, idSuffix: () => suffix });
+  return createPanel(controller, { document, createTrack, createChoiceGroup, createHelpTooltip, createIconButton, idSuffix: () => suffix });
 }

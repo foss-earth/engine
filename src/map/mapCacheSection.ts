@@ -1,9 +1,12 @@
 import type { MapCacheSnapshot } from "../browser/mapCache.js";
+import type { createHelpTooltip, createIconButton } from "@foss-earth/ui/browser";
 import { mapCacheRowLimit } from "./mapCachePresentation.js";
 export interface MapCacheSectionPorts { document: Document; inspect(): Promise<MapCacheSnapshot>; clear(): Promise<void>;
   refreshIntervalMs(): number; nowMs(): number; rowLimit(): number;
   /** The existing host presentation pulse; no private timer is constructed. */
-  refresh: { subscribe(listener: () => void): () => void } }
+  refresh: { subscribe(listener: () => void): () => void };
+  /** UI's ? and icon actions. */
+  createHelpTooltip: typeof createHelpTooltip; createIconButton: typeof createIconButton }
 
 export interface MapCacheSectionHandle {
   element: HTMLElement;
@@ -32,31 +35,37 @@ export function createMapCacheSection(ports: MapCacheSectionPorts): MapCacheSect
   const element = document.createElement("div");
   element.className = "foss-earth-map-cache-section";
   element.setAttribute("aria-label", "Map cache");
-  const heading = document.createElement("div");
-  heading.className = "foss-earth-choices__heading";
+  // "Saved tiles 12 tiles · 3.4 MB of 128 MB ▭ 🗑 ?" in one row; what the caches are, behind ?.
+  const row = document.createElement("div");
+  row.className = "foss-earth-choices foss-earth-map-cache-section__row";
+  const heading = document.createElement("span");
+  heading.className = "foss-earth-choices__heading foss-earth-choices__heading--inline";
   heading.textContent = "Saved tiles";
-  const summary = paragraph("Reading cache…");
+  const summary = document.createElement("span");
+  summary.className = "foss-earth-choices__note";
+  summary.textContent = "Reading cache…";
   const usage = document.createElement("progress");
   usage.setAttribute("aria-label", "Saved tile cache usage");
   usage.max = 1;
   usage.value = 0;
+  const clear = ports.createIconButton(document, { icon: "trash", label: "Clear saved tiles" });
+  const limit = paragraph("");
+  const about = document.createElement("div");
+  about.append(
+    limit,
+    paragraph("Maps reuse the browser's HTTP cache when the provider permits it. Google 3D Tiles use it under Google's caching rules. Its contents and size cannot be listed or cleared by this page: use the browser's control for cached images and files."),
+    paragraph("Saved tiles contain public map requests only. API keys and session URLs are never kept in managed storage."),
+  );
+  const help = ports.createHelpTooltip({ label: "Explain saved tiles", content: about });
+  row.append(heading, summary, usage, clear, help.element);
   const availability = paragraph("");
   availability.hidden = true;
   const providers = document.createElement("div");
-  const clear = document.createElement("button");
-  clear.type = "button";
-  clear.className = "foss-earth-choice foss-earth-parameter__action";
-  clear.textContent = "Clear saved tiles";
-  const limit = paragraph("");
-  const browserHeading = document.createElement("div");
-  browserHeading.className = "foss-earth-choices__heading";
-  browserHeading.textContent = "Browser cache";
-  const browser = paragraph("Maps reuse the browser's HTTP cache when the provider permits it. Google 3D Tiles use it under Google's caching rules. Its contents and size cannot be listed or cleared by this page: use the browser's control for cached images and files.");
-  const requests = document.createElement("div");
-  const privacy = paragraph("Saved tiles contain public map requests only. API keys and session URLs are never kept in managed storage.");
+  const requests = paragraph("");
+  requests.hidden = true;
   const status = paragraph("");
   status.setAttribute("role", "status");
-  element.append(heading, summary, usage, availability, providers, clear, limit, browserHeading, browser, requests, privacy, status);
+  element.append(row, availability, providers, requests, status);
 
   let snapshot: MapCacheSnapshot | null = null;
   let disposed = false;
@@ -103,11 +112,10 @@ export function createMapCacheSection(ports: MapCacheSectionPorts): MapCacheSect
       return details;
     }));
     clear.disabled = clearing || !snapshot?.available || snapshot.entries.length === 0;
-    clear.textContent = clearing ? "Clearing…" : "Clear saved tiles";
-    requests.replaceChildren(...(snapshot && snapshot.browserRequests.length > 0 ? [
-      paragraph("Provider requests this visit, browser cache hits included:"),
-      ...snapshot.browserRequests.map(({ provider, requests: count }) => paragraph(`${provider}: ${count}`)),
-    ] : []));
+    clear.setAttribute("aria-label", clearing ? "Clearing saved tiles" : "Clear saved tiles");
+    clear.title = clear.getAttribute("aria-label")!;
+    requests.hidden = !snapshot || snapshot.browserRequests.length === 0;
+    requests.textContent = requests.hidden ? "" : `Requests this visit, cache hits included: ${snapshot!.browserRequests.map(({ provider, requests: count }) => `${provider} ${count}`).join(" · ")}`;
   };
 
   let pending = false, lastRefresh = -Infinity, inspectionGeneration = 0;
@@ -161,6 +169,7 @@ export function createMapCacheSection(ports: MapCacheSectionPorts): MapCacheSect
       disposed = true;
       stopRefresh();
       clear.removeEventListener("click", onClear);
+      help.destroy();
       element.remove();
     },
   };

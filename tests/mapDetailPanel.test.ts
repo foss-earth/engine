@@ -21,7 +21,7 @@ function mountRaster() {
   document.body.append(panel.element);
   const slider = (label: string) => panel.element.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)!;
   const choice = (value: string) => panel.element.querySelector<HTMLInputElement>(`input[type="radio"][value="${value}"]`)!;
-  const button = (text: string) => [...panel.element.querySelectorAll("button")].find(item => item.textContent === text)!;
+  const button = (label: string) => [...panel.element.querySelectorAll("button")].find(item => item.getAttribute("aria-label") === label)!;
   const set = (input: HTMLInputElement, value: number) => {
     input.value = String(value);
     input.dispatchEvent(new Event("input"));

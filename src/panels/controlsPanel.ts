@@ -1,5 +1,5 @@
 import type { SettingsRegistry } from "@foss-earth/ui/settings";
-import type { createParameterSection, createSectionsElement, appendHostSections, ParameterSectionOptions, SectionsElementEntry } from "@foss-earth/ui/browser";
+import type { createIconButton, createParameterSection, createSectionsElement, appendHostSections, ParameterSectionOptions, SectionsElementEntry } from "@foss-earth/ui/browser";
 import { INPUT_SENSITIVITY_IDS } from "../settings/catalogue/controls.js";
 import type { InputModeHudHandle } from "./inputModeHud.js";
 import type { GlobeNavigationAnchors } from "../input/navigationAnchors.js";
@@ -17,6 +17,7 @@ export interface ControlsPanelPorts {
     createParameterSection: typeof createParameterSection;
     createSectionsElement: typeof createSectionsElement;
     appendHostSections: typeof appendHostSections;
+    createIconButton: typeof createIconButton;
   };
   /** Same host presentation refresh authority used by the other settings sections. */
   refresh: NonNullable<ParameterSectionOptions["refresh"]>;
@@ -39,7 +40,7 @@ export function createControlsPanel(ports: ControlsPanelPorts) {
   const tiltNote = document.createElement("p");
   tiltNote.className = "settings-line";
   tiltNote.textContent = "Tilt: 0° looks at the horizon, 90° straight down.";
-  const pinSection = ports.navigationAnchors ? createNavigationAnchorPinSection({ document, anchors: ports.navigationAnchors }) : null;
+  const pinSection = ports.navigationAnchors ? createNavigationAnchorPinSection({ document, anchors: ports.navigationAnchors, createIconButton: ports.ui.createIconButton }) : null;
   const entries: SectionsElementEntry[] = [
     ...(ports.inputMethod ? [{ id: "controls.input-method", title: "Input method", element: sectionOf("input-method", { main: inputMethod, covers: ["input.mode", ...INPUT_SENSITIVITY_IDS] }), defaultOpen: true }] : []),
     { id: "controls.camera", title: settings.getSectionTitle("controls", "camera"), element: sectionOf("camera", { footer: tiltNote }), defaultOpen: false },

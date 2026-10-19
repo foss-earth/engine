@@ -1,4 +1,4 @@
-import type { VisualizationTunerPorts, VisualizationTunerSettings } from "./tunerPorts.js";
+import { createTunerActions, type VisualizationTunerPorts, type VisualizationTunerSettings } from "./tunerPorts.js";
 import { COMPASS_SCALE_SETTING_IDS, DEFAULT_ORBIT_COMPASS_SCALE_PARAMS, orbitCompassScaleFromSettings } from "../visualization/defaults.js";
 import type { OrbitCompassScaleParams } from "../visualization/defaults.js";
 
@@ -63,12 +63,12 @@ export function createCompassScaleTuner(
   let appliedParams = defaultParams;
 
   const panel = document.createElement("div");
-  panel.className = "poi-sprite-tuner compass-scale-tuner";
+  panel.className = "poi-sprite-tuner compass-scale-tuner foss-earth-choices";
   panel.hidden = true;
   const radius = rangeOf(defaultParams, "radius");
   const distance = rangeOf(defaultParams, "distance");
   panel.innerHTML = `
-    <div class="poi-sprite-tuner-title">Compass Scale</div>
+    <div class="poi-sprite-tuner-title foss-earth-choices__heading foss-earth-choices__heading--inline">Compass scale</div>
     <div class="poi-sprite-tuner-grid">
       ${RANGES.map(spec => {
         const value = spec.kind === "radius" ? radius : distance;
@@ -85,17 +85,15 @@ export function createCompassScaleTuner(
         <input type="number" data-field="labelSizeScale" step="0.01" value="${defaultParams.labelSizeScale}">
       </label>
     </div>
-    <div class="poi-sprite-tuner-actions">
-      <button class="poi-sprite-tuner-apply" type="button" hidden>Apply</button>
-      <button class="poi-sprite-tuner-save-defaults" type="button" hidden>Save defaults</button>
-    </div>
   `;
+  const actions = createTunerActions(ports, "Apply compass scale");
+  panel.append(actions.element);
   container.appendChild(panel);
 
   const thumbs = Array.from(panel.querySelectorAll<HTMLInputElement>("input[data-range]"));
   const labelInput = panel.querySelector<HTMLInputElement>('input[data-field="labelSizeScale"]');
-  const applyBtn = panel.querySelector<HTMLButtonElement>(".poi-sprite-tuner-apply");
-  const saveDefaultsBtn = panel.querySelector<HTMLButtonElement>(".poi-sprite-tuner-save-defaults");
+  const applyBtn: HTMLButtonElement | null = actions.apply;
+  const saveDefaultsBtn: HTMLButtonElement | null = actions.save;
   const committed = {
     radius: { ...radius },
     distance: { ...distance },

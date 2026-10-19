@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { describe,expect,it,vi } from "vitest";
-import { createMapCacheSection } from "../src/map/mapCacheSection.js";
+import { createHelpTooltip, createIconButton } from "@foss-earth/ui/browser";
+import { createMapCacheSection as createInjectedMapCacheSection } from "../src/map/mapCacheSection.js";
+const createMapCacheSection = (ports: Omit<Parameters<typeof createInjectedMapCacheSection>[0], "createHelpTooltip" | "createIconButton">) => createInjectedMapCacheSection({ ...ports, createHelpTooltip, createIconButton });
 import type { MapCacheSnapshot } from "../src/browser/mapCache.js";
 const snapshot: MapCacheSnapshot = { available: true,entries: [],bytes: 0,maxBytes: 100,hits: 0,browserRequests: [] };
 const flush = async () => { for (let n=0;n<5;n++) await Promise.resolve(); };
@@ -36,6 +38,28 @@ describe("Map cache on shared host presentation pulse", () => {
     try {
       await flush();expect(panel.element.querySelectorAll("details li")).toHaveLength(2);expect(panel.element.textContent).toContain("OpenStreetMap: 3 tiles");
       rows = 1;pulse?.();expect(panel.element.querySelectorAll("details li")).toHaveLength(1);expect(panel.element.textContent).toContain("Showing the first 1 tiles.");expect(inspect).toHaveBeenCalledOnce();
+    } finally { panel.destroy(); }
+  });
+  it("keeps the title, summary, usage, Clear and ? in one row, with what the caches are behind ?", async () => {
+    const populated = { ...snapshot, bytes: 1, browserRequests: [{ provider: "OpenStreetMap", requests: 4 }], entries: [{ url: "https://tile.openstreetmap.org/0/0/0.png", provider: "OpenStreetMap", bytes: 1, storedAt: 0, expiresAt: 100 }] };
+    const panel = createMapCacheSection({ document, inspect: async () => populated, clear: async () => {}, nowMs: () => 0, refreshIntervalMs: () => 2000, rowLimit: () => 40, refresh: { subscribe: () => () => {} } });
+    document.body.append(panel.element);
+    try {
+      await flush();
+      const row = panel.element.firstElementChild!;
+      expect(row.firstElementChild!.textContent).toBe("Saved tiles");
+      expect(row.querySelector("progress")).not.toBeNull();
+      const clear = row.querySelector<HTMLButtonElement>('button[aria-label="Clear saved tiles"]')!;
+      expect(clear.textContent).toBe("");
+      expect(clear.disabled).toBe(false);
+      const help = row.lastElementChild!.querySelector<HTMLButtonElement>("button")!;
+      expect(help.getAttribute("aria-label")).toBe("Explain saved tiles");
+      help.click();
+      const about = document.getElementById(help.getAttribute("aria-controls")!)!;
+      expect(about.textContent).toContain("API keys and session URLs are never kept");
+      expect(about.textContent).toContain("browser's HTTP cache");
+      expect(panel.element.textContent).toContain("Requests this visit, cache hits included: OpenStreetMap 4");
+      expect(panel.element.querySelectorAll(".foss-earth-choices__heading")).toHaveLength(1);
     } finally { panel.destroy(); }
   });
 });

@@ -1,4 +1,4 @@
-import type { VisualizationTunerPorts, VisualizationTunerSettings } from "./tunerPorts.js";
+import { createTunerActions, type VisualizationTunerPorts, type VisualizationTunerSettings } from "./tunerPorts.js";
 import { DEFAULT_POI_SPRITE_SIZE_PARAMS, type PoiSpriteSizeParams } from "../visualization/defaults.js";
 export { DEFAULT_POI_SPRITE_SIZE_PARAMS, type PoiSpriteSizeParams } from "../visualization/defaults.js";
 
@@ -60,10 +60,10 @@ export function createPoiSpriteSizeTuner(
   let appliedParams = defaultParams;
 
   const panel = document.createElement("div");
-  panel.className = "poi-sprite-tuner";
+  panel.className = "poi-sprite-tuner foss-earth-choices";
   panel.hidden = true;
   panel.innerHTML = `
-    <div class="poi-sprite-tuner-title">Sprite Size</div>
+    <div class="poi-sprite-tuner-title foss-earth-choices__heading foss-earth-choices__heading--inline">Sprite size</div>
     <div class="poi-sprite-tuner-grid">
       <label class="poi-sprite-tuner-field">
         <span>Max size (m)</span>
@@ -82,16 +82,14 @@ export function createPoiSpriteSizeTuner(
         <input type="number" data-field="maxRefZoom" value="${defaultParams.maxRefZoom}">
       </label>
     </div>
-    <div class="poi-sprite-tuner-actions">
-      <button class="poi-sprite-tuner-apply" type="button" hidden>Apply</button>
-      <button class="poi-sprite-tuner-save-defaults" type="button" hidden>Save defaults</button>
-    </div>
   `;
+  const actions = createTunerActions(ports, "Apply sprite size");
+  panel.append(actions.element);
   container.appendChild(panel);
 
   const inputs = Array.from(panel.querySelectorAll<HTMLInputElement>("input[data-field]"));
-  const applyBtn = panel.querySelector<HTMLButtonElement>(".poi-sprite-tuner-apply");
-  const saveDefaultsBtn = panel.querySelector<HTMLButtonElement>(".poi-sprite-tuner-save-defaults");
+  const applyBtn: HTMLButtonElement | null = actions.apply;
+  const saveDefaultsBtn: HTMLButtonElement | null = actions.save;
 
   const committed = paramsToCommitted(appliedParams);
 

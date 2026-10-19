@@ -17,7 +17,7 @@ import {
 } from "../terrain/mapDetailPolicy.js";
 import type { MapDetailController } from "./mapDetailController.js";
 import { describeDetailStatus } from "./mapDetailSlider.js";
-import type { createTrack, TrackThumb } from "@foss-earth/ui/browser";
+import type { createChoiceGroup, createHelpTooltip, createIconButton, createTrack, TrackThumb } from "@foss-earth/ui/browser";
 
 export interface MapDetailPanelHandle {
   element: HTMLElement;
@@ -28,6 +28,10 @@ export interface MapDetailPanelOptions {
   document: Document;
   idSuffix(): string;
   createTrack: typeof createTrack;
+  /** UI's compact segmented choice, ? and icon actions. */
+  createChoiceGroup: typeof createChoiceGroup;
+  createHelpTooltip: typeof createHelpTooltip;
+  createIconButton: typeof createIconButton;
   /** Draws the "Detail" heading; leave it out inside a section that has the title. Defaults to true. */
   heading?: boolean;
 }
@@ -47,19 +51,6 @@ function makeReadout(document: Document, label: string, className: string): Read
   output.className = "map-detail-panel__value";
   element.append(text, output);
   return { element, output };
-}
-
-function makeChoice(document: Document, name: string, value: string, label: string): { element: HTMLLabelElement; input: HTMLInputElement; text: HTMLSpanElement } {
-  const element = document.createElement("label");
-  element.className = "foss-earth-choice";
-  const input = document.createElement("input");
-  input.type = "radio";
-  input.name = name;
-  input.value = value;
-  const text = document.createElement("span");
-  text.textContent = label;
-  element.append(input, text);
-  return { element, input, text };
 }
 
 const FINER = "finer";
@@ -89,9 +80,8 @@ function samePanelState(a: DetailState | null | undefined, b: DetailState | null
  * source's policy through the shared controller.
  */
 export function createMapDetailPanel(controller: MapDetailController, options: MapDetailPanelOptions): MapDetailPanelHandle {
-  const { document, createTrack } = options;
+  const { document, createTrack, createChoiceGroup, createHelpTooltip, createIconButton } = options;
   const createReadout = (label: string, className: string) => makeReadout(document, label, className);
-  const createChoice = (name: string, value: string, label: string) => makeChoice(document, name, value, label);
   const choiceName = `foss-earth-map-detail-default-${options.idSuffix()}`;
   const element = document.createElement("div");
   element.className = "foss-earth-choices map-detail-panel";
@@ -134,25 +124,22 @@ export function createMapDetailPanel(controller: MapDetailController, options: M
   const markerNotes = document.createElement("div");
   markerNotes.className = "map-detail-panel__markers";
   range.append(readouts, track.element, scale, markerNotes);
-  const defaultHeading = document.createElement("div");
-  defaultHeading.className = "foss-earth-choices__heading map-detail-panel__subheading";
-  defaultHeading.textContent = "Saved default";
-  const recommended = createChoice(choiceName, "recommended", "Normal");
-  const custom = createChoice(choiceName, "custom", "Custom");
-  const restore = document.createElement("button");
-  restore.type = "button";
-  restore.className = "foss-earth-choice map-detail-panel__action";
-  restore.textContent = "Restore saved detail";
-  const reset = document.createElement("button");
-  reset.type = "button";
-  reset.className = "foss-earth-choice map-detail-panel__action";
-  reset.textContent = "Reset detail settings";
+  // "Saved default [Normal / Custom] ↶ ⟲ ?": what the detail means is behind ?.
+  const defaultGroup = createChoiceGroup(choiceName, "Saved default", [{ id: "recommended", label: "Normal" }, { id: "custom", label: "Custom" }], document);
+  const recommended = { input: defaultGroup.querySelector<HTMLInputElement>('input[value="recommended"]')! };
+  const recommendedText = recommended.input.nextElementSibling as HTMLElement;
+  const custom = { input: defaultGroup.querySelector<HTMLInputElement>('input[value="custom"]')! };
+  const restore = createIconButton(document, { icon: "undo", label: "Restore saved detail" });
+  const reset = createIconButton(document, { icon: "reset", label: "Reset detail settings" });
+  const about = document.createElement("p");
+  const help = createHelpTooltip({ label: "Explain detail", content: about });
+  defaultGroup.append(restore, reset, help.element);
   const status = document.createElement("p");
   status.className = "foss-earth-choices__note map-detail-panel__status";
   status.setAttribute("role", "status");
   const storage = document.createElement("p");
   storage.className = "foss-earth-choices__note map-detail-panel__storage";
-  element.append(heading, note, range, defaultHeading, recommended.element, custom.element, restore, reset, status, storage);
+  element.append(heading, note, range, defaultGroup, status, storage);
 
   let shown: DetailState | null | undefined;
   // The positions the thumbs showed last, so a thumb stops at the other end.
@@ -171,13 +158,14 @@ export function createMapDetailPanel(controller: MapDetailController, options: M
     if (!state) {
       for (const control of pills) control.disabled = true;
       track.render({ min: 0, max: 1, step: 1, thumbs: [], disabled: true });
+      note.hidden = false;
       note.textContent = "This map has no detail setting.";
-      for (const part of [range, defaultHeading, recommended.element, custom.element, restore, reset]) part.hidden = true;
+      for (const part of [range, defaultGroup]) part.hidden = true;
       status.hidden = true;
       storage.hidden = true;
       return;
     }
-    for (const part of [range, defaultHeading, recommended.element, custom.element, restore, reset]) part.hidden = false;
+    for (const part of [range, defaultGroup]) part.hidden = false;
     const kind = state.policy.kind;
     const envelope = detailEnvelope(kind);
     const span = detailRange(state.policy);
@@ -238,20 +226,21 @@ export function createMapDetailPanel(controller: MapDetailController, options: M
 
     recommended.input.checked = isRecommended;
     custom.input.checked = !isRecommended;
-    recommended.text.textContent = kind === "raster"
+    recommendedText.textContent = kind === "raster"
       ? "Normal"
       : `Recommended (${formatDetailValue(kind, state.resolvedDefault)}${state.defaultLimitedByRange ? ", limited by the range" : ""})`;
 
     for (const control of pills) control.disabled = !ready;
     restore.disabled = !ready || state.sessionOverride === null;
 
-    note.textContent = !ready
-      ? state.availability === "initializing"
-        ? "Detail becomes adjustable once the map has started."
-        : state.reason ?? (kind === "raster" ? "Detail for 2D basemaps is not available yet." : "Detail is not available for this map.")
-      : kind === "raster"
-        ? "Sharper or softer imagery than Normal, which shows each image pixel at about one screen pixel. Elevation is not affected."
-        : "The screen-space error Google 3D Tiles may leave, in pixels. Smaller is finer and loads more.";
+    // Why detail cannot be changed stays visible; what it means is behind ?.
+    note.hidden = ready;
+    note.textContent = ready ? "" : state.availability === "initializing"
+      ? "Detail becomes adjustable once the map has started."
+      : state.reason ?? (kind === "raster" ? "Detail for 2D basemaps is not available yet." : "Detail is not available for this map.");
+    about.textContent = `${kind === "raster"
+      ? "Sharper or softer imagery than Normal, which shows each image pixel at about one screen pixel. Elevation is not affected."
+      : "The screen-space error Google 3D Tiles may leave, in pixels. Smaller is finer and loads more."} The saved default is the detail each visit starts with, inside the range. Restore saved detail returns to it from this visit's own choice; Reset detail settings restores the range and default.`;
     const sentence = ready ? describeDetailStatus(state) : null;
     status.hidden = sentence === null;
     status.textContent = sentence ?? "";
@@ -324,6 +313,7 @@ export function createMapDetailPanel(controller: MapDetailController, options: M
       custom.input.removeEventListener("change", onDefaultChoice);
       restore.removeEventListener("click", onRestore);
       reset.removeEventListener("click", onReset);
+      help.destroy();
       element.remove();
     },
   };

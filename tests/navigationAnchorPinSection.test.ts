@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSettingsRegistry } from "@foss-earth/ui/settings";
-import { appendHostSections, createParameterSection, createSectionsElement } from "@foss-earth/ui/browser";
+import { appendHostSections, createIconButton, createParameterSection, createSectionsElement } from "@foss-earth/ui/browser";
 import { CONTROLS_PARAMETERS } from "../src/settings/catalogue/controls.js";
 import { createControlsPanel } from "../src/panels/controlsPanel.js";
 import { createNavigationAnchorPinSection, formatPinnedPoint, navigationAnchorPinMessage } from "../src/panels/navigationAnchorPinSection.js";
@@ -49,10 +49,10 @@ function fakeAnchors(initial: Partial<NavigationAnchorStatus> = {}) {
 
 function mount(initial: Partial<NavigationAnchorStatus> = {}) {
   const fake = fakeAnchors(initial);
-  const section = createNavigationAnchorPinSection({ document, anchors: fake.anchors });
+  const section = createNavigationAnchorPinSection({ document, anchors: fake.anchors, createIconButton });
   document.body.append(section.element);
-  const button = (text: string): HTMLButtonElement =>
-    Array.from(section.element.querySelectorAll("button")).find(element => element.textContent === text)!;
+  const button = (name: string): HTMLButtonElement =>
+    Array.from(section.element.querySelectorAll("button")).find(element => (element.getAttribute("aria-label") ?? element.textContent) === name)!;
   const note = section.element.querySelector<HTMLElement>("[role=status]")!;
   const where = section.element.querySelectorAll("p")[0]!;
   return { ...fake, section, pick: button("Pick point"), pinTarget: button("Pin compass target"), clear: button("Clear pin"), note, where };
@@ -83,6 +83,13 @@ describe("pinned point section", () => {
     const { section, pick, pinTarget, clear } = mount();
     expect(section.element.getAttribute("role")).toBe("group");
     expect(section.element.getAttribute("aria-label")).toBe("Pinned point");
+    // "Pinned point [⌖] [Pin compass target] [×]"
+    const row = section.element.firstElementChild!;
+    expect(row.firstElementChild?.textContent).toBe("Pinned point");
+    expect([...row.querySelectorAll("button")]).toEqual([pick, pinTarget, clear]);
+    expect(pick.dataset.icon).toBe("crosshair");
+    expect(clear.dataset.icon).toBe("close");
+    expect(pinTarget.textContent).toBe("Pin compass target");
     for (const button of [pick, pinTarget, clear]) {
       expect(button.type).toBe("button");
       expect(button.tabIndex).toBe(0);
@@ -184,7 +191,7 @@ describe("Controls panel", () => {
     const settings = createSettingsRegistry({ storage: window.localStorage });
     settings.register(CONTROLS_PARAMETERS);
     return createControlsPanel({ document, settings, navigationAnchors,
-      ui: { createParameterSection, createSectionsElement, appendHostSections },
+      ui: { createParameterSection, createSectionsElement, appendHostSections, createIconButton },
       refresh: { subscribe: () => () => {} }, panelStorage: null });
   }
 

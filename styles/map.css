@@ -447,9 +447,10 @@ html[data-world-edges="flush"] .map-source-hud :is(.map-source-hud__provider, .m
 }
 
 .map-detail-panel__range[hidden],
+.map-detail-panel__note[hidden],
 .map-detail-panel__status[hidden],
 .map-detail-panel__storage[hidden],
-.map-detail-panel .foss-earth-choice[hidden] {
+.map-detail-panel .foss-earth-choice-group[hidden] {
   display: none;
 }
 
@@ -475,26 +476,6 @@ html[data-world-edges="flush"] .map-source-hud :is(.map-source-hud__provider, .m
 .map-detail-panel__value {
   font-variant-numeric: tabular-nums;
   opacity: 0.8;
-}
-
-.map-detail-panel__subheading {
-  margin-top: 4px;
-}
-
-.map-detail-panel__action {
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  font-size: 12px;
-}
-
-.map-detail-panel__action:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.08);
-}
-
-.map-detail-panel__action:disabled {
-  cursor: default;
-  opacity: 0.45;
 }
 
 .map-detail-panel.is-unavailable .map-detail-panel__range,

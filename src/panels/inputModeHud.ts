@@ -1,6 +1,7 @@
 import { oneFingerClickSvgRaw, mouseLeftButtonSvgRaw, mouseRightButtonSvgRaw, mouseScrollWheelSvgRaw, trackpadPinchSvgRaw, trackpadSwipeSvgRaw, trackpadTouchSvgRaw } from "./gestureArtwork.js";
 import type { GlobeInputSensitivitySettings } from "../view.js";
 import type { SettingsRegistry } from "@foss-earth/ui/settings";
+import type { checkChoice, createChoiceGroup } from "@foss-earth/ui/browser";
 import {
   loadInputModePreference,
   loadInputSensitivityPreference,
@@ -32,6 +33,10 @@ export interface InputModeDeviceHints {
 export interface InputModeHudOptions {
   document: Document;
   settings: SettingsRegistry;
+  /** UI's compact segmented choice, for the pointer mode. */
+  ui: { createChoiceGroup: typeof createChoiceGroup; checkChoice: typeof checkChoice };
+  /** Offer "Debug wheel events", which logs each wheel event's reading; for a host's developer pages. */
+  showDebug?: boolean;
   deviceHints: InputModeDeviceHints;
   log: { info(...values: unknown[]): void };
   availableModes?: ReadonlySet<HudInputMode>;
@@ -46,33 +51,6 @@ export interface InputModeHudOptions {
 
 const DELTA_EPSILON = 0.001;
 const HUD_ACCENT = "#0284c7";
-const HUD_ACCENT_ACTIVE_BG = "rgba(14, 165, 233, 0.16)";
-
-const INPUT_MODE_ACCENT_STYLE_ID = "foss-earth-input-mode-accent";
-
-function ensureInputModeAccentStyles(document: Document): void {
-  if (document.getElementById(INPUT_MODE_ACCENT_STYLE_ID)) return;
-  const style = document.createElement("style");
-  style.id = INPUT_MODE_ACCENT_STYLE_ID;
-  style.textContent = `
-    .input-mode-inline .input-mode-toggle-option.is-active,
-    .input-mode-inline .input-mode-toggle-option.is-active span {
-      color: ${HUD_ACCENT} !important;
-    }
-    .input-mode-inline .input-mode-toggle-option.is-active {
-      background: ${HUD_ACCENT_ACTIVE_BG} !important;
-    }
-    .input-mode-inline .input-mode-toggle-option.is-active svg {
-      stroke: ${HUD_ACCENT} !important;
-    }
-  `;
-  document.head.append(style);
-}
-
-function applyAccentToSvg(svg: SVGElement | null): void {
-  if (!svg) return;
-  svg.style.stroke = HUD_ACCENT;
-}
 
 const MODE_LABELS: Record<HudInputMode, string> = {
   mouse: "Mouse mode",
@@ -175,9 +153,6 @@ function actionIconSvg(movement: MovementKind): string {
   return "";
 }
 
-const RESET_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>';
-const PLAY_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><path d="M5 3l14 9-14 9V3z"/></svg>';
-
 function svgForMode(mode: HudInputMode): string {
   const common = `xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="${HUD_ACCENT}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"`;
   if (mode === "mouse") {
@@ -191,6 +166,10 @@ function svgForMode(mode: HudInputMode): string {
 
 /** The modes that read wheel and gesture events; touch is handled on its own. */
 const POINTER_MODES: readonly HudInputMode[] = ["mouse", "trackpad"];
+
+const POINTER_HELP = "How wheel and gesture events are read: a mouse wheel zooms in steps, a trackpad pans and pinches. Touch gestures work in either mode. Each card's number is that movement's sensitivity, a multiple of the standard rate, applied on Enter or when you leave the field; Show all parameters lists them, and Reset all returns them to 1.";
+
+let pointerChoiceCount = 0;
 
 /**
  * The input-method button in the HUD bar, and the Input method section a host
@@ -212,7 +191,6 @@ export function createInputModeHud(
 ): InputModeHudHandle {
   const document = options.document;
   const settings = options.settings;
-  ensureInputModeAccentStyles(document);
   const availableModes = options.availableModes ?? detectAvailableModes(options.deviceHints);
   const pointerModes = POINTER_MODES.filter((mode) => availableModes.has(mode));
   const hasTouch = availableModes.has("touch");
@@ -279,46 +257,45 @@ export function createInputModeHud(
 
   function renderInto(target: HTMLElement): void {
     target.replaceChildren();
-    if (hasTouch) target.append(heading("Touch"), renderCards(target, "touch"));
+    // Each part's title is the first item of its row of cards.
+    if (hasTouch) target.append(renderCards(target, "touch", heading("Touch")));
     if (pointerModes.length === 0) return;
 
-    target.append(heading(pointerModes.length > 1 ? "Mouse or trackpad" : MODE_LABELS[pointerModes[0]].replace(" mode", "")));
-    if (pointerModes.length > 1) {
-      const toggleRow = document.createElement("div");
-      toggleRow.className = "input-mode-toggle-row";
-      toggleRow.setAttribute("role", "group");
-      toggleRow.setAttribute("aria-label", "Pointer");
-      for (const mode of pointerModes) {
-        const btn = document.createElement("button");
-        btn.className = "input-mode-toggle-option";
-        btn.type = "button";
-        btn.setAttribute("aria-pressed", String(activeMode === mode));
-        btn.dataset.mode = mode;
-        if (activeMode === mode) {
-          btn.classList.add("is-active");
-          btn.style.color = HUD_ACCENT;
-          btn.style.background = HUD_ACCENT_ACTIVE_BG;
-        }
-        btn.innerHTML = `<span class="input-mode-toggle-icon">${svgForMode(mode)}</span><span>${MODE_LABELS[mode].replace(" mode", "")}</span>`;
-        applyAccentToSvg(btn.querySelector(".input-mode-toggle-icon svg"));
-        btn.addEventListener("click", () => {
-          activeMode = mode;
-          saveInputModePreference(settings, mode);
-          options.onModeChange?.(mode);
-          renderButton();
-          renderAll();
-        });
-        toggleRow.appendChild(btn);
+    if (pointerModes.length === 1) {
+      target.append(renderCards(target, activeMode, heading(MODE_LABELS[pointerModes[0]].replace(" mode", ""))));
+    } else {
+      // "Pointer [Mouse / Trackpad] ?": a choice of one, with arrow keys, in the shared track.
+      const name = `foss-earth-pointer-mode-${++pointerChoiceCount}`;
+      const group = options.ui.createChoiceGroup(name, "Pointer", pointerModes.map(mode => ({ id: mode, label: MODE_LABELS[mode].replace(" mode", "") })), document, { help: POINTER_HELP, helpLabel: "Explain the pointer mode" });
+      for (const input of group.querySelectorAll<HTMLInputElement>("input[type=radio]")) {
+        const icon = document.createElement("span");
+        icon.className = "input-mode-toggle-icon";
+        icon.innerHTML = svgForMode(input.value as HudInputMode);
+        input.after(icon);
       }
-      target.appendChild(toggleRow);
+      options.ui.checkChoice(group, name, activeMode);
+      let cards = renderCards(target, activeMode);
+      group.addEventListener("change", event => {
+        const mode = (event.target as HTMLInputElement).value as HudInputMode;
+        if (!pointerModes.includes(mode)) return;
+        activeMode = mode;
+        saveInputModePreference(settings, mode);
+        options.onModeChange?.(mode);
+        renderButton();
+        // Redraw only the cards here, so the focused choice keeps its focus.
+        const next = renderCards(target, activeMode);
+        cards.replaceWith(next);
+        cards = next;
+        renderAll(target);
+      });
+      target.append(group, cards);
     }
-    target.appendChild(renderCards(target, activeMode));
 
+    if (!options.showDebug) return;
     const debugRow = document.createElement("label");
     debugRow.className = "input-mode-debug-toggle";
-    debugRow.innerHTML = `<input type="checkbox" ${debugMode ? "checked" : ""}><span>Debug wheel events</span>`;
+    debugRow.innerHTML = `<span>Debug wheel events</span><span class="foss-earth-choice foss-earth-switch"><input type="checkbox" ${debugMode ? "checked" : ""}><span class="foss-earth-switch__knob" aria-hidden="true"></span></span>`;
     const input = debugRow.querySelector("input");
-    if (input) input.style.accentColor = HUD_ACCENT;
     input?.addEventListener("change", () => {
       debugMode = Boolean(input.checked);
       renderButton();
@@ -328,10 +305,11 @@ export function createInputModeHud(
     target.appendChild(debugRow);
   }
 
-  function renderCards(target: HTMLElement, mode: HudInputMode): HTMLElement {
+  function renderCards(target: HTMLElement, mode: HudInputMode, title?: HTMLElement): HTMLElement {
     const panel = document.createElement("div");
     panel.className = "input-mode-sensitivity-panel";
     panel.dataset.mode = mode;
+    if (title) panel.append(title);
 
     for (const movement of movements) {
       const card = document.createElement("div");
@@ -359,54 +337,31 @@ export function createInputModeHud(
       numInput.max = "10";
       numInput.step = "0.1";
       numInput.value = sensitivity[mode][movement].toFixed(2);
-
-      const resetBtn = document.createElement("button");
-      resetBtn.type = "button";
-      resetBtn.className = "gesture-reset-btn";
-      resetBtn.title = "Reset to default";
-      resetBtn.innerHTML = RESET_SVG;
-
-      const playBtn = document.createElement("button");
-      playBtn.type = "button";
-      playBtn.className = "gesture-play-btn";
-      playBtn.title = "Apply";
-      playBtn.hidden = true;
-      playBtn.style.color = HUD_ACCENT;
-      playBtn.innerHTML = PLAY_SVG.replace('fill="currentColor"', `fill="${HUD_ACCENT}"`);
+      numInput.setAttribute("aria-label", `${MODE_LABELS[mode].replace(" mode", "")} ${MOVEMENT_LABELS[movement].toLowerCase()} sensitivity`);
 
       const getVal = (): number => clampSensitivity(parseFloat(numInput.value) || 1);
 
-      const syncPlay = (): void => {
-        playBtn.hidden = Math.abs(getVal() - sensitivity[mode][movement]) <= 0.005;
-      };
-
+      // Applied on Enter or when the field is left; Reset all returns every card to 1.
       const applyVal = (v: number): void => {
         const clamped = clampSensitivity(v);
         numInput.value = clamped.toFixed(2);
+        if (Math.abs(clamped - sensitivity[mode][movement]) <= 0.005) return;
         const next = cloneSensitivity(sensitivity);
         next[mode][movement] = clamped;
         sensitivity = next;
         saveInputSensitivityPreference(settings, next);
         options.onSensitivityChange?.(next);
-        syncPlay();
         renderAll(target);
       };
 
-      numInput.addEventListener("input", syncPlay);
       numInput.addEventListener("keydown", (e: KeyboardEvent) => { if (e.key === "Enter") applyVal(getVal()); });
-      numInput.addEventListener("blur", () => { numInput.value = getVal().toFixed(1); syncPlay(); });
-      playBtn.addEventListener("click", () => applyVal(getVal()));
-      resetBtn.addEventListener("click", () => applyVal(1.0));
+      numInput.addEventListener("change", () => applyVal(getVal()));
 
       const inputWrapEl = document.createElement("div");
       inputWrapEl.className = "gesture-input-wrap";
       inputWrapEl.appendChild(numInput);
 
-      const buttonWrapEl = document.createElement("div");
-      buttonWrapEl.className = "gesture-btn-wrap";
-      buttonWrapEl.append(resetBtn, playBtn);
-
-      topRowEl.append(inputWrapEl, buttonWrapEl);
+      topRowEl.append(inputWrapEl);
 
       const movementMetaEl = document.createElement("div");
       movementMetaEl.className = "gesture-meta-row";
@@ -507,7 +462,6 @@ export function createInputModeHud(
     },
     destroy(): void {
       offSettings();
-      document.getElementById(INPUT_MODE_ACCENT_STYLE_ID)?.remove();
       button.removeEventListener("click", onButtonClick);
       container.removeEventListener("wheel", onWheel);
       for (const view of inlineViews) view.remove();

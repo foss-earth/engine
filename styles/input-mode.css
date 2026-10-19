@@ -104,108 +104,54 @@
   gap: 8px;
 }
 
+/* "Touch" and a lone pointer mode title their row of cards, first in it. */
 .input-mode-heading {
-  flex-basis: 100%;
+  flex: 0 0 auto;
+  align-self: center;
   color: var(--globe-accent, #60a5fa);
   font-size: 12px;
   font-weight: 700;
 }
 
+/* Developer pages only: "Debug wheel events [switch]". */
 .input-mode-debug-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 26px;
-  padding: 4px 10px;
-  border: 1px solid rgba(148, 163, 184, 0.28);
-  border-radius: 999px;
-  color: inherit;
-  font-family: system-ui, -apple-system, sans-serif;
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 1;
-  white-space: nowrap;
-}
-
-.input-mode-debug-toggle:hover {
-  background: rgba(255, 255, 255, 0.08);
-}
-
-.input-mode-toggle-row {
-  display: inline-flex;
-  gap: 3px;
-  padding: 3px;
-  background: rgba(0, 0, 0, 0.3);
-  border-radius: 7px;
-}
-
-.input-mode-toggle-option {
-  appearance: none;
-  flex: 0 0 auto;
+  flex-basis: 100%;
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 5px;
-  border: 0;
-  padding: 5px 8px;
-  border-radius: 5px;
-  background: transparent;
-  font-family: system-ui, -apple-system, sans-serif;
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 1;
-  white-space: nowrap;
-  color: rgba(239, 246, 255, 0.5);
-  cursor: pointer;
-  transition: background 0.12s, color 0.12s;
+  gap: 6px;
+  font-size: 12px;
 }
 
-.input-mode-toggle-option:focus,
-.input-mode-toggle-option:focus-visible {
-  outline: none;
-  box-shadow: none;
-}
-
-.input-mode-toggle-option:hover {
-  background: rgba(255, 255, 255, 0.07);
-  color: rgba(239, 246, 255, 0.8);
-}
-
-.input-mode-toggle-option.is-active {
-  background: rgba(14, 165, 233, 0.22);
-  color: var(--globe-accent-bright);
-  outline: 2px solid rgba(226, 232, 240, 0.9);
-  outline-offset: -1px;
-}
-
-.input-mode-toggle-option.is-active .input-mode-toggle-icon,
-.input-mode-toggle-option.is-active .input-mode-toggle-icon svg {
-  color: inherit;
-}
-
+/* The mode's mark inside its segment, before the word. */
 .input-mode-toggle-icon,
 .input-mode-toggle-icon svg {
   width: 14px;
   height: 14px;
-  display: block;
+  display: inline-block;
   flex-shrink: 0;
+  vertical-align: -3px;
+}
+
+.input-mode-toggle-icon {
+  margin-right: 4px;
 }
 
 .input-mode-sensitivity-panel {
   flex-basis: 100%;
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 6px;
 }
 
 .gesture-card {
   position: relative;
   flex: 0 0 auto;
-  width: 94px;
+  width: 72px;
   aspect-ratio: 1 / 1;
-  min-height: 94px;
+  min-height: 72px;
   box-sizing: border-box;
-  padding: 6px;
+  padding: 4px;
   border-radius: 6px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(255, 255, 255, 0.03);
@@ -222,8 +168,8 @@
 }
 
 .gesture-card-bg svg {
-  width: 54px !important;
-  height: 54px !important;
+  width: 40px !important;
+  height: 40px !important;
   opacity: 0.9;
 }
 
@@ -235,14 +181,14 @@
 }
 
 .gesture-card-bg-stack svg {
-  width: 44px !important;
-  height: 44px !important;
+  width: 30px !important;
+  height: 30px !important;
   opacity: 0.86;
 }
 
 .gesture-card-bg--orbit svg {
-  width: 42px !important;
-  height: 42px !important;
+  width: 32px !important;
+  height: 32px !important;
   opacity: 0.75;
 }
 
@@ -260,19 +206,13 @@
 .gesture-top-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: center;
   width: 100%;
 }
 
 .gesture-input-wrap {
   display: flex;
   align-items: center;
-}
-
-.gesture-btn-wrap {
-  display: flex;
-  align-items: center;
-  gap: 4px;
 }
 
 .gesture-meta-row {
@@ -357,50 +297,6 @@
   box-shadow: 0 0 0 2px rgba(14, 165, 233, 0.15);
 }
 
-.gesture-reset-btn,
-.gesture-play-btn {
-  appearance: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  padding: 0;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
-  cursor: pointer;
-  flex-shrink: 0;
-  color: rgba(239, 246, 255, 0.32);
-  transition: background 0.1s, color 0.1s;
-}
-
-.gesture-reset-btn svg,
-.gesture-play-btn svg {
-  display: block;
-  flex-shrink: 0;
-}
-
-.gesture-reset-btn svg {
-  width: 12px;
-  height: 12px;
-  stroke: currentColor;
-}
-
-.gesture-reset-btn:hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: rgba(239, 246, 255, 0.8);
-}
-
-.gesture-play-btn {
-  color: rgba(239, 246, 255, 0.4);
-}
-
-.gesture-play-btn:hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: rgba(239, 246, 255, 0.8);
-}
-
 .gesture-arrow {
   flex-shrink: 0;
   font-size: 11px;
@@ -434,42 +330,6 @@
   white-space: nowrap;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-}
-
-.input-mode-debug-toggle input {
-  width: 13px;
-  height: 13px;
-  margin: 0;
-  flex-shrink: 0;
-  accent-color: var(--globe-accent);
-}
-
-:root[data-theme="light"] .input-mode-debug-toggle {
-  border-color: rgba(71, 85, 105, 0.3);
-}
-
-:root[data-theme="light"] .input-mode-toggle-row {
-  background: rgba(15, 23, 42, 0.06);
-}
-
-:root[data-theme="light"] .input-mode-toggle-option {
-  color: rgba(15, 23, 42, 0.5);
-}
-
-:root[data-theme="light"] .input-mode-toggle-option:hover {
-  background: rgba(15, 23, 42, 0.06);
-  color: rgba(15, 23, 42, 0.8);
-}
-
-:root[data-theme="light"] .input-mode-toggle-option.is-active {
-  background: rgba(14, 165, 233, 0.14);
-  color: var(--globe-accent);
-  outline: 2px solid rgba(15, 23, 42, 0.5);
-}
-
-:root[data-theme="light"] .input-mode-toggle-option.is-active .input-mode-toggle-icon,
-:root[data-theme="light"] .input-mode-toggle-option.is-active .input-mode-toggle-icon svg {
-  color: inherit;
 }
 
 :root[data-theme="light"] .gesture-icon,
@@ -506,15 +366,6 @@
   background: rgba(255, 255, 255, 0.8);
   border-color: rgba(15, 23, 42, 0.14);
   color: rgba(15, 23, 42, 0.9);
-}
-
-:root[data-theme="light"] .gesture-reset-btn {
-  color: rgba(15, 23, 42, 0.45);
-}
-
-:root[data-theme="light"] .gesture-reset-btn:hover {
-  background: rgba(15, 23, 42, 0.06);
-  color: rgba(15, 23, 42, 0.8);
 }
 
 :root[data-theme="light"] .gesture-action-icon,

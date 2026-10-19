@@ -1,9 +1,8 @@
-.poi-sprite-tuner-grid,.poi-sprite-tuner-actions {display:flex;flex-wrap:wrap;align-items:flex-start;gap:.5rem}
-.poi-sprite-tuner-field {display:flex;flex-direction:column;flex:none;max-width:100%}
-.poi-sprite-tuner-field input {width:9em;max-width:100%;box-sizing:border-box}
-.poi-sprite-tuner-actions button {flex:none;width:max-content;max-width:100%}
-.compass-scale-field {min-width:220px}
-.compass-scale-range {position:relative;display:block;height:28px;width:min(100%,240px);background:linear-gradient(rgba(255,255,255,.28),rgba(255,255,255,.28)) center/100% 4px no-repeat}
+/* "Sprite size [Max size (m) ▢] … [✓] [Save as default]": one wrapping row, each label beside its field. */
+.poi-sprite-tuner-grid,.poi-sprite-tuner-actions {display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px}
+.poi-sprite-tuner-field {display:flex;align-items:center;gap:4px;flex:none;max-width:100%}
+.poi-sprite-tuner-field input[type=number] {width:9ch;max-width:100%;box-sizing:border-box}
+.compass-scale-range {position:relative;display:block;height:28px;width:160px;max-width:100%;background:linear-gradient(rgba(255,255,255,.28),rgba(255,255,255,.28)) center/100% 4px no-repeat}
 .compass-scale-range input[type=range] {position:absolute;left:0;top:0;width:100%;height:28px;margin:0;background:transparent;pointer-events:none;appearance:none}
 .compass-scale-range input[type=range]::-webkit-slider-runnable-track {background:transparent}
 .compass-scale-range input[type=range]::-webkit-slider-thumb {pointer-events:auto;appearance:none;width:16px;height:16px;border-radius:50%;background:var(--globe-accent-bright,#38bdf8)}
