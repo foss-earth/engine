@@ -5,9 +5,10 @@ import type { AbstractMesh, Scene, Sprite } from "@babylonjs/core";
  * something else: the displayed surface is not one, so a drag can grab it.
  * `preparationAdmission` is a prepared terrain tile's provenance: which
  * backend built it and on what evidence. It stays on the mesh, and the tile
- * stays ground.
+ * stays ground. `gltf` is the glTF loader's own record (a Google tile's
+ * extras), not a point of interest; a twist over such a tile turns the view.
  */
-const GROUND_METADATA_KEYS = new Set(["mapSurface", "terrainZoom", "segments", "heightBounds", "googleGeometricErrorMeters", "preparationAdmission"]);
+const GROUND_METADATA_KEYS = new Set(["mapSurface", "terrainZoom", "segments", "heightBounds", "googleGeometricErrorMeters", "preparationAdmission", "gltf"]);
 
 function isWorldPointMetadata(metadata: unknown): boolean {
   if (metadata == null || typeof metadata !== "object") return false;
