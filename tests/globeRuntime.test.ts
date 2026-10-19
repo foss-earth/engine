@@ -61,7 +61,7 @@ class TerrainTilesFixture {
 
 /** Real runtime and settings/control behavior, with authenticated transport
  * replaced at its public port. No live key, network or GPU is required. */
-function createGoogleKeyHost(initialKey: string | null = null) {
+function createGoogleKeyHost(initialKey: string | null = null, ready?: GlobeRuntimeOptions["mapPorts"]["google"]["ready"]) {
   const tokens: string[] = [];
   const renderers: TerrainTilesFixture[] = [];
   const host = createTerrainHost(defaults => ({
@@ -78,9 +78,21 @@ function createGoogleKeyHost(initialKey: string | null = null) {
         tokens.push(apiToken);
         return { fetchData: async () => { throw new Error("No fixture network."); } } as unknown as ReturnType<GlobeRuntimeOptions["mapPorts"]["google"]["createAuthPlugin"]>;
       },
+      ready,
     } },
   }));
   return { ...host, tokens, renderers };
+}
+
+/** A host's 3D Tiles code that loads when Google mode first asks for it, and comes, or fails, when the test says. */
+function codeOnDemand() {
+  let settle: { resolve(): void; reject(error: Error): void } | undefined;
+  let loaded = false, loading: Promise<void> | null = null;
+  const ready = vi.fn(() => (loaded ? null : loading ??= new Promise<void>((resolve, reject) => { settle = { resolve, reject }; })));
+  const settled = async (outcome: () => void) => { outcome(); await loading?.catch(() => undefined); await Promise.resolve(); };
+  return { ready,
+    arrive: () => settled(() => { loaded = true; settle!.resolve(); }),
+    fail: () => settled(() => { settle!.reject(new Error("chunk fixture failed")); loading = null; }) };
 }
 
 describe("live Google key activation", () => {
@@ -199,6 +211,51 @@ describe("live Google key activation", () => {
       expect(host.tokens).toEqual([]);
       expect(host.holdCount()).toBe(1);
     } finally { host.disposeHost(); }
+  });
+
+  it("waits for 3D Tiles code that loads on demand, keeping the map shown, then starts with the key saved", async () => {
+    const code = codeOnDemand();
+    const host = createGoogleKeyHost(null, code.ready);
+    try {
+      host.settings.set("map.source.basemap", "google");
+      // Without a key there is nothing to load the code for.
+      expect(code.ready).not.toHaveBeenCalled();
+      host.settings.set("map.source.googleKey", "on-demand-fixture-key");
+      expect(code.ready).toHaveBeenCalledOnce();
+      expect(host.runtime.status).toMatchObject({ mode: "fallback", message: "Loading Google 3D Tiles.", googleApiKeyProvided: true });
+      expect(host.renderers).toHaveLength(0);
+      await code.arrive();
+      expect(host.runtime.status).toMatchObject({ mode: "google-tiles", lastError: null });
+      expect(host.tokens).toEqual(["on-demand-fixture-key"]);
+      expect(host.renderers).toHaveLength(1);
+    } finally { host.disposeHost(); }
+  });
+
+  it("drops a Google start still waiting for its code when its key is cleared, and falls back when the code fails", async () => {
+    const chosen = codeOnDemand();
+    const host = createGoogleKeyHost(null, chosen.ready);
+    try {
+      host.settings.setMany({ "map.source.googleKey": "on-demand-fixture-key", "map.source.basemap": "google" });
+      host.settings.set("map.source.googleKey", "");
+      await chosen.arrive();
+      expect(host.runtime.status).toMatchObject({ mode: "fallback", lastError: "Google 3D Tiles need an API key." });
+      expect(host.renderers).toHaveLength(0);
+      // Saved again, the code is there.
+      host.settings.set("map.source.googleKey", "on-demand-fixture-key");
+      expect(host.runtime.status.mode).toBe("google-tiles");
+      expect(host.tokens).toEqual(["on-demand-fixture-key"]);
+    } finally { host.disposeHost(); }
+    const failing = codeOnDemand();
+    const failed = createGoogleKeyHost(null, failing.ready);
+    try {
+      failed.settings.setMany({ "map.source.googleKey": "on-demand-fixture-key", "map.source.basemap": "google" });
+      await failing.fail();
+      expect(failed.runtime.status).toMatchObject({ mode: "fallback", lastError: "Google 3D Tiles could not be loaded (chunk fixture failed)." });
+      expect(failed.renderers).toHaveLength(0);
+      // A later choice asks again.
+      failed.runtime.setMapSource("google");
+      expect(failing.ready).toHaveBeenCalledTimes(2);
+    } finally { failed.disposeHost(); }
   });
 
   it("detaches credential/source observers on destruction", () => {

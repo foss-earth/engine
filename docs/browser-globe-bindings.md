@@ -18,7 +18,13 @@ browser startup, check cancellation again, then supply its result as
 the actual 3D Tiles renderer/authentication constructors. Those provider modules
 expect browser/bundler resolution; plain Node imports of the shared entry do not
 initialize them. CPU or embedded hosts can explicitly supply those two ports;
-CPU fixtures refuse unexpected provider construction. Existing qualified
+CPU fixtures refuse unexpected provider construction. A host can instead load
+them on demand: `googleProviders.ready()` returns null once both can be called,
+and otherwise a promise that settles when they can. Google mode waits for it
+and keeps the map it shows meanwhile, and a later map choice, or a cleared key,
+drops the wait. The FOSS Earth app awaits the loader only when the globe starts
+on Google, which brings a cold visit's first frame about 1.2 s sooner
+without a key. Existing qualified
 packages did not contain this new browser binding. Prepared draft hosts must
 add this field before adopting the candidate. The logger supplies `info`,
 `error` and raster's `warn` methods.

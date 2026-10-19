@@ -72,7 +72,7 @@ export interface BrowserGlobeBindingOptions {
   signal?: AbortSignal;
 }
 
-export type BrowserGlobeGoogleProviders = Pick<GlobeMapPorts["google"], "createTilesRenderer" | "createAuthPlugin">;
+export type BrowserGlobeGoogleProviders = Pick<GlobeMapPorts["google"], "createTilesRenderer" | "createAuthPlugin" | "ready">;
 /** Deferred browser/bundler acquisition; importing the public entry is pure. */
 export async function loadBrowserGlobeGoogleProviders(): Promise<BrowserGlobeGoogleProviders> {
   const { TilesRenderer } = await import("3d-tiles-renderer/babylonjs");
@@ -192,6 +192,7 @@ export function createBrowserGlobeBindings(options: BrowserGlobeBindingOptions) 
       google: {
         createTilesRenderer: options.googleProviders.createTilesRenderer,
         createAuthPlugin: options.googleProviders.createAuthPlugin,
+        ready: () => options.googleProviders.ready?.() ?? null,
         createAbortController: () => new realm.AbortController(), combineSignals: signals => realm.AbortSignal.any([...signals]),
         whenMeshesReady: (meshes, readyOptions = {}) => track(whenMeshesReady(meshes, { ...readyOptions, timers: options.timers, readinessPolicy: options.readinessPolicy })),
         lighting, responseRealm: { Response: realm.Response, TransformStream: realm.TransformStream },

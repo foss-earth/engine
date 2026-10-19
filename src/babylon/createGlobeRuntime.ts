@@ -479,6 +479,8 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
   const downloadMeter = createMapDownloadMeter({ nowMs: clock.nowMs, after: (ms, callback) => clock.after(callback, ms) });
   authority.own(() => downloadMeter.destroy());
   let tilesRuntime: ReturnType<typeof createGoogleTilesRuntime> | null = null;
+  // Counts map selections, so that Google mode waiting for the host's 3D Tiles code yields to a later one.
+  let mapSelection = 0;
   let googleTerrainDetailTarget: number | null = null;
   const anchorForRefinement = (value: unknown): GoogleTerrainDetailAnchor => (value === "focus" ? "focus-point" : "camera");
   let googleTerrainDetailAnchor: GoogleTerrainDetailAnchor = anchorForRefinement(settings.get("map.focus.refineFrom"));
@@ -1316,6 +1318,23 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
 
   function enableGoogleTilesMode(): void {
     if (disposed) return;
+    const selection = ++mapSelection;
+    const loading = normalizedApiKey ? options.mapPorts.google.ready?.() : null;
+    if (loading) {
+      // The map shown stays until the code comes, and is the raster map or the plain globe if there is none yet.
+      recordMapDebugEvent("google-code-wait");
+      if (!tilesRuntime && !rasterTilesRuntime) {
+        if (activeRasterBaseMap) enableRasterBaseMapMode(null);
+        else if (!fallbackExperienceCreated) { status.mode = "fallback"; ensureGeospatialCamera(); ensureFallbackExperience(); }
+      }
+      status.message = "Loading Google 3D Tiles.";
+      emitStatus();
+      void loading.then(() => { if (!disposed && selection === mapSelection) enableGoogleTilesMode(); }, (error: unknown) => {
+        if (disposed || selection !== mapSelection) return;
+        enableFallbackMode(`Google 3D Tiles could not be loaded (${getErrorMessage(error)}).`);
+      });
+      return;
+    }
     recordMapDebugEvent("google-mode-select");
     releaseStartupHold();
     endStreaming();
@@ -1559,6 +1578,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
       if (status.mode !== "google-tiles") enableGoogleTilesMode();
       return;
     }
+    mapSelection++;
     if (activeRasterBaseMap?.id === source.id && activeRasterBaseMap.version === source.version
       && activeRasterBaseMap.urlTemplate === source.urlTemplate && status.mode === "raster-basemap") return;
     activeRasterBaseMap = source;
@@ -2191,6 +2211,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
     },
     setRasterBaseMap(source): void {
       if (disposed) return;
+      mapSelection++;
       if (activeRasterBaseMap?.id === source.id && activeRasterBaseMap.version === source.version
         && activeRasterBaseMap.urlTemplate === source.urlTemplate && status.mode === "raster-basemap") return;
       activeRasterBaseMap = source;

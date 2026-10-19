@@ -41,7 +41,11 @@ export interface GlobeRuntimePlatform {
   navigationAnchorMarkers?(canvas: HTMLCanvasElement): NavigationAnchorMarkers;
 }
 export type GlobeRasterPorts = Pick<RasterTilesRuntimeOptions, "loadMapTexture" | "asyncMapTextures" | "attachTerrainLighting" | "createTerrainLoader" | "createTerrainMeshWorker" | "terrainMeshWorkers" | "createTerrainHeightWorker" | "imageryPorts" | "meshRebuildCpuMs" | "log">;
-export type GlobeGooglePorts = Pick<GoogleTilesRuntimeOptions, "createTilesRenderer" | "createAuthPlugin" | "createAbortController" | "combineSignals" | "whenMeshesReady" | "lighting" | "responseRealm" | "recordMapRequest" | "resourceTiming" | "online" | "origin" | "log">;
+export type GlobeGooglePorts = Pick<GoogleTilesRuntimeOptions, "createTilesRenderer" | "createAuthPlugin" | "createAbortController" | "combineSignals" | "whenMeshesReady" | "lighting" | "responseRealm" | "recordMapRequest" | "resourceTiming" | "online" | "origin" | "log"> & {
+  /** For a host that loads the 3D Tiles code on demand: null once createTilesRenderer and createAuthPlugin can be
+   * called, otherwise a promise that settles when they can. Google mode waits for it, keeping the map it shows. */
+  ready?(): Promise<void> | null;
+};
 export interface GlobeMapPorts { raster: GlobeRasterPorts; google: GlobeGooglePorts; setCacheLimits(limits: MapCacheLimits): void }
 export interface GlobeExternalCamera {
   /** Borrowed host root, e.g. moved by a generic floating-origin adapter. */
