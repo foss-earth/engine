@@ -79,8 +79,15 @@ function loadedPresentation(controller: MapDetailController): "distribution" | "
   return controller.settings.get(MAP_DETAIL_LOADED_PRESENTATION_ID) === "marker" ? "marker" : "distribution";
 }
 
+// The rail updates as tiles load. Chrome lays the page out again for a range's
+// min, max or step, and restyles it for `hidden = true`, even when the element
+// holds the value already, so these writes are skipped when they change nothing.
 function setAttr(element: Element, name: string, value: string): void {
   if (element.getAttribute(name) !== value) element.setAttribute(name, value);
+}
+
+function setHidden(element: HTMLElement, hidden: boolean): void {
+  if (element.hidden !== hidden) element.hidden = hidden;
 }
 export function createMapDetailSlider(options: MapDetailSliderOptions): MapDetailSliderHandle {
   const { controller, document } = options;
@@ -190,8 +197,8 @@ export function createMapDetailSlider(options: MapDetailSliderOptions): MapDetai
     element.classList.toggle("is-distribution", presentation === "distribution");
     if (!state) {
       slider.disabled = true;
-      defaultTick.hidden = true;
-      loadedMarker.hidden = true;
+      setHidden(defaultTick, true);
+      setHidden(loadedMarker, true);
       paintDistribution(presentation, null, railWidth());
       markerTicks.replaceChildren();
       shownMarkers = [];
@@ -204,9 +211,9 @@ export function createMapDetailSlider(options: MapDetailSliderOptions): MapDetai
     const range = detailRange(state.policy);
     const finer = detailPosition(kind, range.finer);
     const coarser = detailPosition(kind, range.coarser);
-    slider.min = String(finer);
-    slider.max = String(coarser);
-    slider.step = String(kind === "raster" ? RASTER_DETAIL_STEP : GOOGLE_DETAIL_STEP);
+    setAttr(slider, "min", String(finer));
+    setAttr(slider, "max", String(coarser));
+    setAttr(slider, "step", String(kind === "raster" ? RASTER_DETAIL_STEP : GOOGLE_DETAIL_STEP));
     if (!dragging) slider.value = String(detailPosition(kind, state.requestedTarget));
     // Equal ends leave nothing to choose, but the value stays readable.
     slider.disabled = !ready || Math.abs(coarser - finer) < 1e-9;
@@ -235,13 +242,13 @@ export function createMapDetailSlider(options: MapDetailSliderOptions): MapDetai
       : "Loaded detail distribution is not available.";
     slider.setAttribute("aria-valuetext", [valueText, activeText, presentation === "distribution" ? distributionText : loadedText, status].filter(Boolean).join(". "));
 
-    defaultTick.hidden = false;
+    setHidden(defaultTick, false);
     defaultTick.style.left = `${rangePercent(detailPosition(kind, state.resolvedDefault), finer, coarser)}%`;
 
     // Delivery may be coarser than the selectable range while tiles arrive.
     // Clamp only its position; the tooltip preserves the measured value.
     // Distribution mode keeps this marker in the tree and hides it.
-    loadedMarker.hidden = presentation !== "marker" || !hasLoaded;
+    setHidden(loadedMarker, presentation !== "marker" || !hasLoaded);
     if (presentation === "marker" && hasLoaded) {
       const position = detailPosition(kind, loaded);
       loadedMarker.style.left = `${rangePercent(position, finer, coarser)}%`;

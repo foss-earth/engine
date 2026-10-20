@@ -91,4 +91,21 @@ describe("map detail rail", () => {
     expect(slider.element.title).not.toContain("I-beam");
     slider.destroy();
   });
+
+  it("does not write the range's bounds or hide what is hidden again as tiles load", () => {
+    const { controller, slider, input, marker } = mount();
+    const writes: string[] = [];
+    const observer = new MutationObserver(records => {
+      for (const record of records) writes.push(record.attributeName!);
+    });
+    observer.observe(input, { attributes: true, attributeFilter: ["min", "max", "step", "hidden"] });
+    observer.observe(marker, { attributes: true, attributeFilter: ["hidden"] });
+    controller.reportDelivery("raster:usgs-imagery", { pending: false, limits: [], loadedTarget: -0.2, distribution: population(2, 2) });
+    controller.reportDelivery("raster:usgs-imagery", { pending: true, limits: [], loadedTarget: -0.3, distribution: population(4, 3) });
+    writes.push(...observer.takeRecords().map(record => record.attributeName!));
+    observer.disconnect();
+    expect(marker.hidden).toBe(true);
+    expect(writes).toEqual([]);
+    slider.destroy();
+  });
 });
