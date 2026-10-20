@@ -195,6 +195,18 @@ export function tileSurfacePosition(tile: TileId, u: number, v: number, height: 
   return positionOnTileBasis(tileSurfaceBasis(tile, u, v), height, out);
 }
 
+/**
+ * A sphere around a hull for the horizon test: the points' mean, each point's
+ * share added in order, and a radius a tenth past the farthest point from it.
+ */
+export function hullSphere(hull: readonly Vec3[]): { center: Vec3; radius: number } {
+  let x = 0, y = 0, z = 0;
+  for (const p of hull) { x += p.x / hull.length; y += p.y / hull.length; z += p.z / hull.length; }
+  let farthest = -Infinity;
+  for (const p of hull) farthest = Math.max(farthest, Math.hypot(p.x - x, p.y - y, p.z - z));
+  return { center: { x, y, z }, radius: farthest * 1.1 };
+}
+
 /** Geographic span of a tile in radians, for curvature bounds. */
 export function tileAngularSpan(tile: TileId): number {
   const n = 2 ** tile.z;
@@ -270,6 +282,21 @@ export function outcode(view: ImageryView, clip: Clip): number {
   if (clip.y < -clip.w) code |= 4;
   if (clip.y > clip.w) code |= 8;
   if (nearDistance(view, clip) < 0) code |= 16;
+  return code;
+}
+
+/** `outcode(view, toClip(m, p))`, in its operation order, without making the clip point. */
+export function clipOutcode(view: ImageryView, m: ArrayLike<number>, p: Vec3): number {
+  const x = p.x * m[0] + p.y * m[4] + p.z * m[8] + m[12];
+  const y = p.x * m[1] + p.y * m[5] + p.z * m[9] + m[13];
+  const z = p.x * m[2] + p.y * m[6] + p.z * m[10] + m[14];
+  const w = p.x * m[3] + p.y * m[7] + p.z * m[11] + m[15];
+  let code = 0;
+  if (x < -w) code |= 1;
+  if (x > w) code |= 2;
+  if (y < -w) code |= 4;
+  if (y > w) code |= 8;
+  if (z * view.nearPlane.z + w * view.nearPlane.w < 0) code |= 16;
   return code;
 }
 

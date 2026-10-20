@@ -14,6 +14,8 @@ import { ecefToGeodetic } from "../../camera/cameraMath.js";
 import type { DetailLimit } from "../mapDetailPolicy.js";
 import {
   childTiles,
+  clipOutcode,
+  hullSphere,
   isBelowHorizon,
   isSphereBelowHorizon,
   lonLatToTileXY,
@@ -396,6 +398,8 @@ function heapPop(heap: Evaluated[]): Evaluated | undefined {
 }
 
 const GRID = [0, 0.5, 1];
+/** The 3x3 grid's points, row by row. */
+const GRID_POINTS: ReadonlyArray<{ u: number; v: number }> = GRID.flatMap(v => GRID.map(u => ({ u, v })));
 const QUADS = [[0, 1, 4, 3], [1, 2, 5, 4], [3, 4, 7, 6], [4, 5, 8, 7]] as const;
 const SLOPE_STEP = 1 / 8;
 
@@ -561,6 +565,21 @@ function surfaceSamples(input: Pick<ImagerySelectionInput, "surface">, tile: Til
   });
 }
 
+/**
+ * Heights at points of a tile, as `heightAt` gives them, with null where a
+ * kept lattice height is NaN: lattice points whose heights `surfaceSamples`
+ * kept at this revision are not asked for again.
+ */
+function surfaceHeights(surface: ImagerySurface, tile: TileId, points: ReadonlyArray<{ u: number; v: number }>, key = tileKey(tile)): Array<number | null> {
+  const known = surface.heightsAt ? tileSurface(surface, tile, key) : null;
+  return points.map(({ u, v }) => {
+    const index = latticeIndex(u, v), probes = index >= 0 ? known?.heights.get(index) : undefined;
+    if (probes) return Number.isNaN(probes[0]) ? null : probes[0];
+    const { latDeg, lonDeg } = latLonAt(tile, u, v);
+    return surface.heightAt(latDeg, lonDeg);
+  });
+}
+
 /** A refine point and where it lies, worked out once per traversal. */
 interface RefineContext {
   point: ImageryRefinePoint;
@@ -609,9 +628,7 @@ function measureFocus(job: Job, tile: TileId): { within: boolean; footprint: num
   const { input } = job;
   const focus = job.focus!;
   const bounds = input.surface.boundsFor(tile);
-  const points: Array<{ u: number; v: number }> = [];
-  for (const v of GRID) for (const u of GRID) points.push({ u, v });
-  points.push(nearestLocal(tile, job.focusLonLat));
+  const points = [...GRID_POINTS, nearestLocal(tile, job.focusLonLat)];
   const { nearest, worst } = footprintFrom(input, tile, points, focus, bounds.max);
   let within = nearest <= focus.radiusMeters;
   if (within && focus.horizonCull) {
@@ -622,8 +639,7 @@ function measureFocus(job: Job, tile: TileId): { within: boolean; footprint: num
       const basis = tileSurfaceBasis(tile, point.u, point.v);
       for (const height of [bounds.min, bounds.max + lift]) hull.push(positionOnTileBasis(basis, height));
     }
-    const center = hull.reduce((sum, p) => ({ x: sum.x + p.x / hull.length, y: sum.y + p.y / hull.length, z: sum.z + p.z / hull.length }), { x: 0, y: 0, z: 0 });
-    const radius = Math.max(...hull.map(p => Math.hypot(p.x - center.x, p.y - center.y, p.z - center.z))) * 1.1;
+    const { center, radius } = hullSphere(hull);
     if (isSphereBelowHorizon(job.focusViewer, center, radius)) within = false;
   }
   // The region's own offset, expressed against the view's target so one traversal ranks both.
@@ -799,9 +815,7 @@ function evaluateView(job: ViewMeasurementContext, tile: TileId, bounds = job.in
 
   // Hull: a 3x3 grid and the nearest point, at the lowest height and at the
   // highest lifted by the curvature between grid points.
-  const hullPoints: Array<{ u: number; v: number }> = [];
-  for (const v of GRID) for (const u of GRID) hullPoints.push({ u, v });
-  hullPoints.push(nearest);
+  const hullPoints = [...GRID_POINTS, nearest];
   const lift = sagittaMeters(span / 2);
   let allOutside = 0b11111;
   let anyAboveHorizon = false;
@@ -810,13 +824,13 @@ function evaluateView(job: ViewMeasurementContext, tile: TileId, bounds = job.in
   const low = bounds.min, high = bounds.max + lift;
   const grid = tileSurface(input.surface, tile, result.key);
   if (grid && !(grid.hull && Object.is(grid.hull.low, low) && Object.is(grid.hull.high, high))) {
-    grid.hull = { low, high, positions: hullPoints.slice(0, 9).flatMap(point => [low, high].map(height => sampleTileSurface(tile, point.u, point.v, height).position)) };
+    grid.hull = { low, high, positions: GRID_POINTS.flatMap(point => [low, high].map(height => sampleTileSurface(tile, point.u, point.v, height).position)) };
   }
   hullPoints.forEach((point, i) => {
     for (let j = 0; j < 2; j++) {
       const position = grid?.hull && i < 9 ? grid.hull.positions[i * 2 + j] : sampleTileSurface(tile, point.u, point.v, j === 0 ? low : high).position;
       hull.push(position);
-      allOutside &= outcode(view, toClip(m, position));
+      allOutside &= clipOutcode(view, m, position);
       if (!anyAboveHorizon && !isBelowHorizon(view.camera, position)) anyAboveHorizon = true;
     }
   });
@@ -825,8 +839,7 @@ function evaluateView(job: ViewMeasurementContext, tile: TileId, bounds = job.in
   // samples, so only small tiles are rejected point by point. Any tile is
   // rejected when its whole bounding sphere is behind the globe.
   if (!anyAboveHorizon && span < IMAGERY_SELECTION_CONSTANTS.horizonTileSpan) return result;
-  const center = hull.reduce((sum, p) => ({ x: sum.x + p.x / hull.length, y: sum.y + p.y / hull.length, z: sum.z + p.z / hull.length }), { x: 0, y: 0, z: 0 });
-  const radius = Math.max(...hull.map(p => Math.hypot(p.x - center.x, p.y - center.y, p.z - center.z))) * 1.1;
+  const { center, radius } = hullSphere(hull);
   if (isSphereBelowHorizon(view.camera, center, radius)) return result;
   result.visible = true;
 
@@ -836,7 +849,7 @@ function evaluateView(job: ViewMeasurementContext, tile: TileId, bounds = job.in
   const measured = hullPoints.map((point, i) => {
     const surface = surfaces[i];
     const clip = toClip(m, surface.position);
-    return { ...point, surface, clip, inside: outcode(view, clip) === 0 };
+    return { u: point.u, v: point.v, surface, clip, inside: outcode(view, clip) === 0 };
   });
   const measure: SurfaceSample[] = measured.filter(sample => sample.inside).map(sample => sample.surface);
   /** The screen rays that meet the ground inside this tile. */
@@ -860,7 +873,7 @@ function evaluateView(job: ViewMeasurementContext, tile: TileId, bounds = job.in
     for (let i = 0; i < 5 && outsides.length > 0; i++) {
       const mids = outsides.map((_, k) => (lo[k] + hi[k]) / 2);
       surfaceSamples(input, tile, toward(mids), bounds.max).forEach((probe, k) => {
-        if (outcode(view, toClip(m, probe.position)) === 0) lo[k] = mids[k]; else hi[k] = mids[k];
+        if (clipOutcode(view, m, probe.position) === 0) lo[k] = mids[k]; else hi[k] = mids[k];
       });
     }
     if (outsides.length > 0) measure.push(...surfaceSamples(input, tile, toward(lo), bounds.max));
@@ -869,10 +882,7 @@ function evaluateView(job: ViewMeasurementContext, tile: TileId, bounds = job.in
     // No sample of the actual surface is in view. Loose height bounds can make
     // a tile look visible while its surface is not; test a hull at the heights
     // actually sampled before deciding it straddles the view.
-    const heights = hullPoints.map(point => {
-      const { latDeg, lonDeg } = latLonAt(tile, point.u, point.v);
-      return input.surface.heightAt(latDeg, lonDeg);
-    });
+    const heights = surfaceHeights(input.surface, tile, hullPoints, result.key);
     if (heights.every(height => height !== null)) {
       const known = heights as number[];
       const low = Math.min(...known), high = Math.max(...known);
@@ -882,7 +892,7 @@ function evaluateView(job: ViewMeasurementContext, tile: TileId, bounds = job.in
       for (const point of hullPoints) {
         const basis = tileSurfaceBasis(tile, point.u, point.v);
         for (const height of [low - margin, high + margin + lift]) {
-          outside &= outcode(view, toClip(m, positionOnTileBasis(basis, height, positionScratch)));
+          outside &= clipOutcode(view, m, positionOnTileBasis(basis, height, positionScratch));
         }
       }
       if (outside !== 0) {
@@ -909,7 +919,7 @@ function evaluateView(job: ViewMeasurementContext, tile: TileId, bounds = job.in
     // Where heights are unknown, the ground is taken at the point's own
     // height within the tile's bounds: the nearest it may be.
     const fallback = Math.max(bounds.min, Math.min(bounds.max, refine.altitudeMeters));
-    const { worst } = footprintFrom(input, tile, [...hullPoints.slice(0, 9), nearestLocal(tile, refine.lonLat)], refine.point, fallback);
+    const { worst } = footprintFrom(input, tile, [...GRID_POINTS, nearestLocal(tile, refine.lonLat)], refine.point, fallback);
     result.physicalFootprint = worst;
     result.footprint = job.cartographic ? worst * (view.logicalHeight / view.renderHeight) : worst;
   } else {

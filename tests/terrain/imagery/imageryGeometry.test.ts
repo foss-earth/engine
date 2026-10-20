@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { isSphereBelowHorizon, lonLatToTileXY, tileLatDeg, tileLonDeg, tilesTouch, type TileId } from "../../../src/terrain/imagery/imageryGeometry.js";
+import { clipOutcode, hullSphere, isSphereBelowHorizon, lonLatToTileXY, outcode, tileLatDeg, tileLonDeg, tilesTouch, toClip, type ImageryView, type TileId } from "../../../src/terrain/imagery/imageryGeometry.js";
 
 describe("conservative sphere horizon", () => {
   // Keep the original order as an oracle, including strict inequalities at
@@ -100,5 +100,60 @@ describe("touching tiles", () => {
     expect(tilesTouch({ z: 3, x: 6, y: 2 }, { z: 3, x: 0, y: 2 })).toBe(false);
     expect(tilesTouch({ z: 3, x: 7, y: 2 }, { z: 3, x: 1, y: 2 })).toBe(false);
     expect(tilesTouch({ z: 0, x: 0, y: 0 }, { z: 9, x: 300, y: 17 })).toBe(true);
+  });
+});
+
+describe("clip outcodes", () => {
+  it("gives the outcode of the clip point toClip makes, for any matrix, point and near plane, on the planes too", () => {
+    let seed = 7;
+    const random = (): number => { seed = (seed * 1103515245 + 12345) >>> 0; return seed / 2 ** 32; };
+    const special = [0, -0, 1, -1, 1e-300, -1e300, Infinity, -Infinity, NaN, 6378137, 2 ** 53 + 1];
+    const any = (): number => random() < 0.1 ? special[Math.floor(random() * special.length)] : (random() - 0.5) * 10 ** Math.floor(random() * 14 - 4);
+    const codes = new Set<number>();
+    let flips = 0;
+    for (let round = 0; round < 20_000; round++) {
+      const m = Array.from({ length: 16 }, any);
+      const view = { nearPlane: { z: any(), w: any() } } as ImageryView;
+      // Half the rounds put the point on a plane, where a last bit decides: a
+      // column equal to w's or its negation, or a near plane z = w.
+      const plane = Math.floor(random() * 10);
+      if (plane < 2) for (const row of [0, 4, 8, 12]) m[row] = plane === 0 ? m[row + 3] : -m[row + 3];
+      else if (plane < 4) for (const row of [1, 5, 9, 13]) m[row] = plane === 2 ? m[row + 2] : -m[row + 2];
+      else if (plane === 4) { for (const row of [2, 6, 10, 14]) m[row] = m[row + 1]; view.nearPlane = { z: 1, w: -1 }; }
+      const p = { x: any(), y: any(), z: any() };
+      const expected = outcode(view, toClip(m, p));
+      expect(clipOutcode(view, m, p)).toBe(expected);
+      codes.add(expected);
+      // How often w summed in another order would give another outcode here.
+      const w = m[15] + p.x * m[3] + p.y * m[7] + p.z * m[11];
+      if (outcode(view, { ...toClip(m, p), w }) !== expected) flips += 1;
+    }
+    for (const plane of [1, 2, 4, 8, 16]) expect([...codes].some(code => code === plane)).toBe(true);
+    expect(codes.size).toBeGreaterThan(16);
+    expect(flips).toBeGreaterThan(100);
+  });
+});
+
+describe("hull spheres", () => {
+  it("are the mean and the farthest distance times 1.1, summed in the hull's order, bit for bit", () => {
+    let seed = 11;
+    const random = (): number => { seed = (seed * 1103515245 + 12345) >>> 0; return seed / 2 ** 32; };
+    let reordered = 0;
+    for (let round = 0; round < 2000; round++) {
+      // A tile's hull: twenty points around the globe's surface, metres apart or continents apart.
+      const spread = 10 ** Math.floor(random() * 7);
+      const base = { x: (random() - 0.5) * 12_000_000, y: (random() - 0.5) * 12_000_000, z: (random() - 0.5) * 12_000_000 };
+      const hull = Array.from({ length: 20 }, () => ({ x: base.x + (random() - 0.5) * spread, y: base.y + (random() - 0.5) * spread, z: base.z + (random() - 0.5) * spread }));
+      const center = hull.reduce((sum, p) => ({ x: sum.x + p.x / hull.length, y: sum.y + p.y / hull.length, z: sum.z + p.z / hull.length }), { x: 0, y: 0, z: 0 });
+      const radius = Math.max(...hull.map(p => Math.hypot(p.x - center.x, p.y - center.y, p.z - center.z))) * 1.1;
+      const sphere = hullSphere(hull);
+      for (const axis of ["x", "y", "z"] as const) expect(Object.is(sphere.center[axis], center[axis])).toBe(true);
+      expect(Object.is(sphere.radius, radius)).toBe(true);
+      // Summed in another order the mean would differ, so the test can tell.
+      const reversed = [...hull].reverse().reduce((sum, p) => sum + p.x / hull.length, 0);
+      if (!Object.is(reversed, center.x)) reordered += 1;
+    }
+    expect(reordered).toBeGreaterThan(50);
+    expect(hullSphere([{ x: NaN, y: 0, z: 0 }, { x: 1, y: 2, z: 3 }]).radius).toBeNaN();
   });
 });
