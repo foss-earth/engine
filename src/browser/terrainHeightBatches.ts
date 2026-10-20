@@ -1,5 +1,6 @@
 import { sampleTerrainGrid, type TerrainGrid } from "../terrain/terrainGrid.js";
 import { packTerrainHeightPixels } from "./terrainHeightPixels.js";
+import { createPointHeights, keepPoint, pointSlot, type PointHeights } from "./pointHeights.js";
 import type { HeightBatchReply, HeightBatchWorkerPort } from "./terrainHeightBatchProtocol.js";
 
 export interface TerrainHeightBatchStats {
@@ -14,16 +15,17 @@ export interface TerrainHeightBatchStats {
 }
 interface GridState {
   id: number; key: string; grid: WeakRef<TerrainGrid>;
-  values: Map<number, Map<number, { height: number; origin: "page" | "typescript" | "single" }>>;
+  /** Heights by point, with their origin's code in ORIGIN. */
+  values: PointHeights;
   /** Points first missed since the last flush. A queued point stays cached
    * until its state is removed, so it is never missed and queued twice. */
   pending: number[];
-  count: number;
 }
 interface Flight { id: number; start: number; coordinates: Float64Array; batches: Array<{ state: GridState; offset: number; count: number }> }
 interface GridStamp { z: number; x: number; y: number; size: number; heightsId: number }
 interface GridGeneration { own: GridStamp; neighbors: GridStamp[] | null; key: string }
 const MAX_CACHE = 131072, MAX_PENDING = 16384, MAX_BATCH = 8192, MAX_TRANSFER = 24 * 1024 ** 2;
+const ORIGIN = { page: 1, typescript: 2, single: 3 } as const;
 
 /** Exact asynchronous memoisation over immutable adopted grids. A cache miss
  * always evaluates the reference immediately, so neither terrain arrival nor
@@ -68,13 +70,7 @@ export function createTerrainHeightBatches(options: {
     states.delete(state.id); generations.delete(state.key);
     queued -= state.pending.length / 2;
     state.pending.length = 0;
-    cached -= state.count; state.values.clear(); state.count = 0;
-  }
-  function cacheValue(state: GridState, x: number, y: number, value: number, origin: "page" | "typescript" | "single"): void {
-    let row = state.values.get(x);
-    if (!row) { row = new Map(); state.values.set(x, row); }
-    if (!row.has(y)) { state.count++; cached++; }
-    row.set(y, { height: value, origin });
+    cached -= state.values.size; state.values = createPointHeights();
   }
   function trim(): void {
     while (cached > MAX_CACHE || states.size > 512) removeState(states.values().next().value!);
@@ -111,13 +107,12 @@ export function createTerrainHeightBatches(options: {
         retire("invalid-worker-result"); return;
       }
       if (states.get(state.id) !== state) continue;
-      const origin = batch.actual ?? reply.actual;
+      const origin = ORIGIN[batch.actual ?? reply.actual], values = state.values;
       for (let j = 0; j < count; j++) {
-        const x = current.coordinates[(offset + j) * 2], y = current.coordinates[(offset + j) * 2 + 1];
-        const entry = state.values.get(x)?.get(y);
-        if (!entry) cacheValue(state, x, y, batch.heights[j], origin);
-        else if (!Object.is(entry.height, batch.heights[j])) { status.parity = "different"; retire("worker-reference-mismatch"); return; }
-        else entry.origin = origin;
+        const x = current.coordinates[(offset + j) * 2], y = current.coordinates[(offset + j) * 2 + 1], slot = pointSlot(values, x, y);
+        if (!values.origins[slot]) { keepPoint(values, slot, x, y, batch.heights[j], origin); cached++; }
+        else if (!Object.is(values.heights[slot], batch.heights[j])) { status.parity = "different"; retire("worker-reference-mismatch"); return; }
+        else values.origins[slot] = origin;
       }
     }
     cancelTimeout?.(); cancelTimeout = null; flight = null;
@@ -184,28 +179,27 @@ export function createTerrainHeightBatches(options: {
       const key = generation(grid);
       let state = generations.get(key);
       if (!state) {
-        state = { id: ++nextGrid, key, grid: new WeakRef(grid), values: new Map(), pending: [], count: 0 };
+        state = { id: ++nextGrid, key, grid: new WeakRef(grid), values: createPointHeights(), pending: [] };
         generations.set(key, state); states.set(state.id, state);
       }
       if (state.grid.deref() !== grid) state.grid = new WeakRef(grid);
       states.delete(state.id); states.set(state.id, state);
-      const result = new Float64Array(coordinates.length / 2);
+      const result = new Float64Array(coordinates.length / 2), values = state.values;
       for (let i = 0; i < result.length; i++) {
         const x = coordinates[i * 2], y = coordinates[i * 2 + 1];
         status.samples++;
-        const row = state.values.get(x);
-        const hit = row?.get(y);
-        if (hit) {
-          result[i] = hit.height; status.cacheHits++;
-          if (hit.origin === "page") status.referenceCacheHits++;
-          else { status.workerCacheHits++; if (hit.origin === "single") status.nativeCacheHits++; }
+        const slot = pointSlot(values, x, y), origin = values.origins[slot];
+        if (origin) {
+          result[i] = values.heights[slot]; status.cacheHits++;
+          if (origin === ORIGIN.page) status.referenceCacheHits++;
+          else { status.workerCacheHits++; if (origin === ORIGIN.single) status.nativeCacheHits++; }
           continue;
         }
         result[i] = sampleTerrainGrid(grid, x, y); status.pageSamples++;
         if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
         // The exact reference result is already available. Memoise immediately
         // so a slow worker never repeats page work; both worker arms share this.
-        cacheValue(state, x, y, result[i], "page");
+        keepPoint(values, slot, x, y, result[i], ORIGIN.page); cached++;
         if (queued >= MAX_PENDING) { status.dropped++; continue; }
         state.pending.push(x, y); queued++;
       }
