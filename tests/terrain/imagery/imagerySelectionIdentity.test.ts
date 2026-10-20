@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { geodeticToEcef } from "../../../src/camera/cameraMath.js";
-import type { TileId } from "../../../src/terrain/imagery/imageryGeometry.js";
+import { lonLatToTileXY, tileLatDeg, tileLonDeg, type TileId } from "../../../src/terrain/imagery/imageryGeometry.js";
 import {
   createImageryMeasurementCache,
   createImagerySelector,
@@ -217,6 +217,64 @@ describe("imagery selection identity", () => {
     }
     expect(checked).toBeGreaterThan(100);
   }, 15000);
+
+  it("keeps the heights of tiles that touch no changed terrain into later revisions, with the same plans and measurements", () => {
+    let seed = 5;
+    const random = (): number => (seed = (Math.imul(seed, 1103515245) + 12345) >>> 0) / 2 ** 32;
+    // Terrain tiles of any level raise the ground inside them; a revision raises a few more.
+    const raised = new Map<string, number>();
+    const levels = new Set<number>();
+    const { boundsFor } = ground(true);
+    const heightAt = (lat: number, lon: number): number | null => {
+      const base = ground(true).heightAt(lat, lon);
+      if (base === null) return null;
+      let height = base;
+      for (const z of levels) {
+        const at = lonLatToTileXY(lon, lat, z);
+        height += raised.get(`${z}/${Math.floor(at.x)}/${Math.floor(at.y)}`) ?? 0;
+      }
+      return height;
+    };
+    const asked = { kept: 0, full: 0 };
+    const packed = (count: keyof typeof asked) => (coordinates: Float64Array): Float64Array => {
+      asked[count] += coordinates.length / 2;
+      const heights = new Float64Array(coordinates.length / 2);
+      for (let i = 0; i < heights.length; i++) heights[i] = heightAt(coordinates[i * 2], coordinates[i * 2 + 1]) ?? NaN;
+      return heights;
+    };
+    let revision = 0;
+    const changes: Array<{ revision: number; tiles: TileId[] }> = [];
+    const kept: ImagerySurface = {
+      heightAt, boundsFor, heightsAt: packed("kept"), getRevision: () => revision,
+      changedSince: since => changes.filter(change => change.revision > since).flatMap(change => change.tiles),
+    };
+    const full: ImagerySurface = { heightAt, boundsFor, heightsAt: packed("full"), getRevision: () => revision };
+    let changed = 0;
+    for (const { name, view, source, overrides } of CASES) for (let step = 0; step < 4; step++) {
+      const expected = digestOf(outcome(input(view, { heightAt, boundsFor }, source, overrides)));
+      expect(digestOf(outcome(input(view, kept, source, overrides))), `${name}, step ${step}`).toBe(expected);
+      expect(digestOf(outcome(input(view, full, source, overrides))), `${name}, step ${step}`).toBe(expected);
+      // Raise terrain under a few leaves, a level or so either side of theirs, or across the world's edges.
+      const { leaves } = outcome(input(view, full, source, overrides)).plan;
+      const tiles: TileId[] = [];
+      for (let k = 0; k < 3; k++) {
+        const leaf = leaves[Math.floor(random() * leaves.length)].tile;
+        const z = Math.max(0, leaf.z + Math.floor(random() * 5) - 2), n = 2 ** z;
+        const at = lonLatToTileXY(tileLonDeg(leaf.z, leaf.x + random()), tileLatDeg(leaf.z, leaf.y + random()), z);
+        const x = k === 2 && random() < 0.3 ? (random() < 0.5 ? 0 : n - 1) : Math.min(n - 1, Math.floor(at.x));
+        const tile = { z, x, y: Math.min(n - 1, Math.floor(at.y)) };
+        raised.set(`${tile.z}/${tile.x}/${tile.y}`, (raised.get(`${tile.z}/${tile.x}/${tile.y}`) ?? 0) + 40 + random() * 300);
+        levels.add(z);
+        tiles.push(tile);
+      }
+      revision += 1;
+      changes.push({ revision, tiles });
+      if (digestOf(outcome(input(view, { heightAt, boundsFor }, source, overrides))) !== expected) changed += 1;
+    }
+    // The changes move plans and measurements, and keeping heights saves asking for many.
+    expect(changed).toBeGreaterThan(CASES.length);
+    expect(asked.kept).toBeLessThan(asked.full * 0.75);
+  }, 30000);
 
   it("follows bounds that change while the revision does not", () => {
     const { heightAt } = ground(true);

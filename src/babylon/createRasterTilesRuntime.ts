@@ -276,6 +276,15 @@ function tileKey(tile: TileCoord): string {
   return `${tile.z}/${tile.x}/${tile.y}`;
 }
 
+/** The tile a key names, or null for a key no whole tile has. */
+function keyTile(key: string): TileCoord | null {
+  const [z, x, y, ...rest] = key.split("/").map(Number);
+  return rest.length === 0 && tileKey({ z, x, y }) === key && [z, x, y].every(Number.isInteger) ? { z, x, y } : null;
+}
+
+/** Imagery revisions whose changed terrain tiles are kept, and the most such tiles given at once. */
+const MAX_IMAGERY_CHANGES = 64, MAX_IMAGERY_CHANGED_TILES = 512;
+
 function buildTileUrl(source: RasterBaseMapSource, tile: TileCoord): string {
   return source.urlTemplate
     .replace(/\{z\}/g, String(tile.z))
@@ -840,6 +849,14 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
   // decoded contact index. Unrelated decode arrivals must not invalidate all
   // cached imagery tile hulls and height batches.
   let imageryRevision = 0;
+  // The terrain tiles each of the last imagery revisions changed, oldest
+  // first; null where any height may have changed.
+  const imageryChanges: Array<{ revision: number; tiles: TileCoord[] | null }> = [];
+  const changeImagery = (tiles: TileCoord[] | null): void => {
+    imageryRevision += 1;
+    imageryChanges.push({ revision: imageryRevision, tiles });
+    if (imageryChanges.length > MAX_IMAGERY_CHANGES) imageryChanges.shift();
+  };
   const surfaceSampler = createRasterSurfaceSampler(() => revision, capture?.counters);
   function decodedGridsChanged(changed: boolean): void {
     if (changed && !disposed) {
@@ -1005,6 +1022,20 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
       }
       return options.getSurfaceHeightMeters?.(latDeg, lonDeg) ?? null;
     },
+    // A point's height is its finest visible record's grid's, so it changes only
+    // where a record came, went or changed. Heights from a callback change
+    // without saying where.
+    ...(options.getSurfaceHeightMeters ? {} : { changedSince(since: number): TileCoord[] | null {
+      if (since > imageryRevision || since < imageryRevision - imageryChanges.length) return null;
+      const tiles: TileCoord[] = [];
+      for (const change of imageryChanges) {
+        if (change.revision <= since) continue;
+        if (!change.tiles) return null;
+        tiles.push(...change.tiles);
+      }
+      // Past a few hundred, every kept tile is asked again for less.
+      return tiles.length <= MAX_IMAGERY_CHANGED_TILES ? tiles : null;
+    } }),
     boundsFor(tile: TileCoord): { min: number; max: number } {
       const bounds = coveringVisibleRecord(tile)?.heightBounds;
       return bounds ? { min: bounds.min - 50, max: bounds.max + 50 } : { min: -500, max: 9000 };
@@ -1178,7 +1209,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
       if (visibleTileKeys.delete(record.key)) {
         coverageRecordsDirty = true;
         revision += 1;
-        imageryRevision += 1;
+        changeImagery([record.tile]);
         visibleRecords = visibleRecords.filter(visible => visible !== record);
         surfaceSampler.setCoverage(visibleRecords);
       }
@@ -1231,7 +1262,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
     }
     beginLoad();
     const record = createTileRecord(meshOptions, imagerySource, tile, finishLoad, loadProgressive, changed => {
-      if (visibleTileKeys.has(changed.key)) imageryRevision += 1;
+      if (visibleTileKeys.has(changed.key)) changeImagery([changed.tile]);
       geometryDirty = true;
       dirtyGeometryKeys.add(changed.key);
       visibilityDirty = true;
@@ -1372,12 +1403,18 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
     coverageRecordsDirty = false;
     if (changed || ownersChanged) {
       const previousOwners = ownersChanged ? new Set(visibleRecords) : null;
-      for (const key of representatives) if (!oldVisible.has(key) || (previousOwners && !previousOwners.has(cache.get(key)!))) dirtyGeometryKeys.add(key);
+      // Heights may differ only where a tile came, went or changed owner.
+      const touched: Array<TileCoord | null> = [];
+      for (const key of representatives) if (!oldVisible.has(key) || (previousOwners && !previousOwners.has(cache.get(key)!))) {
+        dirtyGeometryKeys.add(key);
+        touched.push(keyTile(key));
+      }
+      for (const key of oldVisible) if (!representatives.has(key)) touched.push(keyTile(key));
       geometryDirty = true;
       // Visibility itself changes queried coverage, including removal of the
       // final patch when there is no geometry left for commitTerrain to write.
       revision += 1;
-      imageryRevision += 1;
+      changeImagery(touched.every(tile => tile !== null) ? touched as TileCoord[] : null);
     }
     if (changed || ownersChanged) {
       visibleTileKeys = representatives;
@@ -1642,7 +1679,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
       record.target = meshPositions(replacement);
       record.targetTerrainZoom = replacement.metadata.terrainZoom ?? -1;
       record.heightBounds = replacement.metadata.heightBounds;
-      if (visibleTileKeys.has(key)) imageryRevision += 1;
+      if (visibleTileKeys.has(key)) changeImagery([record.tile]);
       if (oldMesh.isEnabled()) {
         revision += 1;
         surfaceSampler.setCoverage([...visibleTileKeys].map(key => cache.get(key)!).filter(Boolean));

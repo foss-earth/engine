@@ -29,6 +29,7 @@ import {
   tileKey,
   tileLatDeg,
   tileLonDeg,
+  tilesTouch,
   toClip,
   toScreen,
   type ImageryView,
@@ -78,6 +79,13 @@ export interface ImagerySurface {
    * an `ImageryMeasurementCache`.
    */
   getRevision?(): number;
+  /**
+   * The tiles whose heights may have changed since `revision`, which
+   * `getRevision` gave: at points of no tile touching them, `heightsAt` answers
+   * as it did then. Null when that is not known. Given, a tile's lattice
+   * heights are kept across revisions until a tile it touches changes.
+   */
+  changedSince?(revision: number): readonly TileId[] | null;
 }
 
 export interface ImageryAvailability {
@@ -449,9 +457,11 @@ function surfaceSample(input: Pick<ImagerySelectionInput, "surface">, tile: Tile
  * between grid points. A point's height depends only on the point and the
  * surface, never on the rest of its batch, so leaving known points out of a
  * batch changes nothing; samples and hull positions are kept with the
- * fallback and bounds they were taken at.
+ * fallback and bounds they were taken at. A surface that names the tiles a
+ * revision changed keeps the others' entries into the next revision.
  */
 interface TileSurface {
+  tile: TileId;
   /** Centre, east and south heights of lattice points, as `heightsAt` answered them. */
   heights: Map<number, Float64Array>;
   /** Lattice points' samples, and the fallback height each was taken with. */
@@ -469,9 +479,21 @@ function tileSurface(surface: ImagerySurface, tile: TileId, key = tileKey(tile))
   const revision = surface.getRevision?.();
   if (revision === undefined) return null;
   let cached = tileSurfaces.get(surface);
+  if (cached && cached.revision !== revision && cached.points < MAX_LATTICE_POINTS) {
+    // Only a tile touching one that changed can answer differently now.
+    const changed = surface.changedSince?.(cached.revision);
+    if (changed) {
+      if (changed.length > 0) for (const [kept, entry] of cached.tiles) {
+        if (!changed.some(other => tilesTouch(entry.tile, other))) continue;
+        cached.points -= entry.heights.size;
+        cached.tiles.delete(kept);
+      }
+      cached.revision = revision;
+    }
+  }
   if (!cached || cached.revision !== revision || cached.points >= MAX_LATTICE_POINTS) tileSurfaces.set(surface, cached = { revision, points: 0, tiles: new Map() });
   let entry = cached.tiles.get(key);
-  if (!entry) cached.tiles.set(key, entry = { heights: new Map(), samples: new Map(), hull: null, owner: cached });
+  if (!entry) cached.tiles.set(key, entry = { tile: { z: tile.z, x: tile.x, y: tile.y }, heights: new Map(), samples: new Map(), hull: null, owner: cached });
   return entry;
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { isSphereBelowHorizon } from "../../../src/terrain/imagery/imageryGeometry.js";
+import { isSphereBelowHorizon, lonLatToTileXY, tileLatDeg, tileLonDeg, tilesTouch, type TileId } from "../../../src/terrain/imagery/imageryGeometry.js";
 
 describe("conservative sphere horizon", () => {
   // Keep the original order as an oracle, including strict inequalities at
@@ -42,5 +42,63 @@ describe("conservative sphere horizon", () => {
       const radius = scale * random() * 0.2;
       expect(isSphereBelowHorizon(eye, center, radius, scale)).toBe(original(eye, center, radius, scale));
     }
+  });
+});
+
+describe("touching tiles", () => {
+  let seed = 11;
+  const random = (): number => (seed = (Math.imul(seed, 1103515245) + 12345) >>> 0) / 2 ** 32;
+  /** A tile at a corner, an edge or anywhere of its level. */
+  const anyTile = (maxZ: number): TileId => {
+    const z = Math.floor(random() * (maxZ + 1)), n = 2 ** z;
+    const at = (): number => [0, n - 1, Math.floor(random() * n)][Math.floor(random() * 3)];
+    return { z, x: at(), y: at() };
+  };
+
+  it("touches each tile a point of the other lands in through latitude and longitude, both ways round", () => {
+    let landed = 0;
+    for (let round = 0; round < 600; round++) {
+      const a = anyTile(24), z = Math.floor(random() * 25);
+      for (const u of [0, 1e-13, 0.5, 1 - 1e-13, 1]) for (const v of [0, 1e-13, 0.5, 1 - 1e-13, 1]) {
+        const at = lonLatToTileXY(tileLonDeg(a.z, a.x + u), tileLatDeg(a.z, a.y + v), z);
+        const b = { z, x: Math.floor(at.x), y: Math.floor(at.y) };
+        if (b.x < 0 || b.x >= 2 ** z || b.y < 0 || b.y >= 2 ** z) continue;
+        expect(tilesTouch(a, b), `${JSON.stringify(a)} ${JSON.stringify(b)}`).toBe(true);
+        expect(tilesTouch(b, a)).toBe(true);
+        landed += 1;
+      }
+    }
+    expect(landed).toBeGreaterThan(10_000);
+  });
+
+  it("is true exactly when one tile's cells, grown by a cell and wrapped east to west, meet the other's", () => {
+    let touching = 0, apart = 0;
+    for (let round = 0; round < 3000; round++) {
+      const a = anyTile(6), b = anyTile(6);
+      const z = Math.max(a.z, b.z), n = 2 ** z;
+      const cells = (tile: TileId, grow: number): Set<string> => {
+        const s = 2 ** (z - tile.z), out = new Set<string>();
+        for (let x = tile.x * s - grow; x < (tile.x + 1) * s + grow; x++) for (let y = tile.y * s - grow; y < (tile.y + 1) * s + grow; y++) {
+          if (y >= 0 && y < n) out.add(`${((x % n) + n) % n}/${y}`);
+        }
+        return out;
+      };
+      const grown = cells(a, 1);
+      const expected = [...cells(b, 0)].some(cell => grown.has(cell));
+      expect(tilesTouch(a, b), `${JSON.stringify(a)} ${JSON.stringify(b)}`).toBe(expected);
+      expect(tilesTouch(b, a)).toBe(expected);
+      if (expected) touching += 1; else apart += 1;
+    }
+    expect(touching).toBeGreaterThan(300);
+    expect(apart).toBeGreaterThan(300);
+  });
+
+  it("joins the world's east edge to its west edge, and nothing else across it", () => {
+    expect(tilesTouch({ z: 3, x: 7, y: 2 }, { z: 3, x: 0, y: 2 })).toBe(true);
+    expect(tilesTouch({ z: 3, x: 7, y: 2 }, { z: 5, x: 0, y: 12 })).toBe(true);
+    expect(tilesTouch({ z: 3, x: 7, y: 2 }, { z: 5, x: 0, y: 13 })).toBe(false);
+    expect(tilesTouch({ z: 3, x: 6, y: 2 }, { z: 3, x: 0, y: 2 })).toBe(false);
+    expect(tilesTouch({ z: 3, x: 7, y: 2 }, { z: 3, x: 1, y: 2 })).toBe(false);
+    expect(tilesTouch({ z: 0, x: 0, y: 0 }, { z: 9, x: 300, y: 17 })).toBe(true);
   });
 });

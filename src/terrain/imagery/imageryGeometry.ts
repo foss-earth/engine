@@ -41,6 +41,19 @@ export function tileContains(ancestor: TileId, tile: TileId): boolean {
   return tile.x >> shift === ancestor.x && tile.y >> shift === ancestor.y;
 }
 
+/**
+ * True when two tiles overlap or share an edge or a corner, across the
+ * antimeridian too: longitude 180 is longitude -180 in Mercator, so the
+ * world's east edge touches its west edge. A point of one tile, taken to
+ * latitude and longitude and back, lands in the other only if they touch.
+ */
+export function tilesTouch(a: TileId, b: TileId): boolean {
+  const z = Math.max(a.z, b.z), n = 2 ** z, sa = 2 ** (z - a.z), sb = 2 ** (z - b.z);
+  const ax = a.x * sa, ay = a.y * sa, bx = b.x * sb, by = b.y * sb;
+  const touchX = (ax <= bx + sb && bx <= ax + sa) || (ax + sa === n && bx === 0) || (bx + sb === n && ax === 0);
+  return touchX && ay <= by + sb && by <= ay + sa;
+}
+
 export function tileLonDeg(z: number, x: number): number {
   return (x / 2 ** z) * 360 - 180;
 }

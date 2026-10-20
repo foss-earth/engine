@@ -16,7 +16,7 @@ import type { TerrainGrid, TerrainTile } from "../src/terrain/terrainGrid.js";
 import type { TerrainInterest } from "../src/terrain/terrainLoader.js";
 import { createRasterTilesRuntime as createCoreRaster, type RasterTilesRuntimeOptions } from "../src/babylon/createRasterTilesRuntime.js";
 import { RASTER_BASE_MAP_SOURCES } from "../src/map/rasterBaseMaps.js";
-import { tileLatDeg, tileLonDeg } from "../src/terrain/imagery/imageryGeometry.js";
+import { lonLatToTileXY, tileLatDeg, tileLonDeg, tilesTouch } from "../src/terrain/imagery/imageryGeometry.js";
 import { createEngineSettings, testAtlasDevice, testAfter } from "../fixtures/composition/runtimeHost.js";
 let settings = createEngineSettings();
 const getAppSettings = () => settings;
@@ -165,6 +165,89 @@ describe("raster imagery and terrain lifecycle", () => {
       expect(differ).toEqual([]);
       expect(points.filter((_, i) => !Number.isNaN(heights[i])).length).toBeGreaterThan(500);
     } finally { runtime.dispose(); engine.dispose(); }
+  });
+
+  it("names terrain tiles touching every point whose imagery height changed since a revision", async () => {
+    settings.register(NATIVE_PARAMETERS);
+    settings.set("native.tier", "typescript-worker");
+    let surface!: imageryRuntimeModule.ImageryRuntimeOptions["surface"];
+    vi.spyOn(imageryRuntimeModule, "createImageryRuntime").mockImplementation(options => {
+      surface = options.surface;
+      return { supported: true, attachPatch() {}, detachPatch() {}, setPatchVisible() {}, hasCoverage: () => true,
+        update() {}, dispose() {}, setOffset() {}, setSource() {} } as unknown as imageryRuntimeModule.ImageryRuntime;
+    });
+    const leafOf = (tile: TerrainTile) => ({ tile, key: `${tile.z}/${tile.x}/${tile.y}`, needed: true, distanceMeters: 20, errorPx: 10,
+      inCore: true, inProximity: true, inFrustum: true });
+    // 2/2/1 split into its children beside 2/3/1, then whole again, then gone.
+    const split = { leaves: [{ z: 3, x: 4, y: 2 }, { z: 3, x: 5, y: 2 }, { z: 3, x: 4, y: 3 }, { z: 3, x: 5, y: 3 }, { z: 2, x: 3, y: 1 }].map(leafOf),
+      rootLevel: 2, split: new Set(["2/2/1"]), nodes: 6, truncated: false };
+    const whole = { leaves: [{ z: 2, x: 2, y: 1 }, { z: 2, x: 3, y: 1 }].map(leafOf), rootLevel: 2, split: new Set<string>(), nodes: 2, truncated: false };
+    const east = { leaves: [{ z: 2, x: 3, y: 1 }].map(leafOf), rootLevel: 2, split: new Set<string>(), nodes: 1, truncated: false };
+    let selection: typeof split = split;
+    vi.spyOn(selector, "selectTerrain").mockImplementation(() => selection);
+    // A selection setting has the still view select again.
+    const select = (next: typeof split) => { selection = next; settings.set("map.terrain.maxTiles", settings.get<number>("map.terrain.maxTiles") + 1); };
+    const engine = new NullEngine(), scene = new Scene(engine);
+    const runtime = createRasterTilesRuntime({ scene, source: RASTER_BASE_MAP_SOURCES[0], imagery: "atlas", createTerrainHeightWorker: () => null });
+    // A lattice over both root tiles and past them, as imagery asks.
+    const points: number[] = [];
+    for (let i = 0; i <= 96; i++) for (let j = 0; j <= 48; j++) points.push(tileLatDeg(2, 0.5 + j / 32), tileLonDeg(2, 1.5 + i / 32));
+    const coordinates = new Float64Array(points);
+    let moved = 0, kept = 0, revisions = 0, round = 0;
+    const step = async (change: () => void): Promise<void> => {
+      const revision = surface.getRevision!(), before = surface.heightsAt!(coordinates);
+      change();
+      await flush();
+      runtime.update();
+      const after = surface.heightsAt!(coordinates);
+      const differ = [...after.keys()].filter(i => !Object.is(after[i], before[i]));
+      if (surface.getRevision!() === revision) { expect(differ).toEqual([]); return; }
+      revisions += 1;
+      const changed = surface.changedSince!(revision);
+      expect(changed).not.toBeNull();
+      const touching = (i: number): boolean => {
+        const at = lonLatToTileXY(points[i * 2 + 1], points[i * 2], 22);
+        return changed!.some(tile => tilesTouch({ z: 22, x: Math.floor(at.x), y: Math.floor(at.y) }, tile));
+      };
+      expect(differ.filter(i => !touching(i))).toEqual([]);
+      moved += differ.length;
+      kept += [...after.keys()].filter(i => !touching(i)).length;
+    };
+    const arrive = async (): Promise<void> => {
+      while (pending.terrain.length > 0) await step(() => {
+        const { tile: { z, x, y }, resolve } = pending.terrain.shift()!;
+        round += 1;
+        resolve({ z, x, y, size: 4, heights: Float32Array.from({ length: 16 }, (_, i) => 100 * z + 10 * x + y + i * i * 3.25 + round) });
+      });
+    };
+    try {
+      await step(() => {});
+      await arrive();
+      await step(() => select(whole));
+      await arrive();
+      await step(() => select(split));
+      await arrive();
+      await step(() => select(east));
+      await arrive();
+      // Heights moved, and changes named less than the whole lattice.
+      expect(revisions).toBeGreaterThan(3);
+      expect(moved).toBeGreaterThan(1000);
+      expect(kept).toBeGreaterThan(1000);
+      expect(surface.changedSince!(surface.getRevision!())).toEqual([]);
+      expect(surface.changedSince!(surface.getRevision!() + 1)).toBeNull();
+    } finally { runtime.dispose(); engine.dispose(); }
+  });
+
+  it("names no changed tiles when heights come from a callback", () => {
+    let surface!: imageryRuntimeModule.ImageryRuntimeOptions["surface"];
+    vi.spyOn(imageryRuntimeModule, "createImageryRuntime").mockImplementation(options => {
+      surface = options.surface;
+      return { supported: true, attachPatch() {}, detachPatch() {}, setPatchVisible() {}, hasCoverage: () => true,
+        update() {}, dispose() {}, setOffset() {}, setSource() {} } as unknown as imageryRuntimeModule.ImageryRuntime;
+    });
+    const engine = new NullEngine(), scene = new Scene(engine);
+    const runtime = createRasterTilesRuntime({ scene, source: RASTER_BASE_MAP_SOURCES[0], imagery: "atlas", getSurfaceHeightMeters: () => 12 });
+    try { expect(surface.changedSince).toBeUndefined(); } finally { runtime.dispose(); engine.dispose(); }
   });
 
   it("invalidates imagery heights only when adopted grids, bounds, or coverage change", async () => {
