@@ -268,4 +268,24 @@ describe("imagery residency disposal failures", () => {
     expect(() => f.residency.dispose()).toThrow(error); expect(calls).toHaveLength(2); expect(f.free).toHaveLength(8); expect(f.residency.stats().resident).toBe(0);
     f.residency.dispose(); expect(calls).toHaveLength(2);
   });
+
+  it("counts every state, page and reserved byte in its stats", async () => {
+    const { residency, pending, image, flush } = harness({ concurrentRequests: 2 });
+    residency.setDemand(["a", "b", "c", "d", "e"].map((key, index) => request(key, 5 - index)));
+    residency.pump();
+    pending[0].resolve(image());
+    pending[1].reject(new Error("network"));
+    await flush();
+    residency.pump();
+    residency.upload(Infinity);
+    pending[2].resolve(image());
+    pending[3].reject(new ImageryMissingError("absent"));
+    await flush();
+    expect(residency.stats()).toMatchObject({
+      resident: 1, residentPages: 1, staged: 1, stagedBytes: 1000, inFlight: 0, inFlightReservedBytes: 0,
+      queued: 1, demanded: 5, failed: 1, missing: 1, limits: ["loading"],
+    });
+    residency.pump();
+    expect(residency.stats()).toMatchObject({ staged: 1, inFlight: 1, inFlightReservedBytes: 256 * 256 * 4 * 2, queued: 0 });
+  });
 });

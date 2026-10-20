@@ -693,31 +693,38 @@ export function createImageryResidency<TSignal extends NavigationAbortSignal>(op
       return earliest === Infinity ? null : earliest;
     },
     stats() {
-      const values = [...entries.values()];
-      const count = (state: EntryState) => values.filter(entry => entry.state === state).length;
-      const loadingDemanded = values.some(entry => entry.state !== "resident" && demand.has(entry.request.imageKey));
+      // One pass over the entries, in their order: the update asks for these several times a frame.
+      const count: Record<EntryState, number> = { queued: 0, loading: 0, staged: 0, uploading: 0, resident: 0, failed: 0 };
+      let residentPages = 0, stagedBytes = 0, inFlightReservedBytes = 0, loadingDemanded = false;
+      for (const entry of entries.values()) {
+        count[entry.state] += 1;
+        residentPages += entry.slots?.length ?? 0;
+        if (entry.state === "staged") stagedBytes += entry.reservedBytes;
+        else if (entry.state === "loading") inFlightReservedBytes += entry.reservedBytes;
+        if (!loadingDemanded && entry.state !== "resident" && demand.has(entry.request.imageKey)) loadingDemanded = true;
+      }
       const limits: DetailLimit[] = [];
       // Only a full atlas is a memory limit. A long queue is loading: what
       // it left out is queued as it drains.
       if (unplaced > 0) limits.push("memory");
       if (loadingDemanded || overflow > 0) limits.push("loading");
       return {
-        resident: count("resident"),
-        residentPages: values.reduce((sum, entry) => sum + (entry.slots?.length ?? 0), 0),
-        staged: count("staged"),
-        stagedBytes: values.filter(entry => entry.state === "staged").reduce((sum, entry) => sum + entry.reservedBytes, 0),
-        inFlight: count("loading"),
-        inFlightReservedBytes: values.filter(entry => entry.state === "loading").reduce((sum, entry) => sum + entry.reservedBytes, 0),
-        queued: count("queued"),
+        resident: count.resident,
+        residentPages,
+        staged: count.staged,
+        stagedBytes,
+        inFlight: count.loading,
+        inFlightReservedBytes,
+        queued: count.queued,
         demanded: demand.size,
         overflow,
         unplaced,
         pinnedPages: pinned.size,
-        failed: count("failed"),
+        failed: count.failed,
         missing: [...missing.keys()].filter(isMissing).length,
         ...counters,
         limits,
-        uploading: count("uploading"),
+        uploading: count.uploading,
         quarantinedPages: [...pendingUploads].filter(pending => pending.failed || !ownsEntry(pending)).reduce((sum, pending) => sum + pending.job.slots.length, 0),
         uploadRefusals,
       };
