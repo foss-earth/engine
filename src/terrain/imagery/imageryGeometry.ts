@@ -51,11 +51,16 @@ export function tileLatDeg(z: number, y: number): number {
 
 /** A point's Web Mercator position as a share of the world, longitude wrapped: its tile coordinates at zoom 0. */
 export function lonLatToMercator(lonDeg: number, latDeg: number): { x: number; y: number } {
+  return { x: mercatorX(lonDeg), y: mercatorY(latDeg) };
+}
+/** lonLatToMercator's x, which only the longitude decides. */
+export function mercatorX(lonDeg: number): number {
+  return ((((lonDeg + 180) % 360) + 360) % 360) / 360;
+}
+/** lonLatToMercator's y, which only the latitude decides. */
+export function mercatorY(latDeg: number): number {
   const lat = Math.max(-WEB_MERCATOR_MAX_LAT_DEG, Math.min(WEB_MERCATOR_MAX_LAT_DEG, latDeg)) * DEG;
-  return {
-    x: ((((lonDeg + 180) % 360) + 360) % 360) / 360,
-    y: (1 - Math.log(Math.tan(lat) + 1 / Math.cos(lat)) / Math.PI) / 2,
-  };
+  return (1 - Math.log(Math.tan(lat) + 1 / Math.cos(lat)) / Math.PI) / 2;
 }
 
 /**

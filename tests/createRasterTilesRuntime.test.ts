@@ -16,6 +16,7 @@ import type { TerrainGrid, TerrainTile } from "../src/terrain/terrainGrid.js";
 import type { TerrainInterest } from "../src/terrain/terrainLoader.js";
 import { createRasterTilesRuntime as createCoreRaster, type RasterTilesRuntimeOptions } from "../src/babylon/createRasterTilesRuntime.js";
 import { RASTER_BASE_MAP_SOURCES } from "../src/map/rasterBaseMaps.js";
+import { tileLatDeg, tileLonDeg } from "../src/terrain/imagery/imageryGeometry.js";
 import { createEngineSettings, testAtlasDevice, testAfter } from "../fixtures/composition/runtimeHost.js";
 let settings = createEngineSettings();
 const getAppSettings = () => settings;
@@ -114,6 +115,55 @@ describe("raster imagery and terrain lifecycle", () => {
       expect(runtime.sampleHeight!(1, 1)).toBeNull();
       expect(runtime.getRevision()).toBe(revision);
       expect(requestRender).toHaveBeenCalledTimes(requests);
+    } finally { runtime.dispose(); engine.dispose(); }
+  });
+
+  it("answers batched imagery heights as each point's own query, over tiles of two levels in any order", async () => {
+    settings.register(NATIVE_PARAMETERS);
+    settings.set("native.tier", "typescript-worker");
+    let surface!: imageryRuntimeModule.ImageryRuntimeOptions["surface"];
+    vi.spyOn(imageryRuntimeModule, "createImageryRuntime").mockImplementation(options => {
+      surface = options.surface;
+      return { supported: true, attachPatch() {}, detachPatch() {}, setPatchVisible() {}, hasCoverage: () => true,
+        update() {}, dispose() {}, setOffset() {}, setSource() {} } as unknown as imageryRuntimeModule.ImageryRuntime;
+    });
+    // 2/2/1's four children beside 2/3/1.
+    const tiles = [{ z: 3, x: 4, y: 2 }, { z: 3, x: 5, y: 2 }, { z: 3, x: 4, y: 3 }, { z: 3, x: 5, y: 3 }, { z: 2, x: 3, y: 1 }];
+    const leaves = tiles.map(tile => ({ tile, key: `${tile.z}/${tile.x}/${tile.y}`, needed: true, distanceMeters: 20, errorPx: 10,
+      inCore: true, inProximity: true, inFrustum: true }));
+    vi.spyOn(selector, "selectTerrain").mockImplementation(() => ({ leaves, rootLevel: 2, split: new Set(["2/2/1"]), nodes: 6, truncated: false }));
+    const engine = new NullEngine(), scene = new Scene(engine);
+    const runtime = createRasterTilesRuntime({ scene, source: RASTER_BASE_MAP_SOURCES[0], imagery: "atlas", createTerrainHeightWorker: () => null });
+    try {
+      runtime.update();
+      for (const request of pending.terrain.splice(0)) {
+        const { z, x, y } = request.tile;
+        request.resolve({ z, x, y, size: 4, heights: Float32Array.from({ length: 16 }, (_, i) => 100 * z + 10 * x + y + i * i * 3.25) });
+      }
+      await flush();
+      runtime.update();
+      const at = (tile: { z: number; x: number; y: number }, u: number, v: number) => [tileLatDeg(tile.z, tile.y + v), tileLonDeg(tile.z, tile.x + u)];
+      // Each tile answers from its own heights.
+      expect(new Set(tiles.map(tile => surface.heightAt(...at(tile, 0.3, 0.6) as [number, number]))).size).toBe(tiles.length);
+      let seed = 3;
+      const random = () => (seed = Math.imul(seed ^ (seed >>> 15), 0x2c1b3c6d) >>> 0) / 2 ** 32;
+      const points: number[][] = [];
+      // Runs in one tile, as the selector's probes come, then tiles in turn.
+      for (const tile of [...tiles, ...tiles.slice().reverse()]) for (let k = 0; k < 9; k++) {
+        const u = (k % 3) / 2, v = Math.floor(k / 3) / 2;
+        points.push(at(tile, u, v), at(tile, Math.min(1, u + 1 / 64), v), at(tile, u, Math.min(1, v + 1 / 64)));
+      }
+      for (let k = 0; k < 400; k++) points.push(at(tiles[Math.floor(random() * tiles.length)], random(), random()));
+      for (let k = 0; k < 200; k++) points.push([random() * 180 - 90, random() * 720 - 360]);
+      // Edges and corners of each tile, a wrapped longitude, the Mercator limit, signed zeros and NaN.
+      for (const tile of tiles) for (const [u, v] of [[0, 0], [1, 0], [0, 1], [1, 1], [0.5, 0], [0, 0.5]]) points.push(at(tile, u, v));
+      points.push([10, 400], [10, 40 - 360], [89, 30], [-0, 0], [0, -0], [-0, 120], [NaN, 30], [30, NaN], [30, 30], [30, 30], [NaN, NaN]);
+      const coordinates = new Float64Array(points.flat());
+      const heights = surface.heightsAt!(coordinates);
+      expect(heights).toHaveLength(points.length);
+      const differ = points.filter(([lat, lon], i) => !Object.is(heights[i], surface.heightAt(lat, lon) ?? NaN));
+      expect(differ).toEqual([]);
+      expect(points.filter((_, i) => !Number.isNaN(heights[i])).length).toBeGreaterThan(500);
     } finally { runtime.dispose(); engine.dispose(); }
   });
 

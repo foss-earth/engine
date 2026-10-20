@@ -4,6 +4,7 @@ import type { BoundedMapTextureRequest, LoadedMapTexture } from "./imagery/bound
 import type { HeaderImageRequest } from "@foss-earth/images/browser";
 import { finishOwnedCleanup } from "./ownedCleanup.js";
 import { createTerrainMesh, DEFAULT_TILE_SEGMENTS, terrainMeshTarget } from "./terrainMesh.js";
+import { visibleCellLeaves } from "./visibleCellLeaves.js";
 import { createTerrainInterest, type createTerrainTileLoader, type TerrainInterest } from "../terrain/terrainLoader.js";
 import { createTerrainMeshWorkers, type TerrainMeshWorkerPoolStats } from "../browser/terrainMeshWorkers.js";
 import type { TerrainMeshWorkerPort } from "../browser/terrainMeshWorkerProtocol.js";
@@ -31,7 +32,7 @@ import type { TerrainPerformanceCapture } from "../terrain/terrainPerformanceCap
 import { retryDelayMs, type RetryDelay } from "../terrain/retryDelay.js";
 import { meshPositions, patchesForGeometryCommit, stitchTerrainEdges, updateTerrainPositions } from "./meshRefinement.js";
 import type { GlobeViewState } from "../view.js";
-import { lonLatToMercator } from "../terrain/imagery/imageryGeometry.js";
+import { lonLatToMercator, mercatorX, mercatorY } from "../terrain/imagery/imageryGeometry.js";
 import { createImageryRuntime, type ImageryDiagnostics, type ImageryFocusRequest, type ImageryRuntime, type ImageryRuntimeOptions } from "./imagery/createImageryRuntime.js";
 import { IMAGERY_TABLE_MAX_CELLS_LOG2 } from "../terrain/imagery/imageryAtlasLayout.js";
 import type { Material, MaterialPluginBase } from "@babylonjs/core";
@@ -894,12 +895,14 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
   /**
    * visibleTileKeys at each of visibleLevels, as row * 2^z + column, and the
    * keys and levels it was taken from. Null cells: a level whose keys have no
-   * such number, asked by key instead.
+   * such number, asked by key instead. Leaves: the records no finer record's
+   * tile is inside, or null when a level is asked by key.
    */
-  let visibleCells: { keys: Set<string>; size: number; levels: number[]; byLevel: Array<{ z: number; n: number; cells: Map<number, RasterTileRecord> | null }> } | null = null;
-  const indexedVisibleCells = (): NonNullable<typeof visibleCells>["byLevel"] => {
+  let visibleCells: { keys: Set<string>; size: number; levels: number[]; leaves: Set<RasterTileRecord> | null;
+    byLevel: Array<{ z: number; n: number; cells: Map<number, RasterTileRecord> | null }> } | null = null;
+  const indexedVisibleCells = (): NonNullable<typeof visibleCells> => {
     // The keys change by replacement or deletion, the levels by replacement.
-    if (visibleCells?.keys === visibleTileKeys && visibleCells.size === visibleTileKeys.size && visibleCells.levels === visibleLevels) return visibleCells.byLevel;
+    if (visibleCells?.keys === visibleTileKeys && visibleCells.size === visibleTileKeys.size && visibleCells.levels === visibleLevels) return visibleCells;
     const byLevel = visibleLevels.map(z => ({ z, n: 2 ** z, cells: (z <= 26 ? new Map<number, RasterTileRecord>() : null) as Map<number, RasterTileRecord> | null }));
     const byZ = new Map(byLevel.map(level => [level.z, level]));
     for (const record of visibleRecords) {
@@ -909,8 +912,9 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
       if (Number.isInteger(x) && Number.isInteger(y) && x >= 0 && x < level.n && y >= 0 && y < level.n && record.key === `${z}/${x}/${y}`) level.cells.set(y * level.n + x, record);
       else level.cells = null;
     }
-    visibleCells = { keys: visibleTileKeys, size: visibleTileKeys.size, levels: visibleLevels, byLevel };
-    return byLevel;
+    const indexed = byLevel.every(level => level.cells) ? byLevel as Array<{ z: number; n: number; cells: Map<number, RasterTileRecord> }> : null;
+    visibleCells = { keys: visibleTileKeys, size: visibleTileKeys.size, levels: visibleLevels, leaves: indexed && visibleCellLeaves(indexed), byLevel };
+    return visibleCells;
   };
 
   const coveringVisibleRecord = (tile: TileCoord): RasterTileRecord | null => {
@@ -944,15 +948,20 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
     ...(heightBatches ? { heightsAt(coordinates: Float64Array): Float64Array {
       const result = new Float64Array(coordinates.length / 2); result.fill(NaN);
       const groups = new Map<TerrainGrid, { xy: number[]; indices: number[] }>();
-      const levels = indexedVisibleCells();
-      // Repeated grid rows/columns share the exact same Mercator conversion.
-      const worldX = new Map<number, number>(), worldY = new Map<number, number>();
+      const { byLevel: levels, leaves } = indexedVisibleCells();
+      // The last leaf found, in its cell at its level: the levels hold no finer
+      // record in that cell, so they would find the leaf again for a point there.
+      let leaf: RasterTileRecord | null = null, leafGrid: TerrainGrid | undefined, leafGroup: { xy: number[]; indices: number[] } | undefined;
+      let leafN = 0, leafColumn = 0, leafRow = 0, leafScale = 0;
+      // Probes repeat a row's latitude; a longitude converts for less than a lookup.
+      let lat0 = NaN, y0 = NaN, lat1 = NaN, y1 = NaN;
       for (let i = 0; i < result.length; i++) {
-        const lat = coordinates[i * 2], lon = coordinates[i * 2 + 1];
-        let wx = worldX.get(lon), wy = worldY.get(lat);
-        if (wx === undefined || wy === undefined) {
-          const world = lonLatToMercator(lon, lat);
-          wx ??= world.x; wy ??= world.y; worldX.set(lon, wx); worldY.set(lat, wy);
+        const lat = coordinates[i * 2], lon = coordinates[i * 2 + 1], wx = mercatorX(lon);
+        let wy = y0;
+        if (lat !== lat0) { wy = lat === lat1 ? y1 : mercatorY(lat); lat1 = lat0; y1 = y0; lat0 = lat; y0 = wy; }
+        if (leaf && leaf.grid === leafGrid && Math.floor(wx * leafN) === leafColumn && Math.floor(wy * leafN) === leafRow) {
+          leafGroup!.xy.push(wx * leafN * leafScale, wy * leafN * leafScale); leafGroup!.indices.push(i);
+          continue;
         }
         let grid: TerrainGrid | undefined;
         for (const { z, n, cells } of levels) {
@@ -966,6 +975,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
             let group = groups.get(grid);
             if (!group) { group = { xy: [], indices: [] }; groups.set(grid, group); }
             group.xy.push(x * scale, y * scale); group.indices.push(i);
+            if (leaves?.has(record)) { leaf = record; leafGrid = grid; leafGroup = group; leafN = n; leafColumn = column; leafRow = row; leafScale = scale; }
           }
           break;
         }
@@ -980,7 +990,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
     heightAt(latDeg: number, lonDeg: number): number | null {
       // One Mercator position, scaled to each level: lonLatToTileXY's bits.
       let world: { x: number; y: number } | null = null;
-      for (const { z, n, cells } of indexedVisibleCells()) {
+      for (const { z, n, cells } of indexedVisibleCells().byLevel) {
         world ??= lonLatToMercator(lonDeg, latDeg);
         const x = world.x * n, y = world.y * n, column = Math.floor(x), row = Math.floor(y);
         // The key is only made for the visible tile: a column and row outside the level are no tile's.
