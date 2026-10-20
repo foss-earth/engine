@@ -71,6 +71,12 @@ export interface ImagerySurface {
   heightsAt?(coordinates: Float64Array): Float64Array;
   /** Conservative height bounds of a region from adopted terrain or coarse data. */
   boundsFor(tile: TileId): { min: number; max: number };
+  /**
+   * Changes whenever a height or bound this surface reports may change. When
+   * given with `heightsAt`, the heights at a tile's 3x3 grid are reused until
+   * it changes.
+   */
+  getRevision?(): number;
 }
 
 export interface ImageryAvailability {
@@ -434,29 +440,96 @@ function surfaceSample(input: Pick<ImagerySelectionInput, "surface">, tile: Tile
   return sampleTileSurface(tile, u, v, h, slopeU, slopeV);
 }
 
+/**
+ * What a tile's 3x3 grid gives at one surface revision: a traversal, the focus
+ * and the loaded-detail measurements ask for the same grid many times between
+ * surface changes. A point's height depends only on the point and the surface,
+ * never on the rest of its batch, so leaving cached points out of a batch
+ * changes nothing; samples and hull positions are kept with the fallback and
+ * bounds they were taken at.
+ */
+interface GridSurface {
+  /** Centre, east and south heights at each grid point, as `heightsAt` answered them. */
+  heights: Float64Array | null;
+  /** Each grid point's sample, and the fallback height it was taken with. */
+  samples: Array<SurfaceSample | undefined>;
+  fallbacks: number[];
+  /** The grid's hull positions, low then high at each point, at the heights they were taken at. */
+  hull: { low: number; high: number; positions: Vec3[] } | null;
+}
+const gridSurfaces = new WeakMap<ImagerySurface, { revision: number; tiles: Map<string, GridSurface> }>();
+const MAX_GRID_TILES = 16384;
+
+/** The tile's grid at the surface's current revision, or null for a surface without revisions. */
+function gridSurface(surface: ImagerySurface, tile: TileId, key = tileKey(tile)): GridSurface | null {
+  const revision = surface.getRevision?.();
+  if (revision === undefined) return null;
+  let cached = gridSurfaces.get(surface);
+  if (!cached || cached.revision !== revision || cached.tiles.size >= MAX_GRID_TILES) gridSurfaces.set(surface, cached = { revision, tiles: new Map() });
+  let grid = cached.tiles.get(key);
+  if (!grid) cached.tiles.set(key, grid = { heights: null, samples: [], fallbacks: [], hull: null });
+  return grid;
+}
+
+/** The point's place in GRID's 3x3, row by row, or -1 off the grid. */
+function gridIndex(u: number, v: number): number {
+  const column = u === 0 ? 0 : u === 0.5 ? 1 : u === 1 ? 2 : -1;
+  const row = v === 0 ? 0 : v === 0.5 ? 1 : v === 1 ? 2 : -1;
+  return column < 0 || row < 0 ? -1 : row * 3 + column;
+}
+
+/** A point's centre, east and south probes as lat/lon pairs, from `at` in `coordinates`. */
+function writeProbes(coordinates: Float64Array, at: number, tile: TileId, u: number, v: number): void {
+  const uStep = u + SLOPE_STEP <= 1 ? SLOPE_STEP : -SLOPE_STEP;
+  const vStep = v + SLOPE_STEP <= 1 ? SLOPE_STEP : -SLOPE_STEP;
+  [[u, v], [u + uStep, v], [u, v + vStep]].forEach(([uu, vv], j) => {
+    const position = latLonAt(tile, uu, vv);
+    coordinates[at + j * 2] = position.latDeg; coordinates[at + j * 2 + 1] = position.lonDeg;
+  });
+}
+
+/** A sample from a point's centre, east and south heights, at `at` in `heights`. */
+function probedSample(tile: TileId, u: number, v: number, heights: Float64Array, at: number, fallbackHeight: number): SurfaceSample {
+  const height = heights[at], east = heights[at + 1], south = heights[at + 2];
+  const known = !Number.isNaN(height), h = known ? height : fallbackHeight;
+  const uStep = u + SLOPE_STEP <= 1 ? SLOPE_STEP : -SLOPE_STEP;
+  const vStep = v + SLOPE_STEP <= 1 ? SLOPE_STEP : -SLOPE_STEP;
+  return sampleTileSurface(tile, u, v, h, known && !Number.isNaN(east) ? (east - h) / uStep : 0,
+    known && !Number.isNaN(south) ? (south - h) / vStep : 0);
+}
+
 /** All centre/east/south probes cross the height-query seam as one contiguous
  * batch. The complete scalar path remains the reference for other surfaces. */
 function surfaceSamples(input: Pick<ImagerySelectionInput, "surface">, tile: TileId,
   points: ReadonlyArray<{ u: number; v: number }>, fallbackHeight: number): SurfaceSample[] {
-  if (!input.surface.heightsAt) return points.map(({ u, v }) => surfaceSample(input, tile, u, v, fallbackHeight));
-  const coordinates = new Float64Array(points.length * 6);
-  points.forEach(({ u, v }, i) => {
-    const uStep = u + SLOPE_STEP <= 1 ? SLOPE_STEP : -SLOPE_STEP;
-    const vStep = v + SLOPE_STEP <= 1 ? SLOPE_STEP : -SLOPE_STEP;
-    [[u, v], [u + uStep, v], [u, v + vStep]].forEach(([uu, vv], j) => {
-      const at = latLonAt(tile, uu, vv);
-      coordinates[i * 6 + j * 2] = at.latDeg; coordinates[i * 6 + j * 2 + 1] = at.lonDeg;
-    });
-  });
-  const heights = input.surface.heightsAt(coordinates);
-  if (heights.length !== points.length * 3) throw new Error("Imagery height batch has the wrong length");
+  const surface = input.surface;
+  if (!surface.heightsAt) return points.map(({ u, v }) => surfaceSample(input, tile, u, v, fallbackHeight));
+  // Grid points come from the revision's grid; a tile without heights there asks for its whole grid once.
+  const indices = points.map(({ u, v }) => gridIndex(u, v));
+  const grid = indices.some(index => index >= 0) ? gridSurface(surface, tile) : null;
+  const asked: number[] = [];
+  points.forEach((_, i) => { if (!grid || indices[i] < 0) asked.push(i); });
+  const fetch = grid !== null && grid.heights === null;
+  let heights: Float64Array | null = null;
+  if (asked.length || fetch) {
+    const coordinates = new Float64Array((asked.length + (fetch ? 9 : 0)) * 6);
+    asked.forEach((point, i) => writeProbes(coordinates, i * 6, tile, points[point].u, points[point].v));
+    if (fetch) for (let i = 0; i < 9; i++) writeProbes(coordinates, (asked.length + i) * 6, tile, GRID[i % 3], GRID[Math.floor(i / 3)]);
+    heights = surface.heightsAt(coordinates);
+    if (heights.length !== coordinates.length / 2) throw new Error("Imagery height batch has the wrong length");
+    if (fetch) grid.heights = heights.slice(asked.length * 3);
+  }
+  let next = 0;
   return points.map(({ u, v }, i) => {
-    const height = heights[i * 3], east = heights[i * 3 + 1], south = heights[i * 3 + 2];
-    const known = !Number.isNaN(height), h = known ? height : fallbackHeight;
-    const uStep = u + SLOPE_STEP <= 1 ? SLOPE_STEP : -SLOPE_STEP;
-    const vStep = v + SLOPE_STEP <= 1 ? SLOPE_STEP : -SLOPE_STEP;
-    return sampleTileSurface(tile, u, v, h, known && !Number.isNaN(east) ? (east - h) / uStep : 0,
-      known && !Number.isNaN(south) ? (south - h) / vStep : 0);
+    const index = indices[i];
+    if (!grid || index < 0) return probedSample(tile, u, v, heights!, next++ * 3, fallbackHeight);
+    // A known height's sample does not depend on the fallback.
+    let sample = grid.samples[index];
+    if (!sample || Number.isNaN(grid.heights![index * 3]) && !Object.is(grid.fallbacks[index], fallbackHeight)) {
+      grid.samples[index] = sample = probedSample(tile, u, v, grid.heights!, index * 3, fallbackHeight);
+      grid.fallbacks[index] = fallbackHeight;
+    }
+    return sample;
   });
 }
 
@@ -645,14 +718,20 @@ function evaluateView(job: ViewMeasurementContext, tile: TileId): Evaluated {
   let allOutside = 0b11111;
   let anyAboveHorizon = false;
   const hull: Array<{ x: number; y: number; z: number }> = [];
-  for (const point of hullPoints) {
-    for (const height of [bounds.min, bounds.max + lift]) {
-      const sample = sampleTileSurface(tile, point.u, point.v, height);
-      hull.push(sample.position);
-      allOutside &= outcode(view, toClip(m, sample.position));
-      if (!anyAboveHorizon && !isBelowHorizon(view.camera, sample.position)) anyAboveHorizon = true;
-    }
+  // The grid's positions depend only on the tile and the two heights.
+  const low = bounds.min, high = bounds.max + lift;
+  const grid = gridSurface(input.surface, tile, result.key);
+  if (grid && !(grid.hull && Object.is(grid.hull.low, low) && Object.is(grid.hull.high, high))) {
+    grid.hull = { low, high, positions: hullPoints.slice(0, 9).flatMap(point => [low, high].map(height => sampleTileSurface(tile, point.u, point.v, height).position)) };
   }
+  hullPoints.forEach((point, i) => {
+    for (let j = 0; j < 2; j++) {
+      const position = grid?.hull && i < 9 ? grid.hull.positions[i * 2 + j] : sampleTileSurface(tile, point.u, point.v, j === 0 ? low : high).position;
+      hull.push(position);
+      allOutside &= outcode(view, toClip(m, position));
+      if (!anyAboveHorizon && !isBelowHorizon(view.camera, position)) anyAboveHorizon = true;
+    }
+  });
   if (allOutside !== 0) return result;
   // A tile wider than the visible cap could hide its visible part between
   // samples, so only small tiles are rejected point by point. Any tile is
@@ -684,15 +763,19 @@ function evaluateView(job: ViewMeasurementContext, tile: TileId): Evaluated {
   // Measured from a point, the view only has to show the tile is seen.
   const refine = job.refine ?? null;
   if (from && !refine) {
-    for (const outside of measured.filter(sample => !sample.inside).slice(0, 4)) {
-      let lo = 0, hi = 1;
-      for (let i = 0; i < 5; i++) {
-        const mid = (lo + hi) / 2;
-        const probe = surfaceSample(input, tile, from.u + (outside.u - from.u) * mid, from.v + (outside.v - from.v) * mid, bounds.max);
-        if (outcode(view, toClip(m, probe.position)) === 0) lo = mid; else hi = mid;
-      }
-      measure.push(surfaceSample(input, tile, from.u + (outside.u - from.u) * lo, from.v + (outside.v - from.v) * lo, bounds.max));
+    // Each outside sample bisects on its own; their probes go to the surface together, a step at a time.
+    const outsides = measured.filter(sample => !sample.inside).slice(0, 4);
+    const lo = outsides.map(() => 0), hi = outsides.map(() => 1);
+    const toward = (fractions: number[]) => outsides.map((outside, k) => ({
+      u: from.u + (outside.u - from.u) * fractions[k], v: from.v + (outside.v - from.v) * fractions[k],
+    }));
+    for (let i = 0; i < 5 && outsides.length > 0; i++) {
+      const mids = outsides.map((_, k) => (lo[k] + hi[k]) / 2);
+      surfaceSamples(input, tile, toward(mids), bounds.max).forEach((probe, k) => {
+        if (outcode(view, toClip(m, probe.position)) === 0) lo[k] = mids[k]; else hi[k] = mids[k];
+      });
     }
+    if (outsides.length > 0) measure.push(...surfaceSamples(input, tile, toward(lo), bounds.max));
   }
   if (measure.length === 0) {
     // No sample of the actual surface is in view. Loose height bounds can make
@@ -722,10 +805,11 @@ function evaluateView(job: ViewMeasurementContext, tile: TileId): Evaluated {
     // A tile around the view is measured where screen rays meet it; one just
     // past the view's edge measures like its visible neighbours.
     if (!refine) {
-      for (const point of raysWithin()) {
+      const rays = raysWithin().map(point => {
         const at = lonLatToTileXY(point.lonDeg, point.latDeg, tile.z);
-        measure.push(surfaceSample(input, tile, at.x - tile.x, at.y - tile.y, bounds.max));
-      }
+        return { u: at.x - tile.x, v: at.y - tile.y };
+      });
+      if (rays.length > 0) measure.push(...surfaceSamples(input, tile, rays, bounds.max));
       if (measure.length === 0) {
         for (const sample of measured) {
           if ((outcode(view, sample.clip) & 16) === 0) measure.push(sample.surface);
