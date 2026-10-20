@@ -36,7 +36,8 @@ function intersectsSegmentBounds(ray: Ray, minimum: Vector3, maximum: Vector3): 
 export function createSurfaceQuery(scene: Scene, getWorldRoot: () => TransformNode | null,
   isSurface: (mesh: AbstractMesh) => boolean, getRevision: () => number = () => 0,
   sampleOverride?: (latDeg: number, lonDeg: number) => SurfaceHit | null | undefined, acceleration?: GroundAcceleration | null): Required<SurfaceQuery> {
-  function raycast(origin: EcefCoord, direction: EcefCoord, lengthMeters: number): SurfaceHit | null {
+  /** The first surface along a ray; with `finerThanMeters`, the first Google surface of a smaller geometric error. */
+  function cast(origin: EcefCoord, direction: EcefCoord, lengthMeters: number, finerThanMeters = Infinity): SurfaceHit | null {
     if (![origin.x, origin.y, origin.z, direction.x, direction.y, direction.z, lengthMeters].every(Number.isFinite)
       || lengthMeters <= 0) return null;
     const dir = new Vector3(direction.x, direction.y, direction.z);
@@ -46,6 +47,7 @@ export function createSurfaceQuery(scene: Scene, getWorldRoot: () => TransformNo
     const ecefRay = new Ray(new Vector3(origin.x, origin.y, origin.z), dir.normalize(), lengthMeters);
     const ray = Ray.Transform(ecefRay, transform);
     const predicate = (mesh: AbstractMesh): boolean => {
+      if (finerThanMeters !== Infinity && !(mesh.metadata?.googleGeometricErrorMeters < finerThanMeters)) return false;
       if (!mesh.isEnabled() || !mesh.isVisible || !isSurface(mesh)) return false;
       // Let Babylon select the picking camera for billboard/infinite-distance
       // meshes; their bounds can depend on a different camera from rendering.
@@ -72,8 +74,23 @@ export function createSurfaceQuery(scene: Scene, getWorldRoot: () => TransformNo
     const overridden = sampleOverride?.(latDeg, lonDeg);
     if (overridden !== undefined) return overridden;
     const lat = latDeg * DEG_TO_RAD, lon = lonDeg * DEG_TO_RAD;
-    return raycast(geodeticToEcef(lat, lon, 20000),
-      { x: -Math.cos(lat) * Math.cos(lon), y: -Math.cos(lat) * Math.sin(lon), z: -Math.sin(lat) }, 40000);
+    const origin = geodeticToEcef(lat, lon, 20000);
+    const down = { x: -Math.cos(lat) * Math.cos(lon), y: -Math.cos(lat) * Math.sin(lon), z: -Math.sin(lat) };
+    let hit = cast(origin, down, 40000);
+    // While finer Google tiles load, coarser ones stay drawn in their place, and
+    // Google's tile bounds overlap: a tile thousands of kilometres across can be
+    // drawn kilometres above the finer ground under it. A coarser surface within
+    // its geometric error above a finer one gives way to it. Farther above, it is
+    // a feature of its own, such as a bridge, and stays the ground.
+    for (let error = hit?.geometricErrorMeters; hit && error !== undefined; error = hit.geometricErrorMeters) {
+      const finer = cast(origin, down, 40000, error);
+      if (!finer || hit.heightMeters - finer.heightMeters > error) break;
+      hit = finer;
+    }
+    return hit;
+  }
+  function raycast(origin: EcefCoord, direction: EcefCoord, lengthMeters: number): SurfaceHit | null {
+    return cast(origin, direction, lengthMeters);
   }
   /** Changes when the displayed geometry does; a caller re-samples only then. */
   const revision = (): number => getRevision();

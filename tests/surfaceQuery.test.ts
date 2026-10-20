@@ -3,6 +3,14 @@ import { describe, expect, it, vi } from "vitest";
 import { createSurfaceQuery } from "../src/babylon/surfaceQuery.js";
 import { createTerrainMesh } from "../src/babylon/terrainMesh.js";
 
+/** A drawn Google tile's surface over 0° N 0° E, its top `heightMeters` above the ellipsoid. */
+function googleSurface(scene: Scene, heightMeters: number, errorMeters: number) {
+  const mesh = MeshBuilder.CreateBox(`google-${errorMeters}`, { size: 2 }, scene);
+  mesh.position.x = 6378137 + heightMeters - 1;
+  mesh.metadata = { googleGeometricErrorMeters: errorMeters };
+  mesh.computeWorldMatrix(true);
+  return mesh;
+}
 
 describe("visible map surface queries", () => {
   it("treats an indexed raster miss as final while retaining general raycasts", () => {
@@ -127,6 +135,31 @@ describe("visible map surface queries", () => {
     expect(query.sample(lat, lon)?.heightMeters).toBeCloseTo(200, 2);
     mesh.setEnabled(false);
     expect(query.sample(lat, lon)).toBeNull();
+    engine.dispose();
+  });
+  it("samples the finer Google ground under coarser tiles drawn within their error above it", () => {
+    const engine = new NullEngine({ ...new NullEngineOptions(), useHighPrecisionMatrix: true }); const scene = new Scene(engine);
+    const query = createSurfaceQuery(scene, () => null, () => true);
+    // As over the campus while it loads: a tile thousands of kilometres across 6.5 km up, and two coarse levels.
+    googleSurface(scene, 6800, 262979);
+    googleSurface(scene, 600, 2054);
+    googleSurface(scene, 400, 1027);
+    googleSurface(scene, 260, 8);
+    expect(query.sample(0, 0)?.geometricErrorMeters).toBe(8);
+    expect(query.sample(0, 0)?.heightMeters).toBeCloseTo(260, 3);
+    // Pointer and collision rays still meet the first surface drawn.
+    expect(query.raycast({ x: 6378137 + 20000, y: 0, z: 0 }, { x: -1, y: 0, z: 0 }, 40000)?.heightMeters).toBeCloseTo(6800, 3);
+    engine.dispose();
+  });
+  it("keeps a coarser Google surface farther above the finer one than its error, such as a bridge", () => {
+    const engine = new NullEngine({ ...new NullEngineOptions(), useHighPrecisionMatrix: true }); const scene = new Scene(engine);
+    const query = createSurfaceQuery(scene, () => null, () => true);
+    googleSurface(scene, 280, 16);
+    googleSurface(scene, 250, 8);
+    expect(query.sample(0, 0)?.heightMeters).toBeCloseTo(280, 3);
+    // A coarse tile drawn over the deck gives way to the deck, not to the river under it.
+    googleSurface(scene, 900, 2054);
+    expect(query.sample(0, 0)?.heightMeters).toBeCloseTo(280, 3);
     engine.dispose();
   });
 });

@@ -6,6 +6,7 @@ import type { GoogleCloudAuthPlugin } from "3d-tiles-renderer/core/plugins";
 import type { SettingsRegistry } from "@foss-earth/ui/settings";
 import type { NumberRange } from "@foss-earth/ui/settings";
 import { isSphereBelowHorizon } from "../terrain/imagery/imageryGeometry.js";
+import { ecefToGeodetic } from "../camera/cameraMath.js";
 import type { TerrainLightingAdapter } from "./imagery/terrainLightPlugin.js";
 import type { whenMeshesReady } from "@foss-earth/renderer/babylon";
 import type { GoogleTileResourceTiming } from "../browser/describeGoogleTileFailure.js";
@@ -268,6 +269,62 @@ function cacheNativeViewMeasurement(tiles: GoogleTilesRenderer, scene: Scene): v
     target.error = error;
     target.distanceFromCamera = distance;
     if (invalidatedDuringCapture) prepared = false;
+  };
+}
+
+/** A coarse stand-in is hidden while its geometric error exceeds this many times the eye's height. */
+const STAND_IN_HEIGHT_RATIO = 16;
+/** The least eye height counted: near or below the ellipsoid, the eye's height there is not its height above the ground. */
+const STAND_IN_MIN_HEIGHT_METERS = 100;
+
+/**
+ * While finer tiles load, the renderer keeps a loaded tile drawn in their
+ * place, and Google's tile bounds overlap: a tile thousands of kilometres
+ * across can contain the camera and stand in for its own distant subtree, its
+ * coarse surface kilometres above the ground under the eye and a band across
+ * the horizon. A tile with children whose geometric error exceeds its distance
+ * from the eye is drawn only as such a stand-in: the traversal refines it at
+ * any error target. It is hidden, and so is not ground, while its error also
+ * exceeds `STAND_IN_HEIGHT_RATIO` times the eye's height. Coarse tiles nearer
+ * the ground's own scale stay, as the finer tiles they stand in for are often
+ * all that would show instead. The renderer still counts a hidden tile
+ * visible; it is shown again here, unless the renderer has hidden it since.
+ * True when what is drawn changed.
+ */
+function createStandInFilter(tiles: GoogleTilesRenderer, scene: Scene): (enabled: boolean) => boolean {
+  type StandIn = TileWithBabylonBounds & { engineData: { scene?: TransformNode | null } };
+  const hidden = new Set<StandIn>();
+  const worldToTiles = Matrix.Identity(), eye = Vector3.Zero();
+  return enabled => {
+    let changed = false;
+    for (const tile of hidden) if (!tiles.visibleTiles.has(tile)) hidden.delete(tile);
+    const camera = scene.activeCamera;
+    if (!enabled || !camera) {
+      for (const tile of hidden) tile.engineData.scene?.setEnabled(true);
+      changed = hidden.size > 0;
+      hidden.clear();
+      return changed;
+    }
+    // The eye, in the tiles' frame, once a tile is coarse enough to need it.
+    let coarsest: number | null = null;
+    for (const tile of tiles.visibleTiles as Set<StandIn>) {
+      const node = tile.engineData.scene;
+      if (!node) continue;
+      let hide = false;
+      if (tile.geometricError > STAND_IN_HEIGHT_RATIO * STAND_IN_MIN_HEIGHT_METERS && (tile.children?.length ?? 0) > 0) {
+        if (coarsest === null) {
+          tiles.group.getWorldMatrix().invertToRef(worldToTiles);
+          Vector3.TransformCoordinatesToRef(camera.globalPosition, worldToTiles, eye);
+          coarsest = STAND_IN_HEIGHT_RATIO * Math.max(STAND_IN_MIN_HEIGHT_METERS, ecefToGeodetic(eye.x, eye.y, eye.z).altMeters);
+        }
+        hide = tile.geometricError > coarsest && tile.geometricError > tile.engineData.boundingVolume.distanceToPoint(eye);
+      }
+      if (hide === hidden.has(tile)) continue;
+      if (hide) hidden.add(tile); else hidden.delete(tile);
+      node.setEnabled(!hide);
+      changed = true;
+    }
+    return changed;
   };
 }
 
@@ -723,6 +780,7 @@ export function createGoogleTilesRuntime(options: GoogleTilesRuntimeOptions): Se
   }
   prepareDrawableTiles(tiles, drawableLifetime.signal, options, work);
   cacheNativeViewMeasurement(tiles, scene);
+  const filterStandIns = createStandInFilter(tiles, scene);
   const readLoadedError = observeLoadedError(tiles);
   let loadedErrorTarget: number | null = null;
   let loadedDistribution: DetailDistribution = unavailableDetailDistribution("google", "google", 1, "Loaded detail has not been measured.");
@@ -893,6 +951,7 @@ export function createGoogleTilesRuntime(options: GoogleTilesRuntimeOptions): Se
     update() {
       if (suspended || disposed) return;
       tiles.update();
+      if (filterStandIns(settings.get("map.terrain.hideCoarseStandIns") !== false)) handleSurfaceChange();
       const next = readLoadedError();
       if (next.worst !== loadedErrorTarget || next.distribution.revision !== loadedDistribution.revision) {
         loadedErrorTarget = next.worst;

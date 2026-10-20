@@ -276,6 +276,68 @@ describe("Google terrain detail anchors", () => {
   });
 });
 
+describe("Google coarse stand-ins", () => {
+  // Over the campus while it loads: a tile thousands of kilometres across contains the eye.
+  const setup = () => {
+    const camera = { globalPosition: new Vector3(6378137 + 300, 0, 0), viewport: new Viewport(0, 0, 1, 1), getProjectionMatrix: () => Matrix.Identity() };
+    const scene = {
+      activeCamera: camera,
+      getEngine: () => ({ getHardwareScalingLevel: () => 1, getRenderWidth: () => 100, getRenderHeight: () => 100 }),
+    } as unknown as Scene;
+    const onSurfaceChange = vi.fn();
+    const runtime = createGoogleTilesRuntime({ scene, apiKey: "test", onSurfaceChange });
+    const tile = (geometricError: number, distance: number, children = 4) => ({ geometricError, children: Array.from({ length: children }, () => ({})),
+      engineData: { scene: { setEnabled: vi.fn() }, boundingVolume: { distanceToPoint: () => distance } } });
+    const standIn = tile(262979, 0);
+    // A nearer stand-in at the ground's own scale, a leaf and a tile far beyond the horizon all stay.
+    const others = [tile(2054, 0), tile(262979, 0, 0), tile(131489, 5e6)];
+    for (const t of [standIn, ...others]) runtime.tiles.visibleTiles.add(t as never);
+    return { camera, runtime, standIn, others, onSurfaceChange };
+  };
+
+  it("hides a stand-in whose error exceeds its distance and 16 times the eye's height, and shows it again", () => {
+    const { camera, runtime, standIn, others, onSurfaceChange } = setup();
+    runtime.update();
+    expect(standIn.engineData.scene.setEnabled).toHaveBeenCalledExactlyOnceWith(false);
+    for (const other of others) expect(other.engineData.scene.setEnabled).not.toHaveBeenCalled();
+    // What the ground is changed: queries read the surface again.
+    const revision = runtime.getRevision();
+    expect(revision).toBeGreaterThan(0);
+    expect(onSurfaceChange).toHaveBeenCalledWith("geometry");
+    runtime.update();
+    expect(runtime.getRevision()).toBe(revision);
+    expect(standIn.engineData.scene.setEnabled).toHaveBeenCalledOnce();
+    // From 20 km up, the same tile is coarse at the eye's scale only by its own measure.
+    camera.globalPosition = new Vector3(6378137 + 20000, 0, 0);
+    runtime.update();
+    expect(standIn.engineData.scene.setEnabled).toHaveBeenLastCalledWith(true);
+    expect(runtime.getRevision()).toBeGreaterThan(revision);
+    camera.globalPosition = new Vector3(6378137 + 300, 0, 0);
+    runtime.update();
+    expect(standIn.engineData.scene.setEnabled).toHaveBeenLastCalledWith(false);
+    settings.set("map.terrain.hideCoarseStandIns", false);
+    runtime.update();
+    expect(standIn.engineData.scene.setEnabled).toHaveBeenLastCalledWith(true);
+    expect(standIn.engineData.scene.setEnabled).toHaveBeenCalledTimes(4);
+    runtime.dispose();
+  });
+
+  it("leaves a stand-in the renderer has hidden itself for the renderer to show", () => {
+    const { runtime, standIn } = setup();
+    runtime.update();
+    expect(standIn.engineData.scene.setEnabled).toHaveBeenCalledExactlyOnceWith(false);
+    // Its finer tiles are ready: the renderer hides it, and later may show it again.
+    runtime.tiles.visibleTiles.delete(standIn as never);
+    runtime.update();
+    expect(standIn.engineData.scene.setEnabled).toHaveBeenCalledOnce();
+    runtime.tiles.visibleTiles.add(standIn as never);
+    runtime.update();
+    expect(standIn.engineData.scene.setEnabled).toHaveBeenLastCalledWith(false);
+    expect(standIn.engineData.scene.setEnabled).toHaveBeenCalledTimes(2);
+    runtime.dispose();
+  });
+});
+
 describe("Google collision surface revisions", () => {
   it("reports visibility/replacement changes without changing on ordinary flight ticks", () => {
     const runtime = createGoogleTilesRuntime({ scene: {} as Scene, apiKey: "test" });

@@ -422,4 +422,16 @@ export const MAP_TERRAIN_SELECTION_PARAMETERS: readonly ParameterSpec[] = [
     appliesLive: true,
     source: RASTER_RUNTIME,
   },
+  {
+    id: "map.terrain.hideCoarseStandIns",
+    label: "Hide coarse stand-ins",
+    description: "While finer Google 3D tiles load, coarser ones stay drawn in their place, and the coarsest span thousands of kilometres: one can contain the camera, float kilometres above the ground under it, show as a band across the horizon and lift the eye. On, such a tile is not drawn and is not ground while its geometric error exceeds both its distance from the eye and 16 times the eye's height. Off, it is drawn as before.",
+    kind: "boolean",
+    unit: "none",
+    default: true,
+    defaultReason: "Fixes coarse tiles drawn over the ground, and the camera rising to them, while Google 3D tiles load.",
+    home: { tab: MAP_TAB, section: "terrain-selection", level: "main" },
+    appliesLive: true,
+    source: "src/babylon/createTilesRuntime.ts",
+  },
 ];
