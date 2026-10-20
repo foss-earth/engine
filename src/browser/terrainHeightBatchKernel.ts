@@ -1,5 +1,5 @@
 import { sampleTerrainGrid, type TerrainGrid } from "../terrain/terrainGrid.js";
-import { sampleTerrainHeightPixels, type TerrainHeightPixels } from "./terrainHeightPixels.js";
+import { sampleTerrainHeightPixels, unpackTerrainHeightPixels, type TerrainHeightPixels } from "./terrainHeightPixels.js";
 import type { HeightBatchWorkerScope, NativeHeightCore, NativeHeightSampler } from "./terrainHeightBatchProtocol.js";
 
 const MAX_SNAPSHOTS = 24 * 1024 ** 2;
@@ -54,7 +54,9 @@ export function installTerrainHeightBatchKernel(options: {
       const request = event.data;
       if (disposed) return;
       if (request?.kind !== "terrain-heights" || request.version !== 1 || !Number.isSafeInteger(request.id) || request.id < 1
-        || !Array.isArray(request.batches) || request.batches.length > 512) throw new Error("Invalid height batch request");
+        || !Array.isArray(request.batches) || (request.packed !== undefined && request.batches.length)) throw new Error("Invalid height batch request");
+      const requested = request.packed === undefined ? request.batches : unpackTerrainHeightPixels(request.packed);
+      if (requested.length > 512) throw new Error("Invalid height batch request");
       if (!started) {
         started = true;
         if (options.kernel === "single") {
@@ -70,10 +72,10 @@ export function installTerrainHeightBatchKernel(options: {
       let samples = 0;
       // Keep the request's source catalogue through this job: an earlier new
       // model may evict a retained model that a later batch still references.
-      const requestedModels = new Map(request.batches.map(batch => [batch.gridId, models.get(batch.gridId)]));
+      const requestedModels = new Map(requested.map(batch => [batch.gridId, models.get(batch.gridId)]));
       const available = new Map<number, Float32Array>();
       jobSources.clear(); jobIndices.clear();
-      for (const batch of request.batches) {
+      for (const batch of requested) {
         const grid = batch.sparse ? batch.grid : requestedModels.get(batch.gridId)?.grid ?? batch.grid;
         if (grid) for (const source of [grid, ...(grid.neighbors ?? [])]) {
           jobSources.add(source.heights);
@@ -87,11 +89,11 @@ export function installTerrainHeightBatchKernel(options: {
       if ([...jobSources].reduce((sum, heights) => sum + heights.byteLength, 0)
         + [...jobIndices].reduce((sum, indices) => sum + indices.byteLength, 0) > MAX_SNAPSHOTS) throw new Error("Height request exceeds 24 MiB");
       sources.clear();
-      for (const batch of request.batches) for (const source of batch.sources ?? []) if (source.heights) {
+      for (const batch of requested) for (const source of batch.sources ?? []) if (source.heights) {
         if (!Number.isSafeInteger(source.sourceId) || source.sourceId < 1 || !(source.heights instanceof Float32Array)) throw new Error("Invalid height source");
         available.set(source.sourceId, source.heights);
       }
-      for (const batch of request.batches) {
+      for (const batch of requested) {
         if (!Number.isSafeInteger(batch.gridId) || batch.gridId < 1 || !(batch.coordinates instanceof Float64Array)
           || batch.coordinates.length % 2 || !batch.coordinates.length || !batch.coordinates.every(Number.isFinite)) throw new Error("Invalid height coordinates");
         samples += batch.coordinates.length / 2;

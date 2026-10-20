@@ -2,7 +2,14 @@ import type { TerrainGrid } from "../terrain/terrainGrid.js";
 
 export interface HeightSource { sourceId: number; z: number; x: number; y: number; size: number; heights?: Float32Array }
 export interface HeightBatch { gridId: number; grid?: TerrainGrid; sources?: HeightSource[]; sparse?: boolean; neighborsPresent?: boolean; coordinates: Float64Array }
-export interface HeightBatchRequest { kind: "terrain-heights"; version: 1; id: number; batches: HeightBatch[] }
+/** A request's sparse batches in four arrays, so posting it clones a few
+ * buffers rather than two typed arrays per grid and neighbour. Per batch the
+ * table holds [gridId, coordinate pairs, sources, neighbours present], then
+ * [z, x, y, size, pixels] per source; each source's pixels follow the
+ * previous source's in `heights` and `indices`. */
+export interface PackedHeightBatches { table: Float64Array; coordinates: Float64Array; heights: Float32Array; indices: Uint32Array }
+/** `packed`, when present, replaces `batches`, which must then be empty. */
+export interface HeightBatchRequest { kind: "terrain-heights"; version: 1; id: number; batches: HeightBatch[]; packed?: PackedHeightBatches }
 export interface HeightBatchReply {
   kind: "terrain-heights"; version: 1; id: number;
   batches: Array<{ gridId: number; heights: Float64Array; actual?: "typescript" | "single" }>;

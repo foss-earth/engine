@@ -1,5 +1,5 @@
 import { sampleTerrainGrid, type TerrainGrid } from "../terrain/terrainGrid.js";
-import { collectTerrainHeightPixels, type TerrainHeightPixels } from "./terrainHeightPixels.js";
+import { packTerrainHeightPixels } from "./terrainHeightPixels.js";
 import type { HeightBatchReply, HeightBatchWorkerPort } from "./terrainHeightBatchProtocol.js";
 
 export interface TerrainHeightBatchStats {
@@ -15,11 +15,12 @@ export interface TerrainHeightBatchStats {
 interface GridState {
   id: number; key: string; grid: WeakRef<TerrainGrid>;
   values: Map<number, Map<number, { height: number; origin: "page" | "typescript" | "single" }>>;
-  queued: Map<number, Set<number>>;
+  /** Points first missed since the last flush. A queued point stays cached
+   * until its state is removed, so it is never missed and queued twice. */
   pending: number[];
   count: number;
 }
-interface Flight { id: number; start: number; batches: Array<{ state: GridState; coordinates: Float64Array; pixels: TerrainHeightPixels }> }
+interface Flight { id: number; start: number; coordinates: Float64Array; batches: Array<{ state: GridState; offset: number; count: number }> }
 interface GridStamp { z: number; x: number; y: number; size: number; heightsId: number }
 interface GridGeneration { own: GridStamp; neighbors: GridStamp[] | null; key: string }
 const MAX_CACHE = 131072, MAX_PENDING = 16384, MAX_BATCH = 8192, MAX_TRANSFER = 24 * 1024 ** 2;
@@ -66,7 +67,7 @@ export function createTerrainHeightBatches(options: {
     if (states.get(state.id) !== state) return;
     states.delete(state.id); generations.delete(state.key);
     queued -= state.pending.length / 2;
-    state.pending.length = 0; state.queued.clear();
+    state.pending.length = 0;
     cached -= state.count; state.values.clear(); state.count = 0;
   }
   function cacheValue(state: GridState, x: number, y: number, value: number, origin: "page" | "typescript" | "single"): void {
@@ -101,31 +102,26 @@ export function createTerrainHeightBatches(options: {
       || !["typescript", "single"].includes(reply.actual) || (reply.actual === "single" && reply.parity !== "same")) {
       retire("invalid-worker-reply"); return;
     }
+    // Every queued point was cached from the page when it was queued: check
+    // the worker's height against it and admit the worker's provenance.
     for (let i = 0; i < reply.batches.length; i++) {
-      const batch = reply.batches[i], requested = current.batches[i];
-      if (batch.gridId !== requested.state.id || !(batch.heights instanceof Float64Array) || batch.heights.length * 2 !== requested.coordinates.length
+      const batch = reply.batches[i], { state, offset, count } = current.batches[i];
+      if (batch.gridId !== state.id || !(batch.heights instanceof Float64Array) || batch.heights.length !== count
         || (batch.actual !== undefined && !["typescript", "single"].includes(batch.actual)) || (batch.actual === "single" && reply.parity !== "same")) {
         retire("invalid-worker-result"); return;
       }
-      if (states.get(requested.state.id) === requested.state) for (let j = 0; j < batch.heights.length; j++) {
-        const expected = requested.state.values.get(requested.coordinates[j * 2])?.get(requested.coordinates[j * 2 + 1]);
-        if (expected && !Object.is(expected.height, batch.heights[j])) {
-          status.parity = "different"; retire("worker-reference-mismatch"); return;
-        }
+      if (states.get(state.id) !== state) continue;
+      const origin = batch.actual ?? reply.actual;
+      for (let j = 0; j < count; j++) {
+        const x = current.coordinates[(offset + j) * 2], y = current.coordinates[(offset + j) * 2 + 1];
+        const entry = state.values.get(x)?.get(y);
+        if (!entry) cacheValue(state, x, y, batch.heights[j], origin);
+        else if (!Object.is(entry.height, batch.heights[j])) { status.parity = "different"; retire("worker-reference-mismatch"); return; }
+        else entry.origin = origin;
       }
     }
     cancelTimeout?.(); cancelTimeout = null; flight = null;
-    for (let i = 0; i < reply.batches.length; i++) {
-      const { state, coordinates } = current.batches[i];
-      for (let j = 0; j < reply.batches[i].heights.length; j++) {
-        const x = coordinates[j * 2], y = coordinates[j * 2 + 1];
-        const waiting = state.queued.get(x);
-        waiting?.delete(y); if (waiting?.size === 0) state.queued.delete(x);
-        queued--;
-        if (states.get(state.id) !== state) continue;
-        cacheValue(state, x, y, reply.batches[i].heights[j], reply.batches[i].actual ?? reply.actual);
-      }
-    }
+    queued -= current.coordinates.length / 2;
     trim();
     status.actual = reply.actual; status.state = "idle"; status.parity = reply.parity; status.fallbackReason = reply.fallbackReason;
     status.jobs++; status.workMs += reply.workMs; status.roundTripMs += options.now() - current.start;
@@ -146,35 +142,28 @@ export function createTerrainHeightBatches(options: {
         worker.onmessageerror = () => retire("worker-message-error");
       }
       let samples = 0, snapshotBytes = 0;
-      const batches: Flight["batches"] = [];
+      const batches: Flight["batches"] = [], pack = packTerrainHeightPixels();
       for (const state of states.values()) {
         if (!state.pending.length) continue;
         const grid = state.grid.deref();
-        if (!grid) { queued -= state.pending.length / 2; state.pending.length = 0; state.queued.clear(); continue; }
+        if (!grid) { queued -= state.pending.length / 2; state.pending.length = 0; continue; }
         const count = Math.min(state.pending.length / 2, MAX_BATCH - samples);
         if (!count) break;
-        const coordinates = new Float64Array(state.pending.slice(0, count * 2));
-        const pixels = collectTerrainHeightPixels(grid, coordinates);
-        const bytes = [pixels, ...(pixels.neighbors ?? [])].reduce((sum, source) => sum + source.heights.byteLength + source.indices.byteLength, 0);
-        if (snapshotBytes + bytes > MAX_TRANSFER) continue;
+        const bytes = pack.add(state.id, grid, state.pending, count, MAX_TRANSFER - snapshotBytes);
+        if (bytes === null) continue;
         state.pending.splice(0, count * 2);
-        batches.push({ state, coordinates, pixels }); samples += count; snapshotBytes += bytes;
+        batches.push({ state, offset: samples, count }); samples += count; snapshotBytes += bytes;
       }
       if (!batches.length) { if (queued) retire("snapshot-budget-exceeded"); return; }
-      const id = ++nextJob;
-      flight = { id, start: options.now(), batches };
-      const request = { kind: "terrain-heights" as const, version: 1 as const, id,
-        batches: batches.map(({ state, coordinates, pixels }) => ({ gridId: state.id, coordinates, grid: pixels, sparse: true })) };
-      status.inputBytes += snapshotBytes + batches.reduce((sum, batch) => sum + batch.coordinates.byteLength, 0);
+      const id = ++nextJob, packed = pack.finish();
+      flight = { id, start: options.now(), coordinates: packed.coordinates, batches };
+      status.inputBytes += snapshotBytes + packed.coordinates.byteLength;
       status.state = "busy";
       cancelTimeout = options.after(() => retire(status.jobs === 0 ? "worker-startup-timeout" : "worker-timeout"), status.jobs === 0 ? 15000 : 5000);
-      // Keep coordinates for admission/caching. Transfer only the owned compact
-      // pixel buffers; original height arrays are never detached or cloned.
-      const transfer: Transferable[] = [];
-      for (const { pixels } of batches) for (const source of [pixels, ...(pixels.neighbors ?? [])]) {
-        if (source.heights.byteLength) transfer.push(source.heights.buffer as ArrayBuffer, source.indices.buffer as ArrayBuffer);
-      }
-      worker.postMessage(request, transfer);
+      // Keep coordinates for admission. Transfer only the packed pixels and
+      // their table; original height arrays are never detached or cloned.
+      worker.postMessage({ kind: "terrain-heights", version: 1, id, batches: [], packed },
+        [packed.table.buffer as ArrayBuffer, packed.heights.buffer as ArrayBuffer, packed.indices.buffer as ArrayBuffer]);
     } catch { retire("worker-dispatch-failed"); }
   }
   return {
@@ -195,7 +184,7 @@ export function createTerrainHeightBatches(options: {
       const key = generation(grid);
       let state = generations.get(key);
       if (!state) {
-        state = { id: ++nextGrid, key, grid: new WeakRef(grid), values: new Map(), queued: new Map(), pending: [], count: 0 };
+        state = { id: ++nextGrid, key, grid: new WeakRef(grid), values: new Map(), pending: [], count: 0 };
         generations.set(key, state); states.set(state.id, state);
       }
       if (state.grid.deref() !== grid) state.grid = new WeakRef(grid);
@@ -213,14 +202,12 @@ export function createTerrainHeightBatches(options: {
           continue;
         }
         result[i] = sampleTerrainGrid(grid, x, y); status.pageSamples++;
+        if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
         // The exact reference result is already available. Memoise immediately
         // so a slow worker never repeats page work; both worker arms share this.
-        if (Number.isFinite(x) && Number.isFinite(y)) cacheValue(state, x, y, result[i], "page");
-        if (disposed || retired || !Number.isFinite(x) || !Number.isFinite(y) || state.queued.get(x)?.has(y)) continue;
+        cacheValue(state, x, y, result[i], "page");
         if (queued >= MAX_PENDING) { status.dropped++; continue; }
-        let waiting = state.queued.get(x);
-        if (!waiting) { waiting = new Set(); state.queued.set(x, waiting); }
-        waiting.add(y); state.pending.push(x, y); queued++;
+        state.pending.push(x, y); queued++;
       }
       trim(); schedule(); return result;
     },

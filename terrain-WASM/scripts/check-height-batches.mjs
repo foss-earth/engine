@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { sampleTerrainGrid } from "@foss-earth/engine";
-import { collectTerrainHeightPixels, sampleTerrainHeightPixels } from "../../dist/src/browser/terrainHeightPixels.js";
+import { collectTerrainHeightPixels, packTerrainHeightPixels, sampleTerrainHeightPixels, unpackTerrainHeightPixels } from "../../dist/src/browser/terrainHeightPixels.js";
 import { instantiateTerrainCore } from "../index.js";
 const binary = new URL("../single/terrain.wasm", import.meta.url);
 const bytes = readFileSync(binary);
@@ -16,7 +16,11 @@ function compare(input, coordinates, label) {
   const expected = Float64Array.from({ length: coordinates.length / 2 }, (_, i) => sampleTerrainGrid(input, coordinates[i * 2], coordinates[i * 2 + 1]));
   const compact = collectTerrainHeightPixels(input, coordinates);
   for (let i = 0; i < expected.length; i++) assert.ok(Object.is(sampleTerrainHeightPixels(compact, coordinates[i * 2], coordinates[i * 2 + 1]), expected[i]), `${label} sparse TS[${i}] differs`);
-  for (const [arm, source] of [["dense", input], ["sparse", compact]]) {
+  // The page's packed request leaves unread neighbours out.
+  const pack = packTerrainHeightPixels();
+  pack.add(1, input, coordinates, coordinates.length / 2, Infinity);
+  const packed = unpackTerrainHeightPixels(pack.finish())[0].grid;
+  for (const [arm, source] of [["dense", input], ["sparse", compact], ["packed", packed]]) {
     const sampler = core.createHeightSampler(source);
     try {
       const result = sampler.sample(coordinates);
@@ -66,7 +70,7 @@ assert.deepEqual(sampler.sample(new Float64Array([0.5, 0.5])), expected);
 for (const invalid of [new Float64Array(), new Float64Array(3), new Float64Array(131074), new Float64Array([NaN, 0]), new Float64Array([Infinity, 0])]) assert.throws(() => sampler.sample(invalid), /finite x\/y/);
 core.dispose(); assert.throws(() => sampler.sample(new Float64Array([0, 0])), /disposed/);
 const implementations = [binary, new URL("../heightSampler.js", import.meta.url), new URL("../core.js", import.meta.url), new URL("../crates/earth-terrain/src/lib.rs", import.meta.url), new URL("../../dist/src/terrain/terrainGrid.js", import.meta.url), new URL("../../dist/src/browser/terrainHeightPixels.js", import.meta.url)];
-const report = { parity: "same", cases, denseCases: cases / 2, sparseCases: cases / 2, coordinatesChecked, ownership: "source snapshot/output ownership and sampler/core disposal passed", binarySha256: createHash("sha256").update(bytes).digest("hex"),
+const report = { parity: "same", cases, denseCases: cases / 3, sparseCases: cases / 3, packedCases: cases / 3, coordinatesChecked, ownership: "source snapshot/output ownership and sampler/core disposal passed", binarySha256: createHash("sha256").update(bytes).digest("hex"),
   receipts: Object.fromEntries(implementations.map(url => [url.pathname, createHash("sha256").update(readFileSync(url)).digest("hex")])) };
 mkdirSync(new URL("../../build/terrain-WASM/", import.meta.url), { recursive: true });
 writeFileSync(new URL("../../build/terrain-WASM/height-batch-parity.json", import.meta.url), JSON.stringify(report, null, 2) + "\n");

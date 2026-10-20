@@ -2,18 +2,19 @@ import { describe, expect, it, vi } from "vitest";
 import { createTerrainHeightBatches } from "../src/browser/terrainHeightBatches.js";
 import { installTerrainHeightBatchKernel } from "../src/browser/terrainHeightBatchKernel.js";
 import type { HeightBatchReply, HeightBatchRequest, HeightBatchWorkerPort, HeightBatchWorkerScope } from "../src/browser/terrainHeightBatchProtocol.js";
-import { sampleTerrainHeightPixels, type TerrainHeightPixels } from "../src/browser/terrainHeightPixels.js";
+import { packTerrainHeightPixels, sampleTerrainHeightPixels, unpackTerrainHeightPixels, type TerrainHeightPixels } from "../src/browser/terrainHeightPixels.js";
 import { sampleTerrainGrid, type TerrainGrid } from "../src/terrain/terrainGrid.js";
 const turn = () => new Promise(resolve => setImmediate(resolve));
 const grid = (size = 1, height = 3): TerrainGrid => ({ z: 0, x: 0, y: 0, size, heights: new Float32Array(size * size).fill(height) });
 const xy = new Float64Array([0.5, 0.5]);
+const sent = (request: HeightBatchRequest) => request.packed ? unpackTerrainHeightPixels(request.packed) : request.batches;
 function page() {
   const scheduled: Array<() => void> = [], requests: HeightBatchRequest[] = [];
   const worker: HeightBatchWorkerPort = { onmessage: null, onerror: null, onmessageerror: null, terminate: vi.fn(), postMessage: request => { requests.push(request); } };
   const batches = createTerrainHeightBatches({ kernel: "typescript", createWorker: () => worker, now: () => 0,
     schedule: callback => { scheduled.push(callback); }, after: () => () => {} });
   return { batches, worker, requests, flush() { while (scheduled.length) scheduled.shift()!(); }, reply(request = requests.at(-1)!, value = 3) {
-    worker.onmessage?.({ data: { kind: "terrain-heights", version: 1, id: request.id, batches: request.batches.map(batch => ({ gridId: batch.gridId, heights: new Float64Array(batch.coordinates.length / 2).fill(value) })), retained: [], actual: "typescript", parity: "not compared", fallbackReason: null, workMs: 0, snapshotBytes: 0, nativeBytes: 0 } } as unknown as MessageEvent<HeightBatchReply>);
+    worker.onmessage?.({ data: { kind: "terrain-heights", version: 1, id: request.id, batches: sent(request).map(batch => ({ gridId: batch.gridId, heights: new Float64Array(batch.coordinates.length / 2).fill(value) })), retained: [], actual: "typescript", parity: "not compared", fallbackReason: null, workMs: 0, snapshotBytes: 0, nativeBytes: 0 } } as unknown as MessageEvent<HeightBatchReply>);
   } };
 }
 describe("height snapshot lifecycle and bounded admission", () => {
@@ -22,7 +23,7 @@ describe("height snapshot lifecycle and bounded admission", () => {
     try {
       for (let i = 0; i < 600; i++) test.batches.sample(grid(), xy);
       expect(test.batches.stats().retainedGrids).toBe(512);
-      test.flush(); expect(test.requests[0].batches).toHaveLength(512);
+      test.flush(); expect(sent(test.requests[0])).toHaveLength(512);
       for (let i = 0; i < 7; i++) test.batches.sample(grid(1024), xy);
       expect(test.batches.stats().pageSnapshotBytes).toBeLessThanOrEqual(24 * 1024 ** 2);
       expect(test.batches.stats().retainedGrids).toBeLessThanOrEqual(512);
@@ -32,15 +33,19 @@ describe("height snapshot lifecycle and bounded admission", () => {
   it("sends only direct numeric grid records and excludes nested neighbour graphs", () => {
     const test = page();
     try {
-      const source = { ...grid(), extra: new Float32Array(1024) };
-      const neighbor = { ...grid(), neighbors: [grid(1024)], extra: "not part of the kernel" };
-      source.neighbors = [neighbor];
-      test.batches.sample(source, xy); test.flush();
-      const sentGrid = test.requests[0].batches[0].grid as TerrainHeightPixels;
-      const sent = [sentGrid, ...(sentGrid.neighbors ?? [])];
-      expect(sent).toHaveLength(2);
-      expect(Object.keys(sent[0]).filter(key => key !== "neighbors").sort()).toEqual(["heights", "indices", "size", "x", "y", "z"]);
-      expect(Object.keys(sent[1]).sort()).toEqual(["heights", "indices", "size", "x", "y", "z"]);
+      const source = { ...grid(2), z: 1, extra: new Float32Array(1024) };
+      const neighbor = { ...grid(2), z: 1, x: 1, neighbors: [grid(1024)], extra: "not part of the kernel" };
+      const unread = { ...grid(2), z: 1, y: 1 };
+      source.neighbors = [unread, neighbor];
+      // The right edge reads the neighbour; nothing reads the tile below.
+      test.batches.sample(source, new Float64Array([0.9, 0.5])); test.flush();
+      expect(test.requests[0].batches).toEqual([]);
+      expect(Object.values(test.requests[0].packed!).map(value => value.constructor)).toEqual([Float64Array, Float64Array, Float32Array, Uint32Array]);
+      const sentGrid = sent(test.requests[0])[0].grid as TerrainHeightPixels;
+      const records = [sentGrid, ...(sentGrid.neighbors ?? [])];
+      expect(records).toHaveLength(2); expect(records[1]).toMatchObject({ z: 1, x: 1, y: 0 });
+      expect(Object.keys(records[0]).filter(key => key !== "neighbors").sort()).toEqual(["heights", "indices", "size", "x", "y", "z"]);
+      expect(Object.keys(records[1]).sort()).toEqual(["heights", "indices", "size", "x", "y", "z"]);
     } finally { test.batches.dispose(); }
   });
   it("ignores an evicted in-flight generation and releases every page state on retirement", () => {
@@ -116,8 +121,8 @@ describe("height snapshot lifecycle and bounded admission", () => {
     try {
       sample(); await flush();
       expect(requests).toHaveLength(1);
-      expect(requests[0].batches).toHaveLength(9);
-      expect(requests[0].batches.every(batch => batch.sparse)).toBe(true);
+      expect(sent(requests[0])).toHaveLength(9);
+      expect(sent(requests[0]).every(batch => batch.sparse)).toBe(true);
       for (let repeat = 0; repeat < 10; repeat++) sample();
       await flush(); expect(requests).toHaveLength(1);
       expect(batches.stats()).toMatchObject({ retainedGrids: 9, pageSamples: 18, workerCacheHits: 180, nativeCacheHits: 180, pageSnapshotBytes: 0 });
@@ -125,7 +130,7 @@ describe("height snapshot lifecycle and bounded admission", () => {
         const index = iteration % tiles.length;
         tiles[index] = { ...tiles[index], heights: new Float32Array(512 ** 2).fill(100 + iteration) };
         sample(); await flush();
-        expect(requests.at(-1)!.batches.every(batch => batch.sparse)).toBe(true);
+        expect(sent(requests.at(-1)!).every(batch => batch.sparse)).toBe(true);
         expect(reply!.snapshotBytes + reply!.nativeBytes).toBeLessThanOrEqual(24 * 1024 ** 2);
       }
       expect(batches.stats().inputBytes).toBeLessThan(64 * 1024);
@@ -143,7 +148,7 @@ describe("height snapshot lifecycle and bounded admission", () => {
         expect(test.batches.stats().cachedSamples).toBeLessThanOrEqual(131072);
       }
       expect(test.batches.stats().dropped).toBeGreaterThan(0);
-      test.flush(); expect(test.requests[0].batches.reduce((sum, batch) => sum + batch.coordinates.length / 2, 0)).toBeLessThanOrEqual(8192);
+      test.flush(); expect(sent(test.requests[0]).reduce((sum, batch) => sum + batch.coordinates.length / 2, 0)).toBeLessThanOrEqual(8192);
       expect(test.batches.stats().pageSnapshotBytes).toBe(0);
     } finally { test.batches.dispose(); }
   });
@@ -176,7 +181,7 @@ describe("height snapshot lifecycle and bounded admission", () => {
       const backing = new Float32Array(1024 * 1024).fill(4);
       const source = { ...grid(), heights: backing.subarray(50, 51) };
       expect(test.batches.sample(source, xy)[0]).toBe(4); test.flush();
-      expect(test.requests[0].batches[0].grid!.heights.buffer.byteLength).toBe(4);
+      expect(test.requests[0].packed!.heights.buffer.byteLength).toBe(4);
       expect(source.heights.buffer).toBe(backing.buffer);
     } finally { test.batches.dispose(); }
   });
@@ -189,5 +194,33 @@ describe("height snapshot lifecycle and bounded admission", () => {
       expect(test.batches.sample(source, xy)[0]).toBe(17);
       expect(test.worker.terminate).toHaveBeenCalledOnce();
     } finally { test.batches.dispose(); }
+  });
+  it("evaluates packed batches like the same sparse batches, and rejects malformed packing without replying", async () => {
+    const replies: HeightBatchReply[] = [], thrown: Array<() => void> = [];
+    const scope: HeightBatchWorkerScope = { onmessage: null, postMessage(value) { replies.push(value); } };
+    const installed = installTerrainHeightBatchKernel({ scope, kernel: "typescript", now: () => 0 });
+    const source = { ...grid(4), z: 1, neighbors: [{ ...grid(4, 9), z: 1, x: 1 }, { ...grid(4, 5), z: 1, y: 1 }] };
+    const pack = packTerrainHeightPixels(), coordinates = [0.95, 0.5, 0.5, 0.95, 0.4, 0.4];
+    pack.add(7, source, coordinates, 3, Infinity); pack.add(8, { ...grid(2, 4), z: 1, x: 1 }, [1.5, 0.5], 1, Infinity);
+    const packed = pack.finish();
+    const request = (id: number, value: Partial<HeightBatchRequest>) => ({ data: { kind: "terrain-heights", version: 1, id, batches: [], ...value } } as MessageEvent<HeightBatchRequest>);
+    try {
+      scope.onmessage?.(request(1, { packed: structuredClone(packed) }));
+      scope.onmessage?.(request(2, { batches: unpackTerrainHeightPixels(structuredClone(packed)) }));
+      await turn();
+      expect(replies.map(reply => reply.batches)).toEqual([replies[1].batches, replies[1].batches]);
+      expect([...replies[0].batches[0].heights]).toEqual(Array.from({ length: 3 }, (_, i) => sampleTerrainGrid(source, coordinates[i * 2], coordinates[i * 2 + 1])));
+      vi.stubGlobal("setTimeout", (callback: () => void) => { thrown.push(callback); return 0; });
+      const unsorted = structuredClone(packed); unsorted.indices.reverse();
+      const sideways = structuredClone(packed); sideways.table[3] = 0;
+      // A failed request leaves its kernel failed, as the page retires it.
+      for (const value of [{ packed: unsorted }, { packed: sideways }, { packed, batches: unpackTerrainHeightPixels(packed) }]) {
+        const failing = installTerrainHeightBatchKernel({ scope, kernel: "typescript", now: () => 0 });
+        try { scope.onmessage?.(request(3, value)); await turn(); } finally { failing.dispose(); }
+      }
+      vi.unstubAllGlobals();
+      expect(replies).toHaveLength(2);
+      expect(thrown.map(callback => { try { callback(); } catch (error) { return (error as Error).message; } })).toEqual(["Invalid sparse height snapshot", "Invalid packed height batch", "Invalid height batch request"]);
+    } finally { vi.unstubAllGlobals(); installed.dispose(); }
   });
 });
