@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { geodeticToEcef } from "../../../src/camera/cameraMath.js";
 import type { TileId } from "../../../src/terrain/imagery/imageryGeometry.js";
 import {
+  createImageryMeasurementCache,
   createImagerySelector,
   measureImageryView,
   type ImageryPlan,
@@ -141,6 +142,81 @@ describe("imagery selection identity", () => {
       revision += 1;
     }
   });
+
+  it("gives a view's kept measurements bit for bit, and measures again once anything they depend on changes", () => {
+    /** The next double away from zero. */
+    const nudge = (value: number): number => {
+      const bits = new BigInt64Array(Float64Array.of(value).buffer);
+      bits[0] += 1n;
+      return new Float64Array(bits.buffer)[0];
+    };
+    /** Copies of the view with one number moved by one step each. */
+    const nudged = (view: unknown): unknown[] => {
+      if (typeof view === "number") return [Number.isInteger(view) ? view + 1 : nudge(view)];
+      if (!view || typeof view !== "object") return [];
+      return Object.entries(view).flatMap(([key, value]) => nudged(value).map(changed =>
+        Array.isArray(view) ? Object.assign([...view], { [key]: changed }) : { ...view, [key]: changed }));
+    };
+    let checked = 0;
+    for (const unknown of [false, true]) for (const { name, view, source, overrides } of CASES) {
+      if (overrides) continue;
+      const { scalar, revised } = surfaces(unknown);
+      const plan = outcome(input(view, scalar, source)).plan;
+      const leaves = plan.leaves.map(leaf => leaf.tile);
+      const measure = (surface: ImagerySurface, tiles = leaves, coverage: readonly TileId[] = [], cache?: ReturnType<typeof createImageryMeasurementCache>, at = input(view, surface, source).view) =>
+        measureImageryView({ view: at, source: source ?? PHOTO, surface }, tiles, coverage, cache);
+      const cache = createImageryMeasurementCache();
+      const regions = measure(revised, leaves, plan.coverage, cache);
+      expect(digestOf(regions), name).toBe(digestOf(measure(scalar, leaves, plan.coverage)));
+      expect(cache.reused, name).toBe(0);
+      // The loaded pages, at an equal view built again: every one was a region.
+      expect(digestOf(measure(revised, leaves, [], cache)), name).toBe(digestOf(measure(scalar)));
+      expect(cache.reused, name).toBe(leaves.length);
+
+      const base = input(view, revised, source).view;
+      for (const changed of nudged(base) as Array<typeof base>) {
+        measure(revised, leaves, [], cache);
+        const before = cache.reused;
+        expect(digestOf(measure(revised, leaves, [], cache, changed)), name).toBe(digestOf(measure(scalar, leaves, [], undefined, changed)));
+        expect(cache.reused, `${name}: ${JSON.stringify(changed)}`).toBe(before);
+        checked += 1;
+      }
+      // One surface whose revision, camera ground or bounds change in place.
+      const state = { revision: 7, ground: 0, widened: null as TileId | null, raised: null as TileId | null };
+      const changing: ImagerySurface = {
+        heightsAt: revised.heightsAt, getRevision: () => state.revision,
+        heightAt: (lat, lon) => { const height = revised.heightAt(lat, lon); return height === null ? state.ground || null : height + state.ground; },
+        boundsFor: tile => {
+          const bounds = revised.boundsFor(tile);
+          return tile === state.widened ? { min: bounds.min - 1, max: bounds.max } : tile === state.raised ? { min: bounds.min, max: bounds.max + 1 } : bounds;
+        },
+      };
+      /** How many regions a measurement after `change` gives without measuring them again. */
+      const reusedAfter = (change: () => void, surface = changing, at = source ?? PHOTO): number => {
+        measure(changing, leaves, [], cache);
+        change();
+        const before = cache.reused;
+        measureImageryView({ view: base, source: at, surface }, leaves, [], cache);
+        return cache.reused - before;
+      };
+      expect(reusedAfter(() => {}), name).toBe(leaves.length);
+      expect(reusedAfter(() => { state.revision += 1; }), name).toBe(0);
+      expect(reusedAfter(() => { state.ground += 1; }), name).toBe(0);
+      state.ground = 0; state.revision += 1;
+      expect(reusedAfter(() => {}, changing, { ...(source ?? PHOTO), tileWidth: 512 }), name).toBe(0);
+      expect(reusedAfter(() => {}, { ...changing }), name).toBe(0);
+      // A region whose bounds changed is measured again alone.
+      const moved = leaves[Math.floor(leaves.length / 2)];
+      expect(reusedAfter(() => { state.widened = moved; }), name).toBe(leaves.length - 1);
+      expect(reusedAfter(() => { state.raised = leaves.find(leaf => leaf !== moved)!; }), name).toBe(leaves.length - 1);
+      expect(digestOf(measure(changing, leaves, [], cache)), name).toBe(digestOf(measure({ heightAt: changing.heightAt, boundsFor: changing.boundsFor })));
+      state.widened = null; state.raised = null;
+      // Without revisions nothing is kept.
+      const unrevised: ImagerySurface = { heightAt: revised.heightAt, boundsFor: revised.boundsFor, heightsAt: revised.heightsAt };
+      expect(reusedAfter(() => measure(unrevised, leaves, [], cache), unrevised), name).toBe(0);
+    }
+    expect(checked).toBeGreaterThan(100);
+  }, 15000);
 
   it("follows bounds that change while the revision does not", () => {
     const { heightAt } = ground(true);

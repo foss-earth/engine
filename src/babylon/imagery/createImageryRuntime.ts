@@ -2,6 +2,7 @@ import type { Material, Scene, TransformNode } from "@babylonjs/core";
 import { finishOwnedCleanup } from "../ownedCleanup.js";
 import { tileContains, type TileId } from "../../terrain/imagery/imageryGeometry.js";
 import {
+  createImageryMeasurementCache,
   createImagerySelector,
   estimateFocusPages,
   imageKey,
@@ -364,6 +365,8 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
   let measuredAt = -Infinity;
   let measuredPublish = -1;
   let loadedRegions: LoadedImageryRegion[] = [];
+  /** The plan's regions and the loaded pages are mostly the same tiles, measured at the same view. */
+  const viewMeasurements = createImageryMeasurementCache();
   let loadedTarget: number | null = null;
   let distributionGeneration = 1;
   let distributionPageKey = "";
@@ -1056,7 +1059,7 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
     const surfaceRevision = options.surface.getRevision();
     if (pageKey !== distributionPageKey || imageryViewChanged(distributionView, latestView) || surfaceRevision !== distributionSurface) {
       const source = shownPlan.source.capabilities;
-      distributionRegions = measureImageryView({ view: latestView, source, surface: options.surface }, pages).map(region => ({
+      distributionRegions = measureImageryView({ view: latestView, source, surface: options.surface }, pages, [], viewMeasurements).map(region => ({
         tile: region.tile, footprintPx: region.footprintPx, screenArea: region.screenArea, referenceLevel: region.tile.z,
       }));
       distributionPageKey = pageKey;
@@ -1090,7 +1093,7 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
         referenceLevel: leaf.tile.z + Math.log2((leaf.variant === null ? source.tileWidth : source.variants.find(variant => variant.id === leaf.variant)!.width) / 256),
         footprintPx: leaf.footprintPx,
         screenArea: leaf.screenArea,
-      })) : measureImageryView({ view: latestView, source, surface: options.surface }, current.leaves.map(leaf => leaf.tile), current.coverage).map(region => ({
+      })) : measureImageryView({ view: latestView, source, surface: options.surface }, current.leaves.map(leaf => leaf.tile), current.coverage, viewMeasurements).map(region => ({
         ...region, referenceLevel: region.tile.z + Math.log2(source.tileWidth / 256),
       }));
       measuredPlan = current;

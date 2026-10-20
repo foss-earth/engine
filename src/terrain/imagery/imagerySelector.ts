@@ -74,7 +74,8 @@ export interface ImagerySurface {
   /**
    * Changes whenever a height or bound this surface reports may change. When
    * given with `heightsAt`, the heights at points on a 65x65 lattice over each
-   * tile are reused until it changes.
+   * tile are reused until it changes, and so are a view's measurements kept in
+   * an `ImageryMeasurementCache`.
    */
   getRevision?(): number;
 }
@@ -667,11 +668,61 @@ type ViewMeasurementContext = Pick<Job, "cartographic" | "camera" | "screenGroun
 };
 
 /**
+ * Regions measured at one view, given again when the same view measures them:
+ * the loaded-detail readouts measure a plan's regions and the loaded pages,
+ * mostly the same tiles, at each view, and measure again as pages arrive
+ * while the view holds still. A region is given again only at a view, source,
+ * surface revision and camera ground equal to the bit, while its bounds hold.
+ */
+export interface ImageryMeasurementCache {
+  /** Regions given without measuring them again. */
+  reused: number;
+  kept: { surface: ImagerySurface; revision: number; ground: number; view: unknown[]; source: unknown[]; regions: Map<string, KeptMeasurement> } | null;
+}
+interface KeptMeasurement { min: number; max: number; footprintPx: number; screenArea: number }
+const MAX_KEPT_MEASUREMENTS = 1 << 14;
+
+export function createImageryMeasurementCache(): ImageryMeasurementCache {
+  return { reused: 0, kept: null };
+}
+
+/** Every value in a plain object, keys sorted and arrays by element: equal lists describe the same view or source. */
+function flatValues(value: unknown, out: unknown[] = []): unknown[] {
+  if (value !== null && typeof value === "object") {
+    if (Array.isArray(value) || ArrayBuffer.isView(value)) {
+      const list = value as unknown as ArrayLike<unknown>;
+      out.push(list.length);
+      for (let i = 0; i < list.length; i++) flatValues(list[i], out);
+    } else for (const key of Object.keys(value).sort()) { out.push(key); flatValues((value as Record<string, unknown>)[key], out); }
+  } else out.push(value);
+  return out;
+}
+
+function sameValues(a: readonly unknown[], b: readonly unknown[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (!Object.is(a[i], b[i])) return false;
+  return true;
+}
+
+/** The cache's regions for this view, started again when anything they were measured with changed; null for a surface without revisions. */
+function keptMeasurements(cache: ImageryMeasurementCache, input: ViewMeasurementContext["input"], ground: number): Map<string, KeptMeasurement> | null {
+  const revision = input.surface.getRevision?.();
+  if (revision === undefined) return null;
+  const view = flatValues(input.view), source = flatValues(input.source);
+  const kept = cache.kept;
+  if (kept && kept.surface === input.surface && kept.revision === revision && Object.is(kept.ground, ground)
+    && kept.regions.size < MAX_KEPT_MEASUREMENTS && sameValues(kept.view, view) && sameValues(kept.source, source)) return kept.regions;
+  cache.kept = { surface: input.surface, revision, ground, view, source, regions: new Map() };
+  return cache.kept.regions;
+}
+
+/**
  * Measures existing regions from the view alone, independent of a loading
  * focus. Optional coverage fills gaps outside the selected leaves, splitting
  * roots only along existing leaf paths; it never traverses for more detail.
+ * With a cache, regions it measured at the same view are not measured again.
  */
-export function measureImageryView(input: ViewMeasurementContext["input"], tiles: readonly TileId[], coverage: readonly TileId[] = []): Array<{ tile: TileId; footprintPx: number; screenArea: number }> {
+export function measureImageryView(input: ViewMeasurementContext["input"], tiles: readonly TileId[], coverage: readonly TileId[] = [], cache?: ImageryMeasurementCache): Array<{ tile: TileId; footprintPx: number; screenArea: number }> {
   const camera = cameraLonLat(input.view);
   const ground = input.surface.heightAt(camera.latDeg, camera.lonDeg) ?? 0;
   const lat = camera.latDeg * Math.PI / 180;
@@ -698,18 +749,28 @@ export function measureImageryView(input: ViewMeasurementContext["input"], tiles
     };
     for (const tile of coverage) visit(tile);
   } else regions.push(...tiles);
+  const kept = cache ? keptMeasurements(cache, input, ground) : null;
   return regions.map(tile => {
-    const measured = evaluateView(context, tile);
-    return { tile, footprintPx: measured.physicalFootprint, screenArea: measured.screenArea };
+    if (!kept) {
+      const measured = evaluateView(context, tile);
+      return { tile, footprintPx: measured.physicalFootprint, screenArea: measured.screenArea };
+    }
+    const key = tileKey(tile), bounds = input.surface.boundsFor(tile);
+    let known = kept.get(key);
+    if (known && Object.is(known.min, bounds.min) && Object.is(known.max, bounds.max)) cache!.reused += 1;
+    else {
+      const measured = evaluateView(context, tile, bounds);
+      kept.set(key, known = { min: bounds.min, max: bounds.max, footprintPx: measured.physicalFootprint, screenArea: measured.screenArea });
+    }
+    return { tile, footprintPx: known.footprintPx, screenArea: known.screenArea };
   });
 }
 
-function evaluateView(job: ViewMeasurementContext, tile: TileId): Evaluated {
+function evaluateView(job: ViewMeasurementContext, tile: TileId, bounds = job.input.surface.boundsFor(tile)): Evaluated {
   const { input } = job;
   const { view, source } = input;
   job.nodes += 1;
   const result = unmeasured(tile, outsideCoverage(source, tile));
-  const bounds = input.surface.boundsFor(tile);
   const span = tileAngularSpan(tile);
   const nearest = nearestLocal(tile, job.camera);
   const m = view.ecefToClip;
