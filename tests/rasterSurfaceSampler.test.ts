@@ -6,7 +6,7 @@ import { RASTER_BASE_MAP_SOURCES } from "../src/map/rasterBaseMaps.js";
 import { advanceRefinement, inheritParent, meshPositions, refineMesh, stitchTerrainEdges, type TerrainPatch } from "../src/babylon/meshRefinement.js";
 import { createRasterSurfaceSampler, type RasterQueryCounters } from "../src/babylon/rasterSurfaceSampler.js";
 import { createSurfaceQuery } from "../src/babylon/surfaceQuery.js";
-import type { TerrainTile } from "../src/terrain/terrainGrid.js";
+import { sampleTerrainGrid, type TerrainGrid, type TerrainTile } from "../src/terrain/terrainGrid.js";
 
 const engines: NullEngine[] = [];
 afterEach(() => { engines.splice(0).forEach(engine => engine.dispose()); vi.restoreAllMocks(); });
@@ -46,6 +46,88 @@ function setup() {
 }
 
 describe("indexed adopted raster triangles", () => {
+  it("updates decoded residency by owner without dropping another record's shared grid", () => {
+    const s = setup(), tile = { z: 15, x: 7898, y: 11805 };
+    const grid = { ...tile, size: 2, heights: new Float32Array(4).fill(275) };
+    const replacement = { ...tile, size: 2, heights: new Float32Array(4).fill(310) };
+    const location = coord(tile, 0.41, 0.63);
+    expect(s.sampler.setDecodedGrid("a", grid)).toBe(true);
+    expect(s.sampler.setDecodedGrid("a", grid)).toBe(false);
+    expect(s.sampler.setDecodedGrid("b", grid)).toBe(false);
+    expect(s.sampler.setDecodedGrid("a", null)).toBe(false);
+    expect(s.sampler.sampleHeight(...location)).toEqual({ heightMeters: 275, quality: 15 });
+    expect(s.sampler.setDecodedGrid("b", replacement)).toBe(true);
+    expect(s.sampler.sampleHeight(...location)).toEqual({ heightMeters: 310, quality: 15 });
+    expect(s.sampler.setDecodedGrid("c", grid)).toBe(true);
+    expect(s.sampler.setDecodedGrid("c", null)).toBe(true);
+    expect(s.sampler.sampleHeight(...location)).toEqual({ heightMeters: 310, quality: 15 });
+    expect(s.sampler.clearDecodedGrids()).toBe(true);
+    expect(s.sampler.clearDecodedGrids()).toBe(false);
+    expect(s.sampler.sampleHeight(...location)).toBeNull();
+  });
+
+  it("returns the same height and quality as full queries for decoded and adopted surfaces", () => {
+    const s = setup(), tile = { z: 15, x: 7898, y: 11805 };
+    const patch = s.patch(tile);
+    s.sampler.setCoverage([patch]);
+    const location = coord(tile, 0.41, 0.63);
+    const meshHit = s.sampler.sample(...location)!;
+    expect(s.sampler.sampleHeight(...location)).toEqual({ heightMeters: meshHit.heightMeters, quality: meshHit.quality });
+    s.sampler.setDecodedGrid("fine", { z: 16, x: tile.x * 2, y: tile.y * 2 + 1, size: 2,
+      heights: new Float32Array([100, 200, 300, 400]) });
+    const gridHit = s.sampler.sample(...location)!;
+    const triangles = s.counters.triangles;
+    expect(s.sampler.sampleHeight(...location)).toEqual({ heightMeters: gridHit.heightMeters, quality: 16 });
+    expect(s.counters.triangles).toBe(triangles);
+    expect(s.sampler.setDecodedGrid("fine", null)).toBe(true);
+    expect(s.sampler.sampleHeight(...location)).toEqual({ heightMeters: meshHit.heightMeters, quality: meshHit.quality });
+  });
+
+  it.each(["x", "z"] as const)("releases a reused grid's original index after its %s changes", axis => {
+    const s = setup(), tile = { z: 15, x: 7898, y: 11805 };
+    const grid = { ...tile, size: 2, heights: new Float32Array(4).fill(275) };
+    const location = coord(tile, 0.4, 0.6);
+    s.sampler.setDecodedGrid("owner", grid);
+    expect(s.sampler.sampleHeight(...location)?.heightMeters).toBe(275);
+    grid[axis]++;
+    expect(s.sampler.setDecodedGrid("owner", null)).toBe(true);
+    expect(s.sampler.sampleHeight(...location)).toBeNull();
+    expect(s.sampler.clearDecodedGrids()).toBe(false);
+  });
+
+  it.each([false, true])("samples finer resident decoded heights before mesh adoption (shared=%s)", shared => {
+    const s = setup();
+    const coarse = s.patch({ z: 14, x: 3949, y: 5902 }, 1000);
+    const tile = { z: 15, x: 7898, y: 11805 };
+    const heights = shared ? new Float32Array(new SharedArrayBuffer(4 * 4)) : new Float32Array(4);
+    heights.set([200, 210, 220, 230]);
+    const grid: TerrainGrid = { ...tile, size: 2, heights };
+    const location = coord(tile, 0.41, 0.63);
+    s.sampler.setCoverage([coarse]);
+    expect(s.sampler.setDecodedGrids([grid])).toBe(true);
+    expect(s.sampler.setDecodedGrids([grid])).toBe(false);
+    const hit = s.sampler.sample(...location)!;
+    expect(hit.heightMeters).toBeCloseTo(sampleTerrainGrid(grid, tile.x + 0.41, tile.y + 0.63), 7);
+    expect(hit.quality).toBe(15);
+    expect(hit.meshId).toBe(`terrain-grid:15/7898/11805`);
+    expect(hit.revision).toBe(27);
+    expect(Math.hypot(hit.normal.x, hit.normal.y, hit.normal.z)).toBeCloseTo(1, 8);
+    expect(s.counters.triangles).toBe(0);
+    // A decoded grid can serve a proximity tile without a displayed mesh.
+    s.sampler.setCoverage([]);
+    expect(s.sampler.sample(...location)?.heightMeters).toBeCloseTo(hit.heightMeters, 8);
+    expect(s.sampler.setDecodedGrids([])).toBe(true);
+    expect(s.sampler.sample(...location)).toBeNull();
+  });
+
+  it("keeps adopted geometry when decoded data has no finer quality", () => {
+    const s = setup(), tile = { z: 15, x: 7898, y: 11805 };
+    const patch = s.patch(tile, 250);
+    s.sampler.setCoverage([patch]);
+    s.sampler.setDecodedGrids([{ ...tile, size: 2, heights: new Float32Array(4).fill(900) }]);
+    expect(s.sampler.sample(...coord(tile, 0.41, 0.63))?.meshId).toBe(patch.mesh.id);
+  });
+
   it.each([{ z: 15, x: 7898, y: 11805 }, { z: 2, x: 1, y: 1 }, { z: 15, x: 0, y: 0 },
     { z: 15, x: 32767, y: 32767 }])("matches curved geometry and normals at $z/$x/$y", tile => {
     const s = setup(), patch = s.patch(tile);

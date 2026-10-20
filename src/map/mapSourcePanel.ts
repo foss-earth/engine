@@ -108,7 +108,7 @@ export function createMapSourcePanel(options: MapSourcePanelOptions): MapSourceP
     { id: "map.selection", title: settings.getSectionTitle("map", "selection"), element: selection.element, defaultOpen: false,
       help: "How 2D imagery is chosen as the view moves: when a region refines or coarsens, and what stands in while finer imagery loads. The values are the selector's starting calibration." },
     { id: "map.terrain-selection", title: settings.getSectionTitle("map", "terrain-selection"), element: terrainSelection.element, defaultOpen: false,
-      help: "How the terrain mesh of 2D basemaps is chosen: a tile splits while its geometric error, seen from the camera or the focus point, is larger on screen than the detail target." },
+      help: "Terrain refines while its projected error exceeds the detail target. Robust orbit LOD adds independent nearby-ground detail for raster basemaps and Google 3D Tiles, with anchor, motion lookahead, view weighting and safety-core controls." },
   ], { document, storage: options.panelStorage });
   const hostSections = appendHostSections(settings, "map", sections, MAP_SECTIONS, { document, panelStorage: options.panelStorage, refresh: options.refresh });
 

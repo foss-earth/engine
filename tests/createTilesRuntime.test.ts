@@ -410,3 +410,352 @@ describe("Google focus region", () => {
     runtime.dispose();
   });
 });
+
+describe("Google proximity detail", () => {
+  const EARTH = 6_378_137;
+  const sphereTile = (center: Vector3, geometricError = 20, nativeInView = false, nativeError = 1) => ({
+    geometricError, nativeInView, nativeError,
+    engineData: {
+      boundingVolume: {
+        distanceToPoint: (point: Vector3) => Vector3.Distance(center, point),
+        sphere: { centerWorld: center, radiusWorld: 0 },
+      },
+    },
+  });
+  const setup = (extra: Partial<GoogleTilesRuntimeOptions> = {}) => {
+    const eye = new Vector3(EARTH + 20, 0, 0);
+    const scene = {
+      activeCamera: {
+        viewport: new Viewport(0, 0, 1, 1),
+        getProjectionMatrix: () => Matrix.PerspectiveFovLH(Math.PI / 2, 1, 1, 1e7),
+        getViewMatrix: () => Matrix.Identity(),
+        globalPosition: eye,
+      },
+      getEngine: () => ({ getHardwareScalingLevel: () => 1, getRenderWidth: () => 100, getRenderHeight: () => 100 }),
+    } as unknown as Scene;
+    let at = 0;
+    const runtime = createGoogleTilesRuntime({ scene, apiKey: "test", nowMs: () => at, ...extra });
+    const renderer = runtime.tiles as unknown as {
+      calculateTileViewError(tile: object, target: { inView: boolean; error: number; distanceFromCamera: number }): void;
+    };
+    const measure = (tile: object) => {
+      const target = { inView: false, error: 0, distanceFromCamera: 0 };
+      renderer.calculateTileViewError(tile, target);
+      return target;
+    };
+    return { runtime, eye, scene, measure, advance: (ms: number) => { at += ms; runtime.update(); } };
+  };
+
+  it("refines off-frustum ground from the real eye distance even with a 10 km focus-distance clamp", () => {
+    settings.set("map.terrain.robustOrbitLOD", true);
+    settings.set("map.terrain.proximityAnchor", "eye");
+    const focus = new Vector3(EARTH, 10_000, 0);
+    const f = setup({
+      getTerrainDetailAnchor: () => focus,
+      getFocus: () => ({ mode: "both", position: focus, radiusMeters: 20_000, finestErrorPx: null, horizonCull: false }),
+    });
+    try {
+      f.runtime.update();
+      const tile = sphereTile(new Vector3(EARTH, 0, 0));
+      const target = f.measure(tile);
+      expect(target.inView).toBe(true);
+      expect(target.distanceFromCamera).toBeCloseTo(20);
+      expect(target.error).toBeCloseTo(50);
+      // Focus-only and proximity-only selection never count as visible loaded detail.
+      f.runtime.tiles.visibleTiles.add(tile as never);
+      f.runtime.update();
+      expect(f.runtime.getTerrainDetailState().loadedErrorTarget).toBeNull();
+    } finally { f.runtime.dispose(); }
+  });
+
+  it("preserves native measurements by default and restores them when switched off live", () => {
+    const f = setup();
+    try {
+      const tile = sphereTile(new Vector3(EARTH, 0, 0));
+      f.runtime.update();
+      expect(f.measure(tile)).toEqual({ inView: false, error: 1, distanceFromCamera: 999 });
+      settings.set("map.terrain.robustOrbitLOD", true);
+      f.runtime.update();
+      expect(f.measure(tile).inView).toBe(true);
+      settings.set("map.terrain.robustOrbitLOD", false);
+      f.runtime.update();
+      expect(f.measure(tile)).toEqual({ inView: false, error: 1, distanceFromCamera: 999 });
+    } finally { f.runtime.dispose(); }
+  });
+
+  it.each(["max", "power-norm", "weighted-sum"] as const)("combines weighted gaze and proximity errors with %s", mode => {
+    settings.set("map.terrain.robustOrbitLOD", true);
+    settings.set("map.terrain.proximityAnchor", "eye");
+    settings.set("map.terrain.proximityCoreMeters", 15);
+    settings.set("map.terrain.proximityRadiusMeters", 1000);
+    settings.set("map.terrain.losWeight", 2);
+    settings.set("map.terrain.losGazeExponent", 2);
+    settings.set("map.terrain.losPeripheralFloor", 0.25);
+    settings.set("map.terrain.proximityWeight", 0.5);
+    settings.set("map.terrain.proximityBlendMode", mode);
+    settings.set("map.terrain.proximityBlendPower", 2);
+    const f = setup();
+    try {
+      f.runtime.update();
+      const target = f.measure(sphereTile(new Vector3(EARTH + 20, 100, 0), 20, true, 12));
+      const los = 12 * 2 * 0.25;
+      const proximity = 0.5 * (1 - (100 - 15) / (1000 - 15)) * 20 / (100 * 0.02);
+      const expected = mode === "max" ? Math.max(los, proximity) : mode === "weighted-sum" ? los + proximity : Math.hypot(los, proximity);
+      expect(target.error).toBeCloseTo(expected);
+      expect(f.measure(sphereTile(new Vector3(EARTH + 20, 0, 100), 20, true, 12)).error).toBeGreaterThan(target.error);
+    } finally { f.runtime.dispose(); }
+  });
+
+  it("keeps the safety error floor independent of the global detail target and metric weights", () => {
+    settings.set("map.terrain.robustOrbitLOD", true);
+    settings.set("map.terrain.losWeight", 0);
+    settings.set("map.terrain.proximityWeight", 0);
+    const f = setup();
+    try {
+      const tile = sphereTile(new Vector3(EARTH, 0, 0));
+      for (const target of [20, 524_288]) {
+        f.runtime.setTerrainDetailTarget(target);
+        f.runtime.update();
+        expect(f.measure(tile).error).toBe(target * 20 / 8);
+      }
+    } finally { f.runtime.dispose(); }
+  });
+
+  it("extracts the active camera gaze from its view orientation", () => {
+    settings.set("map.terrain.robustOrbitLOD", true);
+    settings.set("map.terrain.losGazeExponent", 2);
+    settings.set("map.terrain.proximityWeight", 0);
+    settings.set("map.terrain.proximityCoreMeters", 15);
+    const f = setup();
+    try {
+      vi.spyOn(f.scene.activeCamera!, "getViewMatrix").mockReturnValue(Matrix.LookAtLH(Vector3.Zero(), new Vector3(0, 1, 0), new Vector3(0, 0, 1)));
+      f.runtime.update();
+      expect(f.measure(sphereTile(new Vector3(EARTH + 20, 100, 0), 20, true, 12)).error).toBeCloseTo(12);
+      expect(f.measure(sphereTile(new Vector3(EARTH + 20, 0, 100), 20, true, 12)).error).toBeCloseTo(3);
+    } finally { f.runtime.dispose(); }
+  });
+
+  it("preserves an infinite native camera error through the power-norm blend", () => {
+    settings.set("map.terrain.robustOrbitLOD", true);
+    settings.set("map.terrain.proximityBlendMode", "power-norm");
+    const f = setup();
+    try {
+      f.runtime.update();
+      expect(f.measure(sphereTile(new Vector3(EARTH, 0, 0), 20, true, Infinity)).error).toBe(Infinity);
+    } finally { f.runtime.dispose(); }
+  });
+
+  it("predicts rear tiles along the whole capsule before the eye crosses the boundary", () => {
+    settings.set("map.terrain.robustOrbitLOD", true);
+    settings.set("map.terrain.proximityAnchor", "eye");
+    settings.set("map.terrain.proximityRadiusMeters", 50);
+    const f = setup();
+    try {
+      const rear = sphereTile(new Vector3(EARTH + 20, -220, 0));
+      f.runtime.update();
+      expect(f.measure(rear).inView).toBe(false);
+      f.eye.y = -100;
+      f.advance(1000);
+      expect(f.measure(rear)).toMatchObject({ inView: true, distanceFromCamera: 0 });
+      settings.set("map.terrain.proximityLookaheadSeconds", 0);
+      f.runtime.update();
+      expect(f.measure(rear).inView).toBe(false);
+    } finally { f.runtime.dispose(); }
+  });
+
+  it("clamps anchor speed and resets prediction after teleports", () => {
+    settings.set("map.terrain.robustOrbitLOD", true);
+    settings.set("map.terrain.proximityAnchor", "eye");
+    settings.set("map.terrain.proximityRadiusMeters", 50);
+    const f = setup();
+    try {
+      f.runtime.update();
+      f.eye.y = -1000;
+      f.advance(10);
+      expect(f.measure(sphereTile(new Vector3(EARTH + 20, -2400, 0))).inView).toBe(true);
+      expect(f.measure(sphereTile(new Vector3(EARTH + 20, -3000, 0))).inView).toBe(false);
+      f.eye.y = -4000;
+      f.advance(1000);
+      expect(f.measure(sphereTile(new Vector3(EARTH + 20, -4500, 0))).inView).toBe(false);
+    } finally { f.runtime.dispose(); }
+  });
+
+  it("uses the selected focus anchor without enabling a focus loading region", () => {
+    settings.set("map.terrain.robustOrbitLOD", true);
+    const focus = new Vector3(EARTH + 20, 10_000, 0);
+    const f = setup({ getProximityFocus: () => focus });
+    try {
+      const tile = sphereTile(new Vector3(EARTH + 20, 10_100, 0));
+      for (const [anchor, inView] of [["eye", false], ["focus", true], ["both", true]] as const) {
+        settings.set("map.terrain.proximityAnchor", anchor);
+        f.runtime.update();
+        expect(f.measure(tile).inView).toBe(inView);
+      }
+    } finally { f.runtime.dispose(); }
+  });
+
+  it("measures the actual box along the capsule rather than its enclosing sphere", () => {
+    settings.set("map.terrain.robustOrbitLOD", true);
+    settings.set("map.terrain.proximityAnchor", "eye");
+    settings.set("map.terrain.proximityRadiusMeters", 50);
+    const f = setup();
+    try {
+      f.runtime.update();
+      f.eye.y = -100;
+      f.advance(1000);
+      const tile = {
+        geometricError: 20,
+        engineData: { boundingVolume: {
+          sphere: { centerWorld: new Vector3(EARTH + 20, -200, 0), radiusWorld: 1000 },
+          obb: {},
+          distanceToPoint: (point: Vector3) => Math.hypot(point.x - (EARTH + 20), Math.max(-205 - point.y, 0, point.y + 195), point.z - 900),
+        } },
+      };
+      expect(f.measure(tile).inView).toBe(false);
+      tile.engineData.boundingVolume.distanceToPoint = point => Math.hypot(point.x - (EARTH + 20), Math.max(-205 - point.y, 0, point.y + 195), point.z);
+      expect(f.measure(tile)).toMatchObject({ inView: true, distanceFromCamera: 0 });
+    } finally { f.runtime.dispose(); }
+  });
+
+  it("transforms the camera eye through the floating origin before measuring proximity", () => {
+    settings.set("map.terrain.robustOrbitLOD", true);
+    const f = setup();
+    try {
+      f.eye.x = 20;
+      vi.spyOn(f.runtime.tiles.group, "getWorldMatrix").mockReturnValue(Matrix.Translation(-EARTH, 0, 0));
+      f.runtime.update();
+      expect(f.measure(sphereTile(new Vector3(EARTH, 0, 0)))).toMatchObject({ inView: true, distanceFromCamera: 20 });
+    } finally { f.runtime.dispose(); }
+  });
+
+  it("does not admit bounds on the far side of the globe", () => {
+    settings.set("map.terrain.robustOrbitLOD", true);
+    const f = setup();
+    try {
+      f.runtime.update();
+      expect(f.measure(sphereTile(new Vector3(-EARTH, 0, 0))).inView).toBe(false);
+    } finally { f.runtime.dispose(); }
+  });
+
+  const boxTile = (transform: Matrix, min = new Vector3(-10, -20, -30), max = new Vector3(10, 20, 30)) => {
+    const inverseTransform = transform.clone().invert();
+    const nearest = Vector3.Zero();
+    const points: Vector3[] = [];
+    for (let x = 0; x <= 1; x++) for (let y = 0; y <= 1; y++) for (let z = 0; z <= 1; z++) {
+      points.push(Vector3.TransformCoordinates(new Vector3(x ? max.x : min.x, y ? max.y : min.y, z ? max.z : min.z), transform));
+    }
+    const clampPoint = (point: Vector3, target: Vector3): Vector3 => {
+      Vector3.TransformCoordinatesToRef(point, inverseTransform, target);
+      target.set(Math.max(min.x, Math.min(max.x, target.x)), Math.max(min.y, Math.min(max.y, target.y)), Math.max(min.z, Math.min(max.z, target.z)));
+      return Vector3.TransformCoordinatesToRef(target, transform, target);
+    };
+    return { geometricError: 2, engineData: { boundingVolume: {
+      obb: { min, max, transform, inverseTransform, points, clampPoint },
+      distanceToPoint: vi.fn((point: Vector3) => { clampPoint(point, nearest); return Vector3.Distance(point, nearest); }),
+    } } };
+  };
+
+  it.each([
+    { start: [-100, 40, 50], end: [100, 40, 50], distance: Math.sqrt(800) },
+    { start: [-100, 40, 0], end: [100, 40, 0], distance: 20 },
+    { start: [-100, 0, 0], end: [100, 0, 0], distance: 0 },
+    { start: [-100, 20, 30], end: [100, 20, 30], distance: 0 },
+    { start: [100, 100, 100], end: [150, 160, 170], distance: Math.sqrt(19400) },
+  ])("solves box capsule face/edge/corner minima without iterative point queries: %j", test => {
+    settings.set("map.terrain.robustOrbitLOD", true);
+    settings.set("map.terrain.proximityAnchor", "eye");
+    settings.set("map.terrain.proximityLookaheadSeconds", 1);
+    const f = setup();
+    try {
+      const start = new Vector3(EARTH + 20 + test.start[0], test.start[1], test.start[2]);
+      const end = new Vector3(EARTH + 20 + test.end[0], test.end[1], test.end[2]);
+      f.eye.copyFrom(start.scale(2).subtract(end)); f.runtime.update();
+      f.eye.copyFrom(start); f.advance(1000);
+      const tile = boxTile(Matrix.Translation(EARTH + 20, 0, 0));
+      expect(f.measure(tile).distanceFromCamera).toBeCloseTo(test.distance, 7);
+      expect(tile.engineData.boundingVolume.distanceToPoint).toHaveBeenCalledOnce();
+    } finally { f.runtime.dispose(); }
+  });
+
+  it("matches an independent dense-search oracle for rotated, scaled, sheared and degenerate boxes", () => {
+    settings.set("map.terrain.robustOrbitLOD", true);
+    settings.set("map.terrain.proximityAnchor", "eye");
+    settings.set("map.terrain.proximityLookaheadSeconds", 1);
+    const f = setup();
+    let seed = 12345;
+    const random = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 2 ** 32; };
+    const point = Vector3.Zero();
+    try {
+      for (let test = 0; test < 32; test++) {
+        const transform = Matrix.Scaling(0.5 + random() * 2, 0.5 + random() * 2, 0.5 + random() * 2)
+          .multiply(Matrix.RotationYawPitchRoll(random() * 3, random() * 3, random() * 3));
+        if (test % 3 === 0) transform.setRowFromFloats(0, transform.m[0], transform.m[1] + 0.2, transform.m[2], 0);
+        transform.setTranslationFromFloats(EARTH + 20, 0, 0);
+        const min = test % 7 === 0 ? Vector3.Zero() : new Vector3(-10, -20, -30);
+        const max = test % 7 === 0 ? Vector3.Zero() : new Vector3(10, 20, 30);
+        const tile = boxTile(transform, min, max), volume = tile.engineData.boundingVolume;
+        const start = new Vector3(EARTH + 20 + random() * 300 - 150, random() * 300 - 150, random() * 300 - 150);
+        const end = new Vector3(EARTH + 20 + random() * 300 - 150, random() * 300 - 150, random() * 300 - 150);
+        // Independent numerical oracle: find the best 1/1000 interval, then
+        // minimize only that neighbourhood at much higher precision.
+        let best = Infinity, bestIndex = 0;
+        const distanceAt = (fraction: number): number => { Vector3.LerpToRef(start, end, fraction, point); return volume.distanceToPoint(point); };
+        for (let step = 0; step <= 1000; step++) {
+          const distance = distanceAt(step / 1000);
+          if (distance < best) { best = distance; bestIndex = step; }
+        }
+        let low = Math.max(0, (bestIndex - 1) / 1000), high = Math.min(1, (bestIndex + 1) / 1000);
+        for (let iteration = 0; iteration < 60; iteration++) {
+          const left = low + (high - low) / 3, right = high - (high - low) / 3;
+          const a = distanceAt(left), b = distanceAt(right);
+          best = Math.min(best, a, b);
+          if (a < b) high = right; else low = left;
+        }
+        volume.distanceToPoint.mockClear();
+        f.eye.copyFrom(start.scale(2).subtract(end)); f.advance(1000);
+        f.eye.copyFrom(start); f.advance(1000);
+        expect(f.measure(tile).distanceFromCamera, `box ${test}`).toBeCloseTo(best, 6);
+        expect(volume.distanceToPoint).toHaveBeenCalledOnce();
+      }
+    } finally { f.runtime.dispose(); }
+  });
+
+  it("reuses unchanged capsule measurements and invalidates every input to proximity error", () => {
+    settings.set("map.terrain.robustOrbitLOD", true);
+    settings.set("map.terrain.proximityAnchor", "eye");
+    const f = setup();
+    try {
+      const tile = sphereTile(new Vector3(EARTH + 20, 300, 0), 2);
+      const measure = vi.spyOn(tile.engineData.boundingVolume, "distanceToPoint");
+      f.runtime.update();
+      const first = f.measure(tile);
+      for (let frame = 0; frame < 5; frame++) { f.advance(16); expect(f.measure(tile)).toEqual(first); }
+      expect(measure).toHaveBeenCalledOnce();
+      settings.set("map.terrain.proximityWeight", 2); f.runtime.update();
+      expect(f.measure(tile).error).toBeCloseTo(first.error * 2);
+      expect(measure).toHaveBeenCalledTimes(2);
+      vi.spyOn(f.scene.activeCamera!, "getProjectionMatrix").mockReturnValue(Matrix.PerspectiveFovLH(Math.PI / 3, 1, 1, 1e7));
+      f.runtime.update();
+      expect(f.measure(tile).error).toBeGreaterThan(first.error * 2);
+      expect(measure).toHaveBeenCalledTimes(3);
+      tile.geometricError = 4;
+      f.measure(tile);
+      expect(measure).toHaveBeenCalledTimes(4);
+      settings.set("map.terrain.proximityRadiusMeters", 50); f.runtime.update();
+      expect(f.measure(tile).inView).toBe(false);
+    } finally { f.runtime.dispose(); }
+  });
+
+  it("measures identical eye and focus capsules once while keeping distinct anchors independent", () => {
+    settings.set("map.terrain.robustOrbitLOD", true);
+    const focus = new Vector3(EARTH + 20, 0, 0), f = setup({ getProximityFocus: () => focus });
+    try {
+      const tile = sphereTile(new Vector3(EARTH + 20, 300, 0), 2);
+      const measure = vi.spyOn(tile.engineData.boundingVolume, "distanceToPoint");
+      f.runtime.update(); f.measure(tile);
+      expect(measure).toHaveBeenCalledOnce();
+      focus.z = 20; f.runtime.update(); f.measure(tile);
+      expect(measure).toHaveBeenCalledTimes(3);
+    } finally { f.runtime.dispose(); }
+  });
+});

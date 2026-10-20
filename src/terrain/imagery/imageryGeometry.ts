@@ -315,13 +315,14 @@ export function isSphereBelowHorizon(camera: Vec3, center: Vec3, radius: number,
   const tx = center.x - camera.x, ty = center.y - camera.y, tz = center.z - camera.z;
   const toCenter = Math.hypot(tx, ty, tz);
   if (toCenter <= radius) return false;
+  const grazing = Math.sqrt(distance * distance - occluderRadius * occluderRadius);
+  if (!(toCenter - radius > grazing)) return false;
   // Angle between the ray to the sphere's centre and the ray to the globe's centre.
   const cosAxis = -(tx * camera.x + ty * camera.y + tz * camera.z) / (toCenter * distance);
   const axisAngle = Math.acos(Math.max(-1, Math.min(1, cosAxis)));
   const sphereAngle = Math.asin(Math.min(1, radius / toCenter));
   const coneAngle = Math.asin(occluderRadius / distance);
-  const grazing = Math.sqrt(distance * distance - occluderRadius * occluderRadius);
-  return axisAngle + sphereAngle < coneAngle && toCenter - radius > grazing;
+  return axisAngle + sphereAngle < coneAngle;
 }
 
 /** The inverse of a 4×4 matrix in Babylon's layout, or null when singular. */

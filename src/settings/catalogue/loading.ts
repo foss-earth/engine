@@ -85,6 +85,92 @@ const STARTING_VALUE = "The starting calibration of the projected-imagery work; 
 
 export const MAP_LOADING_PARAMETERS: readonly ParameterSpec[] = [
   {
+    id: "map.terrain.proximityAnchor",
+    label: "Proximity anchor",
+    description: "Prepare nearby ground around the camera eye, the selected focus point, or both.",
+    kind: "choice",
+    unit: "none",
+    choices: [{"id":"eye","label":"Eye"},{"id":"focus","label":"Focus"},{"id":"both","label":"Both"}],
+    default: "both",
+    defaultReason: "Starting proximity LOD tuning; applies while Robust orbit LOD is on.",
+    home: { tab: MAP_TAB, section: "terrain-selection", level: "all" },
+    appliesLive: true,
+    source: TERRAIN_SELECTOR,
+  },
+  {
+    id: "map.terrain.proximityBlendMode",
+    label: "Detail blend",
+    description: "Combine view and proximity detail by their maximum, a smooth power norm, or their sum.",
+    kind: "choice",
+    unit: "none",
+    choices: [{"id":"max","label":"Max"},{"id":"power-norm","label":"Power"},{"id":"weighted-sum","label":"Sum"}],
+    default: "max",
+    defaultReason: "Starting proximity LOD tuning; applies while Robust orbit LOD is on.",
+    home: { tab: MAP_TAB, section: "terrain-selection", level: "all" },
+    appliesLive: true,
+    source: TERRAIN_SELECTOR,
+  },
+  quantity({
+    id: "map.terrain.proximityBlendPower", label: "Blend power", unit: "ratio", min: 1, max: 8, step: 0.5, fallback: 2, section: "terrain-selection",
+    description: "How smoothly view and proximity detail combine in Power mode.",
+    reason: "Starting proximity LOD tuning; applies while Robust orbit LOD is on.", source: TERRAIN_SELECTOR,
+  }),
+  quantity({
+    id: "map.terrain.losWeight", label: "View weight", unit: "ratio", min: 0, max: 4, step: 0.05, fallback: 1, section: "terrain-selection",
+    description: "How strongly visible terrain contributes to detail selection.",
+    reason: "Starting proximity LOD tuning; applies while Robust orbit LOD is on.", source: TERRAIN_SELECTOR,
+  }),
+  quantity({
+    id: "map.terrain.losGazeExponent", label: "Gaze exponent", unit: "ratio", min: 0, max: 8, step: 0.25, fallback: 0, section: "terrain-selection",
+    description: "Concentrates visible detail toward the view center; zero weights the whole view equally.",
+    reason: "Starting proximity LOD tuning; applies while Robust orbit LOD is on.", source: TERRAIN_SELECTOR,
+  }),
+  quantity({
+    id: "map.terrain.losPeripheralFloor", label: "Peripheral floor", unit: "ratio", min: 0.05, max: 1, step: 0.05, fallback: 0.25, section: "terrain-selection",
+    description: "The smallest share of view detail kept at the edges when gaze weighting is enabled.",
+    reason: "Starting proximity LOD tuning; applies while Robust orbit LOD is on.", source: TERRAIN_SELECTOR,
+  }),
+  quantity({
+    id: "map.terrain.proximityWeight", label: "Proximity weight", unit: "ratio", min: 0, max: 4, step: 0.05, fallback: 1, section: "terrain-selection",
+    description: "How strongly nearby terrain contributes to detail selection; the safety core retains its minimum level independently.",
+    reason: "Starting proximity LOD tuning; applies while Robust orbit LOD is on.", source: TERRAIN_SELECTOR,
+  }),
+  quantity({
+    id: "map.terrain.proximityCoreMeters", label: "Safety core", unit: "m", min: 15, max: 2000, step: 0.1, fallback: 200, scale: "log2", section: "terrain-selection",
+    description: "Nearby ground within this radius retains the minimum proximity detail.",
+    reason: "Starting proximity LOD tuning; applies while Robust orbit LOD is on.", source: TERRAIN_SELECTOR,
+  }),
+  quantity({
+    id: "map.terrain.proximityRadiusMeters", label: "Proximity radius", unit: "m", min: 50, max: 50000, step: 0.1, fallback: 1500, scale: "log2", section: "terrain-selection",
+    description: "The outer horizontal radius of terrain refined around each anchor and its predicted motion.",
+    reason: "Starting proximity LOD tuning; applies while Robust orbit LOD is on.", source: TERRAIN_SELECTOR,
+  }),
+  quantity({
+    id: "map.terrain.proximityHeightMeters", label: "Proximity height", unit: "m", min: 20, max: 10000, step: 0.1, fallback: 600, scale: "log2", section: "terrain-selection",
+    description: "The vertical clearance within which proximity detail applies.",
+    reason: "Starting proximity LOD tuning; applies while Robust orbit LOD is on.", source: TERRAIN_SELECTOR,
+  }),
+  quantity({
+    id: "map.terrain.proximityFalloffExponent", label: "Proximity falloff", unit: "ratio", min: 0.25, max: 4, step: 0.25, fallback: 1, section: "terrain-selection",
+    description: "Shapes how proximity detail fades between the safety core and outer radius.",
+    reason: "Starting proximity LOD tuning; applies while Robust orbit LOD is on.", source: TERRAIN_SELECTOR,
+  }),
+  quantity({
+    id: "map.terrain.proximityLookaheadSeconds", label: "Motion lookahead", unit: "s", min: 0, max: 5, step: 0.1, fallback: 1.5, section: "terrain-selection",
+    description: "How far ahead along anchor motion to prepare nearby terrain.",
+    reason: "Starting proximity LOD tuning; applies while Robust orbit LOD is on.", source: TERRAIN_SELECTOR,
+  }),
+  quantity({
+    id: "map.terrain.minProximityZoom", label: "Minimum proximity level", unit: "levels", min: 0, max: 18, step: 1, fallback: 14, section: "terrain-selection",
+    description: "The minimum terrain level in the safety core, independent of visual detail and limited by the finest terrain level.",
+    reason: "Starting proximity LOD tuning; applies while Robust orbit LOD is on.", source: TERRAIN_SELECTOR,
+  }),
+  quantity({
+    id: "map.terrain.maxProximityErrorPx", label: "Maximum proximity error", unit: "px", min: 1, max: 128, step: 0.25, fallback: 8, scale: "log2", section: "terrain-selection",
+    description: "The largest Google 3D tile error allowed in the safety core, independent of visual detail.",
+    reason: "Starting proximity LOD tuning; applies while Robust orbit LOD is on.", source: TERRAIN_SELECTOR,
+  }),
+  {
     id: "map.imagery.gpuBudget",
     label: "2D imagery GPU memory",
     description: "How much GPU memory the complete 2D imagery atlas mip chain and full transactional page-table texture may use. More keeps more imagery at full detail while the view moves; changing it reloads the imagery.",
@@ -327,7 +413,7 @@ export const MAP_TERRAIN_SELECTION_PARAMETERS: readonly ParameterSpec[] = [
   {
     id: "map.terrain.robustOrbitLOD",
     label: "Robust orbit LOD",
-    description: "Retains recently viewed HD terrain tiles across camera orbits, prevents coarse stand-in elevation from overwriting fine meshes, refines terrain under the camera eye to avoid safe-space elevation jolts, and keeps in-frustum tiles from being blocked by out-of-frustum sibling leaves.",
+    description: "Refines nearby terrain around the eye and predicted anchor motion independently of view detail, for raster basemaps and Google 3D Tiles. Retains recently viewed terrain, prevents coarse stand-ins from replacing fine elevation, and lets visible children settle independently of off-screen siblings.",
     kind: "boolean",
     unit: "none",
     default: false,

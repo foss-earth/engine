@@ -81,6 +81,22 @@ describe("immutable batched imagery heights", () => {
       expect(test.batches.stats()).toMatchObject({ cacheHits: 1, pageSamples: 2, retainedGrids: 2 });
     } finally { test.dispose(); }
   });
+  it("invalidates in-place neighbour edits and grid metadata after reusing a wrapper", () => {
+    const test = setup();
+    const a = { z: 1, x: 1, y: 0, size: 2, heights: new Float32Array(4).fill(20) };
+    const b = { ...a, heights: new Float32Array(4).fill(90) };
+    const source = { ...grid, neighbors: [a, b] };
+    const edge = new Float64Array([0.99, 0.5]);
+    const check = () => expect(test.batches.sample(source, edge)[0]).toBe(sampleTerrainGrid(source, edge[0], edge[1]));
+    try {
+      check(); check();
+      source.neighbors.reverse(); check();
+      b.heights = new Float32Array(4).fill(130); check();
+      source.heights = new Float32Array(4).fill(-30); check();
+      source.x = 1; check();
+      expect(test.batches.stats().pageSamples).toBe(5);
+    } finally { test.dispose(); }
+  });
   it("retires a timed-out worker and uses current page grids without retry", async () => {
     const test = setup();
     try {

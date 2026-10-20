@@ -234,6 +234,22 @@ describe("streamed terrain", () => {
       await Promise.all([...plain, ...moved]);
       expect(fetched()).toEqual(["4/1/0", "4/2/0", "4/6/0", "4/5/0"]);
     });
+    it("promotes a safety-core patch center ahead of queued distant tiles and prioritizes its decode", async () => {
+      const priorities: boolean[] = [];
+      const fetchTile = vi.fn<typeof ports.fetchTile>(async () => new Response("tile"));
+      const loader = createTerrainTileLoader({ ...options, ports: { ...ports, fetchTile },
+        decode: async (_blob, request) => { priorities.push(Boolean(request?.prioritize)); return { size: 1, heights: new Float32Array([250]) }; } });
+      loader.setPaused(true);
+      const ordinary = loader.load({ z: 4, x: 1, y: 1 });
+      const alreadyWaiting = loader.load({ z: 4, x: 8, y: 8 });
+      const core = loader.loadPatch({ z: 4, x: 8, y: 8 }, createTerrainInterest(), true);
+      loader.setPaused(false);
+      await Promise.all([ordinary, alreadyWaiting, core]);
+      expect(fetchTile.mock.calls[0][0]).toContain("/4/8/8");
+      // An already queued download must adopt its promoted decode priority too.
+      expect(priorities[0]).toBe(true);
+      loader.dispose();
+    });
     it("keeps a waiting tile's place for a patch that holds it before asking", async () => {
       const { loader, fetched } = harness();
       loader.setPaused(true);

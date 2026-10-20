@@ -20,6 +20,8 @@ interface GridState {
   count: number;
 }
 interface Flight { id: number; start: number; batches: Array<{ state: GridState; coordinates: Float64Array; pixels: TerrainHeightPixels }> }
+interface GridStamp { z: number; x: number; y: number; size: number; heightsId: number }
+interface GridGeneration { own: GridStamp; neighbors: GridStamp[] | null; key: string }
 const MAX_CACHE = 131072, MAX_PENDING = 16384, MAX_BATCH = 8192, MAX_TRANSFER = 24 * 1024 ** 2;
 
 /** Exact asynchronous memoisation over immutable adopted grids. A cache miss
@@ -41,7 +43,22 @@ export function createTerrainHeightBatches(options: {
     let id = arrayIds.get(heights); if (id === undefined) { id = ++nextArray; arrayIds.set(heights, id); } return id;
   };
   const ownKey = (grid: TerrainGrid): string => `${grid.z}/${grid.x}/${grid.y}/${grid.size}/${arrayId(grid.heights)}`;
-  const generation = (grid: TerrainGrid): string => `${ownKey(grid)}:${grid.neighbors ? grid.neighbors.map(ownKey).join(",") : "none"}`;
+  let wrapperGenerations = new WeakMap<TerrainGrid, GridGeneration>();
+  const unchanged = (stamp: GridStamp, grid: TerrainGrid): boolean => stamp.z === grid.z && stamp.x === grid.x
+    && stamp.y === grid.y && stamp.size === grid.size && stamp.heightsId === arrayId(grid.heights);
+  const stamp = (grid: TerrainGrid): GridStamp => ({ z: grid.z, x: grid.x, y: grid.y, size: grid.size, heightsId: arrayId(grid.heights) });
+  const generation = (grid: TerrainGrid): string => {
+    const previous = wrapperGenerations.get(grid), neighbors = grid.neighbors;
+    let same = previous !== undefined && unchanged(previous.own, grid)
+      && (previous.neighbors === null ? neighbors === undefined : neighbors !== undefined && previous.neighbors.length === neighbors.length);
+    if (same && neighbors) for (let i = 0; i < neighbors.length; i++) {
+      if (!unchanged(previous!.neighbors![i], neighbors[i])) { same = false; break; }
+    }
+    if (same) return previous!.key;
+    const key = `${ownKey(grid)}:${neighbors ? neighbors.map(ownKey).join(",") : "none"}`;
+    wrapperGenerations.set(grid, { own: stamp(grid), neighbors: neighbors ? neighbors.map(stamp) : null, key });
+    return key;
+  };
   const status: TerrainHeightBatchStats = { actual: "not started", state: "idle", parity: options.kernel === "single" ? "unchecked" : "not compared",
     fallbackReason: null, jobs: 0, samples: 0, cacheHits: 0, referenceCacheHits: 0, workerCacheHits: 0, nativeCacheHits: 0, pageSamples: 0, dropped: 0,
     workMs: 0, roundTripMs: 0, inputBytes: 0, outputBytes: 0, snapshotBytes: 0, nativeBytes: 0, cachedSamples: 0, pageSnapshotBytes: 0, retainedGrids: 0, peakSnapshotBytes: 0, peakNativeBytes: 0 };
@@ -66,6 +83,7 @@ export function createTerrainHeightBatches(options: {
     cancelTimeout?.(); cancelTimeout = null;
     if (worker) { worker.onmessage = null; worker.onerror = null; worker.onmessageerror = null; worker.terminate(); worker = null; }
     flight = null; queued = 0;
+    wrapperGenerations = new WeakMap();
     for (const state of [...states.values()]) removeState(state);
     queued = 0;
     status.snapshotBytes = 0; status.nativeBytes = 0;
@@ -180,7 +198,7 @@ export function createTerrainHeightBatches(options: {
         state = { id: ++nextGrid, key, grid: new WeakRef(grid), values: new Map(), queued: new Map(), pending: [], count: 0 };
         generations.set(key, state); states.set(state.id, state);
       }
-      state.grid = new WeakRef(grid);
+      if (state.grid.deref() !== grid) state.grid = new WeakRef(grid);
       states.delete(state.id); states.set(state.id, state);
       const result = new Float64Array(coordinates.length / 2);
       for (let i = 0; i < result.length; i++) {
@@ -212,6 +230,7 @@ export function createTerrainHeightBatches(options: {
       cancelTimeout?.(); cancelTimeout = null;
       if (worker) { worker.onmessage = null; worker.onerror = null; worker.onmessageerror = null; worker.terminate(); }
       worker = null; flight = null;
+      wrapperGenerations = new WeakMap();
       for (const state of [...states.values()]) removeState(state);
       queued = 0; status.snapshotBytes = 0; status.nativeBytes = 0;
     },

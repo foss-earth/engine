@@ -26,6 +26,7 @@ import { cameraAxes, lineOfSightTarget, orbitAbout, rotateAbout, tiltAt, turnAbo
 import type { AnchoredMotionConstraint, AnchoredMotionResult, GlideMotion, NavigationAnchor } from "../input/navigationAnchors.js";
 import { ORBIT_GLIDE_REST_DEG, type GlideAnchors } from "../input/inertialCameraController.js";
 import { worldViewportHeight } from "../browser/worldViewport.js";
+import type { SurfaceHit } from "../surface/contracts.js";
 
 // ─── Camera State Limits ────────────────────────────────────────────
 
@@ -59,6 +60,13 @@ const MAX_EYE_DIP_DEG = 89.9;
 export interface OrbitTargetHeightOptions {
   resolveSurfaceHeightMeters: (latDeg: number, lonDeg: number) => number | null;
   initialOffsetMeters?: number;
+}
+
+/** Optional raster quality gate while finer proximity terrain is loading. */
+export interface EyeContactSurface {
+  sample(latDeg: number, lonDeg: number): Pick<SurfaceHit, "heightMeters" | "quality"> | null;
+  minQuality(): number;
+  pending(): boolean;
 }
 
 // ─── Pitch Conversion ───────────────────────────────────────────────
@@ -195,6 +203,7 @@ export class CameraController {
   private groundFollow: GroundFollow = DEFAULT_GROUND_FOLLOW;
   /** Experimental. Off, the orbit point follows the ground. On, altitude is a velocity the ground can only push up. */
   private eyeContact: EyeContact = DEFAULT_EYE_CONTACT;
+  private eyeContactSurface: EyeContactSurface | null = null;
   /** Upward speed from eye contact, m/s. Never downward: the ground does not pull. */
   private verticalVelocityMps = 0;
   private lastEyeContactMs: number | null = null;
@@ -355,6 +364,10 @@ export class CameraController {
     this.rest();
   }
 
+  setEyeContactSurface(surface: EyeContactSurface | null): void {
+    this.eyeContactSurface = surface;
+  }
+
   private smoothSurfaceHeightMeters(targetHeightMeters: number): number {
     const now = this.ports.nowMs();
     if (this.smoothedSurfaceHeightMeters === null || this.lastSurfaceHeightResolveMs === null) {
@@ -497,8 +510,13 @@ export class CameraController {
 
     const dt = dtMs / 1000;
     const eye = ecefToGeodetic(...this.poseOf(this.currentFields()).eye);
-    const ground = this.resolveSurfaceHeightMeters?.(eye.latRad * RAD_TO_DEG, eye.lonRad * RAD_TO_DEG);
-    const penetration = typeof ground === "number" ? ground + this.eyeContact.clearanceMeters - eye.altMeters : 0;
+    const lat = eye.latRad * RAD_TO_DEG, lon = eye.lonRad * RAD_TO_DEG;
+    const minQuality = this.eyeContactSurface?.minQuality() ?? 0;
+    const sample = minQuality > 0 ? this.eyeContactSurface?.sample(lat, lon) : null;
+    const coarsePending = sample && sample.quality >= 0 && sample.quality < minQuality
+      && this.eyeContactSurface?.pending();
+    const ground = sample?.heightMeters ?? this.resolveSurfaceHeightMeters?.(lat, lon);
+    const penetration = !coarsePending && typeof ground === "number" ? ground + this.eyeContact.clearanceMeters - eye.altMeters : 0;
     const maxAccel = this.eyeContact.maxAccelerationMetersPerSecondSquared;
     const inContact = penetration > 0 && maxAccel > 0;
     if (inContact) {

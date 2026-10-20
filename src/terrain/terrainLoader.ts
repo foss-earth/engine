@@ -86,7 +86,7 @@ export function createTerrainTileLoader<TBlob, TSignal extends NavigationAbortSi
   const requireCurrent = (): void => { if (controller.signal.aborted) throw disposedError(); };
   async function download(tile: TerrainTile, prioritize: boolean): Promise<TerrainGrid> {
     await new Promise<void>((resolve, reject) => {
-      const entry: Waiting = { key: `${tile.z}/${tile.x}/${tile.y}`, start: resolve, reject, withdrawn: false, ahead: prioritize };
+      const entry: Waiting = { key: `${tile.z}/${tile.x}/${tile.y}`, start: () => { prioritize = entry.ahead; resolve(); }, reject, withdrawn: false, ahead: prioritize };
       waiting.set(entry.key, entry);
       (prioritize ? ahead : queue).push(entry);
       pump();
@@ -229,8 +229,8 @@ export function createTerrainTileLoader<TBlob, TSignal extends NavigationAbortSi
       });
     });
   }
-  async function loadPatch(tile: TerrainTile, interest?: TerrainInterest): Promise<TerrainGrid> {
-    const grid = await load(tile, false, interest);
+  async function loadPatch(tile: TerrainTile, interest?: TerrainInterest, prioritize = false): Promise<TerrainGrid> {
+    const grid = await load(tile, prioritize, interest);
     const released = interest?.released ?? false;
     const neighbors: Array<Promise<TerrainGrid>> = [];
     const n = 2 ** grid.z;

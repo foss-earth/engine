@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { Vector3 } from "@babylonjs/core";
 import type { GeospatialCamera } from "@babylonjs/core";
 import { DEG_TO_RAD, ecefToGeodetic, geodeticToEcef } from "../src/camera/cameraMath.js";
@@ -198,6 +198,25 @@ describe("CameraController eye contact", () => {
       at(ms: number) { now = ms; },
     };
   }
+
+  it.each([
+    { minQuality: 14, quality: 4, pending: true, rises: false },
+    { minQuality: 14, quality: 14, pending: true, rises: true },
+    { minQuality: 14, quality: 4, pending: false, rises: true },
+    { minQuality: 0, quality: 4, pending: true, rises: true },
+  ])("gates only coarse pending proximity terrain: %j", ({ minQuality, quality, pending, rises }) => {
+    const view = rig(50);
+    view.controller.setEyeContact(view.contact);
+    view.surface = 400;
+    const sample = vi.fn(() => ({ heightMeters: 400, quality, point: { x: 0, y: 0, z: 0 },
+      normal: { x: 0, y: 0, z: 1 }, meshId: "ground", revision: 1, distanceMeters: 1 }));
+    view.controller.setEyeContactSurface({ sample, minQuality: () => minQuality, pending: () => pending });
+    const before = centerHeight(view.camera);
+    view.at(100);
+    view.controller.stepEyeContact();
+    expect(centerHeight(view.camera) > before + 0.01).toBe(rises);
+    expect(sample).toHaveBeenCalledTimes(minQuality > 0 ? 1 : 0);
+  });
 
   it("keeps its altitude while panning over a hill or a valley", () => {
     const view = rig();

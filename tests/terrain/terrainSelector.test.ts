@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { createHash } from "node:crypto";
 import { ecefToGeodetic, geodeticToEcef } from "../../src/camera/cameraMath.js";
 import { tileContains, type TileId } from "../../src/terrain/imagery/imageryGeometry.js";
 import { createTestView, type TestViewOptions } from "../../src/terrain/imagery/imageryTestViews.js";
-import { selectTerrain, terrainTileErrorMeters, type TerrainSelection, type TerrainSelectionInput } from "../../src/terrain/terrainSelector.js";
+import { blendTerrainErrors, selectTerrain, TERRAIN_PROXIMITY_DEFAULTS, terrainTileErrorMeters, type TerrainProximityConfig, type TerrainSelection, type TerrainSelectionInput } from "../../src/terrain/terrainSelector.js";
 
 const OVERHEAD: TestViewOptions = { latDeg: 36.1, lonDeg: -112.1, altitudeMeters: 3000 };
 const OBLIQUE: TestViewOptions = { latDeg: 36.1, lonDeg: -112.1, altitudeMeters: 1500, pitchDeg: 70, headingDeg: 30 };
@@ -99,6 +100,190 @@ describe("terrain selection by screen-space error", () => {
     for (const targetPx of [3.64, 4.4]) {
       const next = selectTerrain(input(OVERHEAD, { targetPx, previous }));
       expect(next.leaves.map(leaf => leaf.key).sort()).toEqual([...previous.leaves].sort());
+    }
+  });
+});
+
+describe("independent terrain proximity detail", () => {
+  const point = (latDeg: number, lonDeg: number, altitude = 20) => geodeticToEcef(latDeg * Math.PI / 180, lonDeg * Math.PI / 180, altitude);
+  const config = (start: TerrainProximityConfig["start"], overrides: Partial<TerrainProximityConfig> = {}): TerrainProximityConfig => ({
+    ...TERRAIN_PROXIMITY_DEFAULTS, start, end: start, ...overrides,
+  });
+  const leafAt = (selection: TerrainSelection, latDeg: number, lonDeg: number) => {
+    const z = levelAt(selection, latDeg, lonDeg);
+    return selection.leaves.find(({ tile }) => {
+      if (tile.z !== z) return false;
+      const n = 2 ** z, lat = latDeg * Math.PI / 180;
+      return Math.floor((lonDeg + 180) / 360 * n) === tile.x
+        && Math.floor((1 - Math.log(Math.tan(lat) + 1 / Math.cos(lat)) / Math.PI) / 2 * n) === tile.y;
+    })!;
+  };
+
+  it("keeps a 20 m eye at the safety floor despite a 10 km refine point and coarse visual target", () => {
+    const low = { ...OBLIQUE, altitudeMeters: 20, pitchDeg: 85 };
+    const refineFrom = { position: point(36.2, -112.1, 0), minDistanceMeters: 10_000 };
+    const baseline = selectTerrain(input(low, { refineFrom, targetPx: 128 }));
+    const robust = selectTerrain(input(low, { refineFrom, targetPx: 128, robustOrbitLOD: true }));
+    expect(levelAt(baseline, low.latDeg, low.lonDeg)).toBeLessThan(14);
+    expect(levelAt(robust, low.latDeg, low.lonDeg)).toBeGreaterThanOrEqual(14);
+    expect(leafAt(robust, low.latDeg, low.lonDeg).distanceMeters).toBeLessThan(25);
+    expect(leafAt(robust, low.latDeg, low.lonDeg).inCore).toBe(true);
+  });
+
+  it("refines a rear tile before the eye crosses its boundary, along the velocity capsule", () => {
+    const view = { latDeg: 0.0002, lonDeg: -112.1, altitudeMeters: 20, pitchDeg: 85, headingDeg: 0 };
+    const start = point(view.latDeg, view.lonDeg);
+    const proximity = config(start, { coreMeters: 15, radiusMeters: 50, minProximityZoom: 16, losWeight: 0, proximityWeight: 0 });
+    const still = selectTerrain(input(view, { proximity, targetPx: 128 }));
+    const moving = selectTerrain(input(view, { proximity: { ...proximity, end: point(-0.006, view.lonDeg) }, targetPx: 128 }));
+    expect(levelAt(still, -0.004, view.lonDeg)).toBeLessThan(16);
+    const rear = leafAt(moving, -0.004, view.lonDeg);
+    expect(rear.tile.z).toBe(16);
+    expect(rear.inFrustum).toBe(false);
+    expect(rear.inProximity).toBe(true);
+    expect(rear.inCore).toBe(true);
+    expect(rear.distanceMeters).toBeLessThan(25);
+  });
+
+  it("takes the nearer of both anchor capsules and respects the vertical ceiling", () => {
+    const view = { ...OVERHEAD, altitudeMeters: 3000 };
+    const primary = point(view.latDeg, view.lonDeg, view.altitudeMeters);
+    const secondary = point(36.12, -112.1);
+    const proximity = config(primary, { losWeight: 0, proximityWeight: 0, minProximityZoom: 15 });
+    const eyeOnly = selectTerrain(input(view, { proximity, targetPx: 128 }));
+    expect(eyeOnly.leaves.some(leaf => leaf.inProximity)).toBe(false);
+    const both = selectTerrain(input(view, { proximity: { ...proximity, secondary: { start: secondary, end: secondary } }, targetPx: 128 }));
+    expect(levelAt(both, 36.12, -112.1)).toBe(15);
+    expect(leafAt(both, 36.12, -112.1).inCore).toBe(true);
+    expect(levelAt(both, view.latDeg, view.lonDeg)).toBeLessThan(15);
+  });
+
+  it("treats coincident eye and focus trajectories as the same proximity region", () => {
+    const view = { ...OBLIQUE, altitudeMeters: 20 };
+    const start = point(view.latDeg, view.lonDeg), end = point(view.latDeg - 0.003, view.lonDeg);
+    const proximity = config(start, { end });
+    const single = selectTerrain(input(view, { proximity }));
+    const coincident = selectTerrain(input(view, { proximity: { ...proximity, secondary: { start: { ...start }, end: { ...end } } } }));
+    expect(coincident).toEqual(single);
+  });
+
+  it("applies LOS and proximity weights, gaze falloff, and all three blending operators", () => {
+    const view = { ...OVERHEAD, altitudeMeters: 1000 };
+    const start = point(view.latDeg, view.lonDeg, view.altitudeMeters);
+    const proximity = config(start, { heightMeters: 10_000, minProximityZoom: 0 });
+    const error = (overrides: Partial<TerrainProximityConfig>) => leafAt(selectTerrain(input(view, {
+      maxLevel: 2, proximity: { ...proximity, ...overrides },
+    })), view.latDeg, view.lonDeg).errorPx;
+    const los = error({ proximityWeight: 0 });
+    const prox = error({ losWeight: 0 });
+    expect(los).toBeGreaterThan(0);
+    expect(prox).toBeGreaterThan(0);
+    expect(error({ losWeight: 2, proximityWeight: 0 })).toBeCloseTo(los * 2, 8);
+    expect(error({ losWeight: 0, proximityWeight: 2 })).toBeCloseTo(prox * 2, 8);
+    expect(error({ blendMode: "max" })).toBeCloseTo(Math.max(los, prox), 8);
+    expect(error({ blendMode: "weighted-sum" })).toBeCloseTo(los + prox, 8);
+    expect(error({ blendMode: "power-norm", blendPower: 2 })).toBeCloseTo(Math.hypot(los, prox), 8);
+    expect(error({ blendMode: "power-norm", blendPower: 1 })).toBeCloseTo(los + prox, 8);
+    const lat = view.latDeg * Math.PI / 180, lon = view.lonDeg * Math.PI / 180;
+    const forward = { x: Math.cos(lat) * Math.cos(lon), y: Math.cos(lat) * Math.sin(lon), z: Math.sin(lat) };
+    expect(error({ proximityWeight: 0, losGazeExponent: 2, losPeripheralFloor: 0.25, forward })).toBeCloseTo(los * 0.25, 8);
+    // The view matrix supplies the actual downward gaze when no override is given.
+    expect(error({ proximityWeight: 0, losGazeExponent: 2 })).toBeCloseTo(los, 8);
+  });
+
+  it("keeps its hard floor when both metric weights are zero and visual detail is coarsened", () => {
+    const view = { ...OBLIQUE, altitudeMeters: 20, pitchDeg: 85 };
+    const proximity = config(point(view.latDeg, view.lonDeg), { losWeight: 0, proximityWeight: 0 });
+    const selection = selectTerrain(input(view, { proximity, targetPx: 1e12 }));
+    expect(levelAt(selection, view.latDeg, view.lonDeg)).toBe(14);
+    expect(selection.leaves.filter(leaf => leaf.inCore).every(leaf => leaf.tile.z >= 14)).toBe(true);
+    expect(selection.leaves.every(leaf => leaf.errorPx === 0)).toBe(true);
+    const capped = selectTerrain(input(view, { proximity, targetPx: 1e12, maxTiles: 40 }));
+    expect(capped.leaves.length).toBeLessThanOrEqual(40);
+    expect(capped.truncated).toBe(true);
+  });
+
+  it("refines across the antimeridian while rejecting the opposite side of the globe", () => {
+    const view = { latDeg: 0.01, lonDeg: 179.9999, altitudeMeters: 20, pitchDeg: 85, headingDeg: 270 };
+    const start = point(view.latDeg, view.lonDeg);
+    const proximity = config(start, { end: point(view.latDeg, -179.998), losWeight: 0, proximityWeight: 0 });
+    const selection = selectTerrain(input(view, { proximity, targetPx: 128 }));
+    expect(levelAt(selection, view.latDeg, 179.9999)).toBeGreaterThanOrEqual(14);
+    expect(levelAt(selection, view.latDeg, -179.9999)).toBeGreaterThanOrEqual(14);
+    expect(levelAt(selection, view.latDeg, 0)).toBe(2);
+  });
+
+  it("spends a limited tile budget on the safety core ahead of distant visual errors", () => {
+    const view = { latDeg: 36.1, lonDeg: -112.1, altitudeMeters: 20, pitchDeg: 85, headingDeg: 0 };
+    const proximity = config(point(36.04, -112.1), { coreMeters: 15, radiusMeters: 50, losWeight: 4, proximityWeight: 0 });
+    const selection = selectTerrain(input(view, { proximity, targetPx: 0.001, maxTiles: 70 }));
+    expect(levelAt(selection, 36.04, -112.1)).toBeGreaterThanOrEqual(14);
+    expect(selection.leaves.length).toBeLessThanOrEqual(70);
+    expect(selection.truncated).toBe(true);
+  });
+
+  it("preserves infinite power-norm errors instead of producing NaN", () => {
+    expect(blendTerrainErrors(Infinity, 1, "power-norm", 2)).toBe(Infinity);
+    expect(blendTerrainErrors(1, Infinity, "power-norm", 2)).toBe(Infinity);
+    expect(blendTerrainErrors(0, 0, "power-norm", 2)).toBe(0);
+  });
+
+  it("preserves the exact default and explicit-false baselines", () => {
+    // Captured from the previous selector, including floating point errors,
+    // leaf ordering and traversal order. Proximity remains opt-in.
+    const fixtures: Array<[TestViewOptions, string]> = [
+      [OVERHEAD, "99ac0c7222c68d760c05f9ac001ba17335f428e3ad399a05192e8be69a7895fd"],
+      [OBLIQUE, "3641432bb169445e847c186f58ba03b2ef87ceaabca5501b20336330fcbc412d"],
+      [{ latDeg: 0, lonDeg: 179.999, altitudeMeters: 20, pitchDeg: 85, headingDeg: 270 }, "0e22963d2435b3a5787465bc06af42b6a560b123d8536716a80a477af29edbb5"],
+    ];
+    for (const [view, expected] of fixtures) {
+      const selection = selectTerrain(input(view));
+      expect(selectTerrain(input(view, { robustOrbitLOD: false }))).toEqual(selection);
+      const normalized = { leaves: selection.leaves, split: [...selection.split], nodes: selection.nodes, truncated: selection.truncated };
+      expect(createHash("sha256").update(JSON.stringify(normalized)).digest("hex")).toBe(expected);
+    }
+  });
+
+  it("keeps cached geometry independent of live mesh settings and height bounds", () => {
+    const view = { ...OVERHEAD, altitudeMeters: 3000 };
+    const proximity = config(point(view.latDeg, view.lonDeg, view.altitudeMeters));
+    const originalInput = input(view, { maxLevel: 2, proximity });
+    const original = selectTerrain(originalInput);
+    const originalError = leafAt(original, view.latDeg, view.lonDeg).errorPx;
+    const finerMesh = selectTerrain({ ...originalInput, segments: 128 });
+    expect(leafAt(finerMesh, view.latDeg, view.lonDeg).errorPx).toBeCloseTo(originalError / 2, 8);
+    const elevated = selectTerrain({ ...originalInput, boundsFor: () => ({ min: 1000, max: 1000 }) });
+    expect(leafAt(elevated, view.latDeg, view.lonDeg).errorPx).toBeCloseTo(originalError * 1.5, 8);
+    expect(selectTerrain(originalInput)).toEqual(original);
+  });
+
+  it("keeps exact large moving dual-anchor selections while reusing and replacing cached geometry", () => {
+    const fixtures: Array<[number, number, string]> = [
+      [512, 0.25, "d54ca85014dca41c579c2212fdc0cd7f2fd4599dd667423c21a4b5790e9146f0"],
+      [2048, 0.0625, "969471128137313070d216ad6b619df2408a080fa97de7edc4edbe5ef20dfc3a"],
+    ];
+    for (const [maxTiles, targetPx, expected] of fixtures) {
+      let previous: TerrainSelectionInput["previous"] = null;
+      let selection: TerrainSelection | null = null;
+      for (let frame = 0; frame < 8; frame++) {
+        const latDeg = 36.1 + frame * 0.00012, lonDeg = -112.1 + frame * 0.00007;
+        const view = createTestView({ latDeg, lonDeg, altitudeMeters: 20, pitchDeg: 85, headingDeg: 30 + frame * 3, renderHeight: 1080, renderWidth: 1920 });
+        const focus = point(latDeg + 0.045, lonDeg + 0.018, 0);
+        selection = selectTerrain(input(null, {
+          view, targetPx, maxTiles, maxLevel: 18, previous, robustOrbitLOD: true,
+          boundsFor: () => ({ min: 0, max: 80 }),
+          refineFrom: { position: focus, minDistanceMeters: 5000 },
+          proximity: config(view.camera, {
+            end: point(latDeg - 0.003, lonDeg - 0.002),
+            secondary: { start: focus, end: point(latDeg + 0.042, lonDeg + 0.016, 0) },
+          }),
+        }));
+        previous = { split: selection.split, leaves: new Set(selection.leaves.map(leaf => leaf.key)) };
+      }
+      expect(selection!.leaves.length).toBeLessThanOrEqual(maxTiles);
+      expect(selection!.leaves.filter(leaf => leaf.inCore).every(leaf => leaf.tile.z >= 14)).toBe(true);
+      const normalized = { ...selection!, split: [...selection!.split] };
+      expect(createHash("sha256").update(JSON.stringify(normalized)).digest("hex")).toBe(expected);
     }
   });
 });

@@ -4,7 +4,11 @@ import { HostCameraController as CameraController } from "../fixtures/compositio
 import { ecefToGeodetic } from "../src/camera/cameraMath.js";
 import * as refinement from "../src/babylon/meshRefinement.js";
 import * as selector from "../src/terrain/terrainSelector.js";
-import { createTerrainMesh } from "../src/babylon/terrainMesh.js";
+import * as meshWorkerRuntime from "../src/browser/terrainMeshWorkers.js";
+import * as imageryRuntimeModule from "../src/babylon/imagery/createImageryRuntime.js";
+import { readImageryView } from "../src/babylon/imagery/imageryView.js";
+import { NATIVE_PARAMETERS } from "../src/settings/catalogue/native.js";
+import { createTerrainMesh, terrainMeshTarget } from "../src/babylon/terrainMesh.js";
 import { createTerrainLightingFixture } from "../fixtures/composition/terrainLightHost.js";
 import { GROUND_LIGHT_LEAST_SINE, GROUND_LIGHT_SAMPLES, GROUND_LIGHT_TABLE, MERCATOR_MAX_LAT_DEG, NIGHT_RADIANCE_UNITS, groundLightAt } from "@foss-earth/sky";
 import { createTerrainPerformanceCapture } from "../src/terrain/terrainPerformanceCapture.js";
@@ -19,7 +23,7 @@ const getAppSettings = () => settings;
 const pending = vi.hoisted(() => ({
   imagery: [] as Array<() => void>,
   imageryErrors: [] as Array<(message?: string) => void>,
-  terrain: [] as Array<{ tile: TerrainTile; resolve(grid: TerrainGrid): void; reject(error: Error): void; interest?: TerrainInterest }>,
+  terrain: [] as Array<{ tile: TerrainTile; resolve(grid: TerrainGrid): void; reject(error: Error): void; interest?: TerrainInterest; prioritize?: boolean }>,
   dispose: vi.fn(),
 }));
 function createRasterTilesRuntime(options: Partial<RasterTilesRuntimeOptions> & Pick<RasterTilesRuntimeOptions, "scene" | "source">) {
@@ -31,8 +35,8 @@ function createRasterTilesRuntime(options: Partial<RasterTilesRuntimeOptions> & 
     createTerrainLoader: () => ({ dispose: pending.dispose,
       getMetrics: () => ({ active: 0, decoding: 0, queued: 0, decodedBytes: 0 }), setPaused: vi.fn(),
       load: (tile: TerrainTile) => new Promise<TerrainGrid>((resolve, reject) => pending.terrain.push({ tile, resolve, reject })),
-      loadPatch: (tile: TerrainTile, interest?: TerrainInterest) => new Promise<TerrainGrid>((resolve, reject) => {
-        pending.terrain.push({ tile, resolve, reject, interest });
+      loadPatch: (tile: TerrainTile, interest?: TerrainInterest, prioritize?: boolean) => new Promise<TerrainGrid>((resolve, reject) => {
+        pending.terrain.push({ tile, resolve, reject, interest, prioritize });
         // As the loader does with a tile no claim still wants.
         interest?.onRelease(() => reject(Object.assign(new Error("Terrain request withdrawn"), { name: "TerrainWithdrawn" })));
       }),
@@ -61,6 +65,317 @@ async function resolveFirstDetail(): Promise<void> {
 }
 
 describe("raster imagery and terrain lifecycle", () => {
+  it("refreshes representative owners when an off-frustum imagery retry recreates the same tile key", () => {
+    settings.set("map.terrain.robustOrbitLOD", true);
+    const tile = { z: 2, x: 2, y: 1 }, key = "2/2/1";
+    vi.spyOn(selector, "selectTerrain").mockReturnValue({ leaves: [{ tile, key, needed: false, distanceMeters: 20,
+      errorPx: 10, inCore: false, inProximity: false, inFrustum: false }], rootLevel: 2, split: new Set(), nodes: 1, truncated: false });
+    let now = 0;
+    const engine = new NullEngine(), scene = new Scene(engine);
+    const runtime = createRasterTilesRuntime({ scene, source: RASTER_BASE_MAP_SOURCES[0], nowMs: () => now });
+    try {
+      runtime.update();
+      const failed = scene.meshes.find(mesh => mesh.name.endsWith(key))!;
+      pending.imageryErrors[0]("temporary imagery failure");
+      runtime.update();
+      expect(failed.isDisposed()).toBe(true);
+      now = 60_000;
+      runtime.update();
+      const replacement = scene.meshes.find(mesh => mesh.name.endsWith(key))!;
+      expect(replacement).not.toBe(failed);
+      pending.imagery.at(-1)!();
+      runtime.update();
+      expect(replacement.isEnabled()).toBe(true);
+      expect(runtime.getMetrics().visibleTiles).toBe(1);
+      expect(runtime.sample(1, 1)).not.toBeNull();
+    } finally { runtime.dispose(); engine.dispose(); }
+  });
+
+  it("does not resurrect decoded contact grids after a mesh disposer throws", async () => {
+    settings.set("map.terrain.robustOrbitLOD", true);
+    const tile = { z: 2, x: 2, y: 1 }, key = "2/2/1";
+    vi.spyOn(selector, "selectTerrain").mockReturnValue({ leaves: [{ tile, key, needed: true, distanceMeters: 20,
+      errorPx: 10, inCore: true, inProximity: true, inFrustum: false }], rootLevel: 2, split: new Set(), nodes: 1, truncated: false });
+    const loads: Array<{ tile: TerrainTile; resolve: (grid: TerrainGrid) => void }> = [];
+    const engine = new NullEngine(), scene = new Scene(engine), requestRender = vi.fn();
+    const runtime = createRasterTilesRuntime({ scene, source: RASTER_BASE_MAP_SOURCES[0], requestRender,
+      createTerrainLoader: () => ({ setPaused() {}, dispose() {}, getMetrics: () => ({ active: 0, decoding: 0, queued: 0, decodedBytes: 0 }),
+        load: requested => new Promise(resolve => loads.push({ tile: requested, resolve })),
+        loadPatch: requested => new Promise(resolve => loads.push({ tile: requested, resolve })) }) });
+    try {
+      runtime.update();
+      const mesh = scene.meshes.find(mesh => mesh.name.endsWith(key))!;
+      vi.spyOn(mesh, "dispose").mockImplementationOnce(() => { throw new Error("Mesh cleanup failed"); });
+      expect(() => runtime.dispose()).toThrow("Mesh cleanup failed");
+      expect(mesh.isDisposed()).toBe(false);
+      const requests = requestRender.mock.calls.length, revision = runtime.getRevision();
+      for (const load of loads) load.resolve({ ...load.tile, size: 2, heights: new Float32Array([250, 250, 250, 250]) });
+      await flush();
+      expect(runtime.sampleHeight!(1, 1)).toBeNull();
+      expect(runtime.getRevision()).toBe(revision);
+      expect(requestRender).toHaveBeenCalledTimes(requests);
+    } finally { runtime.dispose(); engine.dispose(); }
+  });
+
+  it("invalidates imagery heights only when adopted grids, bounds, or coverage change", async () => {
+    settings.register(NATIVE_PARAMETERS);
+    settings.set("native.tier", "typescript-worker");
+    settings.set("map.terrain.robustOrbitLOD", true);
+    settings.set("map.terrain.tileSegments", 8);
+    let surface!: imageryRuntimeModule.ImageryRuntimeOptions["surface"];
+    vi.spyOn(imageryRuntimeModule, "createImageryRuntime").mockImplementation(options => {
+      surface = options.surface;
+      return { supported: true, attachPatch() {}, detachPatch() {}, setPatchVisible() {}, hasCoverage: () => true,
+        update() {}, dispose() {}, setOffset() {}, setSource() {} } as unknown as imageryRuntimeModule.ImageryRuntime;
+    });
+    const tile = { z: 2, x: 2, y: 1 }, key = "2/2/1";
+    const leaves = [{ tile, key, needed: true, distanceMeters: 20, errorPx: 10, inCore: true, inProximity: true, inFrustum: true }];
+    vi.spyOn(selector, "selectTerrain").mockImplementation(() => ({ leaves, rootLevel: 2, split: new Set(), nodes: 1, truncated: false }));
+    const jobs: Array<{ input: Parameters<ReturnType<typeof meshWorkerRuntime.createTerrainMeshWorkers>["prepare"]>[0]; resolve: (value: Awaited<ReturnType<ReturnType<typeof meshWorkerRuntime.createTerrainMeshWorkers>["prepare"]>>) => void }> = [];
+    const prepare = vi.fn<ReturnType<typeof meshWorkerRuntime.createTerrainMeshWorkers>["prepare"]>(input => new Promise(resolve => jobs.push({ input, resolve })));
+    vi.spyOn(meshWorkerRuntime, "createTerrainMeshWorkers").mockReturnValue({ prepare, stats: () => ({}) as never, dispose() {} });
+    const engine = new NullEngine(), scene = new Scene(engine);
+    const runtime = createRasterTilesRuntime({ scene, source: RASTER_BASE_MAP_SOURCES[0], imagery: "atlas",
+      createTerrainMeshWorker: () => null, createTerrainHeightWorker: () => null });
+    try {
+      runtime.update();
+      const beforeDecoded = surface.getRevision!(), contactRevision = runtime.getRevision(), originalHeight = surface.heightAt(1, 1);
+      const grid = { ...tile, size: 2, heights: new Float32Array([250, 250, 250, 250]) };
+      pending.terrain.find(request => request.tile.z === 2)!.resolve(grid);
+      await flush();
+      expect(runtime.getRevision()).toBeGreaterThan(contactRevision);
+      expect(runtime.sampleHeight!(1, 1)).toEqual({ heightMeters: 250, quality: 2 });
+      expect(surface.getRevision!()).toBe(beforeDecoded);
+      expect(surface.heightAt(1, 1)).toBe(originalHeight);
+      const target = terrainMeshTarget({ segments: 8 }, tile, grid);
+      jobs[0].resolve({ geometry: { segments: 8, targetPositions: target.positions, heightBounds: target.heightBounds } } as never);
+      await flush();
+      expect(surface.getRevision!()).toBeGreaterThan(beforeDecoded);
+      expect(surface.heightAt(1, 1)).toBe(250);
+      expect(scene.meshes.find(mesh => mesh.name.endsWith(key))!.metadata.terrainZoom).toBe(0);
+      const adoptedRevision = surface.getRevision!();
+      runtime.update();
+      expect(surface.getRevision!()).toBe(adoptedRevision);
+      expect(scene.meshes.find(mesh => mesh.name.endsWith(key))!.metadata.terrainZoom).toBe(2);
+      const coordinates = new Float64Array([1, 1, 10, 10, 1, 181, 0, 0, 85, 360]);
+      const expected = Float64Array.from({ length: coordinates.length / 2 }, (_, i) => surface.heightAt(coordinates[i * 2], coordinates[i * 2 + 1]) ?? NaN);
+      expect(surface.heightsAt!(coordinates)).toEqual(expected);
+      runtime.setTerrainSource({ id: "new-source", label: "New source", provider: "test", urlTemplate: "https://terrain.test/{z}/{x}/{y}.png", maxZoom: 15, attribution: "test" });
+      expect(surface.getRevision!()).toBe(adoptedRevision);
+      // A tile created after a source-generation change starts directly in
+      // that generation and exposes decoded contacts before worker adoption.
+      leaves[0] = { ...leaves[0], tile: { z: 2, x: 3, y: 1 }, key: "2/3/1" };
+      settings.set("map.terrain.proximityWeight", 2);
+      runtime.update();
+      expect(surface.getRevision!()).toBeGreaterThan(adoptedRevision);
+      const requests = pending.terrain.filter(request => request.tile.z === 2 && request.tile.x === 3);
+      expect(requests).toHaveLength(1);
+      requests[0].resolve({ z: 2, x: 3, y: 1, size: 2, heights: new Float32Array([350, 350, 350, 350]) });
+      await flush();
+      expect(runtime.sampleHeight!(1, 100)).toEqual({ heightMeters: 350, quality: 2 });
+      runtime.update();
+      expect(pending.terrain.filter(request => request.tile.z === 2 && request.tile.x === 3)).toHaveLength(1);
+    } finally { runtime.dispose(); engine.dispose(); }
+  });
+
+  it("settles off-frustum proximity elevation without imagery and acquires imagery when it enters view", async () => {
+    settings.set("map.terrain.robustOrbitLOD", true);
+    const tile = { z: 2, x: 2, y: 1 }, key = "2/2/1";
+    const leaf = { tile, key, needed: true, distanceMeters: 20, errorPx: 23, inCore: true, inProximity: true, inFrustum: false };
+    vi.spyOn(selector, "selectTerrain").mockImplementation(() => ({ leaves: [leaf], rootLevel: 2, split: new Set(), nodes: 1, truncated: false }));
+    const engine = new NullEngine(), scene = new Scene(engine);
+    const texture = vi.fn<NonNullable<RasterTilesRuntimeOptions["loadMapTexture"]>>((_url, targetScene, loaded) => { pending.imagery.push(loaded); return new Texture(null, targetScene); });
+    const runtime = createRasterTilesRuntime({ scene, source: { ...RASTER_BASE_MAP_SOURCES[0], urlTemplate: "https://map.test/{z}/{x}/{y}.png" }, loadMapTexture: texture });
+    try {
+      runtime.update();
+      expect(texture.mock.calls.some(([url]) => url === "https://map.test/2/2/1.png")).toBe(false);
+      expect(pending.terrain.find(request => request.tile.z === 2)!.prioritize).toBe(true);
+      const revision = runtime.getRevision();
+      for (const request of pending.terrain.splice(0)) request.resolve({ ...request.tile, size: 2, heights: new Float32Array([250, 250, 250, 250]) });
+      await flush();
+      expect(runtime.getRevision()).toBeGreaterThan(revision);
+      expect(runtime.sample(1, 1)).toMatchObject({ quality: 2, heightMeters: 250 });
+      const decodedRevision = runtime.getRevision();
+      settings.set("map.terrain.robustOrbitLOD", false);
+      expect(runtime.getRevision()).toBeGreaterThan(decodedRevision);
+      expect(runtime.sample(1, 1)).toBeNull();
+      const disabledRevision = runtime.getRevision();
+      settings.set("map.terrain.robustOrbitLOD", true);
+      expect(runtime.getRevision()).toBeGreaterThan(disabledRevision);
+      expect(runtime.sample(1, 1)).toMatchObject({ quality: 2, heightMeters: 250 });
+      pending.imagery.splice(0).forEach(loaded => loaded());
+      runtime.update();
+      expect(runtime.getLoadingDiagnostics!().pendingTiles).toBe(0);
+      const mesh = scene.meshes.find(mesh => mesh.name.endsWith(key))!;
+      expect(mesh.metadata.terrainZoom).toBe(2);
+      expect(mesh.isEnabled()).toBe(false);
+      leaf.inFrustum = true;
+      settings.set("map.terrain.proximityWeight", 2);
+      runtime.update();
+      expect(texture.mock.calls.filter(([url]) => url === "https://map.test/2/2/1.png")).toHaveLength(1);
+      expect(runtime.getLoadingDiagnostics!().pendingTiles).toBe(1);
+      expect(mesh.isEnabled()).toBe(false);
+      pending.imagery.splice(0).forEach(loaded => loaded());
+      runtime.update();
+      expect(mesh.isEnabled()).toBe(true);
+      expect(runtime.getLoadingDiagnostics!().pendingTiles).toBe(0);
+    } finally { runtime.dispose(); engine.dispose(); }
+  });
+
+  it("prioritizes safety-core workers, publishes decoded shared heights before preparation, and aborts retired jobs", async () => {
+    settings.register(NATIVE_PARAMETERS);
+    settings.set("map.terrain.robustOrbitLOD", true);
+    settings.set("native.tier", "typescript-worker");
+    const tile = { z: 4, x: 8, y: 7 }, key = "4/8/7";
+    vi.spyOn(selector, "selectTerrain").mockReturnValue({ leaves: [{ tile, key, needed: true, distanceMeters: 20,
+      errorPx: 42.7, inCore: true, inProximity: true, inFrustum: false }], rootLevel: 2, split: new Set(), nodes: 1, truncated: false });
+    const prepare = vi.fn<ReturnType<typeof meshWorkerRuntime.createTerrainMeshWorkers>["prepare"]>((_input, request) => new Promise<never>((_resolve, reject) => {
+      request?.signal?.addEventListener("abort", () => reject(request.signal!.reason), { once: true });
+    }));
+    vi.spyOn(meshWorkerRuntime, "createTerrainMeshWorkers").mockReturnValue({ prepare, stats: () => ({}) as never, dispose: () => {} });
+    const engine = new NullEngine(), scene = new Scene(engine);
+    const runtime = createRasterTilesRuntime({ scene, source: RASTER_BASE_MAP_SOURCES[0], createTerrainMeshWorker: () => null });
+    try {
+      runtime.update();
+      const heights = new Float32Array(new SharedArrayBuffer(16)); heights.fill(275);
+      const request = pending.terrain.find(request => request.tile.z === 4)!;
+      request.resolve({ ...tile, size: 2, heights });
+      await flush();
+      const call = prepare.mock.calls.find(([input]) => input.tile.z === 4)!;
+      expect(call[1]).toMatchObject({ priority: 1_000_043 });
+      expect(call[1]!.signal!.aborted).toBe(false);
+      expect(runtime.sample(1, 1)).toMatchObject({ quality: 4, heightMeters: 275 });
+      pending.terrain.find(request => request.tile.z === 0)!.resolve({ z: 0, x: 0, y: 0, size: 2, heights: new Float32Array([500, 500, 500, 500]) });
+      await flush();
+      // A slower coarse arrival cannot cancel or replace the already queued
+      // fine preparation, even before that worker has published its target.
+      expect(prepare.mock.calls.filter(([input]) => input.tile.z === 4)).toHaveLength(1);
+      expect(call[1]!.signal!.aborted).toBe(false);
+      expect(runtime.getLoadingDiagnostics!().pendingTiles).toBeGreaterThan(0);
+      runtime.setTerrainSource({ id: "replacement", label: "Replacement", provider: "test", urlTemplate: "https://terrain.test/{z}/{x}/{y}.png", maxZoom: 15, attribution: "test" });
+      await flush();
+      expect(call[1]!.signal!.aborted).toBe(true);
+      // Cancellation does not run a page fallback and publish the retired grid.
+      expect(scene.meshes.find(mesh => mesh.name.endsWith(key))!.metadata.terrainZoom).toBe(0);
+      const replacement = pending.terrain.filter(request => request.tile.z === 4).at(-1)!;
+      replacement.resolve({ ...tile, size: 2, heights });
+      await flush();
+      const latest = prepare.mock.calls.filter(([input]) => input.tile.z === 4).at(-1)!;
+      expect(latest[1]!.signal!.aborted).toBe(false);
+      runtime.dispose();
+      expect(latest[1]!.signal!.aborted).toBe(true);
+    } finally { runtime.dispose(); engine.dispose(); }
+  });
+
+  it("tracks independent eye/focus lookahead, caps speed, resets teleports, and live-applies tuning", () => {
+    settings.set("map.terrain.robustOrbitLOD", true);
+    settings.set("map.terrain.reselectWhileMoving", 0);
+    const select = vi.spyOn(selector, "selectTerrain").mockReturnValue({ leaves: [], rootLevel: 2, split: new Set(), nodes: 0, truncated: false });
+    const engine = new NullEngine(), scene = new Scene(engine);
+    scene.useRightHandedSystem = true;
+    const camera = new GeospatialCamera("proximity-camera", scene, { planetRadius: 6378137 });
+    camera.addBehavior(new GeospatialClippingBehavior());
+    const controller = new CameraController(camera);
+    let now = 0;
+    const focus = { x: 6378137, y: 0, z: 0 };
+    const runtime = createRasterTilesRuntime({ scene, source: RASTER_BASE_MAP_SOURCES[0], nowMs: () => now, getProximityFocusPoint: () => focus });
+    const current = { latDeg: 0, lonDeg: 0, zoomMeters: 200, pitchDeg: 30, headingDeg: 0 };
+    const update = () => { controller.applyViewState(current); scene.render(); runtime.update(); return select.mock.calls.at(-1)![0].proximity!; };
+    try {
+      let proximity = update();
+      expect(proximity.start).toEqual(proximity.end);
+      expect(proximity.secondary!.start).toEqual(focus);
+      now = 100; current.lonDeg = 0.0001; focus.y += 10;
+      proximity = update();
+      expect(proximity.start).toEqual(readImageryView(scene, null)!.camera);
+      expect(proximity.end).not.toEqual(proximity.start);
+      expect(proximity.secondary!.end.y - proximity.secondary!.start.y).toBeCloseTo(150);
+      now = 101; current.lonDeg += 0.001;
+      proximity = update();
+      expect(Math.hypot(proximity.end.x - proximity.start.x, proximity.end.y - proximity.start.y, proximity.end.z - proximity.start.z)).toBeCloseTo(1500, 3);
+      now = 201; current.lonDeg = 2;
+      proximity = update();
+      expect(proximity.end).toEqual(proximity.start);
+      settings.set("map.terrain.proximityAnchor", "focus");
+      settings.set("map.terrain.proximityBlendMode", "power-norm");
+      settings.set("map.terrain.losWeight", 0.5);
+      settings.set("map.terrain.proximityRadiusMeters", 2500);
+      now += 100;
+      proximity = update();
+      expect(proximity).toMatchObject({ start: focus, blendMode: "power-norm", losWeight: 0.5, radiusMeters: 2500 });
+      expect(proximity.secondary).toBeUndefined();
+      settings.set("map.terrain.robustOrbitLOD", false);
+      update();
+      expect(select.mock.calls.at(-1)![0].proximity).toBeUndefined();
+    } finally { runtime.dispose(); engine.dispose(); }
+  });
+
+  it("requeues an ordinary pending mesh at safety-core priority without publishing its aborted result", async () => {
+    settings.register(NATIVE_PARAMETERS);
+    settings.set("native.tier", "typescript-worker");
+    settings.set("map.terrain.robustOrbitLOD", true);
+    const tile = { z: 2, x: 2, y: 1 }, key = "2/2/1";
+    const leaf = { tile, key, needed: true, distanceMeters: 20, errorPx: 42.7, inCore: false, inProximity: true, inFrustum: false };
+    vi.spyOn(selector, "selectTerrain").mockReturnValue({ leaves: [leaf], rootLevel: 2, split: new Set(), nodes: 1, truncated: false });
+    const prepare = vi.fn<ReturnType<typeof meshWorkerRuntime.createTerrainMeshWorkers>["prepare"]>((_input, request) => new Promise<never>((_resolve, reject) => {
+      request?.signal?.addEventListener("abort", () => reject(request.signal!.reason), { once: true });
+    }));
+    vi.spyOn(meshWorkerRuntime, "createTerrainMeshWorkers").mockReturnValue({ prepare, stats: () => ({}) as never, dispose: () => {} });
+    const engine = new NullEngine(), scene = new Scene(engine);
+    const runtime = createRasterTilesRuntime({ scene, source: RASTER_BASE_MAP_SOURCES[0], createTerrainMeshWorker: () => null });
+    try {
+      runtime.update();
+      pending.terrain.find(request => request.tile.z === 2)!.resolve({ ...tile, size: 2, heights: new Float32Array([275, 275, 275, 275]) });
+      await flush();
+      expect(prepare.mock.calls[0][1]!.priority).toBe(43);
+      leaf.inCore = true;
+      settings.set("map.terrain.proximityWeight", 2);
+      runtime.update();
+      await flush();
+      expect(prepare.mock.calls).toHaveLength(2);
+      expect(prepare.mock.calls[0][1]!.signal!.aborted).toBe(true);
+      expect(prepare.mock.calls[1][1]!.priority).toBe(1_000_043);
+      expect(prepare.mock.calls[1][1]!.signal!.aborted).toBe(false);
+      expect(scene.meshes.find(mesh => mesh.name.endsWith(key))!.metadata.terrainZoom).toBe(0);
+      for (const inCore of [false, true, false, true]) {
+        leaf.inCore = inCore;
+        settings.set("map.terrain.proximityWeight", inCore ? 3 : 4);
+        runtime.update();
+        await flush();
+      }
+      // Once promoted, an outstanding task keeps its safety priority across
+      // capsule-boundary oscillation instead of restarting every crossing.
+      expect(prepare.mock.calls).toHaveLength(2);
+    } finally { runtime.dispose(); engine.dispose(); }
+  });
+
+  it("reuses stationary proximity inputs and tuning without reselecting or rebuilding terrain", () => {
+    settings.set("map.terrain.robustOrbitLOD", true);
+    const select = vi.spyOn(selector, "selectTerrain").mockReturnValue({ leaves: [], rootLevel: 2, split: new Set(), nodes: 0, truncated: false });
+    const engine = new NullEngine(), scene = new Scene(engine);
+    scene.useRightHandedSystem = true;
+    const camera = new GeospatialCamera("stationary-proximity", scene, { planetRadius: 6378137 });
+    camera.addBehavior(new GeospatialClippingBehavior());
+    const controller = new CameraController(camera);
+    controller.applyViewState({ latDeg: 36.1, lonDeg: -112.14, zoomMeters: 300, pitchDeg: 20, headingDeg: 0 });
+    scene.render();
+    let now = 0;
+    const runtime = createRasterTilesRuntime({ scene, source: RASTER_BASE_MAP_SOURCES[0], nowMs: () => now });
+    try {
+      runtime.update();
+      const read = vi.spyOn(settings, "get"), write = vi.spyOn(refinement, "updateTerrainPositions");
+      select.mockClear();
+      for (let i = 0; i < 50; i++) { now += 16; runtime.update(); }
+      expect(select).not.toHaveBeenCalled();
+      expect(write).not.toHaveBeenCalled();
+      expect(read.mock.calls.filter(([id]) => id.startsWith("map.terrain.proximity") || id.startsWith("map.terrain.los"))).toHaveLength(0);
+      settings.set("map.terrain.proximityWeight", 2);
+      runtime.update();
+      expect(select).toHaveBeenCalledOnce();
+      expect(select.mock.calls[0][0].proximity!.proximityWeight).toBe(2);
+    } finally { runtime.dispose(); engine.dispose(); }
+  });
+
   it("keeps fine raster tiles in the camera frustum after zooming in and committing terrain", async () => {
     // Select the zoomed view at once, however fast the test runs.
     getAppSettings().set("map.terrain.reselectWhileMoving", 0);

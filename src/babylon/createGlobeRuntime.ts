@@ -892,6 +892,12 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
     cameraController.setLimits(cameraLimits());
     cameraController.setGroundFollow(groundFollow());
     cameraController.setEyeContact(cameraSettings.eyeContact());
+    cameraController.setEyeContactSurface({
+      sample: (lat, lon) => rasterTilesRuntime?.sampleHeight
+        ? rasterTilesRuntime.sampleHeight(lat, lon) : rasterTilesRuntime?.sample(lat, lon) ?? null,
+      minQuality: () => settings.get("map.terrain.robustOrbitLOD") === true && rasterTilesRuntime ? settings.get<number>("map.terrain.minProximityZoom") : 0,
+      pending: () => (rasterTilesRuntime?.getLoadingDiagnostics?.().pendingTiles ?? 0) > 0,
+    });
     cameraController.setZoomAboutViewCenter(zoomAboutViewCenter());
     cameraController.setOrbitInPlace(settings.get("camera.orbitInPlace") === true);
     const anchors = navigationAnchors = createNavigationAnchorService({
@@ -1258,6 +1264,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
           return { ...request, offsetCap: typeof finest === "number" ? finest : null };
         },
         getRefinePoint: () => (settings.get("map.focus.refineBasemapFrom") === "camera" ? null : focusPosition()),
+        getProximityFocusPoint: focusPosition,
         worldRoot: worldRoot ?? undefined,
         getSurfaceHeightMeters: options.getSurfaceHeightMeters,
         terrainSource: activeTerrainSource,
@@ -1382,6 +1389,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
 
       tilesRuntime = startMap(() => createGoogleTilesRuntime({
         ...options.mapPorts.google,
+        nowMs: clock.nowMs,
         onDownloadBytes: downloadMeter.addBytes,
         scene,
         apiKey: normalizedApiKey,
@@ -1393,6 +1401,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
         // Before that happens, terrain preparation owns the active camera and
         // its normal camera-based detail selection remains the safe behavior.
         settings,
+        getProximityFocus: focusPosition,
         getTerrainDetailAnchor: () => {
           if (googleTerrainDetailAnchor === "focus-point") {
             const focus = focusPosition();
@@ -1674,6 +1683,13 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
       focusCache = null;
       scheduler.requestRender();
     })),
+    subscribe(changed => {
+      for (const id of changed) {
+        if (!id.startsWith("map.terrain.")) continue;
+        scheduler.requestRender();
+        break;
+      }
+    }),
     ...["renderer.clipping", "renderer.clipping.fixed"].map(id => watch(id, () => {
       applyClipping();
       scheduler.requestRender();

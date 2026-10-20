@@ -13,6 +13,7 @@ import { hasPickablePointAt } from "../sprites/picking.js";
 import { attachNavigationAnchorMarkers } from "./navigationAnchorMarkers.js";
 import type { createTerrainLightingAdapter } from "../babylon/imagery/terrainLightPlugin.js";
 import type { GlobeMapPorts, GlobeRuntimeClock, GlobeRuntimePlatform } from "../babylon/globeRuntimePorts.js";
+import type { GoogleTilesRenderer } from "../babylon/createTilesRuntime.js";
 import { createTerrainImageDecoder } from "./terrainImageDecoder.js";
 import { createAtlasImageryWorkerBridge } from "./atlasImageryWorkerBridge.js";
 import type { AtlasImageryWorkerPort } from "./atlasImageryWorkerProtocol.js";
@@ -78,7 +79,11 @@ export async function loadBrowserGlobeGoogleProviders(): Promise<BrowserGlobeGoo
   // Both at once: one after the other, the plugins waited a round trip for the renderer.
   const [{ TilesRenderer }, { GoogleCloudAuthPlugin }] = await Promise.all([
     import("3d-tiles-renderer/babylonjs"), import("3d-tiles-renderer/core/plugins")]);
-  return { createTilesRenderer: (url, scene) => new TilesRenderer(url, scene),
+  return { createTilesRenderer: (url, scene) => {
+    const tiles = new TilesRenderer(url, scene) as GoogleTilesRenderer & Pick<NonNullable<GoogleTilesRenderer["nativeViewSnapshot"]>, "calculateTileViewError">;
+    tiles.nativeViewSnapshot = { adapter: "babylonjs-0.4.24", calculateTileViewError: tiles.calculateTileViewError };
+    return tiles;
+  },
     createAuthPlugin: options => new GoogleCloudAuthPlugin(options) };
 }
 
