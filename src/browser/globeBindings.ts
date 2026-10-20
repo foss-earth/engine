@@ -75,8 +75,9 @@ export interface BrowserGlobeBindingOptions {
 export type BrowserGlobeGoogleProviders = Pick<GlobeMapPorts["google"], "createTilesRenderer" | "createAuthPlugin" | "ready">;
 /** Deferred browser/bundler acquisition; importing the public entry is pure. */
 export async function loadBrowserGlobeGoogleProviders(): Promise<BrowserGlobeGoogleProviders> {
-  const { TilesRenderer } = await import("3d-tiles-renderer/babylonjs");
-  const { GoogleCloudAuthPlugin } = await import("3d-tiles-renderer/core/plugins");
+  // Both at once: one after the other, the plugins waited a round trip for the renderer.
+  const [{ TilesRenderer }, { GoogleCloudAuthPlugin }] = await Promise.all([
+    import("3d-tiles-renderer/babylonjs"), import("3d-tiles-renderer/core/plugins")]);
   return { createTilesRenderer: (url, scene) => new TilesRenderer(url, scene),
     createAuthPlugin: options => new GoogleCloudAuthPlugin(options) };
 }
