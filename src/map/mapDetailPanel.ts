@@ -12,12 +12,14 @@ import {
   selectCustomDefault,
   selectGoogleRecommendation,
   selectRasterNormal,
+  type DetailKind,
   type DetailPolicy,
   type DetailState,
 } from "../terrain/mapDetailPolicy.js";
 import type { MapDetailController } from "./mapDetailController.js";
 import { describeDetailStatus } from "./mapDetailSlider.js";
 import type { createChoiceGroup, createHelpTooltip, createIconButton, createTrack, TrackThumb } from "@foss-earth/ui/browser";
+import { numberFaces, parseShownNumber, type NumberFaces } from "@foss-earth/ui/settings";
 
 export interface MapDetailPanelHandle {
   element: HTMLElement;
@@ -51,6 +53,18 @@ function makeReadout(document: Document, label: string, className: string): Read
   output.className = "map-detail-panel__value";
   element.append(text, output);
   return { element, output };
+}
+
+/**
+ * What the range's two handles write, in one width across the whole scale:
+ * a 2D basemap's offset with its sign, "+1.00" to "−3.00", or a Google
+ * target in three figures, "01.00" to "0524k".
+ */
+function detailFaces(kind: DetailKind): NumberFaces {
+  const envelope = detailEnvelope(kind);
+  return kind === "raster"
+    ? numberFaces({ unit: "levels", step: RASTER_DETAIL_STEP }, { min: envelope.coarser, max: envelope.finer })
+    : numberFaces({ unit: "px", step: GOOGLE_DETAIL_STEP, scale: "log2" }, { min: envelope.finer, max: envelope.coarser });
 }
 
 const FINER = "finer";
@@ -100,12 +114,11 @@ export function createMapDetailPanel(controller: MapDetailController, options: M
   range.className = "map-detail-panel__range";
   range.setAttribute("role", "group");
   range.setAttribute("aria-label", "Detail range");
+  // The ends' values are written on their handles; the default is read here.
   const readouts = document.createElement("div");
   readouts.className = "map-detail-panel__readouts";
-  const finerReadout = createReadout("Finest", "map-detail-panel__readout--finer");
   const defaultReadout = createReadout("Default", "map-detail-panel__readout--default");
-  const coarserReadout = createReadout("Coarsest", "map-detail-panel__readout--coarser");
-  readouts.append(finerReadout.element, defaultReadout.element, coarserReadout.element);
+  readouts.append(defaultReadout.element);
   let editing = false;
   const track = createTrack({
     document,
@@ -114,6 +127,7 @@ export function createMapDetailPanel(controller: MapDetailController, options: M
     className: "map-detail-panel__track",
     onInput: (id, position) => onTrackInput(id, position),
     onCommit: () => endEdit(),
+    onEdit: (id, text) => onTyped(id, text),
   });
   const scale = document.createElement("div");
   scale.className = "map-detail-panel__scale";
@@ -179,9 +193,10 @@ export function createMapDetailPanel(controller: MapDetailController, options: M
     // A requirement finer than the range's coarse end stripes what it refuses.
     const requirement = state.markers.find(marker => marker.requirement && !marker.hollow);
     const requirementAt = requirement ? detailPosition(kind, requirement.value) : null;
+    const faces = detailFaces(kind);
     const thumbs: TrackThumb[] = [
-      { id: FINER, role: "end", position: positions.finer, ariaLabel: "Finest end of the detail range", ariaValueText: describeDetailValue(kind, span.finer) },
-      { id: COARSER, role: "end", position: positions.coarser, ariaLabel: "Coarsest end of the detail range", ariaValueText: describeDetailValue(kind, span.coarser) },
+      { id: FINER, role: "end", position: positions.finer, ariaLabel: "Finest end of the detail range", ariaValueText: describeDetailValue(kind, span.finer), face: faces.show(span.finer) },
+      { id: COARSER, role: "end", position: positions.coarser, ariaLabel: "Coarsest end of the detail range", ariaValueText: describeDetailValue(kind, span.coarser), face: faces.show(span.coarser) },
       // A Custom default is a third thumb on the same track; Normal or a
       // recommendation is only marked there.
       { id: DEFAULT, role: "default", position: defaultAt, ariaLabel: "Saved default detail", ariaValueText: describeDetailValue(kind, state.resolvedDefault), hidden: isRecommended, disabled: !ready || equal },
@@ -207,10 +222,9 @@ export function createMapDetailPanel(controller: MapDetailController, options: M
       stripe: requirementAt !== null && requirementAt < positions.coarser
         ? { low: Math.max(requirementAt, positions.finer), high: positions.coarser }
         : null,
+      faceChars: faces.chars,
       disabled: !ready,
     });
-    finerReadout.output.textContent = formatDetailValue(kind, span.finer);
-    coarserReadout.output.textContent = formatDetailValue(kind, span.coarser);
     defaultReadout.output.textContent = formatDetailValue(kind, state.resolvedDefault);
     scaleFiner.textContent = `Finer · ${formatDetailValue(kind, envelope.finer)}`;
     scaleCoarser.textContent = `Coarser · ${formatDetailValue(kind, envelope.coarser)}`;
@@ -278,6 +292,18 @@ export function createMapDetailPanel(controller: MapDetailController, options: M
     withPolicy(policy => policy.kind === "raster"
       ? editRasterRange(policy, id === FINER ? { fineOffset: value } : { coarseOffset: value })
       : editGoogleRange(policy, id === FINER ? { finestErrorPx: value } : { coarsestErrorPx: value }));
+  }
+  /** A value typed on an end's handle, kept inside what the source allows. */
+  function onTyped(id: string, text: string): void {
+    const state = controller.getState();
+    const typed = parseShownNumber(text);
+    if (state && typed !== null) {
+      const kind = state.policy.kind;
+      const envelope = detailEnvelope(kind);
+      const position = detailPosition(kind, typed);
+      onTrackInput(id, Math.min(detailPosition(kind, envelope.coarser), Math.max(detailPosition(kind, envelope.finer), position)));
+    }
+    endEdit();
   }
   const onDefaultChoice = (): void => {
     withPolicy(policy => {

@@ -2,6 +2,7 @@ import { Color3, Color4, HemisphericLight, CreateSphere, StandardMaterial, Unive
 import type { RendererMode } from "@foss-earth/renderer";
 import type { RendererSelection, FrameProfileSession } from "@foss-earth/renderer/babylon";
 import type { SkyRuntime } from "@foss-earth/sky/babylon";
+import type { ParameterReading } from "@foss-earth/ui/settings";
 import { createMapDownloadMeter } from "../browser/mapDownloadMeter.js";
 import { mapCacheLimits } from "../browser/mapCache.js";
 import { createSurfaceQuery } from "./surfaceQuery.js";
@@ -57,6 +58,8 @@ const DEFAULT_GOOGLE_BACKGROUND = new Color4(0.04, 0.05, 0.07, 1);
 const DEFAULT_CAMERA_LAT_DEG = 44.977753;
 const DEFAULT_CAMERA_LON_DEG = -93.265011;
 const DEFAULT_CAMERA_ALTITUDE_METERS = 600;
+/** Frames after rendering starts before the engine's frame rate stops counting the idle gap before them. */
+const FPS_SETTLE_FRAMES = 60;
 
 export type { RendererMode };
 export type { GroundLightSource, SkyCost, SkyEnvironment, SkyGroundLight } from "@foss-earth/sky/babylon";
@@ -657,6 +660,8 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
   let activeTerrainSource = resolveTerrainSource(options.terrainSource);
   const detailAdjustedListeners = new Set<(decision: AutoDetailDecision) => void>();
   let lastRasterFrameAt = clock.nowMs();
+  let framesRendering = 0;
+  authority.own(scheduler.onActiveChange(active => { if (active) framesRendering = 0; }));
   const worldRoot = options.external?.worldRoot ?? null;
 
   // Held while Google tiles are initializing so the scheduler pumps
@@ -695,6 +700,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
     if (disposed) return;
     if (inFrame) throw new Error("The host prepared the globe twice without closing its frame.");
     inFrame = true; preparingFrame = true; focusCache = null;
+    framesRendering += 1;
     try {
     // Before anything reads the camera's projection this frame.
     worldViewport.apply();
@@ -1725,7 +1731,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
     ? decision.reason === "settings" ? ", since automatic-adjustment settings changed"
       : `, since frames averaged ${decision.meanFrameMs.toFixed(1)} ms against a ${decision.goalMs.toFixed(1)} ms goal`
     : "");
-  const readings: Array<[string, () => string | null]> = [
+  const readings: Array<[string, () => string | ParameterReading | null]> = [
     ["map.imagery.gpuBudget", () => {
       const atlas = imagery()?.atlas;
       if (!atlas) return null;
@@ -1800,7 +1806,9 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
     }],
     ["map.detail.terrain.default", () => {
       const terrain = raster()?.getTerrainState();
-      return terrain ? `${formatPx(terrain.targetPx)} in use${terrain.targetPx !== terrain.requestedTargetPx ? `, ${formatPx(terrain.requestedTargetPx)} asked for` : ""}` : null;
+      return terrain
+        ? { text: `${formatPx(terrain.targetPx)} in use${terrain.targetPx !== terrain.requestedTargetPx ? `, ${formatPx(terrain.requestedTargetPx)} asked for` : ""}`, inUse: terrain.targetPx }
+        : null;
     }],
     ["map.terrain.maxTiles", () => {
       const terrain = raster()?.getTerrainState();
@@ -1825,8 +1833,13 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
     ["map.auto.frameTimeGoal", () => {
       const auto = raster()?.getAutoDetailState();
       if (!auto || auto.goalMs === null) return null;
-      return `${auto.goalMs.toFixed(1)} ms in use${auto.lastMeanMs !== null ? `; the last window averaged ${auto.lastMeanMs.toFixed(1)} ms` : ""}`;
+      return { text: `${auto.goalMs.toFixed(1)} ms in use${auto.lastMeanMs !== null ? `; the last window averaged ${auto.lastMeanMs.toFixed(1)} ms` : ""}`, inUse: auto.goalMs };
     }],
+    // The rate reached under the cap, marked on its track; only frames that run have one.
+    ["renderer.frameRateCap", () => ({
+      text: null,
+      inUse: scheduler.isActive() && framesRendering >= FPS_SETTLE_FRAMES ? renderer.engine.getFps() : null,
+    })],
     ["map.terrain.cachedTiles", () => {
       const metrics = status.mode === "raster-basemap" ? rasterTilesRuntime?.getMetrics() : null;
       return metrics ? `${metrics.activeTiles} kept, ${metrics.visibleTiles} shown` : null;

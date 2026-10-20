@@ -67,6 +67,7 @@ export const CAMERA_PARAMETERS: readonly ParameterSpec[] = [
     bounds: () => ({ min: 10, max: 120 }),
     step: 1,
     scale: "linear",
+    alwaysShowTrack: true,
     default: (0.8 * 180) / Math.PI,
     defaultReason: "Babylon's 0.8 rad, which the globe camera had before this became a parameter.",
     home: { tab: CONTROLS_TAB, section: "camera", level: "main" },

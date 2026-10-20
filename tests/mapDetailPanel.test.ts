@@ -60,6 +60,44 @@ describe("Map tab detail editor", () => {
     expect(slider("Saved default detail").disabled).toBe(true);
   });
 
+  it("writes each end's value on its handle in one width, and takes a typed value there", () => {
+    const { controller, panel, slider, set } = mountRaster();
+    const faces = () => [...panel.element.querySelectorAll(".map-detail-panel__track .foss-earth-track__face")].map(face => face.textContent);
+    expect(faces()).toEqual(["+1.00", "−3.00"]);
+    const track = panel.element.querySelector<HTMLElement>(".map-detail-panel__track")!;
+    expect(track.style.getPropertyValue("--face-chars")).toBe("5");
+    // The ends are on their handles, so they are not read out again beside the track.
+    expect([...panel.element.querySelectorAll(".map-detail-panel__readouts output")]).toHaveLength(1);
+    const coarser = slider("Coarsest end of the detail range");
+    for (const position of [3, 2.25, 1.5, 0.75]) {
+      set(coarser, position);
+      expect(faces()[1]).toHaveLength(5);
+      expect(track.style.getPropertyValue("--face-chars")).toBe("5");
+    }
+    // A press that does not move edits the handle's value.
+    const press = (type: string) => {
+      const event = new MouseEvent(type, { bubbles: true, clientX: 50, clientY: 10 });
+      Object.defineProperty(event, "pointerType", { value: "mouse" });
+      coarser.dispatchEvent(event);
+    };
+    press("pointerdown");
+    press("pointerup");
+    const editor = panel.element.querySelector<HTMLInputElement>(".foss-earth-track__editor")!;
+    expect(editor.hidden).toBe(false);
+    expect(editor.value).toBe("−0.75");
+    const type = (text: string) => {
+      editor.value = text;
+      editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    };
+    type("-2");
+    expect(controller.getState()?.policy).toMatchObject({ coarseOffset: -2, fineOffset: 1 });
+    // A value past what the source allows stops at its end.
+    press("pointerdown");
+    press("pointerup");
+    type("-9");
+    expect(controller.getState()?.policy).toMatchObject({ coarseOffset: -3 });
+  });
+
   it("switches between Normal and Custom without silently changing the other", () => {
     const { controller, choice, slider, set } = mountRaster();
     const custom = choice("custom");
