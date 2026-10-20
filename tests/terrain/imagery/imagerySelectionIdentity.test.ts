@@ -116,8 +116,8 @@ describe("imagery selection identity", () => {
       asked += counts.packed; reused += counts.revised;
     }
     expect(digestOf(all)).toBe(SHIPPED_DIGEST);
-    // Reuse has to save heights to be worth keeping.
-    expect(reused).toBeLessThan(asked * 0.6);
+    // Reuse has to save heights to be worth keeping: the lattice asks for about 40 % of them.
+    expect(reused).toBeLessThan(asked * 0.45);
   });
 
   it("asks for every height again once the surface's revision changes", () => {
