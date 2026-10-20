@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { collectTerrainHeightPixels, sampleTerrainHeightPixels } from "../src/browser/terrainHeightPixels.js";
+import { collectTerrainHeightPixels, sampleTerrainHeightPixels, type TerrainHeightPixels } from "../src/browser/terrainHeightPixels.js";
 import { sampleTerrainGrid, type TerrainGrid } from "../src/terrain/terrainGrid.js";
 
 const grid = (z: number, x: number, y: number, size: number, seed = 0): TerrainGrid => ({ z, x, y, size,
@@ -36,6 +36,24 @@ describe("exact sparse terrain height inputs", () => {
     expect(compact.heights.includes(99999)).toBe(false);
     const broken = { ...compact, indices: new Uint32Array(), heights: new Float32Array() };
     expect(() => sampleTerrainHeightPixels(broken, source.x + 0.5, source.y + 0.5)).toThrow("missing a required pixel");
+  });
+  it("copies each source's pixels in ascending index order with their original heights", () => {
+    const source = grid(5, 9, 12, 256, 4);
+    source.neighbors = [grid(5, 10, 12, 256, 1), grid(4, 4, 6, 129, 2), grid(6, 18, 23, 64, 3)];
+    for (const spread of [1e-3, 0.02, 0.5, 1]) {
+      const coordinates = Float64Array.from({ length: 4096 }, (_, i) => (i % 2 ? source.y : source.x) + 0.5 + (((i * 7919) % 4093) / 4093 - 0.5) * spread * 1.2);
+      const compact = collectTerrainHeightPixels(source, coordinates);
+      const pairs: Array<[TerrainHeightPixels, TerrainGrid]> = [[compact, source], ...(compact.neighbors ?? []).map((value, i): [TerrainHeightPixels, TerrainGrid] => [value, source.neighbors![i]])];
+      expect(pairs.some(([value]) => value !== compact && value.indices.length > 0)).toBe(spread === 1);
+      for (const [value, original] of pairs) {
+        expect(value.heights.length).toBe(value.indices.length);
+        for (let i = 0; i < value.indices.length; i++) {
+          if (i > 0) expect(value.indices[i]).toBeGreaterThan(value.indices[i - 1]);
+          expect(Object.is(value.heights[i], original.heights[value.indices[i]])).toBe(true);
+        }
+      }
+      for (let at = 0; at < coordinates.length; at += 2) expect(Object.is(sampleTerrainHeightPixels(compact, coordinates[at], coordinates[at + 1]), sampleTerrainGrid(source, coordinates[at], coordinates[at + 1]))).toBe(true);
+    }
   });
   it("keeps repeated neighbour objects in tie order without duplicating their unused pixels", () => {
     const source = grid(1, 0, 0, 512), neighbor = grid(0, 0, 0, 257, 3);

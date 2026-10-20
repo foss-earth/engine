@@ -55,9 +55,11 @@ export function collectTerrainHeightPixels(grid: TerrainGrid, coordinates: Float
     } else ownIndices(grid, x, y, add);
   }
   const copy = (source: TerrainGrid): TerrainHeightPixels => {
-    const indices = Uint32Array.from([...used.get(source)!].sort((a, b) => a - b));
-    return { z: source.z, x: source.x, y: source.y, size: source.size, indices,
-      heights: Float32Array.from(indices, index => source.heights[index]) };
+    // A typed array sorts numerically.
+    const indices = Uint32Array.from(used.get(source)!).sort();
+    const heights = new Float32Array(indices.length);
+    for (let i = 0; i < indices.length; i++) heights[i] = source.heights[indices[i]];
+    return { z: source.z, x: source.x, y: source.y, size: source.size, indices, heights };
   };
   return { ...copy(grid), ...(grid.neighbors ? { neighbors: grid.neighbors.map(copy) } : {}) };
 }
