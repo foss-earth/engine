@@ -1,5 +1,5 @@
 import { Matrix, Mesh, PickingCustomization, PickingInfo, Ray, Vector3, VertexBuffer, type AbstractMesh, type Geometry, type Observer, type Scene } from "@babylonjs/core";
-import { queryGroundBvh, validateGroundBvh, type GroundBvhSnapshot } from "../../ground-TS/groundBvh.js";
+import { queryGroundBvh, refitGroundBvh, validateGroundBvh, type GroundBvhSnapshot } from "../../ground-TS/groundBvh.js";
 import type { GroundBvhPreparer, GroundBvhPreparerStatus } from "../browser/groundBvhProtocol.js";
 
 export interface GroundAccelerationStatus {
@@ -20,7 +20,7 @@ export interface GroundAcceleration {
   dispose(): void;
 }
 interface Entry {
-  mesh: Mesh; geometry: Geometry; generation: number; positions: Float32Array; indices: Uint32Array; sourceIndices: ReturnType<Mesh["getIndices"]>;
+  mesh: Mesh; geometry: Geometry; generation: number; positions: Float32Array | number[]; indices: Uint32Array; sourceIndices: ReturnType<Mesh["getIndices"]>;
   snapshot: GroundBvhSnapshot | null; validated: boolean; failed: boolean; touched: number; observer: Observer<import("@babylonjs/core").Node> | null;
 }
 interface Hook { previous: Geometry["onGeometryUpdated"]; wrapper: Geometry["onGeometryUpdated"]; entries: Set<Entry> }
@@ -80,9 +80,11 @@ export function createGroundAcceleration(options: { preparer: GroundBvhPreparer;
     if (entry) entry.touched = options.now();
     if (entry?.snapshot || entry?.failed || pending || disposed || options.preparer.status().state === "failed") return entry ?? null;
     const positions = mesh.getVerticesData(VertexBuffer.PositionKind);
-    // Do not quantize f64/JS geometry to manufacture parity with displayed f32.
-    if (!(positions instanceof Float32Array) || !sourceIndices?.length || sourceIndices.length % 3 || sourceIndices.length / 3 > 262_144
-      || positions.length / 3 > 1_048_576 || !mesh.geometry) return null;
+    // Queries read the positions Babylon picks against: Float32, or a plain array's
+    // float64 numbers, such as stitched terrain seams. The worker builds from their
+    // float32 rounding, and the page fits the boxes to the numbers themselves.
+    if (!(positions instanceof Float32Array || Array.isArray(positions)) || !sourceIndices?.length || sourceIndices.length % 3
+      || sourceIndices.length / 3 > 262_144 || positions.length / 3 > 1_048_576 || !mesh.geometry) return null;
     const indices = Uint32Array.from(sourceIndices);
     if (!entry) {
       if (entries.size >= maxMeshes) {
@@ -100,13 +102,20 @@ export function createGroundAcceleration(options: { preparer: GroundBvhPreparer;
       try {
         workerReason = result.fallbackReason;
         if (result.generation !== generation) throw new Error("Ground generation mismatch.");
-        validateGroundBvh(result.snapshot, current.indices.length / 3, { positions: current.positions, indices: current.indices });
-        if (result.snapshot.byteLength > maxBytes) throw new Error("Ground snapshot exceeds cache budget.");
-        while (bytes() + result.snapshot.byteLength > maxBytes) {
+        const faces = current.indices.length / 3;
+        let snapshot = result.snapshot;
+        if (!(current.positions instanceof Float32Array)) {
+          // A sound tree first, then boxes that hold the float64 corners.
+          validateGroundBvh(snapshot, faces);
+          snapshot = refitGroundBvh(snapshot, current.positions, current.indices);
+        }
+        validateGroundBvh(snapshot, faces, { positions: current.positions, indices: current.indices });
+        if (snapshot.byteLength > maxBytes) throw new Error("Ground snapshot exceeds cache budget.");
+        while (bytes() + snapshot.byteLength > maxBytes) {
           const oldest = [...entries.values()].filter(other => other !== current && other.snapshot).sort((a, b) => a.touched - b.touched)[0];
           if (!oldest) break; remove(oldest);
         }
-        current.snapshot = result.snapshot;
+        current.snapshot = snapshot;
       } catch (error) { current.failed = true; pageReasons.add(error instanceof Error ? error.message : String(error)); }
     }, error => { if (!disposed && entries.get(mesh) === current && current.generation === generation) { current.failed = true; pageReasons.add(error instanceof Error ? error.message : String(error)); } })
       .finally(() => { pending = false; if (!disposed) options.onReady?.(); });
@@ -143,21 +152,25 @@ export function createGroundAcceleration(options: { preparer: GroundBvhPreparer;
     pick(scene, ray, predicate) {
       if (disposed || PickingCustomization.internalPickerForMesh) return scene.pickWithRay(ray, predicate, false);
       const skipped = new Set<AbstractMesh>();
-      let best: PickingInfo | null = null, bestIndex = Infinity;
+      let best: PickingInfo | null = null, bestIndex = Infinity, unanswered = false;
       for (let index = 0; index < scene.meshes.length; index++) {
         const mesh = scene.meshes[index];
-        if (!predicate(mesh) || !supported(mesh)) continue;
-        const entry = schedule(mesh);
-        if (!entry?.snapshot || entry.failed) continue;
+        if (!predicate(mesh)) continue;
+        const entry = supported(mesh) ? schedule(mesh) : null;
+        if (!entry?.snapshot || entry.failed) { unanswered = true; continue; }
         let pick = intersect(entry, ray);
         if (!entry.validated) {
           const reference = scene.pickWithRay(ray, candidate => candidate === mesh, false);
-          if (!samePick(pick, reference)) { entry.failed = true; entry.snapshot = null; parity = "different"; pageReasons.add("first-query-parity-mismatch"); continue; }
+          if (!samePick(pick, reference)) {
+            entry.failed = true; entry.snapshot = null; parity = "different"; pageReasons.add("first-query-parity-mismatch"); unanswered = true; continue;
+          }
           entry.validated = true; if (parity === "pending") parity = "same"; pick = reference ?? pick;
         }
         skipped.add(mesh); queries++;
         if (pick.hit && (!best || pick.distance < best.distance)) { best = pick; bestIndex = index; }
       }
+      // Babylon answers the meshes no index did; when every one was, it would only run the predicate again.
+      if (!unanswered) return best;
       const fallback = scene.pickWithRay(ray, mesh => !skipped.has(mesh) && predicate(mesh), false);
       if (fallback?.hit && (!best || fallback.distance < best.distance || (fallback.distance === best.distance && scene.meshes.indexOf(fallback.pickedMesh!) < bestIndex))) best = fallback;
       return best;

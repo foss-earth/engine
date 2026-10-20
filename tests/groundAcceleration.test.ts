@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { instantiateGroundCore } from "../ground-WASM/index.js";
 import { createGroundAcceleration } from "../src/babylon/groundAcceleration.js";
 import { createSurfaceQuery } from "../src/babylon/surfaceQuery.js";
-import { buildGroundBvh, queryGroundBvh, validateGroundBvh } from "../ground-TS/groundBvh.js";
+import { buildGroundBvh, queryGroundBvh, refitGroundBvh, validateGroundBvh } from "../ground-TS/groundBvh.js";
 import { createGroundBvhPreparer } from "../src/browser/groundBvhPreparer.js";
 import type { GroundBvhBuild, GroundBvhPreparation, GroundBvhPreparer, GroundBvhWorkerReply, GroundBvhWorkerRequest, GroundBuildKernel, GroundNumericCore } from "../src/browser/groundBvhProtocol.js";
 import { installGroundBvhWorker } from "../src/browser/groundBvhWorker.js";
@@ -27,6 +27,19 @@ function f32(mesh: Mesh): Mesh {
   mesh.computeWorldMatrix(true); return mesh;
 }
 const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+/**
+ * A plain array's float64 positions where float32 numbers are 2 m apart: 0.37 m cells 30,000 km along x, whose
+ * corners float32 rounds by up to a metre, much more than the boxes' padding.
+ */
+function farGrid(cells = 8) {
+  const positions: number[] = [], indices: number[] = [];
+  for (let row = 0; row <= cells; row++) for (let col = 0; col <= cells; col++) positions.push(3e7 + col * 0.37, Math.sin(col * 1.3) * Math.cos(row * 0.7) * 0.4 + 0.1, row * 0.37);
+  for (let row = 0; row < cells; row++) for (let col = 0; col < cells; col++) {
+    const a = row * (cells + 1) + col;
+    indices.push(a, a + 1, a + cells + 1, a + 1, a + cells + 2, a + cells + 1);
+  }
+  return { positions, indices: Uint32Array.from(indices), size: cells * 0.37 };
+}
 function heldPreparer() {
   let next: { request: GroundBvhBuild; answer(value: GroundBvhPreparation): void } | null = null;
   const dispose = vi.fn();
@@ -69,6 +82,39 @@ describe("ground immutable index integration", () => {
     secondWorker.answer(); await settle(); expect(second.status().readyMeshes).toBe(0);
     expect(query.raycast(origin, direction, 20)).toEqual(reference.raycast(origin, direction, 20));
     second.dispose(); expect(secondWorker.dispose).toHaveBeenCalledOnce(); expect(mesh.geometry!.onGeometryUpdated).toBe(previous);
+  });
+
+  it("indexes a mesh whose positions are a plain array of float64 numbers, and leaves Babylon nothing to scan once every mesh is indexed", async () => {
+    const { scene } = fixture(), grid = farGrid(), mesh = new Mesh("far", scene);
+    // Babylon keeps a plain array only from an update, as terrain stitching writes its seams.
+    mesh.setVerticesData(VertexBuffer.PositionKind, Float32Array.from(grid.positions), true); mesh.setIndices(grid.indices);
+    mesh.updateVerticesData(VertexBuffer.PositionKind, grid.positions, true); mesh.computeWorldMatrix(true);
+    expect(mesh.getVerticesData(VertexBuffer.PositionKind)).toBe(grid.positions);
+    const worker = heldPreparer(), acceleration = createGroundAcceleration({ preparer: worker.preparer, now: () => 0 });
+    const accelerated = createSurfaceQuery(scene, () => null, () => true, () => 0, undefined, acceleration);
+    const reference = createSurfaceQuery(scene, () => null, () => true);
+    let seed = 13;
+    const random = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 2 ** 32; };
+    const rays = Array.from({ length: 64 }, () => ({ origin: { x: 3e7 + random() * grid.size, y: 5, z: random() * grid.size },
+      direction: { x: (random() - 0.5) * 0.2, y: -1, z: (random() - 0.5) * 0.2 } }));
+    try {
+      accelerated.raycast(rays[0].origin, rays[0].direction, 20);
+      // The worker builds from the float32 rounding, whose boxes do not hold the float64 corners until the page fits them.
+      worker.answer(); await settle();
+      expect(acceleration.status()).toMatchObject({ readyMeshes: 1, fallbackReason: null });
+      const scan = vi.spyOn(mesh.subMeshes[0], "intersects"), pickWithRay = vi.spyOn(scene, "pickWithRay");
+      // The first query is checked against Babylon's; from then on the index answers alone.
+      expect(accelerated.raycast(rays[0].origin, rays[0].direction, 20)).toEqual(reference.raycast(rays[0].origin, rays[0].direction, 20));
+      expect(acceleration.status()).toMatchObject({ parity: "same", acceleratedQueries: 1 });
+      scan.mockClear(); pickWithRay.mockClear();
+      const answers = rays.map(ray => accelerated.raycast(ray.origin, ray.direction, 20));
+      expect(scan).not.toHaveBeenCalled(); expect(pickWithRay).not.toHaveBeenCalled();
+      expect(answers.filter(Boolean).length).toBeGreaterThan(32);
+      // Past x = 3e7 + 2, where float32 boxes would end, as well.
+      expect(answers.some(hit => hit && hit.point.x > 3e7 + 2.1)).toBe(true);
+      pickWithRay.mockRestore();
+      expect(answers).toEqual(rays.map(ray => reference.raycast(ray.origin, ray.direction, 20)));
+    } finally { acceleration.dispose(); }
   });
 
   it("preserves exact world transforms, finite endpoints, normals, scene ties, hidden meshes and unsupported submeshes", async () => {
@@ -156,6 +202,36 @@ describe("ground numerical BVH", () => {
       if (hit) { expect(nativeResults[at + 1]).toBe(hit.distance); expect(nativeResults[at + 2]).toBe(hit.face); expect(nativeResults[at + 3]).toBe(hit.bu); expect(nativeResults[at + 4]).toBe(hit.bv); }
     }
     native.dispose(); core.dispose();
+  });
+
+  it("fits an index built from float32 roundings to a plain array's float64 positions, and then answers as Babylon does on them", () => {
+    const { positions, indices, size } = farGrid(), faces = indices.length / 3, rounded = Float32Array.from(positions);
+    const built = buildGroundBvh(rounded, indices);
+    expect(() => validateGroundBvh(built, faces, { positions, indices })).toThrow("Ground BVH face outside its leaf's bounds.");
+    const fitted = refitGroundBvh(built, positions, indices);
+    expect(() => validateGroundBvh(fitted, faces, { positions, indices })).not.toThrow();
+    // Only the boxes change: the header, children, ranges and face order are the built index's.
+    for (let node = 0; node < built[0]; node++) expect(Array.from(fitted.subarray(2 + node * 10 + 6, 2 + node * 10 + 10))).toEqual(Array.from(built.subarray(2 + node * 10 + 6, 2 + node * 10 + 10)));
+    expect(Array.from(fitted.subarray(2 + built[0] * 10))).toEqual(Array.from(built.subarray(2 + built[0] * 10)));
+    // Each box is the smallest holding its faces: the root's is the corners' extent.
+    for (let axis = 0; axis < 3; axis++) {
+      const values = positions.filter((_, at) => at % 3 === axis);
+      expect([fitted[2 + axis], fitted[5 + axis]]).toEqual([Math.min(...values), Math.max(...values)]);
+    }
+    let seed = 29, missed = 0;
+    const random = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 2 ** 32; };
+    for (let at = 0; at < 512; at++) {
+      const ray = new Ray(new Vector3(3e7 + (random() - 0.1) * size * 1.2, 5, (random() - 0.1) * size * 1.2), new Vector3((random() - 0.5) * 0.2, -1, (random() - 0.5) * 0.2), at % 2 ? 100 : 5.2, 0.001);
+      let hit: { distance: number; face: number; bu: number; bv: number } | null = null;
+      for (let face = 0; face < faces; face++) {
+        const result = ray.intersectsTriangle(Vector3.FromArray(positions, indices[face * 3] * 3), Vector3.FromArray(positions, indices[face * 3 + 1] * 3), Vector3.FromArray(positions, indices[face * 3 + 2] * 3));
+        if (result && result.distance >= 0 && (!hit || result.distance < hit.distance)) hit = { distance: result.distance, face, bu: result.bu!, bv: result.bv! };
+      }
+      expect(queryGroundBvh(fitted, positions, indices, ray)).toEqual(hit);
+      if (hit && !queryGroundBvh(built, positions, indices, ray)) missed++;
+    }
+    // Unfitted, the float32 boxes lose hits.
+    expect(missed).toBeGreaterThan(0);
   });
 
   it("answers every ray as the reference's index does on any index whose boxes contain their faces", () => {

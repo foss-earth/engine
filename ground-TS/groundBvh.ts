@@ -1,6 +1,7 @@
 /** Worker-built immutable spatial index. Header [node count, face count], then
  * ten f64 values per node [low xyz, high xyz, left, right, start, count], then
- * original face IDs. Positions/indices remain the displayed Float32 geometry. */
+ * original face IDs. Positions/indices remain the geometry Babylon picks: Float32,
+ * or the float64 numbers of a plain array, to which refitGroundBvh fits the boxes. */
 export type GroundBvhSnapshot = Float64Array;
 export interface GroundLocalRay { origin: { x: number; y: number; z: number }; direction: { x: number; y: number; z: number }; length: number; epsilon: number }
 export interface GroundLocalHit { distance: number; face: number; bu: number; bv: number }
@@ -44,7 +45,7 @@ export function buildGroundBvh(positions: Float32Array, indices: Uint32Array): G
  * children's: queryGroundBvh then answers every ray as it does on the reference's index, whatever the
  * tree's shape, because it reaches every face whose hit is no farther than its best and breaks distance
  * ties by face. */
-export function validateGroundBvh(snapshot: GroundBvhSnapshot, faceCount: number, geometry?: { positions: Float32Array; indices: Uint32Array }): void {
+export function validateGroundBvh(snapshot: GroundBvhSnapshot, faceCount: number, geometry?: { positions: ArrayLike<number>; indices: Uint32Array }): void {
   const nodes = snapshot[0], faces = snapshot[1];
   if (!Number.isSafeInteger(nodes) || nodes < 1 || nodes > 2 * faceCount || faces !== faceCount
     || snapshot.length !== 2 + nodes * 10 + faces || faceCount > GROUND_MAX_TRIANGLES) throw new RangeError("Invalid ground BVH header.");
@@ -90,8 +91,39 @@ export function validateGroundBvh(snapshot: GroundBvhSnapshot, faceCount: number
   if (seenNodes.indexOf(0) >= 0 || seenFaces.indexOf(0) >= 0) throw new RangeError("Incomplete ground BVH.");
 }
 
+/**
+ * A valid index's boxes, each made the smallest that holds its faces' corners as these positions place them: a leaf's
+ * from its faces, a node's from its two children. An index built from a plain array's numbers rounded to float32 then
+ * holds the float64 numbers themselves, which Babylon picks against. Children follow their parent in the reference's
+ * order, so nodes are refitted from the last; validateGroundBvh, given the geometry, still decides whether the boxes
+ * hold the faces.
+ */
+export function refitGroundBvh(snapshot: GroundBvhSnapshot, positions: ArrayLike<number>, indices: Uint32Array): GroundBvhSnapshot {
+  const result = snapshot.slice(), nodes = result[0], faceOffset = 2 + nodes * 10;
+  for (let node = nodes - 1; node >= 0; node--) {
+    const at = 2 + node * 10, start = result[at + 8], count = result[at + 9];
+    let lx = Infinity, ly = Infinity, lz = Infinity, hx = -Infinity, hy = -Infinity, hz = -Infinity;
+    if (count === 0) {
+      for (const child of [result[at + 6], result[at + 7]]) {
+        const inner = 2 + child * 10;
+        lx = Math.min(lx, result[inner]); ly = Math.min(ly, result[inner + 1]); lz = Math.min(lz, result[inner + 2]);
+        hx = Math.max(hx, result[inner + 3]); hy = Math.max(hy, result[inner + 4]); hz = Math.max(hz, result[inner + 5]);
+      }
+    } else {
+      for (let slot = faceOffset + start, end = slot + count; slot < end; slot++) {
+        for (let corner = result[slot] * 3, last = corner + 3; corner < last; corner++) {
+          const vertex = indices[corner] * 3, x = positions[vertex], y = positions[vertex + 1], z = positions[vertex + 2];
+          lx = Math.min(lx, x); ly = Math.min(ly, y); lz = Math.min(lz, z); hx = Math.max(hx, x); hy = Math.max(hy, y); hz = Math.max(hz, z);
+        }
+      }
+    }
+    result[at] = lx; result[at + 1] = ly; result[at + 2] = lz; result[at + 3] = hx; result[at + 4] = hy; result[at + 5] = hz;
+  }
+  return result;
+}
+
 /** Babylon triangle arithmetic and original-face ties, with conservative finite segment pruning. */
-export function queryGroundBvh(snapshot: GroundBvhSnapshot, positions: Float32Array, indices: Uint32Array, ray: GroundLocalRay): GroundLocalHit | null {
+export function queryGroundBvh(snapshot: GroundBvhSnapshot, positions: ArrayLike<number>, indices: Uint32Array, ray: GroundLocalRay): GroundLocalHit | null {
   const origin = [ray.origin.x, ray.origin.y, ray.origin.z], direction = [ray.direction.x, ray.direction.y, ray.direction.z];
   const stack = [0], faceOffset = 2 + snapshot[0] * 10;
   let best = ray.length, hit: GroundLocalHit | null = null;

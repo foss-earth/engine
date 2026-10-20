@@ -86,7 +86,7 @@ export const NATIVE_CORES: Readonly<Record<NativeCoreId, NativeCoreFacts>> = {
   },
   ground: {
     label: "Ground spatial index",
-    scope: "BVH construction for supported displayed Float32 meshes in one worker. Finite-ray queries synchronously traverse that index in TypeScript using current scene transforms; pending, changed or unsupported meshes retain Babylon picking. Raster height samples keep their current cell walker.",
+    scope: "BVH construction for supported displayed meshes in one worker. Positions in a plain array, such as stitched terrain seams, are built from their float32 rounding, and the page fits the boxes to the float64 numbers Babylon picks against. Finite-ray queries synchronously traverse that index in TypeScript using current scene transforms; pending, changed or unsupported meshes retain Babylon picking. Raster height samples keep their current cell walker.",
     original: "page", auto: "typescript",
     autoReason: "Keep the original picker until representative app/flight paired measurements qualify acceleration.",
     sharedBuild: false,
