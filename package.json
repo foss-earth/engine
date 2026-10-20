@@ -8,98 +8,146 @@
   "exports": {
     ".": {
       "source": "./src/index.ts",
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js"
     },
     "./core": {
       "source": "./src/index.ts",
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js"
     },
     "./browser": {
       "source": "./src/browser.ts",
-      "types": "./dist/browser.d.ts",
-      "import": "./dist/browser.js"
+      "types": "./dist/src/browser.d.ts",
+      "import": "./dist/src/browser.js"
     },
     "./babylon": {
       "source": "./src/babylon/index.ts",
-      "types": "./dist/babylon/index.d.ts",
-      "import": "./dist/babylon/index.js"
+      "types": "./dist/src/babylon/index.d.ts",
+      "import": "./dist/src/babylon/index.js"
     },
     "./package.json": "./package.json",
     "./settings": {
       "source": "./src/settings/index.ts",
-      "types": "./dist/settings/index.d.ts",
-      "import": "./dist/settings/index.js"
+      "types": "./dist/src/settings/index.d.ts",
+      "import": "./dist/src/settings/index.js"
     },
     "./gamepad": {
       "source": "./src/gamepad/index.ts",
-      "types": "./dist/gamepad/index.d.ts",
-      "import": "./dist/gamepad/index.js"
+      "types": "./dist/src/gamepad/index.d.ts",
+      "import": "./dist/src/gamepad/index.js"
     },
     "./imagery": {
       "source": "./src/terrain/imagery/index.ts",
-      "types": "./dist/terrain/imagery/index.d.ts",
-      "import": "./dist/terrain/imagery/index.js"
+      "types": "./dist/src/terrain/imagery/index.d.ts",
+      "import": "./dist/src/terrain/imagery/index.js"
     },
     "./panels": {
       "source": "./src/panels.ts",
-      "types": "./dist/panels.d.ts",
-      "import": "./dist/panels.js"
+      "types": "./dist/src/panels.d.ts",
+      "import": "./dist/src/panels.js"
     },
     "./input-mode.css": "./styles/input-mode.css",
     "./map.css": "./styles/map.css",
     "./location.css": "./styles/location.css",
     "./react": {
       "source": "./src/react.ts",
-      "types": "./dist/react.d.ts",
-      "import": "./dist/react.js"
+      "types": "./dist/src/react.d.ts",
+      "import": "./dist/src/react.js"
     },
     "./layers": {
       "source": "./src/layers/index.ts",
-      "types": "./dist/layers/index.d.ts",
-      "import": "./dist/layers/index.js"
+      "types": "./dist/src/layers/index.d.ts",
+      "import": "./dist/src/layers/index.js"
     },
     "./sprites": {
       "source": "./src/sprites/index.ts",
-      "types": "./dist/sprites/index.d.ts",
-      "import": "./dist/sprites/index.js"
+      "types": "./dist/src/sprites/index.d.ts",
+      "import": "./dist/src/sprites/index.js"
     },
     "./compass": {
       "source": "./src/visualization/orbitCompass.ts",
-      "types": "./dist/visualization/orbitCompass.d.ts",
-      "import": "./dist/visualization/orbitCompass.js"
+      "types": "./dist/src/visualization/orbitCompass.d.ts",
+      "import": "./dist/src/visualization/orbitCompass.js"
     },
     "./visualization": {
       "source": "./src/visualization/index.ts",
-      "types": "./dist/visualization/index.d.ts",
-      "import": "./dist/visualization/index.js"
+      "types": "./dist/src/visualization/index.d.ts",
+      "import": "./dist/src/visualization/index.js"
     },
     "./visualization-tuners": {
       "source": "./src/hud/visualizationTuners.ts",
-      "types": "./dist/hud/visualizationTuners.d.ts",
-      "import": "./dist/hud/visualizationTuners.js"
+      "types": "./dist/src/hud/visualizationTuners.d.ts",
+      "import": "./dist/src/hud/visualizationTuners.js"
     },
     "./visualization-tuners.css": "./styles/visualization-tuners.css",
     "./location-provider": {
       "source": "./src/location-provider.ts",
-      "types": "./dist/location-provider.d.ts",
-      "import": "./dist/location-provider.js"
+      "types": "./dist/src/location-provider.d.ts",
+      "import": "./dist/src/location-provider.js"
     },
     "./map-cache.css": "./styles/map-cache.css",
     "./browser-globe": {
       "source": "./src/browser-globe.ts",
-      "types": "./dist/browser-globe.d.ts",
-      "import": "./dist/browser-globe.js"
+      "types": "./dist/src/browser-globe.d.ts",
+      "import": "./dist/src/browser-globe.js"
     },
     "./prepare-heights": {
       "types": "./scripts/prepare-heights.d.mts",
       "default": "./scripts/prepare-heights.mjs"
-    }
+    },
+    "./raster-TS": {
+      "source": "./raster-TS/terrarium.ts",
+      "types": "./dist/raster-TS/terrarium.d.ts",
+      "import": "./dist/raster-TS/terrarium.js"
+    },
+    "./raster-WASM": {
+      "types": "./raster-WASM/index.d.ts",
+      "source": "./raster-WASM/index.js",
+      "import": "./raster-WASM/index.js",
+      "default": "./raster-WASM/index.js"
+    },
+    "./raster-WASM/wasm": "./raster-WASM/single/raster.wasm",
+    "./terrain-TS": {
+      "source": "./terrain-TS/terrainNumericGeometry.ts",
+      "types": "./dist/terrain-TS/terrainNumericGeometry.d.ts",
+      "import": "./dist/terrain-TS/terrainNumericGeometry.js"
+    },
+    "./terrain-WASM": {
+      "types": "./terrain-WASM/index.d.ts",
+      "source": "./terrain-WASM/index.js",
+      "import": "./terrain-WASM/index.js",
+      "default": "./terrain-WASM/index.js"
+    },
+    "./terrain-WASM/core": {
+      "types": "./terrain-WASM/index.d.ts",
+      "source": "./terrain-WASM/core.js",
+      "import": "./terrain-WASM/core.js",
+      "default": "./terrain-WASM/core.js"
+    },
+    "./terrain-WASM/wasm": "./terrain-WASM/single/terrain.wasm",
+    "./ground-TS": {
+      "source": "./ground-TS/groundBvh.ts",
+      "types": "./dist/ground-TS/groundBvh.d.ts",
+      "import": "./dist/ground-TS/groundBvh.js"
+    },
+    "./ground-WASM": {
+      "types": "./ground-WASM/index.d.ts",
+      "source": "./ground-WASM/index.js",
+      "import": "./ground-WASM/index.js",
+      "default": "./ground-WASM/index.js"
+    },
+    "./ground-WASM/wasm": "./ground-WASM/single/ground.wasm"
   },
   "files": [
     "dist",
     "src",
+    "raster-TS",
+    "raster-WASM",
+    "terrain-TS",
+    "terrain-WASM",
+    "ground-TS",
+    "ground-WASM",
     "tests",
     "fixtures",
     "scripts",
@@ -120,6 +168,12 @@
     "lint": "eslint . --cache --cache-strategy content --cache-location node_modules/.cache/eslint/",
     "test": "vitest run --maxWorkers=50%",
     "test:consumer": "node fixtures/consumer.mjs && tsc -p fixtures/tsconfig.json",
+    "build:wasm": "node raster-WASM/scripts/build.mjs && node terrain-WASM/scripts/build.mjs && node ground-WASM/scripts/build.mjs",
+    "check:wasm": "node raster-WASM/scripts/check.mjs && node terrain-WASM/scripts/check.mjs && node ground-WASM/scripts/check.mjs",
+    "check:parity": "npm run build && node raster-WASM/scripts/check-parity.mjs && node terrain-WASM/scripts/check-terrain.mjs && node terrain-WASM/scripts/check-height-batches.mjs && node ground-WASM/scripts/check-index.mjs",
+    "test:wasm": "node --test raster-WASM/tests/*.test.mjs",
+    "test:rust": "cargo +stable test --locked --offline --manifest-path raster-WASM/Cargo.toml --target-dir build/raster-WASM/target/test && cargo +stable test --locked --offline --manifest-path terrain-WASM/Cargo.toml --target-dir build/terrain-WASM/target/test && cargo +stable test --locked --offline --manifest-path ground-WASM/Cargo.toml --target-dir build/ground-WASM/target/test",
+    "prepare:raster-ab": "node raster-WASM/scripts/prepare-ab.mjs",
     "check:implementation": "npm run typecheck && npm run lint && npm run test && npm run build && npm run test:consumer",
     "ci": "npm run check:implementation"
   },

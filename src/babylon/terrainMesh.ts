@@ -1,7 +1,7 @@
 import { Mesh, VertexData, Vector3, type Scene, type TransformNode } from "@babylonjs/core";
 import { DEG_TO_RAD, ecefOnParallel, geodeticParallel, geodeticToEcef, type EcefCoord } from "../camera/cameraMath.js";
 import { sampleTerrainGridRow, terrainGridColumns, type TerrainGrid, type TerrainTile } from "../terrain/terrainGrid.js";
-import { copyTerrainNumericGeometry, type TerrainNumericGeometry } from "../terrain/terrainNumericGeometry.js";
+import { copyTerrainNumericGeometry, type TerrainNumericGeometry } from "../../terrain-TS/terrainNumericGeometry.js";
 export interface TerrainMeshOptions {
   scene: Scene;
   source: { id: string };

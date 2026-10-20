@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "rust": "1.99.0",
+  "cargo": "1.99.0",
+  "installedToolchainAlias": "stable",
+  "target": "wasm32-unknown-unknown",
+  "binaryen": 132,
+  "node": "26.9.0",
+  "abi": "bounded raw exports, version 1",
+  "singleTargetFeatures": [
+    "simd128"
+  ],
+  "maximumMemoryBytes": 268435456,
+  "maximumBinaryBytes": 262144,
+  "wasmBindgen": null,
+  "qualification": "terrain surfaces and height batches checked bit for bit against the TypeScript twin (scripts/check-terrain.mjs, scripts/check-height-batches.mjs); browser, performance and power qualification are separate"
+}

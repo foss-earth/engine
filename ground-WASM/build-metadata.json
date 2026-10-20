@@ -1,0 +1,52 @@
+{
+  "schema": 1,
+  "core": "ground",
+  "abiVersion": 1,
+  "rust": "rustc 1.99.0 (b940084d7 2026-09-28)",
+  "cargo": "cargo 1.99.0 (5f94df478 2026-08-27)",
+  "optimizer": "wasm-opt version 132",
+  "node": "26.9.0",
+  "target": "wasm32-unknown-unknown",
+  "build": {
+    "command": [
+      "cargo",
+      "+stable",
+      "build",
+      "-p",
+      "earth-ground",
+      "--release",
+      "--locked",
+      "--offline",
+      "--target",
+      "wasm32-unknown-unknown"
+    ],
+    "rustflags": "-C target-feature=+simd128 -C link-arg=--max-memory=268435456",
+    "optimize": [
+      "wasm-opt",
+      "-O3",
+      "--enable-simd",
+      "--strip-debug"
+    ]
+  },
+  "inputs": {
+    "Cargo.lock": "8cce8ea13289690bf8a91fe4b114d531727c675c8f2470b8bd8542bf1b438644",
+    "Cargo.toml": "bc7a53361d6e6056759dc39cec0975ba86272f5f5738034534bf3076c3ac35e0",
+    "crates/earth-ground/Cargo.toml": "2b664a4dc7f9fe2e1258db0930a313eddf6f6ee35681fed3fd74b8d634a238c1",
+    "crates/earth-ground/src/lib.rs": "1ebd134207cb0a5568f72b1ca4ee8a85f658269265b774ce3df9558109e38ccd",
+    "index.d.ts": "20380532081878594da4baa60330e8544ed1ee6317d9af2e8b79fd2ce04e7915",
+    "index.js": "b735db05569091ddf14e691440b4b20c2a3d258678c7b7d4ee71364e03ede06b",
+    "rust-toolchain.toml": "ef4d1f56bd8d2d2644df4c2c5786dc149046cd43048f4550420d77a8829f9e53",
+    "scripts/build.mjs": "c42983a57372c7f7feb2462ddced22f8ef23b3787239cad376ba4858bee0e83c",
+    "toolchain.lock.json": "a9cf775a615bc4e3efd376f7a99e4c2dfcf27a59881865823f8bcfc26eaee5f4"
+  },
+  "outputs": {
+    "single/ground.wasm": {
+      "sha256": "3b66f9ea20425af443ea45faf7e46e1819bad724e82b06a2ef420d1a2140e0f7",
+      "bytes": 49399
+    }
+  },
+  "threaded": false,
+  "functionality": "build receipt only; parity evidence comes from this folder's checks",
+  "performance": "unmeasured",
+  "power": "unmeasured"
+}

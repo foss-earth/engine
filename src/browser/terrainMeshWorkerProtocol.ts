@@ -1,4 +1,4 @@
-import type { TerrainNumericGeometry, TerrainNumericRequest } from "../terrain/terrainNumericGeometry.js";
+import type { TerrainNumericGeometry, TerrainNumericRequest } from "../../terrain-TS/terrainNumericGeometry.js";
 import type { PoolWorkerPort } from "./workerPool.js";
 
 export const TERRAIN_MESH_PROTOCOL = 1;

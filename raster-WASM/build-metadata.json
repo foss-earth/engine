@@ -1,0 +1,53 @@
+{
+  "schema": 1,
+  "core": "raster",
+  "abiVersion": 1,
+  "rust": "rustc 1.99.0 (b940084d7 2026-09-28)",
+  "cargo": "cargo 1.99.0 (5f94df478 2026-08-27)",
+  "optimizer": "wasm-opt version 132",
+  "node": "26.9.0",
+  "target": "wasm32-unknown-unknown",
+  "build": {
+    "command": [
+      "cargo",
+      "+stable",
+      "build",
+      "-p",
+      "earth-raster",
+      "--release",
+      "--locked",
+      "--offline",
+      "--target",
+      "wasm32-unknown-unknown"
+    ],
+    "rustflags": "-C target-feature=+simd128 -C link-arg=--max-memory=268435456",
+    "optimize": [
+      "wasm-opt",
+      "-O3",
+      "--enable-simd",
+      "--strip-debug"
+    ]
+  },
+  "inputs": {
+    "Cargo.lock": "03f34b861973c71ef230788f6aac035fa0494fb8c8b175e364d33bb35d9ec78a",
+    "Cargo.toml": "aee030f5c8dc2b180ff0e972402424fce9c06f29a4735ec9a9ce03a0e0fea52d",
+    "core.js": "3ac6e20f5b00517f33caa526bff5f26146a9d3cc06aa7e652da69d180e7e2df0",
+    "crates/earth-raster/Cargo.toml": "8031fa94949ec0fdbd6443f8f2e33c4a6f94434d9452be5c61e011a5c6393cbb",
+    "crates/earth-raster/src/lib.rs": "2f941ebc39bf022e7e04b3b329f12f2b6f2608570a48c4f5395e4ff43acf3eb2",
+    "index.d.ts": "23cb2cc5331886960d5b3eafe4d91ecb4be18af1f471877726c9f751447901f1",
+    "index.js": "555e8beb2eb0b481d1e228736366af5e768d678a78272208867f352cc28d1e7f",
+    "rust-toolchain.toml": "ef4d1f56bd8d2d2644df4c2c5786dc149046cd43048f4550420d77a8829f9e53",
+    "scripts/build.mjs": "9636d1ae4e73e7b5a39fddb989452a7f86c72120321f303a4cc9d286b5038902",
+    "toolchain.lock.json": "2a193bb95804c74a7fcbda40e07a4f974ba6a13b5250fbb960d1dbb4610bcb6f"
+  },
+  "outputs": {
+    "single/raster.wasm": {
+      "sha256": "533e6afcabf60238c41cf9ea6ebeeb7e84c571b810e1428dd69ee89240b3f8c3",
+      "bytes": 16459
+    }
+  },
+  "threaded": false,
+  "functionality": "build receipt only; parity evidence comes from this folder's checks",
+  "performance": "unmeasured",
+  "power": "unmeasured"
+}

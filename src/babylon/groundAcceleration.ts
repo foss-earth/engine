@@ -1,5 +1,5 @@
 import { Matrix, Mesh, PickingCustomization, PickingInfo, Ray, Vector3, VertexBuffer, type AbstractMesh, type Geometry, type Observer, type Scene } from "@babylonjs/core";
-import { queryGroundBvh, validateGroundBvh, type GroundBvhSnapshot } from "../browser/groundBvh.js";
+import { queryGroundBvh, validateGroundBvh, type GroundBvhSnapshot } from "../../ground-TS/groundBvh.js";
 import type { GroundBvhPreparer, GroundBvhPreparerStatus } from "../browser/groundBvhProtocol.js";
 
 export interface GroundAccelerationStatus {
@@ -32,7 +32,9 @@ export function createGroundAcceleration(options: { preparer: GroundBvhPreparer;
   const entries = new Map<Mesh, Entry>(), hooks = new Map<Geometry, Hook>();
   const maxMeshes = options.maxMeshes ?? 64, maxBytes = options.maxSnapshotBytes ?? 64 * 1024 * 1024;
   let disposed = false, pending = false, nextGeneration = 0, queries = 0;
-  let parity: GroundAccelerationStatus["parity"] = "pending", fallbackReason: string | null = null;
+  // Every mismatch or rejection found here stays reported; the worker's reason is its latest result's.
+  let parity: GroundAccelerationStatus["parity"] = "pending", workerReason: string | null = null;
+  const pageReasons = new Set<string>();
   const bytes = () => [...entries.values()].reduce((sum, entry) => sum + (entry.snapshot?.byteLength ?? 0), 0);
   function remove(entry: Entry): void {
     entries.delete(entry.mesh); entry.snapshot = null; entry.generation = ++nextGeneration;
@@ -96,16 +98,17 @@ export function createGroundAcceleration(options: { preparer: GroundBvhPreparer;
       if (disposed || entries.get(mesh) !== current || current.generation !== generation || mesh.isDisposed() || mesh.geometry !== current.geometry
         || mesh.getIndices() !== sourceIndices) return;
       try {
+        workerReason = result.fallbackReason;
         if (result.generation !== generation) throw new Error("Ground generation mismatch.");
-        validateGroundBvh(result.snapshot, current.indices.length / 3);
+        validateGroundBvh(result.snapshot, current.indices.length / 3, { positions: current.positions, indices: current.indices });
         if (result.snapshot.byteLength > maxBytes) throw new Error("Ground snapshot exceeds cache budget.");
         while (bytes() + result.snapshot.byteLength > maxBytes) {
           const oldest = [...entries.values()].filter(other => other !== current && other.snapshot).sort((a, b) => a.touched - b.touched)[0];
           if (!oldest) break; remove(oldest);
         }
-        current.snapshot = result.snapshot; fallbackReason = result.fallbackReason;
-      } catch (error) { current.failed = true; fallbackReason = error instanceof Error ? error.message : String(error); }
-    }, error => { if (!disposed && entries.get(mesh) === current && current.generation === generation) { current.failed = true; fallbackReason = error instanceof Error ? error.message : String(error); } })
+        current.snapshot = result.snapshot;
+      } catch (error) { current.failed = true; pageReasons.add(error instanceof Error ? error.message : String(error)); }
+    }, error => { if (!disposed && entries.get(mesh) === current && current.generation === generation) { current.failed = true; pageReasons.add(error instanceof Error ? error.message : String(error)); } })
       .finally(() => { pending = false; if (!disposed) options.onReady?.(); });
     return entry;
   }
@@ -149,8 +152,8 @@ export function createGroundAcceleration(options: { preparer: GroundBvhPreparer;
         let pick = intersect(entry, ray);
         if (!entry.validated) {
           const reference = scene.pickWithRay(ray, candidate => candidate === mesh, false);
-          if (!samePick(pick, reference)) { entry.failed = true; entry.snapshot = null; parity = "different"; fallbackReason = "first-query-parity-mismatch"; continue; }
-          entry.validated = true; parity = "same"; pick = reference ?? pick;
+          if (!samePick(pick, reference)) { entry.failed = true; entry.snapshot = null; parity = "different"; pageReasons.add("first-query-parity-mismatch"); continue; }
+          entry.validated = true; if (parity === "pending") parity = "same"; pick = reference ?? pick;
         }
         skipped.add(mesh); queries++;
         if (pick.hit && (!best || pick.distance < best.distance)) { best = pick; bestIndex = index; }
@@ -160,7 +163,8 @@ export function createGroundAcceleration(options: { preparer: GroundBvhPreparer;
       return best;
     },
     status: () => ({ queryKernel: "typescript", readyMeshes: [...entries.values()].filter(entry => entry.snapshot && !entry.failed).length, pending,
-      snapshotBytes: bytes(), acceleratedQueries: queries, parity, fallbackReason, preparer: options.preparer.status() }),
+      snapshotBytes: bytes(), acceleratedQueries: queries, parity, fallbackReason: [...pageReasons, workerReason].filter(Boolean).join("; ") || null,
+      preparer: options.preparer.status() }),
     dispose() {
       if (disposed) return; disposed = true;
       for (const entry of [...entries.values()]) remove(entry);

@@ -1,11 +1,17 @@
-import { buildGroundBvh, queryGroundBvh, validateGroundBvh, type GroundBvhSnapshot } from "./groundBvh.js";
+import { buildGroundBvh, validateGroundBvh, type GroundBvhSnapshot } from "../../ground-TS/groundBvh.js";
 import type { GroundBvhPreparation, GroundBvhWorkerRequest, GroundBvhWorkerScope, GroundBuildKernel, GroundNumericCore, GroundWorkerTimers } from "./groundBvhProtocol.js";
 
-/** Starts no native module in the TypeScript arm. One build in flight, with bounded startup. */
+/** Starts no native module in the TypeScript arm. The single-threaded core loads with the worker and,
+ * before it builds any mesh, must build a fixed fixture's index bit for bit as the reference does. Each
+ * mesh is then built once, natively, and its index checked against the mesh's own geometry, which gives
+ * the reference's hits whatever the tree; the page also checks each mesh's first query against Babylon.
+ * One build in flight, with bounded startup. */
 export function installGroundBvhWorker(options: { scope: GroundBvhWorkerScope; kernel: GroundBuildKernel; loadNumericCore?: () => Promise<GroundNumericCore>; now(): number; timers: GroundWorkerTimers; startupTimeoutMs?: number }): void {
-  let core: GroundNumericCore | null = null, starting: Promise<void> | null = null, busy = false, checked = false;
+  let core: GroundNumericCore | null = null, starting: Promise<void> | null = null, busy = false;
   let fallbackReason: string | null = options.kernel === "threaded" ? "threaded-unsupported" : null;
   let parity: GroundBvhPreparation["parity"] = "not-run";
+  // A core that trapped cannot release its handles; drop it rather than fail the worker.
+  const abandon = () => { try { core?.dispose(); } catch { /* abandoned */ } core = null; };
   const start = (): Promise<void> => starting ??= (async () => {
     if (options.kernel !== "single") return;
     if (!options.loadNumericCore) { fallbackReason = "native-core-unavailable"; return; }
@@ -17,7 +23,13 @@ export function installGroundBvhWorker(options: { scope: GroundBvhWorkerScope; k
       ]);
     } catch (error) { fallbackReason = error instanceof Error && error.message === "startup-timeout" ? "startup-timeout" : "startup-failed"; }
     finally { if (timer !== undefined) options.timers.clear(timer); }
+    if (!core) return;
+    try { parity = admits(core) ? "same" : "different"; } catch { fallbackReason = "native-build-failed"; }
+    if (parity === "different") fallbackReason = "startup-parity-mismatch";
+    if (fallbackReason) abandon();
   })();
+  // Start loading and checking the core with the worker; the first build waits for it.
+  void start();
   options.scope.addEventListener("message", event => {
     const message = event.data as GroundBvhWorkerRequest;
     if (!message || message.type !== "build" || !Number.isSafeInteger(message.id)) return;
@@ -31,31 +43,18 @@ export function installGroundBvhWorker(options: { scope: GroundBvhWorkerScope; k
         let snapshot: GroundBvhSnapshot | null = null;
         let actual: GroundBvhPreparation["actual"] = "typescript";
         if (core && !fallbackReason) {
+          let invalid = false;
           try {
             const mesh = core.buildBvh(positions, indices, { generation });
+            let built: GroundBvhSnapshot;
             try {
-              snapshot = mesh.snapshot(); validateGroundBvh(snapshot, indices.length / 3);
-              if (!checked) {
-                const reference = buildGroundBvh(positions, indices);
-                const rays = parityRays(positions, indices, snapshot);
-                const native = mesh.query(rays);
-                for (let at = 0; at < rays.length; at += 8) {
-                  const ray = { origin: { x: rays[at], y: rays[at + 1], z: rays[at + 2] }, length: rays[at + 3],
-                    direction: { x: rays[at + 4], y: rays[at + 5], z: rays[at + 6] }, epsilon: rays[at + 7] };
-                  const hit = queryGroundBvh(reference, positions, indices, ray), exported = queryGroundBvh(snapshot, positions, indices, ray);
-                  if (native.length !== rays.length || !sameHit(hit, exported) || native[at] !== (hit ? 1 : 0)
-                    || (!hit && (native[at + 1] !== -1 || native[at + 2] !== -1)) || (hit && (!Object.is(native[at + 1], hit.distance)
-                    || native[at + 2] !== hit.face || !Object.is(native[at + 3], hit.bu) || !Object.is(native[at + 4], hit.bv)))) {
-                    parity = "different"; throw new Error("first-use-parity-mismatch");
-                  }
-                }
-                checked = true; parity = "same";
-              }
-              actual = "single";
+              built = mesh.snapshot();
+              try { validateGroundBvh(built, indices.length / 3, { positions, indices }); } catch (error) { invalid = true; throw error; }
             } finally { mesh.dispose(); }
-          } catch (error) {
-            fallbackReason = error instanceof Error && error.message === "first-use-parity-mismatch" ? error.message : "native-build-failed";
-            snapshot = null; core.dispose(); core = null;
+            snapshot = built; actual = "single";
+          } catch {
+            fallbackReason = invalid ? "native-index-invalid" : "native-build-failed";
+            abandon();
           }
         }
         snapshot ??= buildGroundBvh(positions, indices);
@@ -67,20 +66,32 @@ export function installGroundBvhWorker(options: { scope: GroundBvhWorkerScope; k
   });
 }
 
-function sameHit(a: ReturnType<typeof queryGroundBvh>, b: ReturnType<typeof queryGroundBvh>): boolean {
-  return a === null ? b === null : b !== null && a.face === b.face && Object.is(a.distance, b.distance) && Object.is(a.bu, b.bu) && Object.is(a.bv, b.bv);
+/** The fixture's index must equal the reference's bit for bit. The core's own ray queries are not
+ * compared: the page queries the exported index in TypeScript. */
+function admits(core: GroundNumericCore): boolean {
+  const { positions, indices } = admissionFixture(), reference = buildGroundBvh(positions, indices);
+  const mesh = core.buildBvh(positions, indices, { generation: 0 });
+  try {
+    const snapshot = mesh.snapshot();
+    return snapshot.length === reference.length && snapshot.every((value, at) => Object.is(value, reference[at]));
+  } finally { mesh.dispose(); }
 }
 
-/** Broad bounds plus original triangle centroids, both signs on every axis. */
-function parityRays(positions: Float32Array, indices: Uint32Array, snapshot: GroundBvhSnapshot): Float64Array {
-  const values: number[] = [];
-  const span = Math.max(snapshot[5] - snapshot[2], snapshot[6] - snapshot[3], snapshot[7] - snapshot[4], 1);
-  const points = [[(snapshot[2] + snapshot[5]) / 2, (snapshot[3] + snapshot[6]) / 2, (snapshot[4] + snapshot[7]) / 2]];
-  for (let face = 0; face < Math.min(16, indices.length / 3); face++) points.push([0, 1, 2].map(axis =>
-    (positions[indices[face * 3] * 3 + axis] + positions[indices[face * 3 + 1] * 3 + axis] + positions[indices[face * 3 + 2] * 3 + axis]) / 3));
-  for (const point of points) for (let axis = 0; axis < 3; axis++) for (const sign of [-1, 1]) {
-    const origin = [...point], direction = [0, 0, 0]; origin[axis] += sign * (span + 1); direction[axis] = -sign;
-    values.push(...origin, 2 * (span + 1), ...direction, 0.001);
+/** 1,088 faces (17 × 64), so every branch reaches the 17-face nodes whose median selection is not a full
+ * sort. West of x = 0, a sloped grid with repeated and degenerate faces; at the root median, faces whose
+ * x centroid is exactly -0 or +0, alternating; east, a tower that splits on y and z. */
+function admissionFixture(): { positions: Float32Array; indices: Uint32Array } {
+  const positions: number[] = [], indices: number[] = [];
+  const face = (...corners: number[]) => { const base = positions.length / 3; positions.push(...corners); indices.push(base, base + 1, base + 2); };
+  for (let i = 0; i < 512; i++) {
+    const x = -4096 + (i % 32) * 128, y = Math.sin(i * 0.37) * 300, z = Math.floor(i / 32) * 64;
+    if (i % 16 === 15) indices.push(...indices.slice(-3));
+    else face(x, y, z, x + 100, y + 40, z, ...(i % 32 === 7 ? [x + 100, y + 40, z] : [x, y - 25, z + 60]));
   }
-  return new Float64Array(values);
+  for (let i = 0; i < 64; i++) { const x = i % 2 ? -0 : 0, y = i * 3, z = 100 + (i % 8) / 1024; face(x, y, z, x, y + 2, z, x, y, z + 2); }
+  for (let i = 0; i < 512; i++) {
+    const x = 50_000 + (i % 4) / 64, y = i * 50, z = 200 + (i % 3 === 0 ? 10_000 : (i % 5) / 4096);
+    face(x, y, z, x + 3, y + 40, z, x, y + 20, z + 7);
+  }
+  return { positions: new Float32Array(positions), indices: new Uint32Array(indices) };
 }

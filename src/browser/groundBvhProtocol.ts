@@ -1,4 +1,4 @@
-import type { GroundBvhSnapshot } from "./groundBvh.js";
+import type { GroundBvhSnapshot } from "../../ground-TS/groundBvh.js";
 
 export type GroundBuildKernel = "typescript" | "single" | "threaded";
 export interface GroundBvhBuild { positions: Float32Array; indices: Uint32Array; generation: number }

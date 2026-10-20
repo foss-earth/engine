@@ -48,7 +48,7 @@ export * from "./browser/terrainMeshWorkers.js";
 export * from "./browser/terrainHeightBatchProtocol.js";
 export * from "./browser/terrainHeightBatchKernel.js";
 export * from "./browser/terrainHeightBatches.js";
-export * from "./browser/groundBvh.js";
+export * from "../ground-TS/groundBvh.js";
 export * from "./browser/groundBvhProtocol.js";
 export * from "./browser/groundBvhPreparer.js";
 export * from "./browser/groundBvhWorker.js";

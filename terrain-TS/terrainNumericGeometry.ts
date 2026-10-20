@@ -1,6 +1,6 @@
 /** Opt-in renderer-free terrain preparation. Legacy rendering remains unchanged. */
-import { DEG_TO_RAD, ecefOnParallel, geodeticParallel, geodeticToEcef, type EcefCoord } from "../camera/cameraMath.js";
-import { sampleTerrainGridRow, terrainGridColumns, type TerrainGrid, type TerrainTile } from "./terrainGrid.js";
+import { DEG_TO_RAD, ecefOnParallel, geodeticParallel, geodeticToEcef, type EcefCoord } from "../src/camera/cameraMath.js";
+import { sampleTerrainGridRow, terrainGridColumns, type TerrainGrid, type TerrainTile } from "../src/terrain/terrainGrid.js";
 
 export interface TerrainNumericRequest {
   tile: TerrainTile;

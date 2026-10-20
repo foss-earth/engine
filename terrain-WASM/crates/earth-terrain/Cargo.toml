@@ -1,0 +1,10 @@
+[package]
+name = "earth-terrain"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+license = "AGPL-3.0-only"
+description = "Worker-only terrain surface, interpolation, and mesh numeric core"
+
+[lib]
+crate-type = ["cdylib", "rlib"]

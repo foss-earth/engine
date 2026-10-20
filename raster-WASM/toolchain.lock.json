@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "rust": "1.99.0",
+  "cargo": "1.99.0",
+  "installedToolchainAlias": "stable",
+  "target": "wasm32-unknown-unknown",
+  "binaryen": 132,
+  "node": "26.9.0",
+  "abi": "bounded raw exports, version 1",
+  "singleTargetFeatures": [
+    "simd128"
+  ],
+  "maximumMemoryBytes": 268435456,
+  "maximumBinaryBytes": 262144,
+  "wasmBindgen": null,
+  "qualification": "Terrarium decode checked against the TypeScript twin over all 16,777,216 RGB colours (scripts/check-parity.mjs); browser, performance and power qualification are separate"
+}

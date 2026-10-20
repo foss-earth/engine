@@ -39,31 +39,55 @@ export function buildGroundBvh(positions: Float32Array, indices: Uint32Array): G
   return result;
 }
 
-/** Validate bounds, topology and a one-to-one original-face permutation before publication. */
-export function validateGroundBvh(snapshot: GroundBvhSnapshot, faceCount: number): void {
+/** Validate bounds, topology and a one-to-one original-face permutation before publication. Given the
+ * geometry, also check that every leaf's box contains its faces' corners and every node's box its
+ * children's: queryGroundBvh then answers every ray as it does on the reference's index, whatever the
+ * tree's shape, because it reaches every face whose hit is no farther than its best and breaks distance
+ * ties by face. */
+export function validateGroundBvh(snapshot: GroundBvhSnapshot, faceCount: number, geometry?: { positions: Float32Array; indices: Uint32Array }): void {
   const nodes = snapshot[0], faces = snapshot[1];
   if (!Number.isSafeInteger(nodes) || nodes < 1 || nodes > 2 * faceCount || faces !== faceCount
     || snapshot.length !== 2 + nodes * 10 + faces || faceCount > GROUND_MAX_TRIANGLES) throw new RangeError("Invalid ground BVH header.");
-  const seenNodes = new Uint8Array(nodes), seenFaces = new Uint8Array(faces), stack = [0];
-  const faceOffset = 2 + nodes * 10;
-  while (stack.length) {
-    const index = stack.pop()!;
+  if (geometry && geometry.indices.length !== faceCount * 3) throw new RangeError("Invalid ground BVH geometry.");
+  const positions = geometry?.positions, indices = geometry?.indices;
+  const seenNodes = new Uint8Array(nodes), seenFaces = new Uint8Array(faces), faceOffset = 2 + nodes * 10;
+  // [node, parent] pairs. Only a node seen for the first time pushes its two children, so at most
+  // 2 * nodes + 1 pairs; f64 keeps a corrupt child index as it is for the integer check.
+  const stack = new Float64Array(4 * nodes + 2);
+  let top = 2; stack[0] = 0; stack[1] = -1;
+  while (top) {
+    const parent = stack[--top], index = stack[--top];
     if (!Number.isSafeInteger(index) || index < 0 || index >= nodes || seenNodes[index]) throw new RangeError("Invalid ground BVH topology.");
     seenNodes[index] = 1;
     const at = 2 + index * 10;
-    for (let axis = 0; axis < 3; axis++) if (!Number.isFinite(snapshot[at + axis]) || !Number.isFinite(snapshot[at + axis + 3])
-      || snapshot[at + axis] > snapshot[at + axis + 3]) throw new RangeError("Invalid ground BVH bounds.");
+    const lx = snapshot[at], ly = snapshot[at + 1], lz = snapshot[at + 2], hx = snapshot[at + 3], hy = snapshot[at + 4], hz = snapshot[at + 5];
+    // Finite and ordered: NaN fails every comparison.
+    if (!(lx > -Infinity && lx <= hx && hx < Infinity && ly > -Infinity && ly <= hy && hy < Infinity && lz > -Infinity && lz <= hz && hz < Infinity)) {
+      throw new RangeError("Invalid ground BVH bounds.");
+    }
+    if (positions && parent >= 0) {
+      const outer = 2 + parent * 10;
+      if (lx < snapshot[outer] || ly < snapshot[outer + 1] || lz < snapshot[outer + 2] || hx > snapshot[outer + 3] || hy > snapshot[outer + 4] || hz > snapshot[outer + 5]) {
+        throw new RangeError("Ground BVH node outside its parent's bounds.");
+      }
+    }
     const start = snapshot[at + 8], count = snapshot[at + 9];
     if (!Number.isSafeInteger(count) || count < 0) throw new RangeError("Invalid ground BVH leaf.");
-    if (count === 0) { stack.push(snapshot[at + 6], snapshot[at + 7]); continue; }
+    if (count === 0) { stack[top++] = snapshot[at + 6]; stack[top++] = index; stack[top++] = snapshot[at + 7]; stack[top++] = index; continue; }
     if (!Number.isSafeInteger(start) || start < 0 || start + count > faces) throw new RangeError("Invalid ground BVH leaf range.");
-    for (let slot = start; slot < start + count; slot++) {
-      const face = snapshot[faceOffset + slot];
+    for (let slot = faceOffset + start, end = slot + count; slot < end; slot++) {
+      const face = snapshot[slot];
       if (!Number.isSafeInteger(face) || face < 0 || face >= faces || seenFaces[face]) throw new RangeError("Invalid ground BVH face order.");
       seenFaces[face] = 1;
+      if (!positions) continue;
+      for (let corner = face * 3, last = corner + 3; corner < last; corner++) {
+        const vertex = indices![corner] * 3, x = positions[vertex], y = positions[vertex + 1], z = positions[vertex + 2];
+        // Also false for a missing or non-finite position.
+        if (!(x >= lx && x <= hx && y >= ly && y <= hy && z >= lz && z <= hz)) throw new RangeError("Ground BVH face outside its leaf's bounds.");
+      }
     }
   }
-  if (seenNodes.some(value => value !== 1) || seenFaces.some(value => value !== 1)) throw new RangeError("Incomplete ground BVH.");
+  if (seenNodes.indexOf(0) >= 0 || seenFaces.indexOf(0) >= 0) throw new RangeError("Incomplete ground BVH.");
 }
 
 /** Babylon triangle arithmetic and original-face ties, with conservative finite segment pruning. */

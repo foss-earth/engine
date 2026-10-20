@@ -24,6 +24,8 @@ Root, `/core` and `/imagery` are pure. Everything else is an explicit optional e
 | `/location-provider` | Location provider and cache. |
 | `/prepare-heights` | Node only, at build time, also as the `foss-earth-prepare-heights` command. Fixed heights above the WGS84 ellipsoid: the top of Google Photorealistic 3D Tiles' finest geometry on the vertical, or USGS 3DEP with GEOID18 where Google can't serve a point, with the reason recorded. Reads `FOSS_EARTH_GOOGLE_KEY`, sends it as a header and keeps no Google responses. |
 | `/input-mode.css`, `/map.css`, `/map-cache.css`, `/location.css`, `/visualization-tuners.css` | Engine-owned styles. Generic cache-section styles belong to [`@foss-earth/ui`](https://github.com/foss-earth/ui). |
+| `/raster-TS`, `/terrain-TS`, `/ground-TS` | TypeScript reference cores: Terrarium decoding, terrain surface geometry and the ground spatial index. |
+| `/raster-WASM`, `/terrain-WASM`, `/ground-WASM` | Their Rust/WebAssembly twins, loaded only on request in a worker. `/<name>-WASM/wasm` is the binary. |
 
 Other optional peers: `@foss-earth/renderer`, `@foss-earth/ui`, `@foss-earth/sky` and `3d-tiles-renderer`. Terrain and imagery code uses [`@foss-earth/images`](https://github.com/foss-earth/images). Terrain covers sources, grids, download, selection, refinement and displayed-height queries, plus Google and raster streaming runtimes.
 
@@ -43,6 +45,20 @@ A displayed geometry coordinate height does not establish a physical terrain dat
 - [Build-time height preparation](docs/height-preparation.md): Google-first fixed heights, the USGS fallback, what a height means and the first real run.
 - [Google tiles across a reload](docs/google-tile-reload.md): which requests use the browser cache, why the root is revalidated and a session renewal skips the cache.
 - [Performance notes](docs/performance-notes.md): where the tour's first view spends its time, what was measured and how, and the rules a speedup must keep.
+
+## TypeScript and WebAssembly twins
+
+Each core has its TypeScript reference in `<name>-TS/` and its Rust twin in `<name>-WASM/` beside it. The app's workers choose between them at run time (the Component execution tab) and accept a WebAssembly core only after its output matches the TypeScript one exactly: raster and terrain on their first real input, ground on a fixed fixture when its worker starts, and then every ground index must contain its mesh.
+
+```sh
+npm run build:wasm     # rebuild the three binaries offline with the installed Rust and Binaryen
+npm run check:wasm     # source and binary receipts
+npm run check:parity   # build engine, then raster, terrain, height-batch and ground-index parity
+npm run test:wasm      # node tests of the raster wrapper and benchmark adapter
+npm run test:rust      # cargo tests of the three crates
+```
+
+Each folder's README describes its ABI, bounds and evidence: [raster-WASM](raster-WASM/README.md), [terrain-WASM](terrain-WASM/README.md) and [ground-WASM](ground-WASM/README.md). The main test suite also checks the ground index against ground-TS and Babylon, and the worker's admission (`tests/groundAcceleration.test.ts`).
 
 ## Assets
 

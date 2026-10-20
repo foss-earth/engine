@@ -1,4 +1,4 @@
-import { adoptTerrainNumericGeometry, copyTerrainNumericGeometry, prepareTerrainNumericGeometry, validateTerrainNumericRequest } from "../terrain/terrainNumericGeometry.js";
+import { adoptTerrainNumericGeometry, copyTerrainNumericGeometry, prepareTerrainNumericGeometry, validateTerrainNumericRequest } from "../../terrain-TS/terrainNumericGeometry.js";
 import { TERRAIN_MESH_PROTOCOL, type NativeTerrainGeometryPort, type TerrainMeshActualBackend,
   type TerrainMeshValidation, type TerrainMeshWorkerRequest, type TerrainMeshWorkerScope } from "./terrainMeshWorkerProtocol.js";
 

@@ -9,6 +9,9 @@
   },
   "include": [
     "src/**/*.ts",
+    "raster-TS/**/*.ts",
+    "terrain-TS/**/*.ts",
+    "ground-TS/**/*.ts",
     "tests/**/*.ts",
     "vitest.config.ts",
     "src/**/*.tsx",

@@ -1,4 +1,4 @@
-import { decodeTerrarium } from "../terrain/terrainGrid.js";
+import { decodeTerrarium } from "../../raster-TS/terrarium.js";
 import type { WorkerPoolTimers } from "./workerPool.js";
 
 export type NativeTierPreference = "auto" | "typescript" | "single" | "threaded";

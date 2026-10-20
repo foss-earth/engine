@@ -1,4 +1,4 @@
-import { decodeTerrarium } from "../terrain/terrainGrid.js";
+import { decodeTerrarium } from "../../raster-TS/terrarium.js";
 
 export interface TerrainImageDecodeLimits { /** Maximum square tile side, pixels. Original bound: 1024. */ maxTileSide: number }
 export const DEFAULT_TERRAIN_IMAGE_DECODE_LIMITS: Readonly<TerrainImageDecodeLimits> = Object.freeze({ maxTileSide: 1024 });

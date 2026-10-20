@@ -1,0 +1,54 @@
+{
+  "schema": 1,
+  "core": "terrain",
+  "abiVersion": 1,
+  "rust": "rustc 1.99.0 (b940084d7 2026-09-28)",
+  "cargo": "cargo 1.99.0 (5f94df478 2026-08-27)",
+  "optimizer": "wasm-opt version 132",
+  "node": "26.9.0",
+  "target": "wasm32-unknown-unknown",
+  "build": {
+    "command": [
+      "cargo",
+      "+stable",
+      "build",
+      "-p",
+      "earth-terrain",
+      "--release",
+      "--locked",
+      "--offline",
+      "--target",
+      "wasm32-unknown-unknown"
+    ],
+    "rustflags": "-C target-feature=+simd128 -C link-arg=--max-memory=268435456",
+    "optimize": [
+      "wasm-opt",
+      "-O3",
+      "--enable-simd",
+      "--strip-debug"
+    ]
+  },
+  "inputs": {
+    "Cargo.lock": "a652dd888d72a52d668d56a2821c2f13ed3ea0f1234e1addc686766bb1c92249",
+    "Cargo.toml": "1f8c5265192fd9a1932cfff0230ab9a98602c114c75bfe00c60a3a201ec66996",
+    "core.js": "39994ab8727256c443fec1a119a04e0e08e822c64da564a9613567285ffa4234",
+    "crates/earth-terrain/Cargo.toml": "be4863bc75bc39df721cf4bc8ee68aa1b7ff91970a616c376382aa2a4b2ee760",
+    "crates/earth-terrain/src/lib.rs": "bcdb00e6e7f9bb29cd2dfe31f3cef1bfad0eddc3f2605bde814b4b2fbc0ae382",
+    "heightSampler.js": "0077410908cec4bddc564a8f4f918ff37227c532de977a29287ba3ec2d1b8047",
+    "index.d.ts": "63749a736e4b787f710997e8ec3e0bda58c9a03a23ed58514c4af8d884d2705c",
+    "index.js": "b0155bb62c34a53c20d7257c638448b396be9af8cf000d4fc21779444ce24ac8",
+    "rust-toolchain.toml": "ef4d1f56bd8d2d2644df4c2c5786dc149046cd43048f4550420d77a8829f9e53",
+    "scripts/build.mjs": "c97daf56cc8b54e4d5c3cd6b4b662b340ff8e941f31702a037f37ac3508929e1",
+    "toolchain.lock.json": "18566c8bd8fc553c8f301f345c526621a751123e8946cae9acbcc1c5e65e2445"
+  },
+  "outputs": {
+    "single/terrain.wasm": {
+      "sha256": "24e02faab3dac2561ecc38a15cbaf88556ba9c9c79f743cea1dcd5ede853aba1",
+      "bytes": 33297
+    }
+  },
+  "threaded": false,
+  "functionality": "build receipt only; parity evidence comes from this folder's checks",
+  "performance": "unmeasured",
+  "power": "unmeasured"
+}

@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "rust": "1.99.0",
+  "cargo": "1.99.0",
+  "installedToolchainAlias": "stable",
+  "target": "wasm32-unknown-unknown",
+  "binaryen": 132,
+  "node": "26.9.0",
+  "abi": "bounded raw exports, version 1",
+  "singleTargetFeatures": [
+    "simd128"
+  ],
+  "maximumMemoryBytes": 268435456,
+  "maximumBinaryBytes": 262144,
+  "wasmBindgen": null,
+  "qualification": "index identical bit for bit to the TypeScript twin's, and hits identical, on 13 meshes (scripts/check-index.mjs); hits checked against Babylon's ray-triangle test (engine tests/groundAcceleration.test.ts); browser, performance and power qualification are separate"
+}

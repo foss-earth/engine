@@ -1,13 +1,19 @@
 import { readFile } from "node:fs/promises";
 import { Mesh, MeshBuilder, MorphTargetManager, NullEngine, NullEngineOptions, Ray, Scene, SubMesh, TransformNode, Vector3, VertexBuffer } from "@babylonjs/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { instantiateGroundCore } from "../../native/packages/native-ground/index.js";
+import { instantiateGroundCore } from "../ground-WASM/index.js";
 import { createGroundAcceleration } from "../src/babylon/groundAcceleration.js";
 import { createSurfaceQuery } from "../src/babylon/surfaceQuery.js";
-import { buildGroundBvh, queryGroundBvh, validateGroundBvh } from "../src/browser/groundBvh.js";
+import { buildGroundBvh, queryGroundBvh, validateGroundBvh } from "../ground-TS/groundBvh.js";
 import { createGroundBvhPreparer } from "../src/browser/groundBvhPreparer.js";
-import type { GroundBvhBuild, GroundBvhPreparation, GroundBvhPreparer, GroundBvhWorkerReply, GroundBvhWorkerRequest, GroundBuildKernel } from "../src/browser/groundBvhProtocol.js";
+import type { GroundBvhBuild, GroundBvhPreparation, GroundBvhPreparer, GroundBvhWorkerReply, GroundBvhWorkerRequest, GroundBuildKernel, GroundNumericCore } from "../src/browser/groundBvhProtocol.js";
 import { installGroundBvhWorker } from "../src/browser/groundBvhWorker.js";
+
+// Counts the reference builds, the worker's included, without changing them.
+vi.mock("../ground-TS/groundBvh.js", async importOriginal => {
+  const actual = await importOriginal<typeof import("../ground-TS/groundBvh.js")>();
+  return { ...actual, buildGroundBvh: vi.fn(actual.buildGroundBvh) };
+});
 
 const engines: NullEngine[] = [];
 afterEach(() => { for (const engine of engines.splice(0)) engine.dispose(); });
@@ -28,8 +34,9 @@ function heldPreparer() {
     prepare: request => new Promise(resolve => { next = { request, answer: resolve }; }),
     status: () => ({ kernel: "typescript", state: next ? "busy" : "idle", actual: "typescript", parity: "not-run", failure: null, jobs: 0, lastJob: null }), dispose,
   };
-  return { preparer, dispose, answer: () => { const current = next!; next = null; current.answer({ generation: current.request.generation,
-    snapshot: buildGroundBvh(current.request.positions, current.request.indices), actual: "typescript", parity: "not-run", fallbackReason: null, workMs: 0 }); } };
+  return { preparer, dispose, answer: (edit?: (snapshot: Float64Array) => void) => { const current = next!; next = null;
+    const snapshot = buildGroundBvh(current.request.positions, current.request.indices); edit?.(snapshot);
+    current.answer({ generation: current.request.generation, snapshot, actual: "typescript", parity: "not-run", fallbackReason: null, workMs: 0 }); } };
 }
 
 describe("ground immutable index integration", () => {
@@ -92,6 +99,30 @@ describe("ground immutable index integration", () => {
     expect(query.raycast(origin, direction, 40)).toEqual(reference.raycast(origin, direction, 40));
     acceleration.dispose();
   });
+
+  it("keeps reporting what the page rejected after later meshes are admitted", async () => {
+    const { scene } = fixture(), ray = new Ray(new Vector3(0.17, 10, 0.23), new Vector3(0, -1, 0), 40);
+    const meshes = ["a", "b", "c"].map((name, at) => {
+      const mesh = f32(MeshBuilder.CreateGround(name, { width: 20, height: 20, subdivisions: 4 }, scene)); mesh.position.y = -at; mesh.computeWorldMatrix(true); return mesh;
+    });
+    const worker = heldPreparer(), acceleration = createGroundAcceleration({ preparer: worker.preparer, now: () => 0 });
+    const pick = (mesh: Mesh) => acceleration.pick(scene, ray, candidate => candidate === mesh);
+    try {
+      // a: a root box narrower than its children is rejected before use.
+      pick(meshes[0]); worker.answer(snapshot => { snapshot[5] -= 1; }); await settle();
+      expect(pick(meshes[0])?.pickedMesh).toBe(meshes[0]);
+      expect(acceleration.status()).toMatchObject({ readyMeshes: 0, parity: "pending", fallbackReason: "Ground BVH node outside its parent's bounds." });
+      // b: its first query disagrees with Babylon's, here because Babylon is made to miss once.
+      pick(meshes[1]); worker.answer(); await settle();
+      vi.spyOn(scene, "pickWithRay").mockReturnValueOnce(null);
+      expect(pick(meshes[1])?.pickedMesh).toBe(meshes[1]);
+      expect(acceleration.status()).toMatchObject({ readyMeshes: 0, parity: "different" });
+      // c: admitted, and its worker reported nothing wrong; both earlier findings still stand.
+      pick(meshes[2]); worker.answer(); await settle(); pick(meshes[2]);
+      expect(acceleration.status()).toMatchObject({ readyMeshes: 1, parity: "different",
+        fallbackReason: "Ground BVH node outside its parent's bounds.; first-query-parity-mismatch" });
+    } finally { acceleration.dispose(); }
+  });
 });
 
 describe("ground numerical BVH", () => {
@@ -101,10 +132,10 @@ describe("ground numerical BVH", () => {
     for (let at = 0; at < positions.length; at += 3) positions[at + 1] = Math.sin(positions[at] * 0.37) * Math.cos(positions[at + 2] * 0.29) * 2;
     // Overlapping first face must keep its original lower ID even when partition order changes.
     const duplicated = new Uint32Array(indices.length + 3); duplicated.set(indices); duplicated.set(indices.subarray(0, 3), indices.length);
-    const reference = buildGroundBvh(positions, duplicated); validateGroundBvh(reference, duplicated.length / 3);
-    const core = await instantiateGroundCore(await readFile(new URL("../../native/packages/native-ground/single/ground.wasm", import.meta.url)));
+    const reference = buildGroundBvh(positions, duplicated); validateGroundBvh(reference, duplicated.length / 3, { positions, indices: duplicated });
+    const core = await instantiateGroundCore(await readFile(new URL("../ground-WASM/single/ground.wasm", import.meta.url)));
     const native = core.buildBvh(positions, duplicated, { generation: 1 });
-    const snapshot = native.snapshot(); validateGroundBvh(snapshot, duplicated.length / 3);
+    const snapshot = native.snapshot(); validateGroundBvh(snapshot, duplicated.length / 3, { positions, indices: duplicated });
     const rays: number[] = [];
     let seed = 47;
     const random = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 2 ** 32; };
@@ -125,6 +156,72 @@ describe("ground numerical BVH", () => {
       if (hit) { expect(nativeResults[at + 1]).toBe(hit.distance); expect(nativeResults[at + 2]).toBe(hit.face); expect(nativeResults[at + 3]).toBe(hit.bu); expect(nativeResults[at + 4]).toBe(hit.bv); }
     }
     native.dispose(); core.dispose();
+  });
+
+  it("answers every ray as the reference's index does on any index whose boxes contain their faces", () => {
+    const { scene } = fixture(), mesh = f32(MeshBuilder.CreateGround("grid", { width: 20, height: 20, subdivisions: 8 }, scene));
+    const positions = Float32Array.from(mesh.getVerticesData(VertexBuffer.PositionKind)!), source = Uint32Array.from(mesh.getIndices()!);
+    for (let at = 0; at < positions.length; at += 3) positions[at + 1] = Math.sin(positions[at] * 0.37) * Math.cos(positions[at + 2] * 0.29) * 2;
+    // Repeated faces, so distance ties must go to the lower face whatever the order.
+    const indices = new Uint32Array(source.length * 2); indices.set(source); indices.set(source, source.length);
+    const faces = indices.length / 3, geometry = { positions, indices }, reference = buildGroundBvh(positions, indices);
+    // One leaf holding every face, last face first; and the reference's tree with every box 5 larger.
+    const flat = new Float64Array(2 + 10 + faces); flat.set([1, faces, ...reference.subarray(2, 8), 0, 0, 0, faces]);
+    for (let slot = 0; slot < faces; slot++) flat[12 + slot] = faces - 1 - slot;
+    const loose = reference.slice();
+    for (let node = 0; node < reference[0]; node++) for (let axis = 0; axis < 3; axis++) { loose[2 + node * 10 + axis] -= 5; loose[2 + node * 10 + axis + 3] += 5; }
+    for (const index of [flat, loose]) expect(() => validateGroundBvh(index, faces, geometry)).not.toThrow();
+    let seed = 91, hits = 0;
+    const random = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 2 ** 32; };
+    for (let at = 0; at < 512; at++) {
+      const ray = new Ray(new Vector3((random() - 0.5) * 24, 10, (random() - 0.5) * 24), new Vector3((random() - 0.5) * 0.4, -1, (random() - 0.5) * 0.4), at % 2 ? 100 : 10, 0.001);
+      const expected = queryGroundBvh(reference, positions, indices, ray);
+      if (expected) { hits++; expect(expected.face).toBeLessThan(faces / 2); }
+      for (const index of [flat, loose]) expect(queryGroundBvh(index, positions, indices, ray)).toEqual(expected);
+    }
+    expect(hits).toBeGreaterThan(200);
+  });
+
+  it("rejects, given the geometry, a leaf that misses a face's corner or a node outside its parent's box", () => {
+    // 32 faces: a root, two 16-face nodes, four 8-face leaves; the last node is a leaf.
+    const positions = new Float32Array(32 * 9), indices = Uint32Array.from({ length: 96 }, (_, at) => at);
+    for (let face = 0; face < 32; face++) positions.set([face, 0, 0, face + 1, 0, 1, face, 1, 0], face * 9);
+    const geometry = { positions, indices }, reference = buildGroundBvh(positions, indices), leaf = 2 + (reference[0] - 1) * 10;
+    expect(reference[leaf + 9]).toBe(8);
+    expect(() => validateGroundBvh(reference, 32, geometry)).not.toThrow();
+    // narrow misses the last face's second corner, short every face's third; wide pokes out of its parent.
+    const narrow = reference.slice(); narrow[leaf + 3] -= 0.5;
+    const short = reference.slice(); short[leaf + 4] -= 0.5;
+    const wide = reference.slice(); wide[leaf + 4] += 1;
+    for (const index of [narrow, short, wide]) expect(() => validateGroundBvh(index, 32)).not.toThrow();
+    for (const index of [narrow, short]) expect(() => validateGroundBvh(index, 32, geometry)).toThrow("Ground BVH face outside its leaf's bounds.");
+    expect(() => validateGroundBvh(wide, 32, geometry)).toThrow("Ground BVH node outside its parent's bounds.");
+    const missing = positions.slice(); missing[31 * 9 + 4] = NaN;
+    expect(() => validateGroundBvh(reference, 32, { positions: missing, indices })).toThrow("Ground BVH face outside its leaf's bounds.");
+    expect(() => validateGroundBvh(reference, 32, { positions, indices: indices.subarray(3) })).toThrow("Invalid ground BVH geometry.");
+    const fractional = reference.slice(); fractional[2 + 6] += 0.5;
+    expect(() => validateGroundBvh(fractional, 32)).toThrow("Invalid ground BVH topology.");
+  });
+});
+
+describe("ground index identity with the TypeScript twin", () => {
+  it("builds the reference's index bit for bit, with signed-zero centroid ties and 17-face nodes", async () => {
+    const core = await instantiateGroundCore(await readFile(new URL("../ground-WASM/single/ground.wasm", import.meta.url)));
+    // x centroids of exactly -0 and +0, alternating by face, straddle the root median. 139 faces split
+    // into nodes of 17, whose median selection is not a full sort; 1088 is 17 × 64.
+    for (const faces of [139, 1088]) {
+      const positions = new Float32Array(faces * 9), indices = Uint32Array.from({ length: faces * 3 }, (_, at) => at);
+      for (let face = 0; face < faces; face++) {
+        const block = face - (faces >> 1) + 16, x = block >= 0 && block < 32 ? (block % 2 ? -0 : 0) : (face - faces / 2) * 3;
+        const y = Math.sin(face) * 2, z = Math.cos(face * 1.3) * 2;
+        positions.set([x, y, z, x, y + 1, z, x, y, z + 1], face * 9);
+      }
+      const native = core.buildBvh(positions, indices), snapshot = native.snapshot(), reference = buildGroundBvh(positions, indices);
+      expect(snapshot.length).toBe(reference.length);
+      expect(snapshot.findIndex((value, at) => !Object.is(value, reference[at]))).toBe(-1);
+      native.dispose();
+    }
+    core.dispose();
   });
 });
 
@@ -200,23 +297,27 @@ describe("ground CPU index identity", () => {
   });
 });
 
-function connected(kernel: GroundBuildKernel, missingNative = false) {
-  let workerListener: (event: { data: unknown }) => void = () => {};
+/** The preparer creates its worker on the first build, as the app does, and the worker starts its core then. */
+function connected(kernel: GroundBuildKernel, missingNative = false, wrap = (core: GroundNumericCore): GroundNumericCore => core) {
   const listeners = new Map<string, Array<(event: { data?: unknown; message?: string }) => void>>();
-  const loadNumericCore = vi.fn(async () => { if (missingNative) throw new Error("missing"); return instantiateGroundCore(await readFile(new URL("../../native/packages/native-ground/single/ground.wasm", import.meta.url))); });
+  const loadNumericCore = vi.fn(async () => { if (missingNative) throw new Error("missing"); return wrap(await instantiateGroundCore(await readFile(new URL("../ground-WASM/single/ground.wasm", import.meta.url)))); });
   const timers = { set: (callback: () => void, ms: number) => setTimeout(callback, ms), clear: (handle: unknown) => clearTimeout(handle as ReturnType<typeof setTimeout>) };
-  installGroundBvhWorker({ kernel, loadNumericCore, now: () => 0, timers, scope: {
-    addEventListener: (_type, listener) => { workerListener = listener; }, postMessage: (message: GroundBvhWorkerReply, transfer) => {
-      const data = structuredClone(message, { transfer: transfer as ArrayBuffer[] }); queueMicrotask(() => { for (const listener of listeners.get("message") ?? []) listener({ data }); });
-    },
-  } });
   const terminate = vi.fn();
-  const preparer = createGroundBvhPreparer({ kernel, now: () => 0, timers, createWorker: () => ({
-    postMessage: (message: GroundBvhWorkerRequest, transfer) => { const data = structuredClone(message, { transfer: transfer as ArrayBuffer[] }); queueMicrotask(() => workerListener({ data })); },
-    addEventListener: (type, listener) => { listeners.set(type, [...(listeners.get(type) ?? []), listener]); }, terminate,
-  }) });
+  const preparer = createGroundBvhPreparer({ kernel, now: () => 0, timers, createWorker: () => {
+    let workerListener: (event: { data: unknown }) => void = () => {};
+    installGroundBvhWorker({ kernel, loadNumericCore, now: () => 0, timers, scope: {
+      addEventListener: (_type, listener) => { workerListener = listener; }, postMessage: (message: GroundBvhWorkerReply, transfer) => {
+        const data = structuredClone(message, { transfer: transfer as ArrayBuffer[] }); queueMicrotask(() => { for (const listener of listeners.get("message") ?? []) listener({ data }); });
+      },
+    } });
+    return {
+      postMessage: (message: GroundBvhWorkerRequest, transfer) => { const data = structuredClone(message, { transfer: transfer as ArrayBuffer[] }); queueMicrotask(() => workerListener({ data })); },
+      addEventListener: (type, listener) => { listeners.set(type, [...(listeners.get(type) ?? []), listener]); }, terminate,
+    };
+  } });
   return { preparer, loadNumericCore, terminate };
 }
+const triangle = () => ({ positions: new Float32Array([0, 0, 0, 1, 0, 0, 0, 0, 1]), indices: new Uint32Array([0, 1, 2]) });
 
 describe("ground build worker lifecycle", () => {
   it.each(["typescript", "single", "threaded"] as const)("runs the %s arm with owned transfer buffers and honest actual status", async kernel => {
@@ -231,7 +332,74 @@ describe("ground build worker lifecycle", () => {
   });
   it("keeps a complete TS build after native startup failure", async () => {
     const pair = connected("single", true);
-    const result = await pair.preparer.prepare({ generation: 1, positions: new Float32Array([0, 0, 0, 1, 0, 0, 0, 0, 1]), indices: new Uint32Array([0, 1, 2]) });
+    const result = await pair.preparer.prepare({ generation: 1, ...triangle() });
     expect(result).toMatchObject({ actual: "typescript", fallbackReason: "startup-failed", parity: "not-run" }); pair.preparer.dispose();
+  });
+  it("admits the core on its startup fixture before the first mesh, then builds each mesh once, natively", async () => {
+    const builds: number[] = [];
+    const pair = connected("single", false, core => ({ ...core, buildBvh: (positions, indices, options) => { builds.push(indices.length / 3); return core.buildBvh(positions, indices, options); } }));
+    expect(pair.loadNumericCore).not.toHaveBeenCalled();
+    const { scene } = fixture(), mesh = f32(MeshBuilder.CreateBox("box", { size: 10 }, scene));
+    const request = (generation: number) => ({ generation, positions: Float32Array.from(mesh.getVerticesData(VertexBuffer.PositionKind)!), indices: Uint32Array.from(mesh.getIndices()!) });
+    const references = vi.mocked(buildGroundBvh); references.mockClear();
+    const first = await pair.preparer.prepare(request(1)), second = await pair.preparer.prepare(request(2));
+    expect(builds).toEqual([1088, 12, 12]);
+    // The worker's only TypeScript build is the fixture's reference.
+    expect(references.mock.calls.map(([, indices]) => indices.length / 3)).toEqual([1088]);
+    expect(pair.loadNumericCore).toHaveBeenCalledOnce();
+    for (const result of [first, second]) expect(result).toMatchObject({ actual: "single", parity: "same", fallbackReason: null });
+    pair.preparer.dispose();
+  });
+  it("returns to TypeScript, and says why, when the startup fixture's index differs", async () => {
+    const dispose = vi.fn();
+    const pair = connected("single", false, core => ({ dispose: () => { dispose(); core.dispose(); }, buildBvh: (positions, indices, options) => {
+      const mesh = core.buildBvh(positions, indices, options);
+      // One looser root bound: still a valid index, but not the reference's.
+      return { ...mesh, snapshot: () => { const snapshot = mesh.snapshot(); snapshot[2] -= 1; return snapshot; } };
+    } }));
+    const result = await pair.preparer.prepare({ generation: 1, ...triangle() });
+    expect(result).toMatchObject({ actual: "typescript", parity: "different", fallbackReason: "startup-parity-mismatch" });
+    expect(Array.from(result.snapshot)).toEqual(Array.from(buildGroundBvh(triangle().positions, triangle().indices)));
+    expect(dispose).toHaveBeenCalledOnce(); pair.preparer.dispose();
+  });
+  it("counts a zero of the other sign in the startup fixture's index as a difference", async () => {
+    let flipped = false;
+    const pair = connected("single", false, core => ({ ...core, buildBvh: (positions, indices, options) => {
+      const mesh = core.buildBvh(positions, indices, options);
+      return { ...mesh, snapshot: () => {
+        const snapshot = mesh.snapshot();
+        // The first zero bound, sign flipped: equal under ===, different bit for bit.
+        for (let at = 2; at < 2 + snapshot[0] * 10 && !flipped; at++) if ((at - 2) % 10 < 6 && snapshot[at] === 0) { snapshot[at] = Object.is(snapshot[at], 0) ? -0 : 0; flipped = true; }
+        return snapshot;
+      } };
+    } }));
+    const result = await pair.preparer.prepare({ generation: 1, ...triangle() });
+    expect(flipped).toBe(true);
+    expect(result).toMatchObject({ actual: "typescript", parity: "different", fallbackReason: "startup-parity-mismatch" }); pair.preparer.dispose();
+  });
+  it("builds in TypeScript from then on, and says why, when a mesh's native index does not contain the mesh", async () => {
+    const dispose = vi.fn(), builds: number[] = [];
+    const pair = connected("single", false, core => ({ dispose: () => { dispose(); core.dispose(); }, buildBvh: (positions, indices, options) => {
+      builds.push(indices.length / 3);
+      const mesh = core.buildBvh(positions, indices, options);
+      if (indices.length / 3 === 1088) return mesh;
+      // Well formed, but its only leaf lies far from the face.
+      return { ...mesh, snapshot: () => { const snapshot = mesh.snapshot(); snapshot[2] = snapshot[5] = 1e6; return snapshot; } };
+    } }));
+    const { positions, indices } = triangle(), wrong = buildGroundBvh(positions, indices); wrong[2] = wrong[5] = 1e6;
+    expect(() => validateGroundBvh(wrong, 1)).not.toThrow();
+    const first = await pair.preparer.prepare({ generation: 1, ...triangle() }), second = await pair.preparer.prepare({ generation: 2, ...triangle() });
+    for (const result of [first, second]) {
+      expect(result).toMatchObject({ actual: "typescript", parity: "same", fallbackReason: "native-index-invalid" });
+      expect(Array.from(result.snapshot)).toEqual(Array.from(buildGroundBvh(positions, indices)));
+    }
+    expect(builds).toEqual([1088, 1]); expect(dispose).toHaveBeenCalledOnce(); pair.preparer.dispose();
+  });
+  it("returns to TypeScript when the core traps during admission, even if it cannot then be released", async () => {
+    const trap = () => { throw new WebAssembly.RuntimeError("unreachable"); };
+    const pair = connected("single", false, core => ({ dispose: () => { core.dispose(); trap(); }, buildBvh: trap }));
+    const first = await pair.preparer.prepare({ generation: 1, ...triangle() }), second = await pair.preparer.prepare({ generation: 2, ...triangle() });
+    for (const result of [first, second]) expect(result).toMatchObject({ actual: "typescript", parity: "not-run", fallbackReason: "native-build-failed" });
+    expect(pair.preparer.status()).toMatchObject({ state: "idle", jobs: 2 }); pair.preparer.dispose();
   });
 });

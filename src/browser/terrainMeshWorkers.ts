@@ -1,4 +1,4 @@
-import { adoptTerrainNumericGeometry, type TerrainNumericGeometry } from "../terrain/terrainNumericGeometry.js";
+import { adoptTerrainNumericGeometry, type TerrainNumericGeometry } from "../../terrain-TS/terrainNumericGeometry.js";
 import { createWorkerPool, type WorkerPoolStats, type WorkerPoolTimers } from "./workerPool.js";
 import { TERRAIN_MESH_PROTOCOL, type TerrainMeshActualBackend, type TerrainMeshNumericInput, type TerrainMeshRequestedBackend,
   type TerrainMeshValidation, type TerrainMeshWorkerPort, type TerrainMeshWorkerReply, type TerrainMeshWorkerRequest } from "./terrainMeshWorkerProtocol.js";
