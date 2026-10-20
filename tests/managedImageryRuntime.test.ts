@@ -106,6 +106,20 @@ describe("managed actual runtime table acknowledgement", () => {
       expect(failing.errors.join(" ")).toContain("partial native table failure");
     } finally { failing.dispose(); }
   });
+  it("builds a withdrawal reason for a hidden patch only while its table uploads", async () => {
+    // Each Error the runtime constructs, by message: a stack is captured for each, on every publish.
+    const NativeError = globalThis.Error, reasons: string[] = [];
+    globalThis.Error = new Proxy(NativeError, { construct(target, args, newTarget) { reasons.push(String(args[0])); return Reflect.construct(target, args, newTarget); } });
+    const h = harness(), hidden = () => reasons.filter(reason => reason === "Patch became hidden.").length;
+    try { await h.pump(); h.setVisible(false); await h.pump(); h.touchSurface(); await h.pump();
+      expect(hidden()).toBe(0);
+      h.setVisible(true); await h.pump(); h.switchSource(); expect((await h.pump(true))?.table).toBe(true);
+      h.setVisible(false); await h.pump(true);
+      expect(hidden()).toBe(1);
+      h.completeTable(); await flushOwnedAtlas(); await h.pump(); h.touchSurface(); await h.pump();
+      expect(hidden()).toBe(1); expect(h.errors).toEqual([]);
+    } finally { globalThis.Error = NativeError; h.dispose(); }
+  });
   it("keeps a table uploading while its imagery is selected again with the same result, and binds it when it completes", async () => {
     const h = harness();
     try { await h.pump(); h.touchSurface(); await h.pump(); expect(h.runtime.getDiagnostics().binding.fallbackLeaves).toBe(0); const cellsLog2 = h.uniform("imageryTable")[2];

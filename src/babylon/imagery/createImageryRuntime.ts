@@ -795,7 +795,8 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
     capped = 0; emptyCells = 0; fallbackPatches = 0; tablesNeeded = 0; let logicalTables = 0;
     for (const patch of patches.values()) {
       if (!patch.visible) {
-        cancelPendingTable(patch, new Error("Patch became hidden."));
+        // Most hidden patches have no table to cancel, and an Error's stack costs on each publish.
+        if (patch.pendingTable) cancelPendingTable(patch, new Error("Patch became hidden."));
         const oldAtlas = patch.atlas, oldBlock = patch.block, oldTable = patch.ownedTable;
         patch.block = null; patch.ownedTable = null; patch.table = null; patch.tableSignature = null; patch.bound = null; patch.boundSlots = new Set(); patch.boundSource = null;
         try { if (oldBlock !== null) oldAtlas?.releaseBlock(oldBlock); } catch (error) { reportManaged(error); }
