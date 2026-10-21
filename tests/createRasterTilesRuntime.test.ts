@@ -965,8 +965,15 @@ describe("raster imagery and terrain lifecycle", () => {
     try {
       runtime.update(); pending.imagery.forEach(loaded => loaded()); runtime.update(); await resolveFirstDetail();
       const revision = runtime.getRevision(); changes.mockClear();
-      const stitch = vi.spyOn(refinement, "stitchTerrainEdges").mockImplementationOnce(() => { throw new Error("Synthetic seam commit failed"); });
+      let written: Array<[{ getVerticesData: (kind: string) => unknown }, unknown]> = [];
+      const stitch = vi.spyOn(refinement, "stitchTerrainEdges").mockImplementationOnce((_patches, _counters, staged) => {
+        written = [...staged!].map(([mesh, { positions }]) => [mesh, positions]);
+        throw new Error("Synthetic seam commit failed");
+      });
       expect(() => runtime.update()).toThrow("Synthetic seam commit failed");
+      // The targets staged before the failure still reach their meshes.
+      expect(written.length).toBeGreaterThan(0);
+      for (const [mesh, positions] of written) expect(mesh.getVerticesData(VertexBuffer.PositionKind)).toBe(positions);
       expect(runtime.getRevision()).toBeGreaterThan(revision); expect(changes).toHaveBeenLastCalledWith("geometry");
       stitch.mockRestore(); runtime.update(); expect(runtime.getRevision()).toBeGreaterThan(revision + 1);
     } finally { runtime.dispose(); engine.dispose(); }

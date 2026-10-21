@@ -1,7 +1,10 @@
 import { createHash, type Hash } from "node:crypto";
 import { Mesh, NullEngine, Scene, TransformNode, Vector3, VertexBuffer, VertexData } from "@babylonjs/core";
-import { afterEach, describe, expect, it } from "vitest";
-import { patchPoint, patchesForGeometryCommit, stitchTerrainEdges, updateTerrainPositions, type TerrainPatch } from "../src/babylon/meshRefinement.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  patchPoint, patchesForGeometryCommit, stageTerrainPositions, stitchTerrainEdges, updateTerrainPositions, uploadStagedTerrainPositions,
+  type GeometryWriteCounters, type StagedTerrainPositions, type TerrainPatch,
+} from "../src/babylon/meshRefinement.js";
 
 // Every mesh's stored positions and their type, its bounds and its cached world
 // matrix after each commit round, from the shipped commit (engine 1e3a0a3). It
@@ -42,9 +45,30 @@ const ground = (u: number, v: number) => 1500 * Math.sin(u * 40) * Math.cos(v * 
  * The commit as the runtime ran it: upload every committed target, then stitch
  * the committed tiles and the visible tiles that read them.
  */
+const counted = { geometryWrites: 0, seamPasses: 0 };
 const oneWriteAtATime: Commit = (visible, changed) => {
-  for (const record of changed) updateTerrainPositions(record.mesh, record.target);
-  stitchTerrainEdges(patchesForGeometryCommit(visible, new Set(changed.map(record => record.key))));
+  for (const record of changed) { updateTerrainPositions(record.mesh, record.target); counted.geometryWrites++; }
+  stitchTerrainEdges(patchesForGeometryCommit(visible, new Set(changed.map(record => record.key))), counted);
+};
+/** The commit as the runtime runs it now: every mesh uploaded once, with its seams. */
+const stagedOnce: Commit = (visible, changed) => {
+  const staged: StagedTerrainPositions = new Map();
+  for (const record of changed) stageTerrainPositions(staged, record.mesh, record.target, counted);
+  stitchTerrainEdges(patchesForGeometryCommit(visible, new Set(changed.map(record => record.key))), counted, staged);
+  uploadStagedTerrainPositions(staged, counted);
+};
+/**
+ * The same, with a tile outside its level among the patches. No lookup can
+ * find it, as x never reaches 2^z, but it sends the stitch to string keys.
+ */
+const stagedByStrings: Commit = (visible, changed) => {
+  const staged: StagedTerrainPositions = new Map(), scene = visible[0].mesh.getScene();
+  const decoy = flat(scene, 0, 1, 0, 0);
+  for (const record of changed) stageTerrainPositions(staged, record.mesh, record.target, counted);
+  stitchTerrainEdges([...patchesForGeometryCommit(visible, new Set(changed.map(record => record.key))), decoy], counted, staged);
+  staged.delete(decoy.mesh);
+  uploadStagedTerrainPositions(staged, counted);
+  decoy.mesh.dispose();
 };
 
 /**
@@ -197,8 +221,106 @@ function flat(scene: Scene, z: number, x: number, y: number, height: number): Te
 }
 
 describe("terrain seam identity", () => {
-  it("gives the shipped positions, bounds and transforms over random quadtrees across the antimeridian", () => {
-    expect(digestOf(oneWriteAtATime)).toBe(SHIPPED_DIGEST);
+  it.each([["one write at a time", oneWriteAtATime], ["staged, each mesh once", stagedOnce], ["staged, by string keys", stagedByStrings]] as const)(
+    "gives the shipped positions, bounds and transforms over random quadtrees across the antimeridian (%s)", (_name, commit) => {
+      expect(digestOf(commit)).toBe(SHIPPED_DIGEST);
+    });
+
+  it("uploads fewer meshes when each is uploaded once and unchanged ones are skipped", () => {
+    const writes = (commit: Commit) => {
+      counted.geometryWrites = 0;
+      digestOf(commit);
+      return counted.geometryWrites;
+    };
+    const shipped = writes(oneWriteAtATime), staged = writes(stagedOnce);
+    expect(staged).toBeGreaterThan(0);
+    expect(staged).toBeLessThan(shipped * 0.75);
+  });
+
+  it.each(["frozen", "parented"] as const)("skips the upload of a seam already stitched, and still moves its world bounds (%s)", placement => {
+    const scene = new Scene(new NullEngine()); engines.push(scene.getEngine() as NullEngine);
+    const coarse = flat(scene, 2, 1, 1, 100), fine = flat(scene, 3, 4, 2, 400);
+    const root = new TransformNode("terrain-root", scene);
+    for (const { mesh } of [coarse, fine]) if (placement === "parented") mesh.parent = root; else mesh.freezeWorldMatrix();
+    const counters: GeometryWriteCounters = { geometryWrites: 0, seamPasses: 0 };
+    stitchTerrainEdges([fine, coarse], counters);
+    expect(counters.geometryWrites).toBe(1);
+    const stitched = fine.mesh.getVerticesData(VertexBuffer.PositionKind), updated = vi.fn();
+    fine.mesh.geometry!.onGeometryUpdated = updated;
+    root.position.set(6_378_137, -20, 3);
+    scene.incrementRenderId();
+    counters.geometryWrites = 0;
+    stitchTerrainEdges([fine, coarse], counters);
+    expect(counters.geometryWrites).toBe(0);
+    expect(updated).not.toHaveBeenCalled();
+    expect(fine.mesh.getVerticesData(VertexBuffer.PositionKind)).toBe(stitched);
+    const bounds = fine.mesh.getBoundingInfo(), world = fine.mesh.getWorldMatrix();
+    expect(world.m[12] === (placement === "parented" ? 6_378_137 : 0)).toBe(true);
+    expect(bounds.boundingBox.centerWorld.asArray()).toEqual(Vector3.TransformCoordinates(bounds.boundingBox.center, world).asArray());
+    expect(bounds.boundingSphere.centerWorld.asArray()).toEqual(Vector3.TransformCoordinates(bounds.boundingSphere.center, world).asArray());
+  });
+
+  it("stores a stitched tile as a plain array even when its seam already fits", () => {
+    const scene = new Scene(new NullEngine()); engines.push(scene.getEngine() as NullEngine);
+    const coarse = flat(scene, 2, 1, 1, 100), fine = flat(scene, 3, 4, 2, 100);
+    const before = fine.mesh.getVerticesData(VertexBuffer.PositionKind)!;
+    expect(before).toBeInstanceOf(Float32Array);
+    const counters: GeometryWriteCounters = { geometryWrites: 0, seamPasses: 0 };
+    stitchTerrainEdges([fine, coarse], counters);
+    expect(counters.geometryWrites).toBe(1);
+    const after = fine.mesh.getVerticesData(VertexBuffer.PositionKind)!;
+    expect(Array.isArray(after)).toBe(true);
+    expect(Array.from(after)).toEqual(Array.from(before));
+  });
+
+  it("skips the upload of a target the mesh already holds, and still moves its world bounds", () => {
+    const scene = new Scene(new NullEngine()); engines.push(scene.getEngine() as NullEngine);
+    const terrain = flat(scene, 3, 4, 2, 400), root = new TransformNode("terrain-root", scene);
+    terrain.mesh.parent = root;
+    const target = Float32Array.from(terrain.mesh.getVerticesData(VertexBuffer.PositionKind)!, (value, index) => index % 3 === 1 ? 500 : value);
+    updateTerrainPositions(terrain.mesh, target);
+    const updated = vi.fn();
+    terrain.mesh.geometry!.onGeometryUpdated = updated;
+    root.position.set(-1_945_532, -4_792_825, 3_719_025);
+    scene.incrementRenderId();
+    const staged: StagedTerrainPositions = new Map(), counters: GeometryWriteCounters = { geometryWrites: 0, seamPasses: 0 };
+    stageTerrainPositions(staged, terrain.mesh, target, counters);
+    uploadStagedTerrainPositions(staged, counters);
+    expect(counters.geometryWrites).toBe(0);
+    expect(staged.size).toBe(0);
+    expect(updated).not.toHaveBeenCalled();
+    const bounds = terrain.mesh.getBoundingInfo(), world = terrain.mesh.getWorldMatrix();
+    expect(bounds.boundingBox.centerWorld.y).toBeCloseTo(-4_792_825 + 500, 3);
+    expect(bounds.boundingBox.centerWorld.asArray()).toEqual(Vector3.TransformCoordinates(bounds.boundingBox.center, world).asArray());
+  });
+
+  it("uploads at once positions Babylon would not hand back as given", () => {
+    const scene = new Scene(new NullEngine()); engines.push(scene.getEngine() as NullEngine);
+    const terrain = flat(scene, 3, 4, 2, 400), longer = new Float32Array(81 * 3 + 3).fill(7);
+    const staged: StagedTerrainPositions = new Map(), counters: GeometryWriteCounters = { geometryWrites: 0, seamPasses: 0 };
+    stageTerrainPositions(staged, terrain.mesh, Float32Array.from(terrain.mesh.getVerticesData(VertexBuffer.PositionKind)!), counters);
+    stageTerrainPositions(staged, terrain.mesh, longer, counters);
+    expect(staged.size).toBe(0);
+    expect(counters.geometryWrites).toBe(1);
+    expect(terrain.mesh.getVerticesData(VertexBuffer.PositionKind)).toHaveLength(81 * 3);
+    // A static buffer keeps its first data, so a staged read would differ from the mesh.
+    const still = new Mesh("static", scene), data = new VertexData();
+    data.positions = Array.from(terrain.mesh.getVerticesData(VertexBuffer.PositionKind)!); data.indices = terrain.mesh.getIndices()!;
+    data.applyToMesh(still, false);
+    stageTerrainPositions(staged, still, new Float32Array(81 * 3), counters);
+    expect(staged.size).toBe(0);
+    expect(counters.geometryWrites).toBe(2);
+  });
+
+  it("leaves a −0 corner that its owner puts at +0, as the shipped === did", () => {
+    const scene = new Scene(new NullEngine()); engines.push(scene.getEngine() as NullEngine);
+    // These meet only at the fine tile's north-west corner, whose owner is the coarse tile.
+    const coarse = flat(scene, 2, 1, 1, 0), fine = flat(scene, 3, 4, 4, -0);
+    const counters: GeometryWriteCounters = { geometryWrites: 0, seamPasses: 0 };
+    stitchTerrainEdges([fine, coarse], counters);
+    expect(counters.geometryWrites).toBe(0);
+    expect(Object.is(fine.mesh.getVerticesData(VertexBuffer.PositionKind)![1], -0)).toBe(true);
+    expect(Object.is(patchPoint(coarse, 4, 4, 3)[1], 0)).toBe(true);
   });
 
   it("evaluates a point as the shipped sum, whose leading 0 turns −0 into +0", () => {

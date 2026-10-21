@@ -30,7 +30,10 @@ import type { SurfaceHit } from "../surface/contracts.js";
 import type { SurfaceOwnerChange } from "../surface/currentReadiness.js";
 import type { TerrainPerformanceCapture } from "../terrain/terrainPerformanceCapture.js";
 import { retryDelayMs, type RetryDelay } from "../terrain/retryDelay.js";
-import { meshPositions, patchesForGeometryCommit, stitchTerrainEdges, updateTerrainPositions } from "./meshRefinement.js";
+import {
+  meshPositions, patchesForGeometryCommit, stageTerrainPositions, stitchTerrainEdges, updateTerrainPositions, uploadStagedTerrainPositions,
+  type StagedTerrainPositions,
+} from "./meshRefinement.js";
 import type { GlobeViewState } from "../view.js";
 import { lonLatToMercator, mercatorX, mercatorY } from "../terrain/imagery/imageryGeometry.js";
 import { createImageryRuntime, type ImageryDiagnostics, type ImageryFocusRequest, type ImageryRuntime, type ImageryRuntimeOptions } from "./imagery/createImageryRuntime.js";
@@ -1608,19 +1611,26 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
     }
     if (changed.length === 0) return;
     const failures: unknown[] = [];
+    // Each mesh is uploaded once, with its seams, rather than its target first.
+    const staged: StagedTerrainPositions = new Map();
     try {
       for (const record of changed) {
-        updateTerrainPositions(record.mesh, record.target);
+        stageTerrainPositions(staged, record.mesh, record.target, capture?.counters);
         record.mesh.metadata.terrainZoom = record.targetTerrainZoom;
-        if (capture) capture.counters.geometryWrites++;
       }
       // A replacement is a discrete commit. Stitch the committed tiles and the
       // visible neighbors that read them. Unrelated tiles keep their last upload.
       const dirtyKeys = new Set(changed.map(record => record.key));
-      stitchTerrainEdges(patchesForGeometryCommit(visibleRecords, dirtyKeys), capture?.counters);
+      stitchTerrainEdges(patchesForGeometryCommit(visibleRecords, dirtyKeys), capture?.counters, staged);
+      uploadStagedTerrainPositions(staged, capture?.counters);
       for (const record of changed) dirtyGeometryKeys.delete(record.key);
       geometryDirty = false;
-    } catch (error) { failures.push(error); }
+    } catch (error) {
+      failures.push(error);
+      // What was staged before the failure still reaches the meshes, as it did
+      // when every write went straight to them.
+      try { uploadStagedTerrainPositions(staged, capture?.counters); } catch (uploadError) { failures.push(uploadError); }
+    }
     // A throwing upload/seam operation may have changed some CPU triangles.
     // Invalidate retained evidence even then; keep dirty work for a later retry.
     revision += 1;
