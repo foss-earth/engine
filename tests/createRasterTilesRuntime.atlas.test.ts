@@ -190,9 +190,16 @@ describe("raster runtime with atlas imagery", () => {
   it("changes imagery level and source without touching terrain, elevation requests or the surface", async () => {
     // Imagery alone: the rail does not move terrain.
     getAppSettings().set("map.detail.linkTerrainToImagery", false);
-    const { runtime, settle, engine, urls } = await setup();
+    // Frames 50 ms apart on a clock that stands still within a frame: heights
+    // that arrive are selected for again only after the terrain reselection
+    // interval, so a settle must span it however fast the test runs.
+    let clock = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => clock);
+    const { runtime, settle, engine, urls, scene } = await setup();
+    scene.onBeforeRenderObservable.add(() => { clock += 50; });
     await settle();
-    const writes = vi.spyOn(refinement, "updateTerrainPositions");
+    // Hidden tiles are written directly; a commit stages the visible ones.
+    const writes = vi.spyOn(refinement, "updateTerrainPositions"), staged = vi.spyOn(refinement, "stageTerrainPositions");
     const revision = runtime.getRevision();
     const probe = runtime.sample(36.1, -112.14);
     expect(probe).not.toBeNull();
@@ -209,6 +216,7 @@ describe("raster runtime with atlas imagery", () => {
     expect(urls.length).toBeGreaterThan(imageRequests);
     expect(pending.terrainRequests).toBe(demRequests);
     expect(writes).not.toHaveBeenCalled();
+    expect(staged).not.toHaveBeenCalled();
     expect(runtime.getRevision()).toBe(revision);
     expect(runtime.sample(36.1, -112.14)).toEqual(probe);
     expect(runtime.getDisplayedSourceId()).toBe("carto-positron");
