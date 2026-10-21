@@ -7,6 +7,8 @@ export interface ComputeLease { readonly lanes: number; release(outcome?: Comput
 export interface ComputeAdmissionPort {
   /** Whole team, coordinator included. May grant a smaller supported team after
    * a limit reduction; the dispatcher must use exactly the returned width. */
+  /** Priority's sign supplies one urgency step; arbitrary tile scores cannot
+   * defeat bounded aging across components. Local pools keep their full order. */
   acquire(request?: { lanes?: number; signal?: AbortSignal; priority?: number }): Promise<ComputeLease>;
 }
 export interface ComputeWorker { readonly compute?: ComputeAdmissionPort }
@@ -74,7 +76,7 @@ export function createComputeAdmission(options: { limit: number; now(): number; 
           if (disposed) { reject(new Error("Compute admission disposed.")); return; }
           request.signal?.throwIfAborted();
           if (!Number.isFinite(request.priority ?? 0)) { reject(new RangeError("Invalid compute urgency.")); return; }
-          const entry: Entry = { lanes: width(request.lanes ?? 1), signal: request.signal, queued: options.now(), priority: priority + (request.priority ?? 0), order: sequence++, stats: observed, resolve, reject,
+          const entry: Entry = { lanes: width(request.lanes ?? 1), signal: request.signal, queued: options.now(), priority: Math.sign(priority) + Math.sign(request.priority ?? 0), order: sequence++, stats: observed, resolve, reject,
             abort() { const index = queue.indexOf(entry); if (index < 0) return; queue.splice(index, 1); observed.queued--; entry.signal?.removeEventListener("abort", entry.abort); reject(entry.signal?.reason); pump(); } };
           observed.queued++; queue.push(entry); entry.signal?.addEventListener("abort", entry.abort, { once: true }); pump();
         });

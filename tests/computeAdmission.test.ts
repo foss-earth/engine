@@ -47,6 +47,16 @@ describe("shared fixed compute admission", () => {
     (await optional).release(); (await urgent).release();
     expect(a.snapshot()).toMatchObject({ active: 0, queued: 0, observing: false });
   });
+  it("bounds urgency so arbitrary tile scores cannot starve an aged component", async () => {
+    let now = 0;
+    const a = createComputeAdmission({ limit: 1, now: () => now, agingMs: 10 }), busy = await a.port("sky").acquire();
+    const order: string[] = [];
+    const optional = a.port("optional", -1).acquire().then(lease => { order.push("optional"); return lease; });
+    now = 50;
+    const urgent = a.port("terrain", Number.MAX_VALUE).acquire({ priority: Number.MAX_VALUE }).then(lease => { order.push("terrain"); return lease; });
+    busy.release(); await tick(); expect(order).toEqual(["optional"]);
+    (await optional).release(); (await urgent).release();
+  });
   it("settles queued demand on disposal while owned live leases retire independently", async () => {
     const a = createComputeAdmission({ limit: 1, now: () => 0 }), p = a.port("ground");
     const live = await p.acquire(), queued = p.acquire(); a.dispose();
