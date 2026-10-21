@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { clipOutcode, hullSphere, isSphereBelowHorizon, lonLatToTileXY, outcode, tileLatDeg, tileLonDeg, tilesTouch, toClip, type ImageryView, type TileId } from "../../../src/terrain/imagery/imageryGeometry.js";
+import { clipOutcode, hullSphere, isSphereBelowHorizon, lonLatToTileXY, outcode, projectedPixelFootprint, tileLatDeg, tileLonDeg, tilesTouch, toClip, type ImageryView, type SurfaceSample, type TileId } from "../../../src/terrain/imagery/imageryGeometry.js";
 
 describe("conservative sphere horizon", () => {
   // Keep the original order as an oracle, including strict inequalities at
@@ -131,6 +131,65 @@ describe("clip outcodes", () => {
     for (const plane of [1, 2, 4, 8, 16]) expect([...codes].some(code => code === plane)).toBe(true);
     expect(codes.size).toBeGreaterThan(16);
     expect(flips).toBeGreaterThan(100);
+  });
+});
+
+describe("projected pixel footprints", () => {
+  // The shipped function, which made the clip point and each Jacobian column as objects.
+  // `regrouped` takes each column's inverse as 1 / (w * (w * pixels)), so the test can show it would tell.
+  const shipped = (view: ImageryView, sample: SurfaceSample, imageWidth: number, imageHeight: number, viewportWidth: number, viewportHeight: number, regrouped = false): number | null => {
+    const m = view.ecefToClip, p = sample.position;
+    const c = { x: p.x * m[0] + p.y * m[4] + p.z * m[8] + m[12], y: p.x * m[1] + p.y * m[5] + p.z * m[9] + m[13],
+      z: p.x * m[2] + p.y * m[6] + p.z * m[10] + m[14], w: p.x * m[3] + p.y * m[7] + p.z * m[11] + m[15] };
+    if (c.z * view.nearPlane.z + c.w * view.nearPlane.w < 0 || c.w <= 0) return null;
+    const jacobianColumn = (t: { x: number; y: number; z: number }, pixels: number): [number, number] => {
+      const dx = t.x * m[0] + t.y * m[4] + t.z * m[8];
+      const dy = t.x * m[1] + t.y * m[5] + t.z * m[9];
+      const dw = t.x * m[3] + t.y * m[7] + t.z * m[11];
+      const inv = regrouped ? 1 / (c.w * (c.w * pixels)) : 1 / (c.w * c.w * pixels);
+      return [(viewportWidth / 2) * (dx * c.w - c.x * dw) * inv, (viewportHeight / 2) * (dy * c.w - c.y * dw) * inv];
+    };
+    const [a, cc] = jacobianColumn(sample.du, imageWidth);
+    const [b, d] = jacobianColumn(sample.dv, imageHeight);
+    const sum = a * a + b * b + cc * cc + d * d;
+    const det = a * d - b * cc;
+    return Math.sqrt((sum + Math.sqrt(Math.max(0, sum * sum - 4 * det * det))) / 2);
+  };
+
+  it("are the shipped function's, bit for bit, for any matrix, sample, image and viewport", () => {
+    let seed = 13;
+    const random = (): number => { seed = (seed * 1103515245 + 12345) >>> 0; return seed / 2 ** 32; };
+    const special = [0, -0, 1, -1, 1e-300, -1e300, Infinity, -Infinity, NaN, 6378137, 2 ** 53 + 1];
+    const any = (): number => random() < 0.05 ? special[Math.floor(random() * special.length)] : (random() - 0.5) * 10 ** Math.floor(random() * 14 - 4);
+    const vector = () => ({ x: any(), y: any(), z: any() });
+    const pixels = (): number => random() < 0.8 ? [256, 512, 255, 1][Math.floor(random() * 4)] : random() * 1000;
+    let finite = 0, behindNear = 0, behindEye = 0, regrouped = 0, oneInverse = 0;
+    for (let round = 0; round < 100_000; round++) {
+      const m = Array.from({ length: 16 }, any);
+      // A fifth of the views has a near plane that passes any w, so w alone decides.
+      const nearPlane = random() < 0.2 ? { z: 0, w: 0 } : { z: any(), w: any() };
+      const view = { ecefToClip: m, nearPlane } as unknown as ImageryView;
+      const sample = { position: vector(), du: vector(), dv: vector(), latDeg: 0, lonDeg: 0 };
+      const imageWidth = pixels(), imageHeight = random() < 0.5 ? imageWidth : pixels();
+      const viewportWidth = pixels(), viewportHeight = pixels();
+      const expected = shipped(view, sample, imageWidth, imageHeight, viewportWidth, viewportHeight);
+      expect(Object.is(projectedPixelFootprint(view, sample, imageWidth, imageHeight, viewportWidth, viewportHeight), expected)).toBe(true);
+      const p = sample.position;
+      const w = p.x * m[3] + p.y * m[7] + p.z * m[11] + m[15], z = p.x * m[2] + p.y * m[6] + p.z * m[10] + m[14];
+      if (z * nearPlane.z + w * nearPlane.w < 0) behindNear += 1;
+      else if (!(w > 0)) behindEye += 1;
+      else if (Number.isFinite(expected)) {
+        finite += 1;
+        // How often an inverse grouped another way, or the width's inverse for both columns, would give another footprint here.
+        if (!Object.is(shipped(view, sample, imageWidth, imageHeight, viewportWidth, viewportHeight, true), expected)) regrouped += 1;
+        if (!Object.is(shipped(view, sample, imageWidth, imageWidth, viewportWidth, viewportHeight), expected)) oneInverse += 1;
+      }
+    }
+    expect(finite).toBeGreaterThan(20_000);
+    expect(behindNear).toBeGreaterThan(20_000);
+    expect(behindEye).toBeGreaterThan(5_000);
+    expect(regrouped).toBeGreaterThan(1000);
+    expect(oneInverse).toBeGreaterThan(1000);
   });
 });
 

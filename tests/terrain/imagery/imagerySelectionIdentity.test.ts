@@ -17,6 +17,8 @@ import { createTestView, type TestViewOptions } from "../../../src/terrain/image
 // asked the surface for every height each time; one that reuses heights must
 // give the same leaves, footprints and areas, bit for bit.
 const SHIPPED_DIGEST = "b2a7e123117cd19b3ce19096c5d40df6524d12468d361f1490b4a4750eed8100";
+// The same for 400 random cases (`randomCase`), from the selector at engine `b2ddff9`.
+const SHIPPED_RANDOM_DIGEST = "d28ae1399bcaf036109288e05c3bc881e7a91d11fb3bb85b989f8e32fafeb225";
 
 const PHOTO: ImagerySourceCapabilities = {
   id: "photo", version: "1", kind: "photographic", minLevel: 0, maxLevel: 19,
@@ -103,6 +105,74 @@ function digestOf(value: unknown): string {
   return hash.digest("hex");
 }
 
+/**
+ * A random view, source, ground and focus from a seed: altitudes from half a
+ * metre to ten thousand kilometres, grazing views, near planes far out, the
+ * poles, the antimeridian, flat and unknown ground, and scalar, packed or
+ * revised heights. Fixed cases miss tiles that only their nearest point keeps
+ * above the horizon; these reach them.
+ */
+function randomCase(seed: number): ImagerySelectionInput {
+  let state = seed >>> 0;
+  const random = (): number => (state = (Math.imul(state, 1103515245) + 12345) >>> 0) / 2 ** 32;
+  const pick = <T,>(items: T[]): T => items[Math.floor(random() * items.length)];
+  const latDeg = random() < 0.2 ? pick([-89.9, -85.05, -84.9, 0, 84.9, 85.05, 89.9]) + (random() - 0.5) * 0.2 : (random() - 0.5) * 178;
+  const lonDeg = random() < 0.2 ? pick([-180, 180, 0]) + (random() - 0.5) * 0.05 : (random() - 0.5) * 360;
+  const view: TestViewOptions = {
+    latDeg, lonDeg,
+    altitudeMeters: random() < 0.1 ? pick([0.5, 2, -50]) : 10 ** (random() * 7),
+    pitchDeg: random() < 0.4 ? 75 + random() * 15 : random() * 90,
+    headingDeg: random() * 360,
+    fovYDeg: 20 + random() * 80,
+    renderWidth: pick([1280, 1080, 640, 333]), renderHeight: pick([720, 2400, 480, 1001]),
+    near: random() < 0.3 ? 10 ** (random() * 3.5) : undefined,
+    orthographicHalfHeight: random() < 0.05 ? 10 ** (2 + random() * 5) : undefined,
+  };
+  if (random() < 0.3) { view.logicalWidth = Math.round(view.renderWidth! / 2.625); view.logicalHeight = Math.round(view.renderHeight! / 2.625); }
+  const side = pick([256, 512]);
+  const source: ImagerySourceCapabilities = {
+    id: "s", version: "1", kind: random() < 0.3 ? "cartographic" : "photographic", minLevel: 0, maxLevel: pick([19, 22, 12]),
+    tileWidth: side, tileHeight: random() < 0.15 ? 768 - side : side,
+    variants: random() < 0.3 ? [{ id: "2x", width: 512, height: 512 }] : [],
+  };
+  const flat = random() < 0.2, unknown = random() < 0.3, shift = random() * 3;
+  const amplitude = flat ? 0 : 10 ** (random() * 3.5);
+  const heightAt = (lat: number, lon: number): number | null => flat ? 0 : unknown && Math.sin(lat * 3.1 + lon * 1.7) > 0.6 ? null
+    : Math.sin(lat * 0.13 + shift) * amplitude + Math.cos(lon * 0.07) * amplitude / 6 + Math.sin(lat * 40 + lon * 31) * 90 + lat * 0.000000123;
+  const boundsFor = (tile: TileId) => {
+    if (flat) return { min: 0, max: 0 };
+    const s = ((tile.z * 73856093) ^ (tile.x * 19349663) ^ (tile.y * 83492791)) >>> 0;
+    return { min: -amplitude * 1.3 - 100 + (s % 300), max: amplitude * 1.3 + 100 + (s >>> 9) % 400 };
+  };
+  const heightsAt = (coordinates: Float64Array): Float64Array => {
+    const heights = new Float64Array(coordinates.length / 2);
+    for (let i = 0; i < heights.length; i++) heights[i] = heightAt(coordinates[i * 2], coordinates[i * 2 + 1]) ?? NaN;
+    return heights;
+  };
+  const surface: ImagerySurface = pick([{ heightAt, boundsFor }, { heightAt, boundsFor, heightsAt }, { heightAt, boundsFor, heightsAt, getRevision: () => 3 }]);
+  const near = at(latDeg + (random() - 0.5) * 0.2, lonDeg + (random() - 0.5) * 0.2, random() * 2000);
+  const overrides: Partial<ImagerySelectionInput> = pick<Partial<ImagerySelectionInput>>([
+    {}, {}, {},
+    { refineFrom: { position: near, minDistanceMeters: 10 ** (random() * 4), pixelAngle: 0.8 / 720 } },
+    { focus: { mode: "both", position: near, radiusMeters: 10 ** (2 + random() * 3), minDistanceMeters: 10 ** (random() * 4), pixelAngle: 0.8 / 720, offset: 0, horizonCull: random() < 0.5 } },
+    { focus: { mode: "around", position: near, radiusMeters: 10 ** (2 + random() * 3), minDistanceMeters: 10 ** (random() * 4), pixelAngle: 0.8 / 720, offset: -1, horizonCull: random() < 0.5 } },
+  ]);
+  const offset = random() < 0.2 ? pick([-1, 1, 0.5]) : 0;
+  return { ...input(view, surface, source, overrides), offset, maxPages: 2048, maxNodes: 3000 };
+}
+
+/** The digest of a random case's plan, its measurements, and its pages measured twice with a cache. */
+function randomOutcome(value: ImagerySelectionInput): string {
+  const step = createImagerySelector(() => 0).step(value, Infinity);
+  const plan = step.plan ? { ...step.plan, cpuMs: 0 } : null;
+  const tiles = plan?.leaves.map(leaf => leaf.tile) ?? [];
+  const cache = createImageryMeasurementCache();
+  return digestOf({
+    completed: step.completed, plan, measured: measureImageryView(value, tiles, plan?.coverage ?? []),
+    pages: measureImageryView(value, tiles, [], cache), again: measureImageryView(value, tiles, [], cache),
+  });
+}
+
 describe("imagery selection identity", () => {
   it("gives the shipped plans and measurements whether heights come one at a time, packed, or reused within a revision", () => {
     const all: unknown[] = [];
@@ -120,6 +190,12 @@ describe("imagery selection identity", () => {
     // Reuse has to save heights to be worth keeping: the lattice asks for about 40 % of them.
     expect(reused).toBeLessThan(asked * 0.45);
   });
+
+  it("gives the shipped plans and measurements for random views, sources, grounds and focus", () => {
+    const outcomes: string[] = [];
+    for (let seed = 1; seed <= 400; seed++) outcomes.push(randomOutcome(randomCase(seed)));
+    expect(digestOf(outcomes)).toBe(SHIPPED_RANDOM_DIGEST);
+  }, 30000);
 
   it("asks for every height again once the surface's revision changes", () => {
     let shift = 0, revision = 0;
@@ -276,12 +352,12 @@ describe("imagery selection identity", () => {
     expect(asked.kept).toBeLessThan(asked.full * 0.75);
   }, 30000);
 
-  it("follows bounds that change while the revision does not", () => {
+  it("follows bounds that change while the revision does not, at either end or both", () => {
     const { heightAt } = ground(true);
-    let widen = 0;
+    let lower = 0, raise = 0;
     const boundsFor = (tile: TileId) => {
       const bounds = ground(true).boundsFor(tile);
-      return { min: bounds.min - widen, max: bounds.max + widen };
+      return { min: bounds.min - lower, max: bounds.max + raise };
     };
     const heightsAt = (coordinates: Float64Array): Float64Array => {
       const heights = new Float64Array(coordinates.length / 2);
@@ -289,11 +365,60 @@ describe("imagery selection identity", () => {
       return heights;
     };
     const surface: ImagerySurface = { heightAt, boundsFor, heightsAt, getRevision: () => 0 };
-    for (const { name, view, source, overrides } of CASES) {
-      widen = 0;
-      outcome(input(view, surface, source, overrides));
-      widen = 3000;
-      expect(outcome(input(view, surface, source, overrides)), name).toEqual(outcome(input(view, { heightAt, boundsFor }, source, overrides)));
+    const moved = new Set<string>();
+    for (const { name, view, source, overrides } of CASES) for (const [down, up] of [[3000, 3000], [0, 3000], [3000, 0]]) {
+      lower = 0; raise = 0;
+      const before = outcome(input(view, surface, source, overrides));
+      lower = down; raise = up;
+      const after = outcome(input(view, surface, source, overrides));
+      expect(after, `${name}, ${down} down, ${up} up`).toEqual(outcome(input(view, { heightAt, boundsFor }, source, overrides)));
+      if (digestOf(after) !== digestOf(before)) moved.add(`${down}/${up}`);
     }
+    expect(moved.size).toBe(3);
+    // The fixed views have no tile that the top of its hull alone shows; random ones do.
+    let shown = 0;
+    for (let seed = 1; seed <= 200; seed++) for (const [down, up] of [[0, 3000], [3000, 0]]) {
+      const value = randomCase(seed), base = value.surface;
+      const changing = { ...base, getRevision: () => 0, boundsFor: (tile: TileId) => { const bounds = base.boundsFor(tile); return { min: bounds.min - lower, max: bounds.max + raise }; } };
+      lower = 0; raise = 0;
+      const before = randomOutcome({ ...value, surface: changing });
+      lower = down; raise = up;
+      const after = randomOutcome({ ...value, surface: changing });
+      expect(after, `seed ${seed}, ${down} down, ${up} up`).toBe(randomOutcome({ ...value, surface: { heightAt: base.heightAt, boundsFor: changing.boundsFor } }));
+      if (after !== before) shown += 1;
+    }
+    expect(shown).toBeGreaterThan(100);
+  }, 30000);
+
+  it("measures a tile measured just before with its new heights once the revision changes, whether the change names it or not", () => {
+    // Each measurement asks only for this one tile, so the entry the selector
+    // gave last is the one it is asked for first after each change.
+    let shift = 0, revision = 0, named = true;
+    const { boundsFor } = ground(false);
+    const heightAt = (lat: number, lon: number): number | null => ground(false, shift).heightAt(lat, lon);
+    const heightsAt = (coordinates: Float64Array): Float64Array => {
+      const heights = new Float64Array(coordinates.length / 2);
+      for (let i = 0; i < heights.length; i++) heights[i] = heightAt(coordinates[i * 2], coordinates[i * 2 + 1]) ?? NaN;
+      return heights;
+    };
+    // The whole world changes: named, every kept tile touches the root and goes; unnamed, the revision's record goes.
+    const surface: ImagerySurface = { heightAt, boundsFor, heightsAt, getRevision: () => revision, changedSince: () => named ? [{ z: 0, x: 0, y: 0 }] : null };
+    let checked = 0;
+    for (const { name, view, source, overrides } of CASES) {
+      if (overrides) continue;
+      shift = 0;
+      for (const { tile } of outcome(input(view, { heightAt, boundsFor }, source)).plan.leaves.slice(0, 3)) {
+        const measure = (at: ImagerySurface) => digestOf(measureImageryView({ view: input(view, at, source).view, source: source ?? PHOTO, surface: at }, [tile]));
+        let before = measure(surface);
+        for (const change of [true, false, true]) {
+          named = change; shift += 0.5; revision += 1;
+          const after = measure(surface);
+          expect(after, `${name}, ${change ? "named" : "unnamed"}`).toBe(measure({ heightAt, boundsFor }));
+          if (after !== before) checked += 1;
+          before = after;
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(30);
   });
 });

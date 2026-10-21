@@ -315,20 +315,21 @@ export function projectedPixelFootprint(
   viewportHeight: number,
 ): number | null {
   const m = view.ecefToClip;
-  const c = toClip(m, sample.position);
-  if (nearDistance(view, c) < 0 || c.w <= 0) return null;
-  const jacobianColumn = (t: Vec3, pixels: number): [number, number] => {
-    const dx = t.x * m[0] + t.y * m[4] + t.z * m[8];
-    const dy = t.x * m[1] + t.y * m[5] + t.z * m[9];
-    const dw = t.x * m[3] + t.y * m[7] + t.z * m[11];
-    const inv = 1 / (c.w * c.w * pixels);
-    return [
-      (viewportWidth / 2) * (dx * c.w - c.x * dw) * inv,
-      (viewportHeight / 2) * (dy * c.w - c.y * dw) * inv,
-    ];
-  };
-  const [a, cc] = jacobianColumn(sample.du, imageWidth);
-  const [b, d] = jacobianColumn(sample.dv, imageHeight);
+  // `toClip`, `nearDistance` and each Jacobian column in their operation order, without the objects.
+  const p = sample.position;
+  const x = p.x * m[0] + p.y * m[4] + p.z * m[8] + m[12];
+  const y = p.x * m[1] + p.y * m[5] + p.z * m[9] + m[13];
+  const z = p.x * m[2] + p.y * m[6] + p.z * m[10] + m[14];
+  const w = p.x * m[3] + p.y * m[7] + p.z * m[11] + m[15];
+  if (z * view.nearPlane.z + w * view.nearPlane.w < 0 || w <= 0) return null;
+  const halfWidth = viewportWidth / 2, halfHeight = viewportHeight / 2;
+  const u = sample.du, v = sample.dv;
+  const uw = u.x * m[3] + u.y * m[7] + u.z * m[11], uInv = 1 / (w * w * imageWidth);
+  const a = halfWidth * ((u.x * m[0] + u.y * m[4] + u.z * m[8]) * w - x * uw) * uInv;
+  const cc = halfHeight * ((u.x * m[1] + u.y * m[5] + u.z * m[9]) * w - y * uw) * uInv;
+  const vw = v.x * m[3] + v.y * m[7] + v.z * m[11], vInv = 1 / (w * w * imageHeight);
+  const b = halfWidth * ((v.x * m[0] + v.y * m[4] + v.z * m[8]) * w - x * vw) * vInv;
+  const d = halfHeight * ((v.x * m[1] + v.y * m[5] + v.z * m[9]) * w - y * vw) * vInv;
   const sum = a * a + b * b + cc * cc + d * d;
   const det = a * d - b * cc;
   return Math.sqrt((sum + Math.sqrt(Math.max(0, sum * sum - 4 * det * det))) / 2);
