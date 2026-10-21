@@ -184,6 +184,47 @@ describe("imagery runtime recovery", () => {
     } finally { test.dispose(); }
   });
 
+  it("reports each feedback once: never the same loaded target and content twice in a row", async () => {
+    const waiting: Array<() => void> = [];
+    const test = harness({
+      load(url, { width, height }) {
+        const image = { width, height, compressedBytes: 1, pages: [[new Uint8Array(4)]] };
+        const level = Number(new URL(url).pathname.split("/")[1]);
+        return level === 2 ? Promise.resolve(image) : new Promise(resolve => waiting.push(() => resolve(image)));
+      },
+    });
+    const seen: Array<{ loadedTarget: number | null | undefined; json: string }> = [];
+    test.onFeedback.mockImplementation(() => { const feedback = test.runtime.getFeedback(); seen.push({ loadedTarget: feedback.loadedTarget, json: JSON.stringify(feedback) }); });
+    const finishDownloads = async () => {
+      for (let round = 0; waiting.length > 0 && round < 100; round++) {
+        for (const resolve of waiting.splice(0)) resolve();
+        await flush();
+        await test.settle();
+      }
+    };
+    try {
+      test.attach("current-view", VIEW_ROOT);
+      test.attach("next-view", { z: 2, x: 3, y: 1 });
+      await test.settle();
+      await finishDownloads();
+      for (const lonDeg of [-112.1, 112.14, -112.14]) {
+        test.controller.applyViewState({ ...test.controller.getViewState(), lonDeg });
+        test.update(); test.runtime.update(); test.runtime.update();
+        await test.settle();
+        await finishDownloads();
+      }
+      test.runtime.setOffset(-1); test.update(); await test.settle(); await finishDownloads();
+      test.runtime.setLimits({ ...LIMITS, gpuBytes: 64 * 2 ** 20 }); test.update(); await test.settle(); await finishDownloads();
+      for (let index = 0; index < 3; index++) test.runtime.update();
+      const targetChanges = seen.filter((entry, index) => index > 0 && !Object.is(entry.loadedTarget, seen[index - 1]!.loadedTarget)).length;
+      expect(targetChanges).toBeGreaterThan(1);
+      expect(seen.length).toBeGreaterThan(targetChanges + 1);
+      for (let index = 1; index < seen.length; index++) {
+        expect(Object.is(seen[index]!.loadedTarget, seen[index - 1]!.loadedTarget) && seen[index]!.json === seen[index - 1]!.json, `report ${index} repeats the one before`).toBe(false);
+      }
+    } finally { test.dispose(); }
+  });
+
   it("moves loaded detail as visible pages arrive and after a view change, without changing the requested target", async () => {
     const waiting: Array<() => void> = [];
     const test = harness({

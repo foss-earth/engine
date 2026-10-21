@@ -377,6 +377,9 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
   /** Regions a budget coarsened after showing them finer, since that budget began to limit. */
   let reduced = { pages: 0, nodes: 0 };
   let feedback: ImageryFeedback = { support: "unavailable", reason: unsupportedReason ?? undefined, pending: false, limits: [], activeTarget: null, loadedTarget: null, effectiveTarget: null, source: null, constraints: [], distribution: loadedDistribution };
+  // Each feedback is built anew and never edited once published, so the
+  // published one's JSON is kept for the next comparison, or written when first needed.
+  let feedbackJson: string | null = null;
   const patches = new Map<string, PatchState>();
   /** Where each publish builds its tables; a changed one is copied out, an unchanged one only compared. */
   const tableScratch = new Uint8Array(IMAGERY_TABLE_BLOCK ** 2 * 4);
@@ -1188,8 +1191,16 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
         distribution: loadedDistribution,
       };
     }
-    if (!Object.is(next.loadedTarget, feedback.loadedTarget) || JSON.stringify(next) !== JSON.stringify(feedback)) {
+    if (!Object.is(next.loadedTarget, feedback.loadedTarget)) {
       feedback = next;
+      feedbackJson = null;
+      options.onFeedback?.();
+      return;
+    }
+    const nextJson = JSON.stringify(next);
+    if (nextJson !== (feedbackJson ??= JSON.stringify(feedback))) {
+      feedback = next;
+      feedbackJson = nextJson;
       options.onFeedback?.();
     }
   }
