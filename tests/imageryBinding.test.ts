@@ -6,9 +6,10 @@ import {
   IMAGERY_PAGE_SIZE,
   IMAGERY_SLOT_SIZE,
   IMAGERY_TABLE_BLOCK,
+  encodeTableEntry,
   planAtlasLayout,
 } from "../src/terrain/imagery/imageryAtlasLayout.js";
-import { buildImageryDisplay, buildPatchTable, loadedImageryPages, measureLoadedImagery, measureLoadedImageryDistribution, type DisplayLeaf, type LoadedImageryBinding, type LoadedImageryRegion } from "../src/terrain/imagery/imageryBinding.js";
+import { buildImageryDisplay, buildPatchTable, patchTableDepth, samePatchTableCells, loadedImageryPages, measureLoadedImagery, measureLoadedImageryDistribution, type DisplayLeaf, type LoadedImageryBinding, type LoadedImageryRegion } from "../src/terrain/imagery/imageryBinding.js";
 
 const MiB = 1024 * 1024;
 
@@ -298,5 +299,84 @@ describe("imagery display and page tables", () => {
   it("marks cells with no page at all as empty", () => {
     const display = buildImageryDisplay({ leaves: [], coverage: roots, slotsFor: () => null, standardKey: std });
     expect(buildPatchTable(display, { z: 3, x: 0, y: 0 }).emptyCells).toBe(1);
+  });
+
+  it("tells apart two tables whose cells have the same 32-bit FNV-1a hash", () => {
+    // The signature a publish used to compare tables by.
+    const fnv = (data: Uint8Array, cellsLog2: number) => {
+      let hash = 2166136261;
+      for (let row = 0; row < 2 ** cellsLog2; row++) {
+        for (let index = row * IMAGERY_TABLE_BLOCK * 4; index < (row * IMAGERY_TABLE_BLOCK + 2 ** cellsLog2) * 4; index++) { hash ^= data[index]; hash = Math.imul(hash, 16777619); }
+      }
+      return hash >>> 0;
+    };
+    // Found by a birthday search over 2 × 2 tables: [slot, level] per cell, row by row.
+    const table = (cells: number[][]) => {
+      const data = new Uint8Array(IMAGERY_TABLE_BLOCK ** 2 * 4);
+      cells.forEach(([slot, level], index) => encodeTableEntry(data, ((index >> 1) * IMAGERY_TABLE_BLOCK + (index & 1)) * 4, slot, level));
+      return data;
+    };
+    const a = table([[584, 15], [939, 13], [149, 16], [124, 13]]), b = table([[783, 17], [1014, 15], [237, 12], [386, 13]]);
+    expect(fnv(a, 1)).toBe(fnv(b, 1));
+    expect(samePatchTableCells(a, b, 1)).toBe(false);
+    expect(samePatchTableCells(a, a.slice(), 1)).toBe(true);
+  });
+
+  it("builds every table empty outside its cells, into a reused block as into a new one, so its cells decide equality", () => {
+    let state = 0x9e3779b9;
+    const random = (n: number) => { state ^= state << 13; state ^= state >>> 17; state ^= state << 5; return (state >>> 0) % n; };
+    const scratch = new Uint8Array(IMAGERY_TABLE_BLOCK ** 2 * 4);
+    const equalBytes = (a: Uint8Array, b: Uint8Array) => { for (let index = 0; index < a.length; index++) if (a[index] !== b[index]) return false; return true; };
+    let depths = 0, equal = 0, unequal = 0;
+    for (let trial = 0; trial < 300; trial++) {
+      // Random resident pages under one z6 patch, from one level above it to nine below (past the table's cap).
+      const patch = { z: 6, x: 16 + random(4), y: 24 + random(4) };
+      const slots: Record<string, number[]> = Object.fromEntries(roots.map((tile, index) => [std(tile), [index]]));
+      const leaves: DisplayLeaf[] = [], keys: string[] = [];
+      for (let count = random(12); count > 0; count--) {
+        const dz = random(10) - 1, z = patch.z + dz, scale = 2 ** dz;
+        const x = dz < 0 ? patch.x >> 1 : patch.x * scale + random(scale), y = dz < 0 ? patch.y >> 1 : patch.y * scale + random(scale);
+        leaves.push(leaf(z, x, y));
+        if (random(4) > 0) { slots[std({ z, x, y })] = [16 + random(4000)]; keys.push(std({ z, x, y })); }
+      }
+      const display = (resident: Record<string, number[]>) => buildImageryDisplay({ leaves, coverage: roots, slotsFor: residentSlots(resident), standardKey: std });
+      const shown = display(slots);
+      for (let index = 0; index < scratch.length; index++) scratch[index] = random(256);
+      const fresh = buildPatchTable(shown, patch), reused = buildPatchTable(shown, patch, scratch, patchTableDepth(shown, patch));
+      expect(reused.data).toBe(scratch);
+      expect({ ...reused, data: null, same: equalBytes(reused.data, fresh.data) }).toEqual({ ...fresh, data: null, same: true });
+      const side = 2 ** fresh.cellsLog2;
+      let outside = 0;
+      for (let index = 0; index < fresh.data.length; index++) {
+        const cell = index >> 2;
+        if (cell % IMAGERY_TABLE_BLOCK >= side || Math.floor(cell / IMAGERY_TABLE_BLOCK) >= side) outside |= fresh.data[index];
+      }
+      expect(outside).toBe(0);
+      // The same pages, and then one page moved to another slot, which this patch may or may not show.
+      const moved = keys.length ? { ...slots, [keys[random(keys.length)]]: [5000 + random(1000)] } : slots;
+      for (const resident of [{ ...slots }, moved]) {
+        const next = buildPatchTable(display(resident), patch);
+        if (next.cellsLog2 !== fresh.cellsLog2) continue;
+        const same = equalBytes(next.data, fresh.data);
+        expect(samePatchTableCells(fresh.data, next.data, fresh.cellsLog2)).toBe(same);
+        if (same) equal += 1; else unequal += 1;
+      }
+      depths |= 1 << fresh.cellsLog2;
+    }
+    // Every depth the table allows came up, and both answers.
+    expect(depths).toBe(0b1111111);
+    expect(Math.min(equal, unequal)).toBeGreaterThan(50);
+  });
+
+  it("compares every used cell of every used row, and nothing else", () => {
+    for (let cellsLog2 = 0; cellsLog2 <= 6; cellsLog2++) {
+      const side = 2 ** cellsLog2, base = new Uint8Array(IMAGERY_TABLE_BLOCK ** 2 * 4);
+      for (let row = 0; row < IMAGERY_TABLE_BLOCK; row++) for (let col = 0; col < IMAGERY_TABLE_BLOCK; col++) encodeTableEntry(base, (row * IMAGERY_TABLE_BLOCK + col) * 4, row * 64 + col, 12);
+      for (let index = 0; index < base.length; index++) {
+        const changed = base.slice(); changed[index] ^= 1;
+        const cell = index >> 2, used = cell % IMAGERY_TABLE_BLOCK < side && Math.floor(cell / IMAGERY_TABLE_BLOCK) < side;
+        if (samePatchTableCells(base, changed, cellsLog2) === used) throw new Error(`byte ${index} at cellsLog2 ${cellsLog2}: ${used ? "missed" : "compared"}`);
+      }
+    }
   });
 });

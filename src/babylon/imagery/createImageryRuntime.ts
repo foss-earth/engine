@@ -23,8 +23,8 @@ import { rasterDetailKey, type DetailDistribution, type DetailLimit } from "../.
 import { createDetailDistribution, unavailableDetailDistribution } from "../../terrain/detailDistribution.js";
 import { createImageryAtlas, planAtlasForBackend, type ImageryAtlasDevicePorts, type ManagedImageryAtlasResources, type OwnedImageryTableJob, type AtlasCapabilities, type ImageryAtlas } from "./imageryAtlas.js";
 import { IMAGERY_TABLE_BLOCK, IMAGERY_TABLE_MAX_CELLS_LOG2, slotBytes, type ImageryAtlasLayout } from "../../terrain/imagery/imageryAtlasLayout.js";
-import { buildImageryDisplay, buildPatchTable, patchTableDepth, createBoundLevels, loadedImageryPages, measureLoadedImagery, measureLoadedImageryDistribution, type ImageryDisplay, type LoadedImageryBinding, type LoadedImageryRegion } from "../../terrain/imagery/imageryBinding.js";
-import { prepareManagedPatchTable, type HeldPatchTable } from "../../terrain/imagery/managedPatchTable.js";
+import { buildImageryDisplay, buildPatchTable, patchTableDepth, samePatchTableCells, createBoundLevels, loadedImageryPages, measureLoadedImagery, measureLoadedImageryDistribution, type ImageryDisplay, type LoadedImageryBinding, type LoadedImageryRegion } from "../../terrain/imagery/imageryBinding.js";
+import { prepareManagedPatchTable, type HeldPatchTable, type UnchangedPatchTable } from "../../terrain/imagery/managedPatchTable.js";
 import type { TextureTransferOutcome, TextureTransferRetirement } from "@foss-earth/renderer";
 import { ImageryAtlasMaterialPlugin } from "./imageryMaterialPlugin.js";
 import {
@@ -235,17 +235,11 @@ interface SourceState {
 const COVERAGE_PRIORITY = 1e12;
 const MiB = 1024 * 1024;
 
-function signature(data: Uint8Array, cellsLog2: number): string {
-  // A cheap content signature: FNV-1a over the used cells.
-  let hash = 2166136261;
-  const side = 2 ** cellsLog2;
-  for (let row = 0; row < side; row++) {
-    for (let index = row * 64 * 4; index < (row * 64 + side) * 4; index++) {
-      hash ^= data[index];
-      hash = Math.imul(hash, 16777619);
-    }
-  }
-  return `${cellsLog2}:${hash >>> 0}`;
+/** A bound table's signature names only its depth: its cells are compared exactly, by holdsTable. */
+const tableSignature = (cellsLog2: number): string => `table:${cellsLog2}`;
+/** Whether the patch's bound table is `built`, which buildPatchTable filled. */
+function holdsTable(patch: PatchState, built: { cellsLog2: number; data: Uint8Array }): boolean {
+  return patch.table !== null && patch.tableSignature === tableSignature(built.cellsLog2) && samePatchTableCells(patch.table, built.data, built.cellsLog2);
 }
 
 /**
@@ -384,6 +378,8 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
   let reduced = { pages: 0, nodes: 0 };
   let feedback: ImageryFeedback = { support: "unavailable", reason: unsupportedReason ?? undefined, pending: false, limits: [], activeTarget: null, loadedTarget: null, effectiveTarget: null, source: null, constraints: [], distribution: loadedDistribution };
   const patches = new Map<string, PatchState>();
+  /** Where each publish builds its tables; a changed one is copied out, an unchanged one only compared. */
+  const tableScratch = new Uint8Array(IMAGERY_TABLE_BLOCK ** 2 * 4);
   const counters = { selections: 0, selectionCpuMs: 0, publishes: 0, tableWrites: 0, uploads: 0, uploadBytes: 0 };
   let countedUploads = 0, countedUploadBytes = 0;
   try { if (managed) stopAvailable = managed.subscribeAvailable(() => {
@@ -805,7 +801,7 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
         patch.plugin.setBinding(nextAtlas, null, null); patch.atlas = nextAtlas;
         continue;
       }
-      const needsTable = patchTableDepth(candidate, patch.tile).cellsLog2 > 0;
+      const depth = patchTableDepth(candidate, patch.tile), needsTable = depth.cellsLog2 > 0;
       if (needsTable) { tablesNeeded += 1; logicalTables += 1; }
       const allowedTable = needsTable && logicalTables <= Math.min(tuning.tablePatches, Math.floor(nextAtlas.layout.tableBlocks / 2));
       if (patch.pendingTable) {
@@ -832,17 +828,20 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
       if ((patch.tableRetryAt ?? 0) > now()) { scheduleWake(patch.tableRetryAt!); continue; }
       const tableBytes = IMAGERY_TABLE_BLOCK ** 2 * 4;
       if (!managed.canUpload(tableBytes, tableBytes)) { capacityBlocked = true; fallbackPatches += 1; continue; }
-      let table: HeldPatchTable | null;
-      try { table = prepareManagedPatchTable(candidate, patch.tile, { reserve: (bytes, label) => managed.reserveTable(bytes, label) }); }
+      let prepared: HeldPatchTable | UnchangedPatchTable | null;
+      try {
+        prepared = prepareManagedPatchTable(candidate, patch.tile, { reserve: (bytes, label) => managed.reserveTable(bytes, label) },
+          { scratch: tableScratch, depth, isBound: built => patch.atlas === nextAtlas && patch.boundSource === source && holdsTable(patch, built) });
+      }
       catch (error) { reportManaged(error); capacityBlocked = true; continue; }
-      if (!table) { capacityBlocked = true; fallbackPatches += 1; continue; }
-      if (table.capped) capped += 1; emptyCells += table.emptyCells;
-      const tableSignature = signature(table.data, table.cellsLog2);
-      if (patch.atlas === nextAtlas && patch.tableSignature === tableSignature && patch.boundSource === source) { patch.boundPlan = selected; patch.boundRevision = residencyRevision; try { table.close(); } catch (error) { reportManaged(error); } continue; }
+      if (!prepared) { capacityBlocked = true; fallbackPatches += 1; continue; }
+      if (prepared.capped) capped += 1; emptyCells += prepared.emptyCells;
+      if (prepared.unchanged) { patch.boundPlan = selected; patch.boundRevision = residencyRevision; try { prepared.close(); } catch (error) { reportManaged(error); } continue; }
+      const table = prepared;
       const block = nextAtlas.allocateBlock();
       if (block === null) { capacityBlocked = true; fallbackPatches += 1; try { table.close(); } catch (error) { reportManaged(error); } continue; }
       let job: OwnedImageryTableJob | null;
-      try { job = nextAtlas.prepareOwnedTable!(block, table.data, () => table!.retain()); }
+      try { job = nextAtlas.prepareOwnedTable!(block, table.data, () => table.retain()); }
       catch (error) { reportManaged(error); job = null; }
       if (!job) {
         capacityBlocked = true; fallbackPatches += 1;
@@ -850,7 +849,7 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
         try { table.close(); } catch (error) { reportManaged(error); }
         continue;
       }
-      const pending: PendingTable = { patch, atlas: nextAtlas, block, table, signature: tableSignature, source, plan: selected, revision: residencyRevision, display: candidate,
+      const pending: PendingTable = { patch, atlas: nextAtlas, block, table, signature: tableSignature(table.cellsLog2), source, plan: selected, revision: residencyRevision, display: candidate,
         slots: tableSlots(table), job, outcome: null, retirement: null, closed: false, cancelled: false, backedOff: false };
       patch.pendingTable = pending; pendingTableJobs.add(pending); syncManagedPins();
       void job.settled.then(outcome => {
@@ -899,7 +898,7 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
     capped = 0;
     emptyCells = 0;
     fallbackPatches = 0;
-    const tables: Array<{ patch: PatchState; table: ReturnType<typeof buildPatchTable> }> = [];
+    const tables: Array<{ patch: PatchState; table: ReturnType<typeof buildPatchTable>; bound: boolean }> = [];
     const bindSinglePage = (patch: PatchState): void => {
       let page: { slot: number; z: number } | undefined;
       let { z, x, y } = patch.tile;
@@ -926,8 +925,11 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
         patch.plugin.setAtlas(atlas);
         patch.atlas = atlas;
       }
-      patch.table ??= new Uint8Array(64 * 64 * 4);
-      const table = buildPatchTable(display, patch.tile, patch.table);
+      // Built aside and compared with the bound table first; the patch's own table then holds it either way.
+      const built = buildPatchTable(display, patch.tile, tableScratch);
+      const bound = holdsTable(patch, built);
+      if (!bound) (patch.table ??= new Uint8Array(64 * 64 * 4)).set(tableScratch);
+      const table = { ...built, data: patch.table! };
       if (table.capped) capped += 1;
       emptyCells += table.emptyCells;
       if (table.cellsLog2 === 0) {
@@ -939,12 +941,12 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
         bindSinglePage(patch);
         continue;
       }
-      tables.push({ patch, table });
+      tables.push({ patch, table, bound });
     }
     tablesNeeded = tables.length;
     // Release every obsolete block before allocating any replacement. A
     // newly visible patch can precede the patch it replaces in cache order.
-    for (const { patch, table } of tables) {
+    for (const { patch, table, bound } of tables) {
       if (patch.block === null) patch.block = atlas.allocateBlock();
       if (patch.block === null) {
         // No block left: show the one page that covers the whole patch.
@@ -952,10 +954,9 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
         bindSinglePage(patch);
         continue;
       }
-      const tableSignature = signature(table.data, table.cellsLog2);
-      if (tableSignature !== patch.tableSignature) {
+      if (!bound) {
         atlas.writeBlock(patch.block, table.data);
-        patch.tableSignature = tableSignature;
+        patch.tableSignature = tableSignature(table.cellsLog2);
         counters.tableWrites += 1;
       }
       const origin = atlas.blockOrigin(patch.block);

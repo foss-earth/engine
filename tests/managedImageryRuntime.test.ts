@@ -1,24 +1,35 @@
 import { GeospatialCamera, NullEngine, Scene, StandardMaterial, type UniformBuffer } from "@babylonjs/core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { HostCameraController } from "../fixtures/composition/runtimeHost.js";
 import { ownedAtlasHost, flushOwnedAtlas, OWNED_ATLAS_GPU_BUDGET } from "../fixtures/composition/ownedAtlasHost.js";
 import { createImageryRuntime } from "../src/babylon/imagery/createImageryRuntime.js";
 import { ImageryAtlasMaterialPlugin } from "../src/babylon/imagery/imageryMaterialPlugin.js";
+import { samePatchTableCells } from "../src/terrain/imagery/imageryBinding.js";
+
+// The runtime's table comparison, observed and, where a test says so, overridden.
+vi.mock("../src/terrain/imagery/imageryBinding.js", async importOriginal => {
+  const actual = await importOriginal<typeof import("../src/terrain/imagery/imageryBinding.js")>();
+  return { ...actual, samePatchTableCells: vi.fn(actual.samePatchTableCells) };
+});
+const compareCells = vi.mocked(samePatchTableCells);
+const { samePatchTableCells: exactCells } = await vi.importActual<typeof import("../src/terrain/imagery/imageryBinding.js")>("../src/terrain/imagery/imageryBinding.js");
 
 function harness() {
   const host = ownedAtlasHost(), engine = new NullEngine({ renderWidth: 1280, renderHeight: 720, textureSize: 8192, deterministicLockstep: false, lockstepMaxSteps: 1 }), scene = new Scene(engine);
   scene.useRightHandedSystem = true;
   const camera = new GeospatialCamera("owned-table", scene, { planetRadius: 6378137 });
-  new HostCameraController(camera, () => 0).applyViewState({ latDeg: 36.1, lonDeg: -112.14, zoomMeters: 30_000, pitchDeg: 0, headingDeg: 0 });
+  const controller = new HostCameraController(camera, () => 0);
+  controller.applyViewState({ latDeg: 36.1, lonDeg: -112.14, zoomMeters: 30_000, pitchDeg: 0, headingDeg: 0 });
   let frame = true, now = 0, nativeIndex = 0, surfaceRevision = 0;
   const timers: { at: number; callback(): void }[] = [];
   const errors: string[] = [];
+  const tuning = { reselectWhileMovingMs: 0, anisotropy: 4, fallbackGap: 4, fallbackStep: 3, tablePatches: 1, maxNodes: 12_000, hysteresis: { refineAbove: 1.2, coarsenBelow: 0.8, coarsenAfterMs: 500, pinMs: 1000 }, refineAtRestAbove: 1 };
   const source = { id: "old", version: "1", label: "Old", provider: "Fixture", attribution: "Fixture", protocol: "xyz" as const, kind: "cartographic" as const, urlTemplate: "https://fixture.invalid/old/{z}/{x}/{y}", maxZoom: 14 };
   const runtime = createImageryRuntime({ scene, source, loader: { load: async (_url, expected) => host.image(expected.width, expected.height) },
     device: host.device, managedAtlas: host.resources, createAbortController: () => new AbortController(), capabilities: { backend: "webgpu", maxTextureSize: 8192, explicitGradients: true },
     surface: { heightAt: () => 0, boundsFor: () => ({ min: 0, max: 0 }), maxLevelFor: () => 8, getRevision: () => surfaceRevision },
     limits: { gpuBytes: OWNED_ATLAS_GPU_BUDGET, stagingBytes: 16 * 2 ** 20, concurrentRequests: 2, queuedRequests: 128, uploadBytesPerUpdate: 8 * 2 ** 20, cpuMsPerUpdate: 2, missingRetryMs: 1000, retryDelayMs: { min: 2000, max: 30000 } },
-    tuning: { reselectWhileMovingMs: 0, anisotropy: 4, fallbackGap: 4, fallbackStep: 3, tablePatches: 1, maxNodes: 12_000, hysteresis: { refineAbove: 1.2, coarsenBelow: 0.8, coarsenAfterMs: 500, pinMs: 1000 }, refineAtRestAbove: 1 },
+    tuning,
     requestRender: () => { frame = true; }, now: () => now, log: { warn() {} }, onError: error => { errors.push(error.message); },
     after(callback, delay) { const timer = { at: now + delay, callback }; timers.push(timer); return () => { const index = timers.indexOf(timer); if (index >= 0) timers.splice(index,1); }; },
   });
@@ -54,11 +65,15 @@ function harness() {
     }
     throw new Error("Managed host frame failed to settle.");
   };
-  return { host, runtime, binding, uniform, pump, pumpHolding, source, errors, gpuBudget: OWNED_ATLAS_GPU_BUDGET, switchSource() { runtime.setSource({ ...source, id: "new", label: "New", urlTemplate: "https://fixture.invalid/new/{z}/{x}/{y}" }); },
+  return { host, runtime, binding, uniform, pump, pumpHolding, source, tuning, errors, gpuBudget: OWNED_ATLAS_GPU_BUDGET, switchSource() { runtime.setSource({ ...source, id: "new", label: "New", urlTemplate: "https://fixture.invalid/new/{z}/{x}/{y}" }); },
     completeTable() { host.native[nativeIndex++].resolve(); },
     async completeHeld() { for (const next of held.splice(0)) { next.resolve(); await flushOwnedAtlas(); } },
     /** The terrain changed: the runtime selects its imagery again, which picks the same pages. */
     touchSurface() { surfaceRevision += 1; frame = true; },
+    /** Attaches and shows another patch. */
+    attach(key: string, tile: { z: number; x: number; y: number }) { runtime.attachPatch(key, tile, new StandardMaterial(key, scene)); runtime.setPatchVisible(key, true); frame = true; },
+    /** Moves the camera to another height above the same place. */
+    zoom(meters: number) { controller.applyViewState({ latDeg: 36.1, lonDeg: -112.14, zoomMeters: meters, pitchDeg: 0, headingDeg: 0 }); frame = true; },
     /** Shows or hides the patch, as the terrain does before it draws a frame. */
     setVisible(visible: boolean) { runtime.setPatchVisible("patch", visible); frame = true; }, failTable(error: unknown) { host.native[nativeIndex++].reject(error); },
     advance(ms: number) { now += ms; for (const timer of [...timers]) if (timer.at <= now) { timers.splice(timers.indexOf(timer),1); timer.callback(); } },
@@ -150,6 +165,42 @@ describe("managed actual runtime table acknowledgement", () => {
       await h.completeHeld(); expect(h.runtime.getDiagnostics().counters.tableWrites).toBe(1); expect(h.uniform("imageryTable")[2]).toBeGreaterThan(0);
       await h.pump(); expect(h.runtime.getDiagnostics().counters.tableWrites).toBe(2); expect(picture(h)).toEqual(expected);
     } finally { h.dispose(); }
+  });
+  it("compares a republished table with the bound one cell by cell, and uploads it where they differ", async () => {
+    const h = harness();
+    const written = () => h.host.writes.filter(write => write.width === 64).at(-1)!.data;
+    // The second selection still refines; the third picks the same pages.
+    try { await h.pump(); h.touchSurface(); await h.pump(); const writes = h.runtime.getDiagnostics().counters.tableWrites, cellsLog2 = h.uniform("imageryTable")[2], table = [...written()];
+      compareCells.mockClear(); h.touchSurface(); await h.pump();
+      expect(h.runtime.getDiagnostics().counters.tableWrites).toBe(writes);
+      const [bound, built, depth] = compareCells.mock.calls.at(-1)!;
+      expect({ bound: [...bound], built: [...built], depth }).toEqual({ bound: table, built: table, depth: cellsLog2 });
+      // Cells that compare different are uploaded, though here the content is the same.
+      compareCells.mockReturnValueOnce(false); h.touchSurface(); await h.pump();
+      expect(h.runtime.getDiagnostics().counters.tableWrites).toBe(writes + 1); expect([...written()]).toEqual(table); expect(h.uniform("imageryTable")[2]).toBe(cellsLog2);
+    } finally { compareCells.mockImplementation(exactCells); h.dispose(); }
+  });
+  it("uploads a table whose depth changed even where its cells compare equal", async () => {
+    const h = harness();
+    try { h.zoom(250_000); await h.pump(); expect(h.uniform("imageryTable")[2]).toBe(6); const writes = h.runtime.getDiagnostics().counters.tableWrites;
+      compareCells.mockReturnValue(true); h.zoom(500_000); await h.pump();
+      expect(h.uniform("imageryTable")[2]).toBe(5); expect(h.runtime.getDiagnostics().counters.tableWrites).toBeGreaterThan(writes);
+    } finally { compareCells.mockImplementation(exactCells); h.dispose(); }
+  });
+  it("counts a table whose pages are deeper than it can address as capped", async () => {
+    const h = harness();
+    try { await h.pump(); expect(h.uniform("imageryTable")[2]).toBe(6); expect(h.runtime.getDiagnostics().binding.capped).toBe(0);
+      // The same pages, seven levels below a coarser patch.
+      h.setVisible(false); h.attach("coarse", { z: 1, x: 0, y: 0 }); await h.pump(); expect(h.runtime.getDiagnostics().binding).toMatchObject({ tablesNeeded: 1, capped: 1 });
+    } finally { h.dispose(); }
+  });
+  it("uploads a table again into a new atlas, even where its cells compare equal, and draws from that atlas", async () => {
+    const h = harness();
+    try { await h.pump(); h.touchSurface(); await h.pump(); const before = h.binding(), writes = h.runtime.getDiagnostics().counters.tableWrites;
+      compareCells.mockReturnValue(true); h.runtime.setTuning({ ...h.tuning, tablePatches: 2 }); await h.pump();
+      expect(h.runtime.getDiagnostics().counters.tableWrites).toBeGreaterThan(writes);
+      expect(h.binding().textures).not.toEqual(before.textures);
+    } finally { compareCells.mockImplementation(exactCells); h.dispose(); }
   });
   it("uses two physical table blocks per logical patch inside the same named GPU budget", async () => {
     const h = harness();

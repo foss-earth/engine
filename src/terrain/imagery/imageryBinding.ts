@@ -410,10 +410,11 @@ export function createBoundLevels(bindings: readonly LoadedImageryBinding[]): (t
 
 /**
  * Fills one terrain patch's page-table block from the display, into `into`
- * when given so a patch reuses one buffer across publishes.
+ * when given so a patch reuses one buffer across publishes. `depth` is the
+ * patch's patchTableDepth, when the caller has it already.
  */
-export function buildPatchTable(display: ImageryDisplay, patch: TileId, into?: Uint8Array): PatchTable {
-  const { cellsLog2, capped } = patchTableDepth(display, patch);
+export function buildPatchTable(display: ImageryDisplay, patch: TileId, into?: Uint8Array, depth = patchTableDepth(display, patch)): PatchTable {
+  const { cellsLog2, capped } = depth;
   const data = into ?? new Uint8Array(IMAGERY_TABLE_BLOCK * IMAGERY_TABLE_BLOCK * 4);
   if (into) into.fill(0);
   const cellLevel = patch.z + cellsLog2;
@@ -436,6 +437,20 @@ export function buildPatchTable(display: ImageryDisplay, patch: TileId, into?: U
   };
   fill(patch.z, patch.x, patch.y, inheritedPage(display, patch));
   return { cellsLog2, data, capped, emptyCells };
+}
+
+/**
+ * Whether two tables buildPatchTable filled at the same `cellsLog2` are equal.
+ * Both are empty outside their 2^k × 2^k used cells, so only those are read.
+ * The comparison is exact: a hash of the cells can collide, and a collision
+ * would leave a stale table bound.
+ */
+export function samePatchTableCells(a: Uint8Array, b: Uint8Array, cellsLog2: number): boolean {
+  const rowBytes = 4 * 2 ** cellsLog2;
+  for (let start = 0, end = IMAGERY_TABLE_BLOCK * 4 * 2 ** cellsLog2; start < end; start += IMAGERY_TABLE_BLOCK * 4) {
+    for (let index = start; index < start + rowBytes; index++) if (a[index] !== b[index]) return false;
+  }
+  return true;
 }
 
 /** The key under which the display stores a page node. */

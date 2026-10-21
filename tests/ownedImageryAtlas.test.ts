@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createImageryAtlas } from "../src/babylon/imagery/imageryAtlas.js";
 import { createImageryResidency, type ImageryRequest } from "../src/terrain/imagery/imageryResidency.js";
 import { prepareManagedPatchTable } from "../src/terrain/imagery/managedPatchTable.js";
+import { buildPatchTable, samePatchTableCells } from "../src/terrain/imagery/imageryBinding.js";
 import { pageUploadBytes } from "../src/terrain/imagery/imageryAtlasLayout.js";
 import { ownedAtlasHost, flushOwnedAtlas } from "../fixtures/composition/ownedAtlasHost.js";
 const request: ImageryRequest = { imageKey: "page", sourceKey: "source@1", width: 256, height: 256, url: "https://fixture.invalid/page", priority: 8, coverage: true };
@@ -83,6 +84,35 @@ describe("actual Renderer whole-batch Atlas ownership", () => {
     expect(await job.settled).toEqual({ status: "failed", error: reason }); candidate.close(); job.release(); expect(h.atlas.prepareOwnedTable!.bind(null, old, new Uint8Array(4), () => () => {})).toThrow();
     expect(h.broker.pools.stats().decoded.reserved).toBe(2 * 16384); h.native[0].resolve(); await job.retired; expect(h.broker.pools.stats().decoded.reserved).toBe(0);
     h.atlas.releaseBlock(old); h.dispose();
+  });
+  it("builds a managed table aside under the same admission, and allocates it only when it differs from the bound one", () => {
+    const display = (slot: number) => ({ pages: new Map([["2/0/0", { slot, z: 2 }], ["1/0/0", { slot: 1, z: 1 }]]), ancestors: new Set(["1/0/0", "0/0/0"]), slots: new Set([slot, 1]), fallbackLeaves: 0, slotImages: new Map([[slot, "s/std/2/0/0"]]), ambiguousSlots: new Set<number>() });
+    const patch = { z: 1, x: 0, y: 0 }, labels: string[] = [];
+    let live = 0, refuse = false;
+    const ports = { reserve: (bytes: number, label: string) => { expect(bytes).toBe(16384); labels.push(label); if (refuse) return null; live += 1; return { release() { live -= 1; } }; } };
+    const scratch = new Uint8Array(16384).fill(7), fresh = buildPatchTable(display(5), patch);
+    const isBound = vi.fn((built: { cellsLog2: number; data: Uint8Array }) => bound !== null && samePatchTableCells(bound.data, built.data, built.cellsLog2));
+    let bound: { cellsLog2: number; data: Uint8Array } | null = null;
+    // Nothing bound: a held table of its own, equal to a new build, under one admission.
+    const first = prepareManagedPatchTable(display(5), patch, ports, { scratch, isBound });
+    if (!first || first.unchanged) throw new Error("expected a held table");
+    expect(first.data).not.toBe(scratch); expect(Array.from(first.data)).toEqual(Array.from(fresh.data)); expect(first.cellsLog2).toBe(1); expect(live).toBe(1);
+    bound = { cellsLog2: first.cellsLog2, data: first.data };
+    // The same table again: unchanged, admitted and then released by its close, with no data.
+    const again = prepareManagedPatchTable(display(5), patch, ports, { scratch, isBound });
+    expect(again).toMatchObject({ unchanged: true, cellsLog2: 1, capped: false, emptyCells: 0 }); expect(again).not.toHaveProperty("data"); expect(live).toBe(2);
+    again!.close(); again!.close(); expect(live).toBe(1);
+    // A changed page: a new held table.
+    const changed = prepareManagedPatchTable(display(6), patch, ports, { scratch, isBound });
+    if (!changed || changed.unchanged) throw new Error("expected a held table");
+    expect(Array.from(changed.data)).toEqual(Array.from(buildPatchTable(display(6), patch).data)); expect(live).toBe(2);
+    // Admission comes first: a refusal builds and compares nothing.
+    isBound.mockClear(); refuse = true;
+    expect(prepareManagedPatchTable(display(5), patch, ports, { scratch, isBound })).toBeNull(); expect(isBound).not.toHaveBeenCalled(); refuse = false;
+    // A throwing comparison releases its admission.
+    expect(() => prepareManagedPatchTable(display(5), patch, ports, { scratch, isBound: () => { throw new Error("compare"); } })).toThrow("compare"); expect(live).toBe(2);
+    expect(new Set(labels)).toEqual(new Set(["imagery patch 1/0/0 table"]));
+    first.close(); changed.close(); expect(live).toBe(0);
   });
   it("attempts every Renderer release after a throwing input cleanup and never acknowledges it resident", async () => {
     const h = ownedAtlasHost(), image = h.image(), original = image.close; image.close = () => { original(); throw new Error("input cleanup"); };
