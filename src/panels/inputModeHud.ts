@@ -34,7 +34,12 @@ export interface InputModeHudOptions {
   document: Document;
   settings: SettingsRegistry;
   /** UI's compact segmented choice, for the pointer mode. */
-  ui: { createChoiceGroup: typeof createChoiceGroup; checkChoice: typeof checkChoice };
+  ui: {
+    createChoiceGroup: typeof createChoiceGroup;
+    checkChoice: typeof checkChoice;
+    /** @foss-earth/ui's attachParameterReset: a reset on the Pointer choice and on each sensitivity field, shown while it differs from its default. */
+    attachParameterReset?(settings: SettingsRegistry, document: Document, widget: HTMLElement, id: string, options?: { name?: string }): { destroy(): void };
+  };
   /** Offer "Debug wheel events", which logs each wheel event's reading; for a host's developer pages. */
   showDebug?: boolean;
   deviceHints: InputModeDeviceHints;
@@ -203,6 +208,21 @@ export function createInputModeHud(
   let autoModeActive = false;
   let onAutoModeExit: (() => void) | null = null;
   const inlineViews = new Set<HTMLElement>();
+  // The resets on a view's widgets, or on a row of cards drawn again by itself, destroyed with what holds them.
+  const resets = new Map<HTMLElement, { destroy(): void }[]>();
+
+  function addReset(owner: HTMLElement, widget: HTMLElement, id: string, name: string): void {
+    if (!options.ui.attachParameterReset) return;
+    resets.set(owner, [...resets.get(owner) ?? [], options.ui.attachParameterReset(settings, document, widget, id, { name })]);
+  }
+
+  function dropResets(within: HTMLElement): void {
+    for (const [owner, handles] of resets) {
+      if (!within.contains(owner)) continue;
+      for (const handle of handles) handle.destroy();
+      resets.delete(owner);
+    }
+  }
 
   const control = document.createElement("div");
   control.className = "input-mode-control";
@@ -256,6 +276,7 @@ export function createInputModeHud(
   }
 
   function renderInto(target: HTMLElement): void {
+    dropResets(target);
     target.replaceChildren();
     // Each part's title is the first item of its row of cards.
     if (hasTouch) target.append(renderCards(target, "touch", heading("Touch")));
@@ -274,6 +295,8 @@ export function createInputModeHud(
         input.after(icon);
       }
       options.ui.checkChoice(group, name, activeMode);
+      const pills = group.querySelector<HTMLElement>(".foss-earth-parameter__pills");
+      if (pills) addReset(target, pills, "input.mode", "Pointer");
       let cards = renderCards(target, activeMode);
       group.addEventListener("change", event => {
         const mode = (event.target as HTMLInputElement).value as HudInputMode;
@@ -284,6 +307,7 @@ export function createInputModeHud(
         renderButton();
         // Redraw only the cards here, so the focused choice keeps its focus.
         const next = renderCards(target, activeMode);
+        dropResets(cards);
         cards.replaceWith(next);
         cards = next;
         renderAll(target);
@@ -360,6 +384,7 @@ export function createInputModeHud(
       const inputWrapEl = document.createElement("div");
       inputWrapEl.className = "gesture-input-wrap";
       inputWrapEl.appendChild(numInput);
+      addReset(panel, numInput, `input.sensitivity.${mode}.${movement}`, numInput.getAttribute("aria-label") ?? "");
 
       topRowEl.append(inputWrapEl);
 
@@ -440,8 +465,14 @@ export function createInputModeHud(
     if (modeChanged) options.onModeChange?.(activeMode);
     if (sensitivityChanged) options.onSensitivityChange?.(sensitivity);
     renderButton();
-    const typing = document.activeElement?.closest<HTMLElement>(".input-mode-inline") ?? null;
+    // A reset pressed from the keyboard is drawn again with its view; its widget then takes the focus, as when a reset hides.
+    const reset = document.activeElement?.closest<HTMLElement>(".foss-earth-parameter__reset") ?? null;
+    const resetView = reset?.closest<HTMLElement>(".input-mode-inline") ?? null;
+    const resetIndex = resetView && reset?.parentElement ? [...resetView.querySelectorAll(".foss-earth-parameter__reset-anchor")].indexOf(reset.parentElement) : -1;
+    const typing = reset ? null : document.activeElement?.closest<HTMLElement>(".input-mode-inline") ?? null;
     renderAll(typing ?? undefined);
+    const anchor = resetView?.querySelectorAll(".foss-earth-parameter__reset-anchor")[resetIndex];
+    anchor?.querySelector<HTMLInputElement>("input:checked, input:not([type=radio])")?.focus({ preventScroll: true });
   });
 
   return {
@@ -453,6 +484,7 @@ export function createInputModeHud(
       renderInto(view);
       return () => {
         inlineViews.delete(view);
+        dropResets(view);
         view.remove();
       };
     },
@@ -464,7 +496,7 @@ export function createInputModeHud(
       offSettings();
       button.removeEventListener("click", onButtonClick);
       container.removeEventListener("wheel", onWheel);
-      for (const view of inlineViews) view.remove();
+      for (const view of inlineViews) { dropResets(view); view.remove(); }
       inlineViews.clear();
       control.remove();
     },

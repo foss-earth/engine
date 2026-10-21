@@ -41,7 +41,7 @@ function mount(modes: readonly HudInputMode[], options: Partial<InputModeHudOpti
   const pointer = (mode: string, root: ParentNode = section) =>
     root.querySelector<HTMLInputElement>(`input[type="radio"][value="${mode}"]`);
   const checked = (mode: string) => pointer(mode)?.checked;
-  return { container, hud, section, unmount, headings, pointer, checked };
+  return { container, hud, settings, section, unmount, headings, pointer, checked };
 }
 
 describe("input method section", () => {
@@ -123,6 +123,64 @@ describe("input method section", () => {
       touch: expect.objectContaining({ zoom: 2.5 }),
       mouse: expect.objectContaining({ zoom: 1 }),
     }));
+  });
+});
+
+/** Stands in for @foss-earth/ui's attachParameterReset: a reset button in the widget's anchor, a span around a field. */
+function fakeResets() {
+  const attached: { id: string; name?: string; widget: HTMLElement; button: HTMLButtonElement; destroyed: boolean }[] = [];
+  const attachParameterReset = (_settings: unknown, document: Document, widget: HTMLElement, id: string, options: { name?: string } = {}) => {
+    let anchor = widget;
+    if (widget.tagName === "INPUT") { anchor = document.createElement("span"); widget.replaceWith(anchor); anchor.append(widget); }
+    anchor.classList.add("foss-earth-parameter__reset-anchor");
+    const button = document.createElement("button");
+    button.className = "foss-earth-parameter__reset";
+    anchor.append(button);
+    const entry = { id, name: options.name, widget, button, destroyed: false };
+    attached.push(entry);
+    return { destroy() { entry.destroyed = true; } };
+  };
+  return { attached, ui: { checkChoice, createChoiceGroup, attachParameterReset } };
+}
+
+describe("input method resets", () => {
+  it("puts one on the pointer choice and each sensitivity field, and drops those a redraw replaces", () => {
+    const { attached, ui } = fakeResets();
+    const { pointer, unmount } = mount(["mouse", "trackpad"], { ui, movements: ["orbit", "zoom"] });
+
+    expect(attached.map(entry => [entry.id, entry.name])).toEqual([
+      ["input.mode", "Pointer"],
+      ["input.sensitivity.trackpad.orbit", "Trackpad orbit sensitivity"],
+      ["input.sensitivity.trackpad.zoom", "Trackpad zoom sensitivity"],
+    ]);
+    expect(attached[0].widget.classList.contains("foss-earth-parameter__pills")).toBe(true);
+    expect(attached[1].widget.classList.contains("gesture-value-input")).toBe(true);
+
+    pointer("mouse")!.click();
+    expect(attached.map(entry => [entry.id, entry.destroyed])).toEqual([
+      ["input.mode", false],
+      ["input.sensitivity.trackpad.orbit", true],
+      ["input.sensitivity.trackpad.zoom", true],
+      ["input.sensitivity.mouse.orbit", false],
+      ["input.sensitivity.mouse.zoom", false],
+    ]);
+
+    unmount();
+    expect(attached.every(entry => entry.destroyed)).toBe(true);
+  });
+
+  it("hands the focus from a reset pressed from the keyboard to its field, drawn again with the default", () => {
+    const { attached, ui } = fakeResets();
+    const { section, settings } = mount(["mouse", "trackpad"], { ui, movements: ["orbit", "zoom"] });
+    const zoom = () => section.querySelector<HTMLInputElement>('[aria-label="Trackpad zoom sensitivity"]')!;
+    zoom().value = "2.5";
+    zoom().dispatchEvent(new Event("change"));
+
+    attached.find(entry => entry.id === "input.sensitivity.trackpad.zoom")!.button.focus();
+    settings.reset("input.sensitivity.trackpad.zoom");
+
+    expect(zoom().value).toBe("1.00");
+    expect(document.activeElement).toBe(zoom());
   });
 });
 
