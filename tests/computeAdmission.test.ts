@@ -102,4 +102,14 @@ describe("worker dispatch owns admission", () => {
     expect(f.admission.snapshot()).toMatchObject({ active: 0, queued: 0 });
     expect(f.workers.every(w => w.terminated)).toBe(true);
   });
+  it("retires a lost worker's grant and wakes another existing worker without leaking a lane", async () => {
+    const f = fixture(1), lost = f.run(), next = f.run(); await tick();
+    f.workers[0].onerror?.({ message: "worker lost" } as ErrorEvent);
+    await expect(lost).rejects.toThrow("stopped"); await tick();
+    expect(f.workers[0].terminated).toBe(true); expect(f.workers[1].messages).toHaveLength(1);
+    expect(f.admission.snapshot()).toMatchObject({ active: 1, queued: 0 });
+    f.reply(1); await next; f.pool.dispose();
+    expect(f.admission.snapshot()).toMatchObject({ active: 0, queued: 0 });
+    expect(f.admission.snapshot().components[0]).toMatchObject({ retired: 1, useful: 1 });
+  });
 });

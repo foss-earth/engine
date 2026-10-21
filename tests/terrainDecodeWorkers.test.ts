@@ -5,6 +5,7 @@ import { createTerrainDecodeWorkers, type TerrainDecodeWorkersOptions } from "..
 import type { TerrainDecodeWorkerPort, TerrainDecodeWorkerReply, TerrainDecodeWorkerRequest } from "../src/browser/terrainDecodeWorkerProtocol.js";
 import { createTerrainNativeDecoder } from "../src/browser/terrainNativeDecoder.js";
 import { decodeTerrarium } from "../src/terrain/terrainGrid.js";
+import { createComputeAdmission, type ComputeAdmissionPort } from "../src/browser/computeAdmission.js";
 
 /** Fake native image realm: each Blob stands for a tile whose RGBA pixels are known. */
 function imageRealm(tiles: Map<Blob, { width: number; height: number; rgba: Uint8ClampedArray }>) {
@@ -41,7 +42,7 @@ function tile(size: number, pixel: (index: number) => [number, number, number, n
 const LIMITS: TerrainImageDecodeLimits = { maxTileSide: 1024 };
 
 /** The real kernel behind a fake worker that delivers messages asynchronously. */
-function fixture(options: { kernel?: Partial<TerrainDecodeWorkerKernelPorts>; bridge?: Partial<TerrainDecodeWorkersOptions>; limits?: () => TerrainImageDecodeLimits } = {}) {
+function fixture(options: { compute?: ComputeAdmissionPort; kernel?: Partial<TerrainDecodeWorkerKernelPorts>; bridge?: Partial<TerrainDecodeWorkersOptions>; limits?: () => TerrainImageDecodeLimits } = {}) {
   const tiles = new Map<Blob, { width: number; height: number; rgba: Uint8ClampedArray }>();
   const worker = imageRealm(tiles), page = imageRealm(tiles);
   const requests: TerrainDecodeWorkerRequest[] = [], transfers: Transferable[][] = [], ports: TerrainDecodeWorkerPort[] = [];
@@ -49,7 +50,7 @@ function fixture(options: { kernel?: Partial<TerrainDecodeWorkerKernelPorts>; br
   const createWorker = vi.fn((): TerrainDecodeWorkerPort => {
     const scope = { onmessage: null as ((event: MessageEvent<TerrainDecodeWorkerRequest>) => void) | null,
       postMessage(reply: TerrainDecodeWorkerReply, transfer?: Transferable[]) { transfers.push(transfer ?? []); queueMicrotask(() => port.onmessage?.({ data: reply } as MessageEvent<TerrainDecodeWorkerReply>)); } };
-    const port: TerrainDecodeWorkerPort = { onmessage: null, onerror: null,
+    const port: TerrainDecodeWorkerPort = { compute: options.compute, onmessage: null, onerror: null,
       postMessage(request) { requests.push(request); queueMicrotask(() => scope.onmessage?.({ data: request } as MessageEvent<TerrainDecodeWorkerRequest>)); },
       terminate: vi.fn(() => { kernel.dispose(); }) };
     const kernel = installTerrainDecodeWorkerKernel({ scope, createImageBitmap: worker.createImageBitmap, createCanvas: worker.createCanvas, onError: kernelErrors, ...options.kernel });
@@ -76,6 +77,18 @@ async function failure(decoding: Promise<unknown>): Promise<Error> {
 }
 
 describe("terrain decode workers", () => {
+  it("queues temporary compute pressure after parity without decoding on the page or losing worker capacity", async () => {
+    const admission = createComputeAdmission({ limit: 1, now: () => 0 });
+    const f = fixture({ compute: admission.port("raster") }); f.setSize(1);
+    const blob = f.add(tile(2, index => [index, 2, 3, 255]));
+    await f.workers.decode(blob, f.onPage); expect(f.onPage).toHaveBeenCalledOnce();
+    const sky = await admission.port("sky").acquire(), next = f.workers.decode(blob, f.onPage);
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+    expect(admission.snapshot().queued).toBe(1); expect(f.requests).toHaveLength(1);
+    expect(f.workers.capacity()).toBe(1); expect(f.onPage).toHaveBeenCalledOnce();
+    sky.release(); expect(await next).toEqual(await f.reference(blob)); expect(f.onPage).toHaveBeenCalledOnce();
+    f.workers.dispose(); expect(admission.snapshot()).toMatchObject({ active: 0, queued: 0 });
+  });
   it("retains page-vs-worker parity and reports native admission/fallback for the individual worker", async () => {
     const native = vi.fn(decodeTerrarium);
     const backend = createTerrainNativeDecoder({ workerId: "worker-test", requestedTier: "single", start: async () => ({ decodeTerrarium: native }),
