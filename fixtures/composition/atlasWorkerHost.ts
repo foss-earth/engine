@@ -6,9 +6,10 @@ import { installAtlasImageryWorkerKernel } from "../../src/browser/atlasImageryW
 import type { AtlasImageryWorkerPort, AtlasImageryWorkerReply, AtlasImageryWorkerRequest, AtlasImageryWorkerScope } from "../../src/browser/atlasImageryWorkerProtocol.js";
 import { createBoundedAtlasImageryLoader } from "../../src/browser/boundedAtlasImageryLoader.js";
 import type { RgbaReadbackSurface } from "@foss-earth/images/browser";
+import type { ComputeAdmissionPort } from "../../src/browser/computeAdmission.js";
 export function deferredWorker<T>() { let resolve!: (value: T) => void; const promise=new Promise<T>(done=>{resolve=done;});return{promise,resolve}; }
 export async function flushWorker(): Promise<void> { for(let index=0;index<16;index++)await Promise.resolve(); }
-export function atlasWorkerHost(available=true) {
+export function atlasWorkerHost(available=true, compute?: ComputeAdmissionPort) {
   const broker=createImageSessionBroker({requests:1,decodes:1,pools:{encoded:2000,decoded:4_000_000,sourceGpu:0,overlap:0,uploadOutstanding:0}});
   const nativeCloses=vi.fn(), surfaceCloses=vi.fn(), onError=vi.fn(), retired=deferredWorker<void>();
   let nativeGate: Promise<void>|null=null, alpha=255, surfaceRetired: Promise<void>|undefined, surfaceError:unknown, postError:unknown, alterReply:((reply:AtlasImageryWorkerReply)=>AtlasImageryWorkerReply)|undefined;
@@ -26,7 +27,7 @@ export function atlasWorkerHost(available=true) {
     replies.push(moved);queueMicrotask(()=>worker.onmessage?.({data:moved} as MessageEvent<AtlasImageryWorkerReply>));
   }};
   const kernel=installAtlasImageryWorkerKernel({scope,decode,createSurface,onError});
-  const worker:AtlasImageryWorkerPort={onmessage:null,onerror:null,retired:retired.promise,terminate:vi.fn(()=>kernel.dispose()),postMessage(request,transfer){
+  const worker:AtlasImageryWorkerPort={compute,onmessage:null,onerror:null,retired:retired.promise,terminate:vi.fn(()=>kernel.dispose()),postMessage(request,transfer){
     if(postError)throw postError;
     const moved=request.kind==="decode"?structuredClone(request,{transfer}):{...request,bitmap:moveBitmap(request.bitmap)};
     requests.push(moved);queueMicrotask(()=>scope.onmessage?.({data:moved} as MessageEvent<AtlasImageryWorkerRequest>));

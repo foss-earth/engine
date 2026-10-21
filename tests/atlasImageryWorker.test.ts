@@ -4,8 +4,23 @@ import { createBoundedAtlasImageryLoader } from "../src/browser/boundedAtlasImag
 import { ImageryMissingError } from "../src/terrain/imagery/imageryResidency.js";
 import { pageUploadBytes } from "../src/terrain/imagery/imageryAtlasLayout.js";
 import { atlasWorkerHost, deferredWorker, flushWorker } from "../fixtures/composition/atlasWorkerHost.js";
+import { createComputeAdmission } from "../src/browser/computeAdmission.js";
 
 describe("actual common acquisition with original worker preparation transport",()=>{
+  it("queues compute pressure after resource admission, then preserves output and native retirement",async()=>{
+    const compute=createComputeAdmission({limit:1,now:()=>0}), busy=await compute.port("sky").acquire(), h=atlasWorkerHost(true,compute.port("atlas"));
+    try {
+      const pending=h.load();await flushWorker();await flushWorker();expect(h.requests).toHaveLength(0);expect(h.loader.offThread).toBe(true);
+      busy.release();const image=await pending;expect(h.requests.map(request=>request.kind)).toEqual(["decode","prepare"]);expect(compute.snapshot()).toMatchObject({active:0,queued:0});
+      image.close();expect(h.broker.pools.live()).toEqual([]);
+    }finally{h.dispose();}
+  });
+  it("retires admitted execution on loss without claiming native resource retirement",async()=>{
+    const compute=createComputeAdmission({limit:1,now:()=>0}), h=atlasWorkerHost(true,compute.port("atlas"));
+    h.postFailure(new Error("transport completion unknown"));const result=h.load().catch((error:unknown)=>error);
+    await flushWorker();await flushWorker();expect(compute.snapshot().active).toBe(0);expect(h.broker.pools.stats().encoded.reserved).toBeGreaterThan(0);
+    h.retired.resolve();expect(await result).toBeInstanceOf(Error);expect(h.broker.pools.live()).toEqual([]);h.dispose();
+  });
   it("selects the actual worker, transfers private encoded input and all original mip outputs, retaining only the held pages",async()=>{
     const h=atlasWorkerHost();try{expect(h.loader.offThread).toBe(true);const before=h.png.slice();const image=await h.load();expect(h.requests.map(request=>request.kind)).toEqual(["decode","prepare"]);
       expect(h.png).toEqual(before);expect(h.png[0]).toBe(137);expect(image.pages[0].map(level=>level.byteLength)).toEqual([331776,82944,20736,5184,1296]);

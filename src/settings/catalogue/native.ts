@@ -155,7 +155,38 @@ const TIER_CHOICES = [
   { id: "custom", label: "Manual (separate choices)" },
 ] as const;
 
-export const NATIVE_PARAMETERS: readonly ParameterSpec[] = [{
+export const COMPUTE_PARAMETERS: readonly ParameterSpec[] = [{
+  id: "native.compute", label: "Compute scheduling", kind: "choice", unit: "none",
+  choices: [{ id: "legacy", label: "Off" }, { id: "fixed", label: "Fixed" }], default: "legacy",
+  description: "After reload, Fixed shares an active-compute allowance across preparation workers, including cooperating sky threads. Capacity waits queue without choosing a page fallback. Off retains existing scheduling. Fixed is an experiment, with no established energy saving; it does not change quality, FPS or simulation frequency.",
+  defaultReason: "Keep current scheduling until fixed candidates and adaptation have qualified responsiveness, content readiness and power evidence.",
+  home: { tab: "native", section: "selection", level: "all" }, appliesLive: false, source: "src/settings/catalogue/native.ts",
+}, {
+  id: "native.computeLanes", label: "Active compute lanes", kind: "number", unit: "count",
+  default: 32, bounds: () => ({ min: 1, max: 32 }), step: 1,
+  description: "After reload, limits simultaneous admitted preparation lanes in Fixed mode, independently of live Worker objects and memory. The effective allowance cannot exceed Total preparation workers. The sky coordinator and helpers each count. Smaller values are candidates to compare, not energy recommendations.",
+  defaultReason: "Start at the full existing allowed worker capacity; no CPU topology or efficiency-core ceiling is assumed.",
+  home: { tab: "native", section: "selection", level: "all" }, appliesLive: false, source: "src/settings/catalogue/native.ts",
+}, {
+  id: "native.computeInitialization", label: "Concurrent worker preparation", kind: "number", unit: "count",
+  default: 1, bounds: () => ({ min: 1, max: 32 }), step: 1,
+  description: "After reload, how many worker module preparation requests may proceed together in Fixed mode. Module I/O and compilation use this separate initialization allowance before numeric compute admission. Worker objects and shared helper startup remain subject to their existing lifetime limits.",
+  defaultReason: "A bounded experimental startup policy, not a device or energy recommendation; compare startup readiness before increasing or adopting it.",
+  home: { tab: "native", section: "selection", level: "all" }, appliesLive: false, source: "src/settings/catalogue/native.ts",
+}, {
+  id: "native.computeAging", label: "Compute queue aging", kind: "number", unit: "ms",
+  default: 1000, bounds: () => ({ min: 1, max: 60000 }), step: 1,
+  description: "After reload, each elapsed aging interval raises waiting work's urgency by one at the next real grant/release event. There is no aging timer. Equal urgency uses submission order, and a whole sky team cannot be bypassed by younger equal-urgency jobs.",
+  defaultReason: "A visible experimental fairness interval, to qualify with required content readiness; it does not estimate energy or CPU topology.",
+  home: { tab: "native", section: "selection", level: "all" }, appliesLive: false, source: "src/settings/catalogue/native.ts",
+}, {
+  id: "native.computeObserve", label: "Compute observations", kind: "boolean", unit: "none", default: false,
+  description: "After reload, retain bounded per-component admission wait, oldest queue age, admitted elapsed spans and useful/stale/retired replies in Fixed mode. Elapsed spans are not thread CPU time, watts or core residency. Actual rendered frames and content snapshots are available in Copy report.",
+  defaultReason: "Observation is off until requested; no idle polling or permanent tuning loop.",
+  home: { tab: "native", section: "selection", level: "all" }, appliesLive: false, source: "src/settings/catalogue/native.ts",
+}];
+
+export const NATIVE_PARAMETERS: readonly ParameterSpec[] = [...COMPUTE_PARAMETERS, {
   id: NATIVE_TIER_ID, label: "Execution selection", kind: "choice", unit: "none",
   description: "After a reload, chooses how every converted core runs. TypeScript keeps each core where it always ran. For an A/B, compare TypeScript in workers with single-threaded WASM: both use the same workers, inputs and quality. WASM is admitted only after its first result equals the TypeScript reference; a failed fetch, compile, start or comparison returns that core to TypeScript and says why. Threaded runs the sky's shared-memory build with cooperating threads where the page is cross-origin isolated, and otherwise its single-threaded core; the other cores have no shared build and report their fallback.",
   choices: [...TIER_CHOICES],

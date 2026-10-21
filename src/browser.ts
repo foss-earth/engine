@@ -52,3 +52,4 @@ export * from "../ground-TS/groundBvh.js";
 export * from "./browser/groundBvhProtocol.js";
 export * from "./browser/groundBvhPreparer.js";
 export * from "./browser/groundBvhWorker.js";
+export * from "./browser/computeAdmission.js";

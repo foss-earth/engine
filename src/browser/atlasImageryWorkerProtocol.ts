@@ -1,4 +1,5 @@
 import type { ImageKind } from "@foss-earth/images";
+import type { ComputeWorker } from "./computeAdmission.js";
 
 export interface AtlasWorkerFailure { name: string; message: string; errors?: AtlasWorkerFailure[] }
 export type AtlasImageryWorkerRequest =
@@ -9,7 +10,7 @@ export type AtlasImageryWorkerReply =
   | { kind: "prepared"; id: number; width: number; height: number; pages?: Uint8Array[][]; blank?: boolean; inputRetired: boolean; canvasRetired: boolean; error?: AtlasWorkerFailure }
   | { kind: "failed"; id: number; error: AtlasWorkerFailure; nativeRetired: boolean }
   | { kind: "canvas-retired"; id: number; error?: AtlasWorkerFailure };
-export interface AtlasImageryWorkerPort {
+export interface AtlasImageryWorkerPort extends ComputeWorker {
   onmessage: ((event: MessageEvent<AtlasImageryWorkerReply>) => void) | null;
   onerror: ((event: ErrorEvent) => void) | null;
   postMessage(message: AtlasImageryWorkerRequest, transfer: Transferable[]): void;

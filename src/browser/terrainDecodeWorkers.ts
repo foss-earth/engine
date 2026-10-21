@@ -47,6 +47,7 @@ export function createTerrainDecodeWorkers(options: TerrainDecodeWorkersOptions)
   const pool = createWorkerPool<TerrainDecodeWorkerRequest, TerrainDecodeWorkerReply>({
     createWorker: options.createWorker, size: () => unsupported ? 0 : options.workers(), timers: options.timers,
     nowMs: options.nowMs, idleMs: options.idleMs, onError: options.onError,
+    isSuccess: reply => reply.kind === "decoded-terrain",
   });
   /** The worker's heights; null when no worker can decode this tile. */
   async function onWorker(blob: Blob, request: TerrainDecodeRequestOptions): Promise<{ size: number; heights: Float32Array } | null> {

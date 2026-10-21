@@ -2,6 +2,7 @@ import { sampleTerrainGrid, type TerrainGrid } from "../terrain/terrainGrid.js";
 import { packTerrainHeightPixels } from "./terrainHeightPixels.js";
 import { createPointHeights, keepPoint, pointSlot, type PointHeights } from "./pointHeights.js";
 import type { HeightBatchReply, HeightBatchWorkerPort } from "./terrainHeightBatchProtocol.js";
+import type { ComputeLease } from "./computeAdmission.js";
 
 export interface TerrainHeightBatchStats {
   actual: "not started" | "typescript" | "single";
@@ -38,6 +39,7 @@ export function createTerrainHeightBatches(options: {
   after(callback: () => void, ms: number): () => void;
 }) {
   let worker: HeightBatchWorkerPort | null = null, flight: Flight | null = null, cancelTimeout: (() => void) | null = null;
+  let admission: AbortController | null = null, lease: ComputeLease | undefined;
   let nextGrid = 0, nextJob = 0, queued = 0, cached = 0, scheduled = false, disposed = false, retired = false;
   const states = new Map<number, GridState>();
   const generations = new Map<string, GridState>(), arrayIds = new WeakMap<Float32Array, number>();
@@ -78,7 +80,9 @@ export function createTerrainHeightBatches(options: {
   function retire(reason: string): void {
     retired = true; status.state = "retired"; status.actual = "typescript"; status.fallbackReason = reason;
     cancelTimeout?.(); cancelTimeout = null;
+    admission?.abort(); admission = null;
     if (worker) { worker.onmessage = null; worker.onerror = null; worker.onmessageerror = null; worker.terminate(); worker = null; }
+    lease?.release("retired"); lease = undefined;
     flight = null; queued = 0;
     wrapperGenerations = new WeakMap();
     for (const state of [...states.values()]) removeState(state);
@@ -86,7 +90,7 @@ export function createTerrainHeightBatches(options: {
     status.snapshotBytes = 0; status.nativeBytes = 0;
   }
   function schedule(): void {
-    if (scheduled || flight || retired || disposed || !queued) return;
+    if (scheduled || flight || admission || retired || disposed || !queued) return;
     scheduled = true;
     options.schedule(() => { scheduled = false; flush(); });
   }
@@ -116,6 +120,7 @@ export function createTerrainHeightBatches(options: {
       }
     }
     cancelTimeout?.(); cancelTimeout = null; flight = null;
+    lease?.release(current.batches.some(batch => states.get(batch.state.id) === batch.state) ? "useful" : "stale"); lease = undefined;
     queued -= current.coordinates.length / 2;
     trim();
     status.actual = reply.actual; status.state = "idle"; status.parity = reply.parity; status.fallbackReason = reply.fallbackReason;
@@ -127,7 +132,7 @@ export function createTerrainHeightBatches(options: {
     schedule();
   }
   function flush(): void {
-    if (disposed || retired || flight || !queued) return;
+    if (disposed || retired || flight || admission || !queued) return;
     try {
       if (!worker) {
         worker = options.createWorker();
@@ -135,6 +140,15 @@ export function createTerrainHeightBatches(options: {
         worker.onmessage = event => receive(event.data);
         worker.onerror = () => retire("worker-error");
         worker.onmessageerror = () => retire("worker-message-error");
+      }
+      if (worker.compute && !lease) {
+        const abort = new AbortController(); admission = abort;
+        void worker.compute.acquire({ signal: abort.signal }).then(grant => {
+          admission = null;
+          if (disposed || retired) { grant.release("stale"); return; }
+          lease = grant; flush();
+        }, () => { admission = null; if (!disposed && !retired) retire("compute-admission-ended"); });
+        return;
       }
       let samples = 0, snapshotBytes = 0;
       const batches: Flight["batches"] = [], pack = packTerrainHeightPixels();
@@ -149,7 +163,7 @@ export function createTerrainHeightBatches(options: {
         state.pending.splice(0, count * 2);
         batches.push({ state, offset: samples, count }); samples += count; snapshotBytes += bytes;
       }
-      if (!batches.length) { if (queued) retire("snapshot-budget-exceeded"); return; }
+      if (!batches.length) { lease?.release("stale"); lease = undefined; if (queued) retire("snapshot-budget-exceeded"); return; }
       const id = ++nextJob, packed = pack.finish();
       flight = { id, start: options.now(), coordinates: packed.coordinates, batches };
       status.inputBytes += snapshotBytes + packed.coordinates.byteLength;
@@ -209,7 +223,9 @@ export function createTerrainHeightBatches(options: {
     dispose() {
       if (disposed) return; disposed = true;
       cancelTimeout?.(); cancelTimeout = null;
+      admission?.abort(); admission = null;
       if (worker) { worker.onmessage = null; worker.onerror = null; worker.onmessageerror = null; worker.terminate(); }
+      lease?.release("retired"); lease = undefined;
       worker = null; flight = null;
       wrapperGenerations = new WeakMap();
       for (const state of [...states.values()]) removeState(state);

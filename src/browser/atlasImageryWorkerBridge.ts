@@ -2,6 +2,7 @@ import { ResourceCapacityError, type ImageKind, type ImageOperationScope, type I
 import { createImageFileService, type HeldDecodedImage, type HeaderInferredImageFileService } from "@foss-earth/images/browser";
 import { pageUploadBytes } from "../terrain/imagery/imageryAtlasLayout.js";
 import { atlasWorkerError, type AtlasImageryWorkerPort, type AtlasImageryWorkerReply, type AtlasImageryWorkerRequest } from "./atlasImageryWorkerProtocol.js";
+import type { ComputeLease } from "./computeAdmission.js";
 
 export interface AtlasWorkerPreparedPages { width: number; height: number; pages?: Uint8Array[][]; blank?: boolean }
 export interface AtlasImageryWorkerBridge {
@@ -31,6 +32,7 @@ export function createAtlasImageryWorkerBridge(options: AtlasImageryWorkerBridge
   let worker: AtlasImageryWorkerPort | null = null, closing = false, failed = false, nextId = 1;
   const services = new WeakSet<HeaderInferredImageFileService>();
   type Pending = { kind: "decode" | "prepare"; settled: boolean; canvasPending: boolean; canvasProven: boolean;
+    admission: AbortController; lease?: ComputeLease; signal?: AbortSignal;
     resolve(reply: AtlasImageryWorkerReply): void; reject(error: unknown): void;
     finishInput(): void; finishCanvas(): void; failure?: unknown };
   const waiting = new Map<number, Pending>();
@@ -50,6 +52,15 @@ export function createAtlasImageryWorkerBridge(options: AtlasImageryWorkerBridge
   const retirePending = (id: number, pending: Pending): void => { if (pending.settled && !pending.canvasPending) { waiting.delete(id); stopIdle(); notifySettled(); } };
   const loseWorker = (error: unknown): void => {
     failed = true; report(error); const retiring = worker;
+    if (retiring?.compute) {
+      // Explicitly retire numeric execution. This is a termination action,
+      // not proof of native image/canvas retirement; those holds below remain
+      // quarantined until their existing replies or actual realm proof.
+      try { retiring.terminate(); } catch (cleanupError) { report(cleanupError); }
+      for (const pending of waiting.values()) {
+        pending.admission.abort(error); pending.lease?.release("retired"); pending.lease = undefined;
+      }
+    }
     // A fatal worker event is not native/queued-output retirement. Keep active
     // charged inputs until final replies or an explicitly supplied proof.
     let retirement: Promise<void> | undefined;
@@ -57,6 +68,7 @@ export function createAtlasImageryWorkerBridge(options: AtlasImageryWorkerBridge
     if (retirement) void retirement.then(() => {
       const entries = [...waiting]; waiting.clear();
       for (const [, pending] of entries) {
+        pending.admission.abort(error); pending.lease?.release("retired");
         const errors = cleanup([pending.finishInput, pending.finishCanvas], [error]);
         if (!pending.settled) pending.reject(errorFrom(errors, "Imagery worker loss and cleanup failed.")); else if (errors.length > 1) report(errorFrom(errors, "Late worker retirement cleanup failed."));
       }
@@ -78,6 +90,7 @@ export function createAtlasImageryWorkerBridge(options: AtlasImageryWorkerBridge
       if (pending.settled) { if (reply.kind === "decoded") try { reply.bitmap.close(); } catch (error) { report(error); } return; }
       if ((pending.kind === "decode" && reply.kind === "prepared") || (pending.kind === "prepare" && (reply.kind === "decoded" || reply.kind === "failed")) || (reply.kind === "failed" && !reply.nativeRetired)) { const errors = [new Error("Worker reply does not prove the expected native input retired.")]; if (reply.kind === "decoded") cleanup([() => reply.bitmap.close()], errors); loseWorker(errorFrom(errors, "Unexpected worker output cleanup failed.")); return; }
       const errors: unknown[] = [];
+      pending.lease?.release(pending.signal?.aborted ? "stale" : reply.kind === "failed" || (reply.kind === "prepared" && reply.error) ? "failed" : "useful"); pending.lease = undefined;
       if (reply.kind === "prepared") {
         pending.canvasPending = !reply.canvasRetired && !pending.canvasProven;
         if (reply.inputRetired) cleanup([pending.finishInput], errors); else { loseWorker(new Error("Worker input close did not prove retirement.")); return; }
@@ -94,18 +107,26 @@ export function createAtlasImageryWorkerBridge(options: AtlasImageryWorkerBridge
   const reserve = (pool: "encoded" | "decoded", bytes: number, label: string): Reservation => {
     const grant = options.broker.pools.reserve(pool, bytes, label); if (!grant.ok) throw new ResourceCapacityError(grant.pool, grant.reason); return grant.reservation;
   };
-  const request = (message: AtlasImageryWorkerRequest, transfer: Transferable[], input: () => void, canvas: () => void): Promise<AtlasImageryWorkerReply> => {
+  const request = (message: AtlasImageryWorkerRequest, transfer: Transferable[], input: () => void, canvas: () => void, signal?: AbortSignal): Promise<AtlasImageryWorkerReply> => {
     return new Promise((resolve, reject) => {
       if (!worker || closing || failed) { const errors = cleanup([input, canvas], [new Error("The imagery worker is unavailable.")]); reject(errorFrom(errors, "Worker admission cleanup failed.")); return; }
-      const pending: Pending = { kind: message.kind, settled: false, canvasPending: false, canvasProven: false, resolve, reject, finishInput: input, finishCanvas: canvas };
+      const pending: Pending = { kind: message.kind, settled: false, canvasPending: false, canvasProven: false, resolve, reject, finishInput: input, finishCanvas: canvas, admission: new AbortController(), signal };
       waiting.set(message.id, pending);
-      try { worker.postMessage(message, transfer); }
-      catch (error) {
+      const dispatch = (lease?: ComputeLease): void => {
+        if (closing || failed) { lease?.release("stale"); waiting.delete(message.id); const errors = cleanup([input, canvas], [new Error("Imagery preparation retired before dispatch.")]); reject(errorFrom(errors, "Imagery cleanup failed.")); notifySettled(); stopIdle(); return; }
+        pending.lease = lease;
+        try { worker!.postMessage(message, transfer); }
+        catch (error) {
         // postMessage throwing does not prove whether an injected transport
         // transferred/started work. Keep all holds unless an actual reply or
         // native realm retirement proves the input stopped.
         pending.failure = error; loseWorker(error);
-      }
+        }
+      };
+      if (worker.compute) void worker.compute.acquire({ signal: signal ? AbortSignal.any([signal, pending.admission.signal]) : pending.admission.signal }).then(dispatch, error => {
+        waiting.delete(message.id); const errors = cleanup([input, canvas], [error]); reject(errorFrom(errors, "Imagery compute admission ended.")); notifySettled(); stopIdle();
+      });
+      else dispatch();
     });
   };
   const decode = async (bytes: Uint8Array, mimeType: ImageKind): Promise<ImageBitmap> => {
@@ -152,7 +173,7 @@ export function createAtlasImageryWorkerBridge(options: AtlasImageryWorkerBridge
         const reply = await options.broker.decodes.run(priority, scope.signal, async () => {
           scope.signal.throwIfAborted(); if (!scope.isCurrent()) throw new Error("Stale worker imagery preparation.");
           posted = true;
-          return request({ kind: "prepare", id: nextId++, bitmap: image.image, width, height, outputBytes }, [image.image], finishInput, finishCanvas);
+          return request({ kind: "prepare", id: nextId++, bitmap: image.image, width, height, outputBytes }, [image.image], finishInput, finishCanvas, scope.signal);
         });
         if (reply.kind !== "prepared") throw new Error("The worker did not return prepared imagery.");
         if (reply.width !== width || reply.height !== height) throw new Error("Worker returned invalid preparation dimensions.");
@@ -167,7 +188,7 @@ export function createAtlasImageryWorkerBridge(options: AtlasImageryWorkerBridge
       }
       } finally { preparations -= 1; notifySettled(); }
     },
-    dispose() { if (closing) return; closing = true; stopIdle(); notifySettled(); },
+    dispose() { if (closing) return; closing = true; for (const pending of waiting.values()) if (!pending.lease) pending.admission.abort(new Error("Imagery bridge disposed.")); stopIdle(); notifySettled(); },
     whenSettled() { return new Promise<void>((resolve, reject) => { waiters.add({ resolve, reject }); notifySettled(); }); },
   };
 }

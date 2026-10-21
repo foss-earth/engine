@@ -40,7 +40,8 @@ export function createTerrainMeshWorkers(options: TerrainMeshWorkersOptions): {
   dispose(): void;
 } {
   const pool = createWorkerPool<TerrainMeshWorkerRequest, TerrainMeshWorkerReply>({ createWorker: options.createWorker,
-    size: options.workers, timers: options.timers, nowMs: options.nowMs, idleMs: options.idleMs, onError: options.onError });
+    size: options.workers, timers: options.timers, nowMs: options.nowMs, idleMs: options.idleMs, onError: options.onError,
+    isSuccess: reply => reply.kind === "prepared-terrain-mesh" });
   let targets = 0;
   let totalMs = 0;
   let lastActualBackend: TerrainMeshActualBackend = options.requestedBackend() === "wasm" ? "wasm-single" : "typescript";
@@ -53,7 +54,7 @@ export function createTerrainMeshWorkers(options: TerrainMeshWorkersOptions): {
       const started = options.nowMs();
       // Structured clone retains the host's source buffers for explicit fallback.
       // Never transfer a grid still read by ground queries or another tile.
-      const reply = await pool.run({ priority: request.priority, signal: request.signal, message: id => {
+      const reply = await pool.run({ priority: request.priority, signal: request.signal, isCurrent: () => generation === options.generation(), message: id => {
         if (generation !== options.generation()) throw new StaleTerrainMeshResultError();
         return { kind: "prepare-terrain-mesh", protocol: TERRAIN_MESH_PROTOCOL, id, generation, requestedBackend, input };
       } });

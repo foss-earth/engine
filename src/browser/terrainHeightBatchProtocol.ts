@@ -1,4 +1,5 @@
 import type { TerrainGrid } from "../terrain/terrainGrid.js";
+import type { ComputeWorker } from "./computeAdmission.js";
 
 export interface HeightSource { sourceId: number; z: number; x: number; y: number; size: number; heights?: Float32Array }
 export interface HeightBatch { gridId: number; grid?: TerrainGrid; sources?: HeightSource[]; sparse?: boolean; neighborsPresent?: boolean; coordinates: Float64Array }
@@ -21,7 +22,7 @@ export interface HeightBatchReply {
   workMs: number; snapshotBytes: number; nativeBytes: number;
   peakSnapshotBytes?: number; peakNativeBytes?: number;
 }
-export interface HeightBatchWorkerPort {
+export interface HeightBatchWorkerPort extends ComputeWorker {
   onmessage: ((event: MessageEvent<HeightBatchReply>) => void) | null;
   onerror: ((event: ErrorEvent) => void) | null;
   onmessageerror: ((event: MessageEvent) => void) | null;
