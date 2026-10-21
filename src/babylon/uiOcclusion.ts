@@ -1,10 +1,12 @@
-import { Constants, Mesh, ShaderLanguage, ShaderMaterial, Vector4, VertexData, type Scene } from "@babylonjs/core";
+import { Constants, Mesh, ShaderLanguage, ShaderMaterial, VertexBuffer, type Scene } from "@babylonjs/core";
 import { cssRectToClip, type ClipRect, type CssBox } from "./uiCover.js";
 import { worldViewportClientRect } from "../browser/worldViewport.js";
 
+// Each cover is one quad, all drawn at once. Its corners carry the cover's
+// rectangle, the value one draw per cover used to set as a uniform.
 const VERTEX = `
 attribute vec3 position;
-uniform vec4 rect;
+attribute vec4 rect;
 uniform float depthSign;
 void main(void) {
   vec2 clip = rect.xy + position.xy * rect.zw;
@@ -22,12 +24,12 @@ void main(void) {
 // 2.6 MiB downloaded and compiled that no other shader here needs.
 const VERTEX_WGSL = /* wgsl */ `
 attribute position : vec3<f32>;
-uniform rect : vec4<f32>;
+attribute rect : vec4<f32>;
 uniform depthSign : f32;
 
 @vertex
 fn main(input : VertexInputs) -> FragmentInputs {
-  let clip = uniforms.rect.xy + vertexInputs.position.xy * uniforms.rect.zw;
+  let clip = vertexInputs.rect.xy + vertexInputs.position.xy * vertexInputs.rect.zw;
   vertexOutputs.position = vec4<f32>(clip, uniforms.depthSign, 1.0);
 }
 `;
@@ -111,8 +113,8 @@ export function attachWorldOcclusion(scene: Scene, canvas: HTMLCanvasElement): {
   const webGpu = scene.getEngine().isWebGPU;
   const material = new ShaderMaterial("world-occlusion", scene,
     webGpu ? { vertexSource: VERTEX_WGSL, fragmentSource: FRAGMENT_WGSL } : { vertexSource: VERTEX, fragmentSource: FRAGMENT }, {
-      attributes: ["position"],
-      uniforms: ["rect", "depthSign"],
+      attributes: ["position", "rect"],
+      uniforms: ["depthSign"],
       shaderLanguage: webGpu ? ShaderLanguage.WGSL : ShaderLanguage.GLSL,
     });
   material.disableColorWrite = true;
@@ -121,15 +123,26 @@ export function attachWorldOcclusion(scene: Scene, canvas: HTMLCanvasElement): {
   material.backFaceCulling = false;
 
   const mesh = new Mesh("world-occlusion", scene);
-  const data = new VertexData();
-  data.positions = [0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0];
-  data.indices = [0, 1, 2, 0, 2, 3];
-  data.applyToMesh(mesh);
   mesh.material = material;
   mesh.isPickable = false;
   mesh.layerMask = 0;
-
-  const rect = new Vector4();
+  // Each quad's rectangle once per corner: the ones drawn, and the ones the
+  // next draw needs. A new shape starts unset, so its first draw sets it.
+  let shown = new Float32Array(0), wanted = shown;
+  const shape = (quads: number): void => {
+    const positions: number[] = [], indices: number[] = [];
+    for (let quad = 0; quad < quads; quad++) {
+      const first = 4 * quad;
+      positions.push(0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0);
+      indices.push(first, first + 1, first + 2, first, first + 2, first + 3);
+    }
+    shown = new Float32Array(16 * quads).fill(NaN);
+    wanted = new Float32Array(16 * quads);
+    mesh.setVerticesData(VertexBuffer.PositionKind, positions);
+    mesh.setVerticesData("rect", shown, true, 4);
+    mesh.setIndices(indices);
+  };
+  shape(1);
   let failed = false;
   const observer = draws.add(() => {
     if (failed) return;
@@ -137,13 +150,23 @@ export function attachWorldOcclusion(scene: Scene, canvas: HTMLCanvasElement): {
     if (camera && (camera.isRigCamera || camera.rigCameras.length > 0)) return;
     try {
       const covers = coveredWorldClips(canvas);
-      if (covers.length === 0 || !material.isReady(mesh)) return;
-      material.setFloat("depthSign", scene.getEngine().useReverseDepthBuffer ? 1 : -1);
-      for (const cover of covers) {
-        rect.set(cover.x, cover.y, cover.w, cover.h);
-        material.setVector4("rect", rect);
-        mesh.directRender();
+      if (covers.length === 0) return;
+      if (16 * covers.length !== shown.length) shape(covers.length);
+      if (!material.isReady(mesh)) return;
+      let changed = false;
+      for (let quad = 0; quad < covers.length; quad++) {
+        const { x, y, w, h } = covers[quad];
+        for (let at = 16 * quad; at < 16 * quad + 16; at += 4) {
+          wanted[at] = x; wanted[at + 1] = y; wanted[at + 2] = w; wanted[at + 3] = h;
+          changed ||= wanted[at] !== shown[at] || wanted[at + 1] !== shown[at + 1] || wanted[at + 2] !== shown[at + 2] || wanted[at + 3] !== shown[at + 3];
+        }
       }
+      if (changed) {
+        [shown, wanted] = [wanted, shown];
+        mesh.updateVerticesData("rect", shown);
+      }
+      material.setFloat("depthSign", scene.getEngine().useReverseDepthBuffer ? 1 : -1);
+      mesh.directRender();
     } catch {
       failed = true;
     }

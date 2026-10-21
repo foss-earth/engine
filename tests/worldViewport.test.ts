@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { FreeCamera, GeospatialCamera, NullEngine, NullEngineOptions, Scene, ShaderLanguage, ShaderMaterial, Vector3, Viewport } from "@babylonjs/core";
-import { afterEach, describe, expect, it } from "vitest";
+import { FreeCamera, GeospatialCamera, Mesh, NullEngine, NullEngineOptions, Scene, ShaderLanguage, ShaderMaterial, Vector3, Viewport } from "@babylonjs/core";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { clientRay, projectEcefToClient } from "../src/babylon/anchorPan.js";
 import { attachWorldOcclusion, coveredWorldClips } from "../src/babylon/uiOcclusion.js";
 import { applyWorldViewport, attachWorldViewport, cameraViewportFromTop, worldRenderRect } from "../src/babylon/worldViewport.js";
@@ -330,9 +330,50 @@ describe("attachWorldOcclusion", () => {
         // The effect is compiled in the language the options give.
         expect(material.options.shaderLanguage ?? ShaderLanguage.GLSL).toBe(webGpu ? ShaderLanguage.WGSL : ShaderLanguage.GLSL);
         expect([vertexSource.includes("@vertex"), fragmentSource.includes("@fragment")]).toEqual([webGpu, webGpu]);
-        expect([material.options.attributes, material.options.uniforms]).toEqual([["position"], ["rect", "depthSign"]]);
+        expect([material.options.attributes, material.options.uniforms]).toEqual([["position", "rect"], ["depthSign"]]);
       } finally { occlusion.dispose(); scene.dispose(); engine.dispose(); }
     }
+  });
+
+  it("draws every cover in one draw, each quad's corners carrying the rectangle one draw per cover set", () => {
+    const engine = new NullEngine(), scene = new Scene(engine), canvas = canvasAt();
+    const panelAt = (left: number, top: number, width: number, height: number): HTMLElement => {
+      const panel = document.createElement("div");
+      panel.dataset.occludeWorld = "";
+      panel.getBoundingClientRect = () => ({ left, top, width, height, x: left, y: top, right: left + width, bottom: top + height, toJSON() {} }) as DOMRect;
+      document.body.append(panel);
+      return panel;
+    };
+    const panels = [panelAt(600, 0, 200, 300), panelAt(0, 500, 333.3, 100), panelAt(650, 100, 100, 450.7)];
+    const occlusion = attachWorldOcclusion(scene, canvas);
+    try {
+      scene.activeCamera = new FreeCamera("page", Vector3.Zero(), scene);
+      const mesh = scene.getMeshByName("world-occlusion") as Mesh;
+      const draws = vi.spyOn(mesh, "directRender"), uploads = vi.spyOn(mesh, "updateVerticesData");
+      const frame = () => { draws.mockClear(); uploads.mockClear(); scene.onBeforeDrawPhaseObservable.notifyObservers(scene); };
+      const expectQuads = () => {
+        const clips = coveredWorldClips(canvas);
+        // The single-precision values a per-cover uniform received, once for each corner.
+        expect(Array.from(mesh.getVerticesData("rect")!)).toEqual(Array.from(new Float32Array(clips.flatMap(clip => [0, 1, 2, 3].flatMap(() => [clip.x, clip.y, clip.w, clip.h])))));
+        expect(Array.from(mesh.getVerticesData("position")!)).toEqual(clips.flatMap(() => [0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0]));
+        expect([...mesh.getIndices()!]).toEqual(clips.flatMap((_, quad) => [0, 1, 2, 0, 2, 3].map(index => 4 * quad + index)));
+        expect(mesh.subMeshes.map(subMesh => [subMesh.indexStart, subMesh.indexCount])).toEqual([[0, 6 * clips.length]]);
+      };
+      frame();
+      expect(coveredWorldClips(canvas)).toHaveLength(3);
+      expect(draws).toHaveBeenCalledOnce(); expectQuads();
+      frame();
+      expect(draws).toHaveBeenCalledOnce(); expect(uploads).not.toHaveBeenCalled(); expectQuads();
+      panels[1]!.getBoundingClientRect = () => ({ left: 10, top: 400, width: 50, height: 60, x: 10, y: 400, right: 60, bottom: 460, toJSON() {} }) as DOMRect;
+      frame();
+      expect(draws).toHaveBeenCalledOnce(); expect(uploads).toHaveBeenCalledOnce(); expectQuads();
+      panels[0]!.remove();
+      frame();
+      expect(draws).toHaveBeenCalledOnce(); expectQuads();
+      for (const panel of panels) panel.remove();
+      frame();
+      expect(draws).not.toHaveBeenCalled();
+    } finally { occlusion.dispose(); scene.dispose(); engine.dispose(); }
   });
 
   it("covers nothing for a stereo camera, whose eyes see past the page's windows", () => {
