@@ -4,31 +4,39 @@ import { DEG_TO_RAD, ecefToGeodetic, geodeticToEcef, type EcefCoord } from "../c
 import type { SurfaceHit, SurfaceQuery } from "../surface/contracts.js";
 import type { GroundAcceleration } from "./groundAcceleration.js";
 
-const AXES = ["x", "y", "z"] as const;
+/** The segment's parameter range still inside every slab tested so far. */
+const segment = { near: 0, far: 0 };
+const MISS = 0, REACH = 1, NEXT = 2;
+
+/** One axis's slab: the segment misses it, may reach the bounds whatever the other axes say, or goes on to the next axis. */
+function slab(minimum: number, maximum: number, origin: number, direction: number, epsilon: number): number {
+  // Triangle picking tolerates slightly negative barycentric coordinates.
+  // Include that same fringe, plus 1 mm for transform roundoff at contacts.
+  const padding = 0.001 + 2 * epsilon * (maximum - minimum);
+  const low = minimum - padding, high = maximum + padding;
+  if (!Number.isFinite(low) || !Number.isFinite(high)) return REACH;
+  if (direction === 0) return origin < low || origin > high ? MISS : NEXT;
+  const a = (low - origin) / direction, b = (high - origin) / direction;
+  segment.near = Math.max(segment.near, Math.min(a, b));
+  segment.far = Math.min(segment.far, Math.max(a, b));
+  return segment.near > segment.far ? MISS : NEXT;
+}
 
 /** Babylon's mesh broadphase intentionally treats rays as infinite. Reject a
  * mesh before its matrix inversion / triangle scan when the finite segment
  * cannot reach its world bounds. Keep Babylon's exact nearest-triangle pick.
+ * The axes go x, y, z, each component read by name: a computed key reaches
+ * Vector3's accessors only through the slow generic path.
  */
-function intersectsSegmentBounds(ray: Ray, minimum: Vector3, maximum: Vector3): boolean {
-  let near = 0, far = ray.length;
-  for (const axis of AXES) {
-    // Triangle picking tolerates slightly negative barycentric coordinates.
-    // Include that same fringe, plus 1 mm for transform roundoff at contacts.
-    const padding = 0.001 + 2 * ray.epsilon * (maximum[axis] - minimum[axis]);
-    const low = minimum[axis] - padding, high = maximum[axis] + padding;
-    const origin = ray.origin[axis], direction = ray.direction[axis];
-    if (!Number.isFinite(low) || !Number.isFinite(high)) return true;
-    if (direction === 0) {
-      if (origin < low || origin > high) return false;
-      continue;
-    }
-    const a = (low - origin) / direction, b = (high - origin) / direction;
-    near = Math.max(near, Math.min(a, b));
-    far = Math.min(far, Math.max(a, b));
-    if (near > far) return false;
-  }
-  return true;
+export function intersectsSegmentBounds(ray: Ray, minimum: Vector3, maximum: Vector3): boolean {
+  segment.near = 0; segment.far = ray.length;
+  const origin = ray.origin, direction = ray.direction;
+  let step = slab(minimum.x, maximum.x, origin.x, direction.x, ray.epsilon);
+  if (step !== NEXT) return step === REACH;
+  step = slab(minimum.y, maximum.y, origin.y, direction.y, ray.epsilon);
+  if (step !== NEXT) return step === REACH;
+  step = slab(minimum.z, maximum.z, origin.z, direction.z, ray.epsilon);
+  return step !== MISS;
 }
 
 /** Query only currently visible map triangles. Input/output are always ECEF,

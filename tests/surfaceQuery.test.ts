@@ -1,6 +1,6 @@
 import { Matrix, MeshBuilder, NullEngine, NullEngineOptions, Ray, Scene, TransformNode, Vector3, VertexBuffer } from "@babylonjs/core";
 import { describe, expect, it, vi } from "vitest";
-import { createSurfaceQuery } from "../src/babylon/surfaceQuery.js";
+import { createSurfaceQuery, intersectsSegmentBounds } from "../src/babylon/surfaceQuery.js";
 import { createTerrainMesh } from "../src/babylon/terrainMesh.js";
 
 /** A drawn Google tile's surface over 0° N 0° E, its top `heightMeters` above the ellipsoid. */
@@ -13,6 +13,46 @@ function googleSurface(scene: Scene, heightMeters: number, errorMeters: number) 
 }
 
 describe("visible map surface queries", () => {
+  it("rejects a segment by its bounds exactly as the shipped per-axis loop did", () => {
+    // The shipped filter, which read each axis by a computed key.
+    const shipped = (ray: Ray, minimum: Vector3, maximum: Vector3): boolean => {
+      let near = 0, far = ray.length;
+      for (const axis of ["x", "y", "z"] as const) {
+        const padding = 0.001 + 2 * ray.epsilon * (maximum[axis] - minimum[axis]);
+        const low = minimum[axis] - padding, high = maximum[axis] + padding;
+        const origin = ray.origin[axis], direction = ray.direction[axis];
+        if (!Number.isFinite(low) || !Number.isFinite(high)) return true;
+        if (direction === 0) {
+          if (origin < low || origin > high) return false;
+          continue;
+        }
+        const a = (low - origin) / direction, b = (high - origin) / direction;
+        near = Math.max(near, Math.min(a, b));
+        far = Math.min(far, Math.max(a, b));
+        if (near > far) return false;
+      }
+      return true;
+    };
+    let seed = 11;
+    const random = (): number => (seed = (Math.imul(seed, 1103515245) + 12345) >>> 0) / 2 ** 32;
+    // Components that are zero of either sign, tiny, Earth-sized, unbounded or not a number.
+    const special = [0, -0, 1e-300, -1e-300, 6_378_137, -6_378_137, Number.MAX_VALUE, -Number.MAX_VALUE, Infinity, -Infinity, NaN];
+    const component = (scale: number): number => random() < 0.15 ? special[Math.floor(random() * special.length)] : (random() - 0.5) * scale;
+    const vector = (scale: number) => new Vector3(component(scale), component(scale), component(scale));
+    const counts = { true: 0, false: 0 };
+    for (let i = 0; i < 200_000; i++) {
+      const scale = 10 ** Math.floor(random() * 8);
+      const ray = new Ray(vector(scale), vector(1), random() < 0.1 ? Infinity : random() * scale * 2);
+      if (random() < 0.3) ray.direction.normalize();
+      ray.epsilon = random() < 0.5 ? 1e-7 : random() * 1e-3;
+      const a = vector(scale), b = vector(scale);
+      const minimum = Vector3.Minimize(a, b), maximum = random() < 0.1 ? b : Vector3.Maximize(a, b);
+      const expected = shipped(ray, minimum, maximum);
+      expect(intersectsSegmentBounds(ray, minimum, maximum)).toBe(expected);
+      counts[`${expected}`] += 1;
+    }
+    expect(Math.min(counts.true, counts.false)).toBeGreaterThan(20_000);
+  });
   it("treats an indexed raster miss as final while retaining general raycasts", () => {
     const engine = new NullEngine(); const scene = new Scene(engine);
     const pick = vi.spyOn(scene, "pickWithRay");
