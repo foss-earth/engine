@@ -323,6 +323,21 @@ describe("imagery display and page tables", () => {
     expect(buildPatchTable(display, { z: 3, x: 0, y: 0 }).emptyCells).toBe(1);
   });
 
+  it("finds the deepest page and the cap in separate branches, in either order", () => {
+    const patch = { z: 2, x: 0, y: 0 };
+    for (const leaves of [
+      [leaf(8, 0, 0), leaf(9, 127, 127)],
+      [leaf(9, 0, 0), leaf(8, 63, 63)],
+    ]) {
+      const display = buildImageryDisplay({ leaves, coverage: [patch], slotsFor: () => [1], standardKey: std });
+      expect(patchTableDepth(display, patch)).toEqual({ cellsLog2: 6, capped: true });
+    }
+    const onlyCapped = buildImageryDisplay({ leaves: [leaf(9, 0, 0)], coverage: [patch], slotsFor: () => [1], standardKey: std });
+    expect(patchTableDepth(onlyCapped, patch)).toEqual({ cellsLog2: 0, capped: true });
+    const onlyDeepest = buildImageryDisplay({ leaves: [leaf(8, 0, 0)], coverage: [patch], slotsFor: () => [1], standardKey: std });
+    expect(patchTableDepth(onlyDeepest, patch)).toEqual({ cellsLog2: 6, capped: false });
+  });
+
   it("tells apart two tables whose cells have the same 32-bit FNV-1a hash", () => {
     // The signature a publish used to compare tables by.
     const fnv = (data: Uint8Array, cellsLog2: number) => {

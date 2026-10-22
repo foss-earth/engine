@@ -129,9 +129,13 @@ export function patchTableDepth(display: ImageryDisplay, patch: TileId): { cells
   let deepest = 0;
   let capped = false;
   const visit = (z: number, x: number, y: number): void => {
+    // Neither result can change once a page reaches the table's last level
+    // and a descendant beyond that level has been found.
+    if (capped && deepest === IMAGERY_TABLE_MAX_CELLS_LOG2) return;
     const depth = z - patch.z;
-    if (display.pages.has(`${z}/${x}/${y}`)) deepest = Math.max(deepest, depth);
-    if (!display.ancestors.has(`${z}/${x}/${y}`)) return;
+    const key = `${z}/${x}/${y}`;
+    if (display.pages.has(key)) deepest = Math.max(deepest, depth);
+    if (!display.ancestors.has(key)) return;
     if (depth >= IMAGERY_TABLE_MAX_CELLS_LOG2) {
       capped = true;
       return;
