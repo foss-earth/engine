@@ -57,6 +57,27 @@ describe("supplied canvas and scene visualization",()=>{
       compass.destroy();
     } finally {scene.dispose();engine.dispose();}
   });
+  it("keeps horizon letters in a host's moving scene frame even when the ECEF eye stays still", () => {
+    const engine = new NullEngine(), scene = new Scene(engine), requestRender = vi.fn();
+    const device = createCanvasTextureDevicePorts({ scene, createCanvas: canvasRealm, transfer: (_bytes, _label, submit) => submit() });
+    const eye = { x: 6_380_137, y: 0, z: 0 };
+    let shift = 0;
+    const compass = createOrbitCompass(scene, { device, requestRender, ecefToScene: point => ({ x: point.y + shift, y: point.x - eye.x, z: -point.z }) });
+    try {
+      compass.update(null, 0, eye);
+      const north = scene.getMeshByName("orbit-compass-label-N")!;
+      expect(north.position.x).toBe(0);
+      expect(north.position.z).toBeLessThan(-1_000);
+      expect(north.parent).toBeNull(); // Billboard orientation stays in scene space.
+      expect(north.isPickable).toBe(false);
+      shift = 100;
+      compass.update(null, 0, eye);
+      expect(north.position.x).toBe(100);
+      expect(requestRender).toHaveBeenCalledTimes(2);
+      compass.update(null, 0, eye);
+      expect(requestRender).toHaveBeenCalledTimes(2);
+    } finally { compass.destroy(); scene.dispose(); engine.dispose(); }
+  });
   it("retains sprite manager/source metadata semantics while allowing a host-selected capacity floor",()=>{
     const engine=new NullEngine(),scene=new Scene(engine),device=createCanvasTextureDevicePorts({scene,createCanvas:canvasRealm,transfer:(_bytes,_label,submit)=>submit()});
     try {

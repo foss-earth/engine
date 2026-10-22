@@ -34,6 +34,28 @@ N is red (`#ef4444`). E, S and W are white. Each texture is stroked and then fil
 after the fill covered the letter, and on the limb they read as faint gray. The dark stroke is the
 halo; the fill stays the letter.
 
+### Hosts with a floating origin or a nearer far clip
+
+`createOrbitCompass` accepts `OrbitCompassPorts.ecefToScene(position)` for horizon letters.
+The camera passed to `update` stays in ECEF metres; the callback converts each letter's ECEF
+position into the host's scene coordinates. It runs on every update, even when the ECEF eye has
+not moved, because the host's scene frame may have moved. Change detection compares the converted
+positions. Legacy mode keeps its existing ECEF drawing.
+
+Convert the positions rather than parenting billboard meshes to a rotated world node. Babylon's
+default billboards ignore the parent's rotation when placing their local translation, which puts
+ECEF letters in the wrong place in an east/up/south flight scene.
+
+`horizonMaxDistanceMeters` limits the drawing distance. The corresponding pure placement option is
+`maxDistanceMeters`. Both are optional: absent a limit, the original horizon distance is used.
+The geometric horizon still determines the bearing; drawing distance and letter size shrink
+together, preserving apparent position and size. A host can supply a getter based on its active
+camera's far clip. 0SFS uses 80% of that clip, leaving room for the letter above its baseline.
+
+The 0SFS adapter is `fly/src/flight/hud/flightCompass.ts`. It owns conversion between ECEF and its
+floating scene frame, refreshes the active camera's parents before reading its position, and
+destroys its compass with the flight session. See the flight app's `docs/sky-indicators.md`.
+
 ## Legacy
 
 The ground compass is the ring, the east-west line, the south-to-center line, the red needle, and

@@ -12,14 +12,21 @@ import type { LinesMesh, Scene } from "@babylonjs/core";
 import "@babylonjs/core/Rendering/edgesRenderer.js";
 
 import { compassLabelMeters, compassLineFade, compassRadiusMeters, DEFAULT_ORBIT_COMPASS_SCALE_PARAMS, DEFAULT_COMPASS_LABEL_TEXTURE_SIZE, type OrbitCompassScaleParams } from "./defaults.js";
-import { horizonCompassPlacements } from "./horizonPlacement.js";
+import { horizonCompassPlacements, type HorizonVec3 } from "./horizonPlacement.js";
 import type { CanvasTextureDevicePorts } from "@foss-earth/renderer/babylon";
 export { compassLabelMeters, compassLineFade, compassRadiusMeters, DEFAULT_ORBIT_COMPASS_SCALE_PARAMS, DEFAULT_COMPASS_LABEL_TEXTURE_SIZE, orbitCompassScaleFromSettings, COMPASS_SCALE_SETTING_IDS, type OrbitCompassScaleParams } from "./defaults.js";
 export { horizonCompassPlacements, HORIZON_COMPASS_ANGULAR_SIZE, HORIZON_COMPASS_LIFT } from "./horizonPlacement.js";
 
 export type CompassMode = "horizon" | "legacy";
 
-export interface OrbitCompassPorts { device: CanvasTextureDevicePorts; labelTextureSize?: number; requestRender?(): void }
+export interface OrbitCompassPorts {
+  device: CanvasTextureDevicePorts;
+  /** Convert horizon letters from ECEF metres into a host's floating scene frame. */
+  ecefToScene?(position: HorizonVec3): HorizonVec3;
+  horizonMaxDistanceMeters?: number;
+  labelTextureSize?: number;
+  requestRender?(): void;
+}
 
 const LABEL_RADIUS_SCALE = 1.28;
 const SURFACE_LIFT_SCALE = 0.08;
@@ -275,7 +282,7 @@ export function createOrbitCompass(scene: Scene, ports: OrbitCompassPorts): Orbi
     const camera = cameraPosition && [cameraPosition.x, cameraPosition.y, cameraPosition.z].every(Number.isFinite)
       ? cameraPosition
       : null;
-    const placements = camera ? horizonCompassPlacements(camera) : null;
+    const placements = camera ? horizonCompassPlacements(camera, { maxDistanceMeters: ports.horizonMaxDistanceMeters }) : null;
     if (!placements) {
       hide();
       if (visible) ports.requestRender?.();
@@ -286,21 +293,22 @@ export function createOrbitCompass(scene: Scene, ports: OrbitCompassPorts): Orbi
 
     let moved = !visible;
     placements.forEach((placement, index) => {
+      const position = ports.ecefToScene?.(placement.position) ?? placement.position;
       const slot = lastHorizon[index];
       const sizeTolerance = Math.max(1, Math.abs(slot.size) * 0.0025);
       const slotMoved = !Number.isFinite(slot.x) || !Number.isFinite(slot.size)
-        || Math.abs(placement.position.x - slot.x) > 1
-        || Math.abs(placement.position.y - slot.y) > 1
-        || Math.abs(placement.position.z - slot.z) > 1
+        || Math.abs(position.x - slot.x) > 1
+        || Math.abs(position.y - slot.y) > 1
+        || Math.abs(position.z - slot.z) > 1
         || Math.abs(placement.sizeMeters - slot.size) > sizeTolerance;
       if (!slotMoved) return;
       moved = true;
       const label = labelsById[placement.id];
-      label.position.set(placement.position.x, placement.position.y, placement.position.z);
+      label.position.set(position.x, position.y, position.z);
       label.scaling.setAll(placement.sizeMeters);
-      slot.x = placement.position.x;
-      slot.y = placement.position.y;
-      slot.z = placement.position.z;
+      slot.x = position.x;
+      slot.y = position.y;
+      slot.z = position.z;
       slot.size = placement.sizeMeters;
     });
     setLabelAlpha(HORIZON_LABEL_ALPHA);

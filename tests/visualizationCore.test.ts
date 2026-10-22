@@ -47,6 +47,15 @@ describe("pure point and compass policies", () => {
     expect(letter("S").position.z).toBeLessThan(-100_000);
     expect(letter("W").position.y).toBeLessThan(-100_000);
     for (const item of placements) expect(Math.hypot(item.position.x, item.position.y, item.position.z)).toBeGreaterThan(radius + 1_000);
+    const clipped = horizonCompassPlacements(camera, { radiusMeters: radius, maxDistanceMeters: 200_000 })!;
+    for (const [index, item] of clipped.entries()) {
+      const full = placements[index];
+      expect(Math.hypot(item.position.x - camera.x, item.position.y, item.position.z)).toBeLessThan(250_000);
+      // Moving nearer preserves both the apparent size and the bearing.
+      expect((item.position.x - camera.x) / item.sizeMeters).toBeCloseTo((full.position.x - camera.x) / full.sizeMeters, 10);
+      expect(item.position.y / item.sizeMeters).toBeCloseTo(full.position.y / full.sizeMeters, 10);
+      expect(item.position.z / item.sizeMeters).toBeCloseTo(full.position.z / full.sizeMeters, 10);
+    }
     expect(horizonCompassPlacements({ x: radius + 2_000_000, y: 0, z: 0 })![0].sizeMeters).toBeGreaterThan(horizonCompassPlacements({ x: radius + 20_000, y: 0, z: 0 })![0].sizeMeters * 5);
     const pole = horizonCompassPlacements({ x: 0, y: 0, z: radius + 500_000 })!;
     expect(pole).toHaveLength(4);

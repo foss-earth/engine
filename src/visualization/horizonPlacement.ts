@@ -69,7 +69,7 @@ function projectOntoPlane(vector: HorizonVec3, normal: HorizonVec3): HorizonVec3
  */
 export function horizonCompassPlacements(
   camera: HorizonVec3,
-  options?: { radiusMeters?: number; liftRadians?: number; angularSizeRadians?: number },
+  options?: { radiusMeters?: number; liftRadians?: number; angularSizeRadians?: number; maxDistanceMeters?: number },
 ): HorizonLetterPlacement[] | null {
   const radius = options?.radiusMeters ?? EARTH_RADIUS_METERS;
   const lift = options?.liftRadians ?? HORIZON_COMPASS_LIFT;
@@ -96,9 +96,12 @@ export function horizonCompassPlacements(
   const outside = distance > radius + 1;
   const cosAlpha = outside ? Math.min(1, radius / distance) : 0;
   const sinAlpha = Math.sqrt(Math.max(0, 1 - cosAlpha * cosAlpha));
-  const slant = outside
+  const horizonSlant = outside
     ? Math.sqrt(Math.max(1, distance * distance - radius * radius))
     : Math.max(5_000, radius * 0.01);
+  // The bearing still meets the geometric horizon; only the drawing distance
+  // changes, keeping the letters inside a host camera's far clip at altitude.
+  const slant = Math.min(horizonSlant, Math.max(1, options?.maxDistanceMeters ?? Infinity));
 
   return CARDINALS.map(({ id, east: eastShare, north: northShare }) => {
     const horizontal = normalize(add(scale(east, eastShare), scale(north, northShare))) ?? north;
