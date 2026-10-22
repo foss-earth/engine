@@ -4,6 +4,23 @@ Measured in October 2026 on the UMN tour's Minneapolis first view, on the
 `perf/terrain-decode-workers` branch. Use these notes to decide what to measure
 next. Before relying on a number, check it against the current code.
 
+## Pending queries, 21 October 2026
+
+`hasPendingTiles()` returns the same pending answer without collecting loader
+metrics or failure counts, and stops at the first pending tile. The eye-contact
+and lease-resume callers use it; older host fixtures retain their diagnostic
+fallback. Full diagnostics count pending replacements in their existing pass
+over selected keys, avoiding another pass over the entire tile cache.
+
+Six interleaved microbenchmark pairs over a 16-tile runtime compared the old
+and new complete counts and the predicate at pending, settled and elevation
+replacement checkpoints. Median query times in nanoseconds were respectively
+86 → 76, 95 → 90 and 137 → 87; the predicates took 5, 76 and 8 ns. These are
+isolated query costs, not a measured frame-rate gain. The suite checks the
+predicate against every existing loading-diagnostic checkpoint, including
+withdrawal, failed loads and mesh-worker cancellation. All 1,355 engine tests,
+typecheck and lint passed. Scratch evidence is in `build/night/`.
+
 ## How it was measured
 
 - A local harness replays every tile from a byte-for-byte cache and adds a fixed

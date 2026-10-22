@@ -26,15 +26,16 @@ const pending = vi.hoisted(() => ({
   imageryErrors: [] as Array<(message?: string) => void>,
   terrain: [] as Array<{ tile: TerrainTile; resolve(grid: TerrainGrid): void; reject(error: Error): void; interest?: TerrainInterest; prioritize?: boolean }>,
   dispose: vi.fn(),
+  metrics: vi.fn(() => ({ active: 0, decoding: 0, queued: 0, decodedBytes: 0 })),
 }));
 function createRasterTilesRuntime(options: Partial<RasterTilesRuntimeOptions> & Pick<RasterTilesRuntimeOptions, "scene" | "source">) {
-  return createCoreRaster({
+  const runtime = createCoreRaster({
     settings, nowMs: () => performance.now(), after: testAfter, requestRender: () => {},
     meshRebuildCpuMs: () => settings.get<number>("map.terrain.meshRebuildTimePerFrame"),
     loadMapTexture: (_url, scene, loaded, failed) => { pending.imagery.push(loaded); pending.imageryErrors.push(failed); return new Texture(null, scene); },
     attachTerrainLighting: () => ({}) as ReturnType<RasterTilesRuntimeOptions["attachTerrainLighting"]>,
     createTerrainLoader: () => ({ dispose: pending.dispose,
-      getMetrics: () => ({ active: 0, decoding: 0, queued: 0, decodedBytes: 0 }), setPaused: vi.fn(),
+      getMetrics: pending.metrics, setPaused: vi.fn(),
       load: (tile: TerrainTile) => new Promise<TerrainGrid>((resolve, reject) => pending.terrain.push({ tile, resolve, reject })),
       loadPatch: (tile: TerrainTile, interest?: TerrainInterest, prioritize?: boolean) => new Promise<TerrainGrid>((resolve, reject) => {
         pending.terrain.push({ tile, resolve, reject, interest, prioritize });
@@ -48,6 +49,15 @@ function createRasterTilesRuntime(options: Partial<RasterTilesRuntimeOptions> & 
       } } },
     log: { warn: () => {} }, ...options,
   });
+  // Exercise the cheap predicate at every diagnostic checkpoint below,
+  // including failures, superseded requests, replacements and worker cancellation.
+  const diagnostics = runtime.getLoadingDiagnostics!;
+  runtime.getLoadingDiagnostics = () => {
+    const result = diagnostics();
+    expect(runtime.hasPendingTiles!()).toBe(result.pendingTiles > 0);
+    return result;
+  };
+  return runtime;
 }
 beforeEach(() => { settings = createEngineSettings(); pending.imagery = []; pending.imageryErrors = []; pending.terrain = []; pending.dispose.mockClear(); });
 afterEach(() => vi.restoreAllMocks());
@@ -66,6 +76,19 @@ async function resolveFirstDetail(): Promise<void> {
 }
 
 describe("raster imagery and terrain lifecycle", () => {
+  it("checks pending tiles without reading elevation metrics or building diagnostics", () => {
+    const engine = new NullEngine(), scene = new Scene(engine);
+    const runtime = createRasterTilesRuntime({ scene, source: RASTER_BASE_MAP_SOURCES[0] });
+    const diagnostics = vi.spyOn(runtime, "getLoadingDiagnostics");
+    try {
+      expect(runtime.hasPendingTiles!()).toBe(false);
+      runtime.update();
+      pending.metrics.mockClear();
+      expect(runtime.hasPendingTiles!()).toBe(true);
+      expect(diagnostics).not.toHaveBeenCalled();
+      expect(pending.metrics).not.toHaveBeenCalled();
+    } finally { runtime.dispose(); engine.dispose(); }
+  });
   it("refreshes representative owners when an off-frustum imagery retry recreates the same tile key", () => {
     settings.set("map.terrain.robustOrbitLOD", true);
     const tile = { z: 2, x: 2, y: 1 }, key = "2/2/1";

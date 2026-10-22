@@ -171,6 +171,8 @@ export interface RasterTilesRuntimeOptions {
 export interface RasterTilesRuntime {
   readonly source: RasterBaseMapSource;
   update(): void;
+  /** Whether a selected tile is loading, without collecting diagnostic counts. */
+  hasPendingTiles?(): boolean;
   getLoadingDiagnostics?(): {
     activeElevationRequests: number;
     queuedElevationRequests: number;
@@ -1801,16 +1803,23 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
 
   return {
     get source(): RasterBaseMapSource { return imagerySource; },
+    hasPendingTiles() {
+      if (loadingCount > 0) return true;
+      for (const key of neededKeys) {
+        const record = cache.get(key);
+        if (record?.settled && (record.terrainPending || record.cancelPendingMesh)) return true;
+      }
+      return false;
+    },
     getLoadingDiagnostics() {
       const requests = terrain.getMetrics();
-      let failedTiles = 0;
+      let failedTiles = 0, pendingReplacements = 0;
       for (const key of neededKeys) {
         const record = cache.get(key);
         // A failed tile leaves the cache until it is asked again; failed detail keeps the coarse surface.
         if (record ? record.terrainRetryAt !== Infinity : imageryFailures.has(key)) failedTiles += 1;
+        if (record?.settled && (record.terrainPending || record.cancelPendingMesh)) pendingReplacements++;
       }
-      let pendingReplacements = 0;
-      for (const record of cache.values()) if (record.settled && (record.terrainPending || record.cancelPendingMesh) && neededKeys.has(record.key)) pendingReplacements++;
       return {
         activeElevationRequests: requests.active,
         queuedElevationRequests: requests.queued,

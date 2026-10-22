@@ -896,7 +896,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
       sample: (lat, lon) => rasterTilesRuntime?.sampleHeight
         ? rasterTilesRuntime.sampleHeight(lat, lon) : rasterTilesRuntime?.sample(lat, lon) ?? null,
       minQuality: () => settings.get("map.terrain.robustOrbitLOD") === true && rasterTilesRuntime ? settings.get<number>("map.terrain.minProximityZoom") : 0,
-      pending: () => (rasterTilesRuntime?.getLoadingDiagnostics?.().pendingTiles ?? 0) > 0,
+      pending: () => rasterTilesRuntime?.hasPendingTiles?.() ?? (rasterTilesRuntime?.getLoadingDiagnostics?.().pendingTiles ?? 0) > 0,
     });
     cameraController.setZoomAboutViewCenter(zoomAboutViewCenter());
     cameraController.setOrbitInPlace(settings.get("camera.orbitInPlace") === true);
@@ -1528,7 +1528,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
       // Continue a load the lease interrupted, if it still has work.
       const google = tilesRuntime?.getLoadingState();
       const googlePending = google ? google.queued + google.downloading + google.parsing + google.waitingToParse > 0 : false;
-      const rasterPending = (rasterTilesRuntime?.getLoadingDiagnostics?.().pendingTiles ?? 0) > 0;
+      const rasterPending = rasterTilesRuntime?.hasPendingTiles?.() ?? (rasterTilesRuntime?.getLoadingDiagnostics?.().pendingTiles ?? 0) > 0;
       if (streamingBeforeSuspension && (googlePending || rasterPending)) beginStreaming();
       if (startupHoldBeforeSuspension && tilesRuntime && tilesRuntime.tiles.visibleTiles.size === 0 && !startupHeld) {
         startupHeld = true;
