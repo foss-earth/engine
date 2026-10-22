@@ -304,16 +304,15 @@ export function measureLoadedImageryDistribution(
   const groups = new Map<string, { weighted: number; weight: number; unknown: boolean }>();
   let incomplete = false;
   let identityFailed = false;
+  let usableFootprint = false, logarithm = 0;
   const note = (image: string | null | undefined, level: number | null, fraction: number, region: LoadedImageryRegion): void => {
     if (!(fraction > 0) || !(region.screenArea > 0)) return;
     if (level === null || image === null) { incomplete = true; return; }
     if (image === undefined) { identityFailed = true; return; }
-    const group = groups.get(image) ?? { weighted: 0, weight: 0, unknown: false };
-    groups.set(image, group);
-    const footprint = region.footprintPx;
-    const usable = footprint === Infinity || (Number.isFinite(footprint) && footprint > 0);
-    if (!usable) { group.unknown = true; return; }
-    const value = Math.log2(normalTargetPx / footprint) + level - region.referenceLevel;
+    let group = groups.get(image);
+    if (!group) groups.set(image, group = { weighted: 0, weight: 0, unknown: false });
+    if (!usableFootprint) { group.unknown = true; return; }
+    const value = logarithm + level - region.referenceLevel;
     const weight = region.screenArea * fraction;
     group.weighted += weight * value;
     group.weight += weight;
@@ -331,15 +330,20 @@ export function measureLoadedImageryDistribution(
     const scale = 2 ** (cellLevel - intersection.z);
     const startX = Math.floor(intersection.x * scale) - binding.tile.x * 2 ** cellsLog2;
     const startY = Math.floor(intersection.y * scale) - binding.tile.y * 2 ** cellsLog2;
+    const cellFraction = fraction / (count * count);
     for (let y = startY; y < startY + count; y++) for (let x = startX; x < startX + count; x++) {
       const index = (y * IMAGERY_TABLE_BLOCK + x) * 4;
-      if (data[index + 3] !== 255) { note(null, null, fraction / (count * count), region); continue; }
+      if (data[index + 3] !== 255) { note(null, null, cellFraction, region); continue; }
       const slot = tableSlot(data, index);
-      note(binding.imagesBySlot.has(slot) ? binding.imagesBySlot.get(slot) : undefined, data[index + 2], fraction / (count * count), region);
+      note(binding.imagesBySlot.get(slot), data[index + 2], cellFraction, region);
     }
   };
   for (const region of regions) {
     if (!(region.screenArea > 0)) continue;
+    // Every cell sampled for this region uses the same projected footprint.
+    const footprint = region.footprintPx;
+    usableFootprint = footprint === Infinity || (Number.isFinite(footprint) && footprint > 0);
+    logarithm = usableFootprint ? Math.log2(normalTargetPx / footprint) : 0;
     let { z, x, y } = region.tile;
     let covering: LoadedImageryBinding | undefined;
     for (;;) {

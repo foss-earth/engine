@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildPageLevels,
   IMAGERY_GUTTER,
@@ -119,6 +119,28 @@ describe("loaded imagery tile distribution", () => {
     const gap = measureLoadedImageryDistribution([region()], [named(0, null, null)]);
     expect(gap).toMatchObject({ status: "measured", tileCount: 0, incomplete: true, samples: [] });
     expect(measureLoadedImageryDistribution([region(0, 0)], [named(0, 8, image)])).toMatchObject({ status: "empty", tileCount: 0 });
+  });
+
+  it("measures a region's footprint once while counting all its table cells", () => {
+    const table = cellTable([
+      { x: 0, y: 0, slot: 7, level: 8 },
+      { x: 1, y: 0, slot: 7, level: 8 },
+      { x: 0, y: 1, slot: 8, level: 9 },
+      { x: 1, y: 1, slot: 8, level: 9 },
+    ]);
+    const logarithm = vi.spyOn(Math, "log2");
+    try {
+      expect(measureLoadedImageryDistribution([region()], [{
+        tile: region().tile, table, directLevel: null,
+        imagesBySlot: new Map([[7, "first"], [8, "second"]]),
+      }])).toMatchObject({
+        tileCount: 2, unknownCount: 0, incomplete: false,
+        samples: [{ value: 0, count: 1 }, { value: 1, count: 1 }],
+      });
+      expect(logarithm).toHaveBeenCalledTimes(1);
+    } finally {
+      logarithm.mockRestore();
+    }
   });
 
   it("is unavailable when a shown page has no image identity", () => {
