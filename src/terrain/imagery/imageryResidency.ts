@@ -230,6 +230,7 @@ export function createImageryResidency<TSignal extends NavigationAbortSignal>(op
   const entries = new Map<string, Entry<TSignal>>();
   const missing = new Map<string, number>();
   let demand = new Map<string, ImageryRequest>();
+  let orderedDemand: ImageryRequest[] | null = null;
   let pinned: ReadonlySet<number> = new Set();
   let revision = 0;
   let missingRevision = 0;
@@ -520,15 +521,33 @@ export function createImageryResidency<TSignal extends NavigationAbortSignal>(op
     return slots;
   }
 
+  const queueOrder = (a: ImageryRequest, b: ImageryRequest): number =>
+    Number(b.coverage) - Number(a.coverage) || b.priority - a.priority || (a.imageKey < b.imageKey ? -1 : 1);
+
+  /**
+   * The demand, most important first. While every priority is a number the
+   * order is total, so the whole demand sorted once orders any part of it as
+   * sorting that part would, and each pump reuses it until the demand changes.
+   */
+  function queueingOrder(skipped: ReadonlySet<string> | null): readonly ImageryRequest[] {
+    if (orderedDemand) return orderedDemand;
+    const all = [...demand.values()];
+    if (!all.some(request => Number.isNaN(request.priority))) return orderedDemand = all.sort(queueOrder);
+    // A NaN priority leaves the order partial: sort only the part wanted, as it stands.
+    return all.filter(request => !skipped?.has(request.imageKey)).sort(queueOrder);
+  }
+
   /** Queues the most important demand not yet loading or resident, within the queue bound. */
   function fillQueue(): void {
-    const ordered = [...demand.values()]
-      .filter(request => !isMissing(request.imageKey))
-      .sort((a, b) => Number(b.coverage) - Number(a.coverage) || b.priority - a.priority || (a.imageKey < b.imageKey ? -1 : 1));
+    // Missing images are asked about in demand order, before anything is queued.
+    let skipped: Set<string> | null = null;
+    for (const request of demand.values()) if (isMissing(request.imageKey)) (skipped ??= new Set()).add(request.imageKey);
+    const ordered = queueingOrder(skipped);
     let queued = 0;
     for (const entry of entries.values()) if (entry.state === "queued") queued += 1;
     overflow = 0;
     for (const request of ordered) {
+      if (skipped?.has(request.imageKey)) continue;
       const entry = entries.get(request.imageKey);
       if (entry) {
         if (entry.state === "failed" && !entry.owned && now() >= entry.retryAt) {
@@ -559,6 +578,7 @@ export function createImageryResidency<TSignal extends NavigationAbortSignal>(op
         if (!existing || existing.priority < request.priority) next.set(request.imageKey, request);
       }
       demand = next;
+      orderedDemand = null;
       const sources = new Set([...next.values()].map(request => request.sourceKey));
       const retiring: [string, Entry<TSignal>][] = [];
       for (const [key, entry] of [...entries]) {

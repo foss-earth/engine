@@ -82,6 +82,24 @@ describe("imagery residency", () => {
     expect(residency.stats().overflow).toBe(0);
   });
 
+  it("orders a demand once, not again on every pump", () => {
+    const { residency, pending } = harness();
+    let reads = 0;
+    const counted = (key: string, priority: number): ImageryRequest =>
+      Object.defineProperty(request(key), "priority", { get: () => { reads += 1; return priority; }, enumerable: true });
+    residency.setDemand(["a", "b", "c", "d"].map((key, index) => counted(key, index)));
+    residency.pump();
+    expect(pending.map(item => item.url)).toEqual(["https://tiles/d", "https://tiles/c", "https://tiles/b", "https://tiles/a"]);
+    // Everything demanded is loading: pumping again has nothing to order.
+    reads = 0;
+    for (let i = 0; i < 5; i++) residency.pump();
+    expect(reads).toBe(0);
+    // A new demand is ordered by its own priorities.
+    residency.setDemand(["e", "f", "g"].map((key, index) => counted(key, index)));
+    residency.pump();
+    expect(pending.slice(4).map(item => item.url)).toEqual(["https://tiles/g", "https://tiles/f", "https://tiles/e"]);
+  });
+
   it("does not start work the staging budget cannot hold", () => {
     const { residency, pending } = harness({ stagingBytes: 256 * 256 * 4 * 2 * 2 });
     residency.setDemand([request("a"), request("b"), request("c")]);
