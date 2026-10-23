@@ -7,7 +7,7 @@ map for that orb and map detail arriving later never moves it. They run in Node 
 never part of a browser bundle.
 
 ```sh
-FOSS_EARTH_GOOGLE_KEY=… foss-earth-prepare-heights --input points.json --output heights.json --cache build/elevation-cache
+GOOGLE_3D_TILES_KEY=… foss-earth-prepare-heights --input points.json --output heights.json --cache build/elevation-cache
 ```
 
 `points.json` is a list of `{ id, longitudeDeg, latitudeDeg }`. Every point gets a height or
@@ -18,8 +18,11 @@ the call fails and writes nothing. The UMN-VR tour wraps this as `npm run prepar
 
 The source is Google Photorealistic 3D Tiles (`scripts/heights/google.mjs`):
 
-- **Key.** `readGoogleKey` takes `FOSS_EARTH_GOOGLE_KEY` from the environment, then from
-  named `.env.local` files, and reads no other variable. The key goes in the
+- **Key.** `readGoogleKey` takes `GOOGLE_3D_TILES_KEY` from the environment, with
+  `FOSS_EARTH_GOOGLE_KEY` as a legacy fallback. If neither is set there, it checks
+  named `.env.local` files in order for the new name, then the legacy name. A new-name
+  file value beats a legacy value in another file; either environment name beats files.
+  It reads no other variables. The key goes in the
   `X-Goog-Api-Key` header, never in a URL; URLs in messages have their `key` and `session`
   removed.
 - **Traversal.** From `v1/3dtiles/root.json`, it follows every tile whose bounding volume

@@ -250,7 +250,7 @@ function withSession(href, parent) {
  * caches in memory only, and a bound on concurrent requests.
  */
 export function createGoogleTilesClient({ apiKey, fetcher = fetch, concurrency = 6, timeoutMs = 30000, retries = 3, rootUrl = GOOGLE_3D_TILES_ROOT } = {}) {
-  if (typeof apiKey !== 'string' || !apiKey.trim()) throw new GoogleUnavailableError('no-key', 'No FOSS_EARTH_GOOGLE_KEY was found.');
+  if (typeof apiKey !== 'string' || !apiKey.trim()) throw new GoogleUnavailableError('no-key', 'No GOOGLE_3D_TILES_KEY was found.');
   let active = 0;
   const waiting = [];
   const json = new Map(), tiles = new Map();

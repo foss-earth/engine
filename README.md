@@ -22,7 +22,7 @@ Root, `/core` and `/imagery` are pure. Everything else is an explicit optional e
 | `/visualization` | Pure source defaults, point math, migrations and horizon culling. |
 | `/visualization-tuners` | Visualization tuner HUD. |
 | `/location-provider` | Location provider and cache. |
-| `/prepare-heights` | Node only, at build time, also as the `foss-earth-prepare-heights` command. Fixed heights above the WGS84 ellipsoid: the top of Google Photorealistic 3D Tiles' finest geometry on the vertical, or USGS 3DEP with GEOID18 where Google can't serve a point, with the reason recorded. Reads `FOSS_EARTH_GOOGLE_KEY`, sends it as a header and keeps no Google responses. |
+| `/prepare-heights` | Node only, at build time, also as the `foss-earth-prepare-heights` command. Fixed heights above the WGS84 ellipsoid: the top of Google Photorealistic 3D Tiles' finest geometry on the vertical, or USGS 3DEP with GEOID18 where Google can't serve a point, with the reason recorded. Reads `GOOGLE_3D_TILES_KEY` (legacy `FOSS_EARTH_GOOGLE_KEY` fallback), sends it as a header and keeps no Google responses. |
 | `/input-mode.css`, `/map.css`, `/map-cache.css`, `/location.css`, `/visualization-tuners.css` | Engine-owned styles. Generic cache-section styles belong to [`@foss-earth/ui`](https://github.com/foss-earth/ui). |
 | `/raster-TS`, `/terrain-TS`, `/ground-TS` | TypeScript reference cores: Terrarium decoding, terrain surface geometry and the ground spatial index. |
 | `/raster-WASM`, `/terrain-WASM`, `/ground-WASM` | Their Rust/WebAssembly twins, loaded only on request in a worker. `/<name>-WASM/wasm` is the binary. |
@@ -32,6 +32,8 @@ Other optional peers: `@foss-earth/renderer`, `@foss-earth/ui`, `@foss-earth/sky
 A displayed geometry coordinate height does not establish a physical terrain datum conversion.
 
 ## Documents
+
+- [Keyboard motion curves and additive forces](docs/keyboard-motion-curves.md): tuning, blending and possible future uses.
 
 - [Public contracts](docs/public-contracts.md) and [host adoption and compatibility](docs/adoption.md).
 - [Visualization and bounded-map contracts](docs/visualization-contracts.md).

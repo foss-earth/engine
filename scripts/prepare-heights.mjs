@@ -17,24 +17,33 @@ export { DEFAULT_MAX_GEOMETRIC_ERROR_METERS, GoogleUnavailableError } from './he
 export const HEIGHT_SAMPLE_FORMAT = 'foss-earth-height-samples';
 export const GOOGLE_PROVIDER = 'google-photorealistic-3d-tiles';
 export const USGS_PROVIDER = 'usgs-3dep-epqs-geoid18';
-const KEY_NAME = 'FOSS_EARTH_GOOGLE_KEY';
+const KEY_NAME = 'GOOGLE_3D_TILES_KEY';
+const LEGACY_KEY_NAME = 'FOSS_EARTH_GOOGLE_KEY';
 const round = value => Math.round(value * 1000) / 1000;
 const ceilCentimetre = value => Math.ceil(value * 100) / 100;
 
 /**
- * The Google key: the environment first, then the named variable from each file in order.
- * Only that variable is read. The result says where it came from, never what it is.
+ * The Google key: environment before files, preferring the canonical name within each source.
+ * A canonical file value beats a legacy value from any file. Only these named variables are
+ * read. The result says where it came from, never what it is.
  */
 export function readGoogleKey({ env = process.env, files = [] } = {}) {
-  if (env[KEY_NAME]?.trim()) return { key: env[KEY_NAME].trim(), origin: 'environment' };
+  for (const name of [KEY_NAME, LEGACY_KEY_NAME]) {
+    if (env[name]?.trim()) return { key: env[name].trim(), origin: 'environment' };
+  }
+  let legacy = null;
   for (const file of files) {
     let text;
     try { text = readFileSync(file, 'utf8'); } catch (error) { if (error.code === 'ENOENT') continue; throw error; }
-    const line = text.split(/\r?\n/).find(row => new RegExp(`^\\s*(export\\s+)?${KEY_NAME}\\s*=`).test(row));
-    const value = line?.slice(line.indexOf('=') + 1).trim().replace(/^(['"])(.*)\1$/, '$2');
-    if (value) return { key: value, origin: file };
+    for (const name of [KEY_NAME, LEGACY_KEY_NAME]) {
+      const match = new RegExp(`^[ \\t]*(?:export[ \\t]+)?${name}[ \\t]*=[ \\t]*(?:"([^"\\r\\n]*)"|'([^'\\r\\n]*)'|([^#\\r\\n]*))`, 'm').exec(text);
+      const value = (match?.[1] ?? match?.[2] ?? match?.[3] ?? '').trim();
+      if (!value) continue;
+      if (name === KEY_NAME) return { key: value, origin: file };
+      legacy ??= { key: value, origin: file };
+    }
   }
-  return { key: null, origin: null };
+  return legacy ?? { key: null, origin: null };
 }
 
 function checkPoints(points) {
@@ -120,7 +129,7 @@ async function main() {
     const name = args[i].slice(2);
     if (name === 'no-fallback') { values.noFallback = true; continue; }
     if (!['input', 'output', 'cache', 'max-geometric-error'].includes(name) || !args[i + 1]) {
-      throw new Error('Usage: foss-earth-prepare-heights --input points.json --output heights.json --cache build/elevation-cache [--max-geometric-error 4] [--no-fallback]\nReads FOSS_EARTH_GOOGLE_KEY from the environment.');
+      throw new Error('Usage: foss-earth-prepare-heights --input points.json --output heights.json --cache build/elevation-cache [--max-geometric-error 4] [--no-fallback]\nReads GOOGLE_3D_TILES_KEY from the environment (FOSS_EARTH_GOOGLE_KEY is a legacy fallback).');
     }
     values[name] = args[++i];
   }

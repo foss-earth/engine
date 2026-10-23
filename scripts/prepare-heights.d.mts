@@ -13,6 +13,7 @@ export interface HeightPreparation {
 }
 export interface HeightRecord extends HeightPoint { height: PreparedHeight; preparation: HeightPreparation }
 export interface UsgsHeightSample { meters: number; uncertaintyMeters: number; resolutionMeters: number; description: string }
+/** Environment before files; GOOGLE_3D_TILES_KEY before legacy FOSS_EARTH_GOOGLE_KEY within each source. */
 export declare function readGoogleKey(options?: { env?: Record<string, string | undefined>; files?: string[] }): { key: string | null; origin: string | null };
 export declare function prepareHeightSamples(points: HeightPoint[], options?: {
   googleKey?: string | null; fetcher?: typeof fetch; cacheDir?: string; refresh?: boolean; fallback?: boolean;

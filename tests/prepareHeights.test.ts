@@ -193,14 +193,23 @@ describe("USGS fallback datum", () => {
 describe("Google key discovery", () => {
   let directory: string | null = null;
   afterEach(() => { if (directory) rmSync(directory, { recursive: true, force: true }); directory = null; });
-  it("prefers the environment, then reads only the named variable from files", () => {
+  it("prefers canonical keys while retaining environment and legacy fallback priority", () => {
     const scratch = fileURLToPath(new URL("../build/", import.meta.url));
     mkdirSync(scratch, { recursive: true });
     directory = mkdtempSync(path.join(scratch, "heights-key-"));
-    const first = path.join(directory, "missing.env"), second = path.join(directory, ".env.local");
-    writeFileSync(second, "OTHER=nope\nexport FOSS_EARTH_GOOGLE_KEY=\"from-file\"\n");
-    expect(readGoogleKey({ env: { FOSS_EARTH_GOOGLE_KEY: "from-env" }, files: [second] })).toEqual({ key: "from-env", origin: "environment" });
-    expect(readGoogleKey({ env: {}, files: [first, second] })).toEqual({ key: "from-file", origin: second });
-    expect(readGoogleKey({ env: {}, files: [first] })).toEqual({ key: null, origin: null });
+    const missing = path.join(directory, "missing.env"), legacy = path.join(directory, "legacy.env"), canonical = path.join(directory, "canonical.env");
+    writeFileSync(legacy, "OTHER=nope\nexport FOSS_EARTH_GOOGLE_KEY=\"legacy-file\"\n");
+    writeFileSync(canonical, "export GOOGLE_3D_TILES_KEY='canonical-file' # local\nFOSS_EARTH_GOOGLE_KEY=ignored\n");
+    const files = [missing, legacy, canonical];
+    expect(readGoogleKey({ env: { GOOGLE_3D_TILES_KEY: " canonical-env ", FOSS_EARTH_GOOGLE_KEY: "legacy-env" }, files })).toEqual({ key: "canonical-env", origin: "environment" });
+    expect(readGoogleKey({ env: { GOOGLE_3D_TILES_KEY: " ", FOSS_EARTH_GOOGLE_KEY: "legacy-env" }, files })).toEqual({ key: "legacy-env", origin: "environment" });
+    expect(readGoogleKey({ env: {}, files })).toEqual({ key: "canonical-file", origin: canonical });
+    expect(readGoogleKey({ env: {}, files: [missing, legacy] })).toEqual({ key: "legacy-file", origin: legacy });
+    writeFileSync(legacy, "GOOGLE_3D_TILES_KEY=first # local\n");
+    expect(readGoogleKey({ env: {}, files })).toEqual({ key: "first", origin: legacy });
+    writeFileSync(legacy, "GOOGLE_3D_TILES_KEY= \nFOSS_EARTH_GOOGLE_KEY='legacy-file'\n");
+    expect(readGoogleKey({ env: {}, files: [legacy] })).toEqual({ key: "legacy-file", origin: legacy });
+    writeFileSync(legacy, "OTHER=not-a-google-key\n");
+    expect(readGoogleKey({ env: {}, files: [missing, legacy] })).toEqual({ key: null, origin: null });
   });
 });
