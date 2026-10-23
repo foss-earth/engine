@@ -10,7 +10,7 @@ export interface GoogleTileResourceTiming {
   durationMs: number;
 }
 
-const SECRET_PARAMS = new Set(["key", "session", "token", "api_key"]);
+const SECRET_PARAMS = new Set(["gkey", "key", "session", "token", "api_key"]);
 
 export function redactTileUrl(url: string): string {
   try {

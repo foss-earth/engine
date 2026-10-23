@@ -64,6 +64,10 @@ export function createEngineMigrations(storage: Pick<SettingsStorage, "getItem">
   function readStorage(key: string): string | null { try { return storage?.getItem(key) ?? null; } catch { return null; } }
   return [
     ...VISUALIZATION_MIGRATIONS,
+    // Adopt credentials stored under a query name; the stable settings id is
+    // independent of that URL spelling. Existing settings always win.
+    ...["gkey", "key", "googleKey"].map(key => ({ key, migrate: (raw: string) =>
+      raw.trim() ? { "map.source.googleKey": raw.trim() } : null })),
     { key: "foss-earth.map-detail.v1", migrate: migrateMapDetail },
     { key: "foss-earth.globeAnchorRotation", migrate: booleanString("input.globeAnchorRotation") },
     { key: "foss-earth.inputMode", migrate: raw => (["mouse", "trackpad", "touch"].includes(raw) ? { "input.mode": raw } : null) },

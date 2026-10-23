@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import { describeGoogleTileFailure, redactTileUrl } from "../src/browser/describeGoogleTileFailure.js";
 
 describe("Google tile failure reports", () => {
-  it("keeps the key out of the logged url", () => {
-    expect(redactTileUrl("https://tile.googleapis.com/v1/3dtiles/root.json?key=secret&session=abc")).toBe(
-      "https://tile.googleapis.com/v1/3dtiles/root.json?key=redacted&session=redacted",
+  it.each(["key", "gkey", "GKEY"])("keeps %s out of the logged url", parameter => {
+    expect(redactTileUrl(`https://tile.googleapis.com/v1/3dtiles/root.json?${parameter}=secret&session=abc`)).toBe(
+      `https://tile.googleapis.com/v1/3dtiles/root.json?${parameter}=redacted&session=redacted`,
     );
   });
 

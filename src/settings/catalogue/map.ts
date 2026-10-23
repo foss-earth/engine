@@ -48,7 +48,7 @@ export const MAP_SOURCE_PARAMETERS: readonly ParameterSpec[] = [
     unit: "none",
     kind: "text",
     default: "",
-    defaultReason: "No key is built in; `?key=` saves one on this device and leaves the address bar.",
+    defaultReason: "No key is built in; `?gkey=` saves one on this device and leaves the address bar.",
     home: { tab: MAP_TAB, section: "source", level: "main" },
     appliesLive: true,
     source: "src/babylon/createTilesRuntime.ts",

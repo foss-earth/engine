@@ -51,7 +51,7 @@ export interface ResolveMapRuntimeConfigOptions {
 }
 
 export function getGoogleApiKeyFromSearchParams(searchParams: Pick<URLSearchParams, "get">): string | null {
-  const key = searchParams.get("key") ?? searchParams.get("googleKey");
+  const key = searchParams.get("gkey") ?? searchParams.get("key") ?? searchParams.get("googleKey");
   if (!key) return null;
   const trimmed = key.trim();
   return trimmed.length > 0 ? trimmed : null;
