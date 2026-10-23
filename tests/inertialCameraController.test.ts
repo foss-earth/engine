@@ -699,3 +699,34 @@ describe("createGlobeInertia: anchors", () => {
     expect(requestRender).toHaveBeenCalledOnce();
   });
 });
+
+describe("additive keyboard forces", () => {
+  const force = (x: number): GlideMotion => ({ pan: { x, y: 0, canvasHeight: 800 }, orbit: { pitch: 0, heading: 0, anchor: null }, zoom: { log: 0, anchor: null } });
+  it("blends a swipe with keyboard velocity and brakes only the keyboard contribution", () => {
+    const target = { panBy: vi.fn(), orbitBy: vi.fn(), zoomBy: vi.fn() };
+    const camera = createInertialCameraController(target, { nowMs: () => 0, decayPerFrame: () => 0.5 });
+    camera.applyNavigationForce!(force(100), 0.02); // keyboard velocity 2 px/frame
+    camera.panBy(10, 0, 800); // simultaneous trackpad impulse
+    camera.update(1000);
+    expect(target.panBy).toHaveBeenLastCalledWith(12, 0, 800);
+    camera.applyNavigationForce!(force(-100), 0.02); // key brakes to zero
+    camera.clearNavigationForce!();
+    camera.update(1000 + 1000 / 60);
+    expect(target.panBy).toHaveBeenLastCalledWith(5, 0, 800); // swipe still glides
+  });
+  it("integrates keyboard speed equally across render rates and preserves it when a mouse drag stops pointer inertia", () => {
+    const distances = [30, 60, 120].map(fps => {
+      const target = { panBy: vi.fn(), orbitBy: vi.fn(), zoomBy: vi.fn() };
+      const camera = createInertialCameraController(target, { nowMs: () => 0 });
+      camera.update(0);
+      camera.applyNavigationForce!(force(100), 0.02);
+      camera.cancelInertial!();
+      for (let i = 1; i <= fps; i++) camera.update(i * 1000 / fps);
+      const distance = target.panBy.mock.calls.reduce((sum, args) => sum + args[0], 0);
+      camera.clearNavigationForce!();
+      expect(camera.isActive()).toBe(false);
+      return distance;
+    });
+    distances.forEach(distance => expect(distance).toBeCloseTo(120, 8));
+  });
+});

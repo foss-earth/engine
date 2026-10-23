@@ -53,6 +53,20 @@ function selection(hits: boolean[] = [true]): PointSelection & { pickAt: Mock<Po
 afterEach(() => { document.body.replaceChildren(); });
 
 describe("attachMouseController: orbit pivot", () => {
+  it("uses the right-drag orbit path for Cmd-left drag", () => {
+    const canvas = createCanvas();
+    const camera = anchoredCamera();
+    const detach = attachMouseController(canvas, camera);
+    canvas.dispatchEvent(pointer("pointerdown", 120, 80, { metaKey: true }));
+    canvas.dispatchEvent(pointer("pointermove", 140, 90, { metaKey: true }));
+    expect(camera.panBy).not.toHaveBeenCalled();
+    expect(camera.holdAnchors).toHaveBeenCalledTimes(1);
+    expect(camera.orbitBy).toHaveBeenCalledWith(expect.closeTo(0.06, 9), expect.closeTo(0.12, 9), expect.any(Object));
+    canvas.dispatchEvent(pointer("pointerup", 140, 90));
+    expect(camera.releaseAnchors).toHaveBeenCalledTimes(1);
+    detach();
+  });
+
   it("picks the pivot where a right press goes down, as a candidate, and holds it once the press is a drag", () => {
     const canvas = createCanvas();
     const camera = anchoredCamera();

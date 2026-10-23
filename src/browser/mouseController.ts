@@ -8,6 +8,7 @@ import { worldViewportHeight } from "./worldViewport.js";
 export interface HeldPress {
   pointerId: number;
   button: number;
+  metaKey?: boolean;
   clientX: number;
   clientY: number;
 }
@@ -29,7 +30,7 @@ const SELECTION_DOUBLE_CLICK_MS = 800;
  * Attach a mouse-button drag handler to the canvas.
  *
  * - Left-button drag  → pan
- * - Right-button drag → orbit (heading + pitch)
+ * - Right-button or Cmd-left drag → orbit (heading + pitch)
  *
  * On pointerdown the event is NOT consumed so that Babylon's picking
  * system can still detect clicks on scene objects.  Once the pointer
@@ -60,6 +61,7 @@ export function attachMouseController(
   // Babylon so picking and sphere-click handlers still fire.
   const rates = () => options.getSettings?.().rates ?? DEFAULT_INPUT_RATES;
   let activeButton: 0 | 2 | null = null;
+  let commandOrbit = false;
   let isDragging = false;
   let anchorPanActive = false;
   let startX = 0;
@@ -158,7 +160,8 @@ export function attachMouseController(
   function beginPress(e: HeldPress): void {
     if (e.button !== 0 && e.button !== 2) return;
     releaseOrbitAnchors();
-    activeButton = e.button as 0 | 2;
+    commandOrbit = e.button === 0 && !!e.metaKey;
+    activeButton = commandOrbit ? 2 : e.button as 0 | 2;
     pressPointerId = e.pointerId;
     isDragging = false;
     anchorPanActive = false;
@@ -166,11 +169,11 @@ export function attachMouseController(
     startY = prevY = e.clientY;
     try { canvas.setPointerCapture(e.pointerId); } catch { /* a held press's pointer may be gone */ }
     // An orbit drag's anchor is resolved now, as the camera is.
-    if (e.button === 2 || (options.isOrbitMode?.() ?? false)) {
+    if (activeButton === 2 || (options.isOrbitMode?.() ?? false)) {
       orbitAnchors = camera.acquireAnchors?.({ family: "mouse", operations: ["orbit"], client: { x: e.clientX, y: e.clientY }, canvas, candidate: true }) ?? null;
     }
 
-    if (shouldUseAnchorPan(e.button) && camera.beginAnchorPan) {
+    if (shouldUseAnchorPan(activeButton) && camera.beginAnchorPan) {
       anchorPanActive = camera.beginAnchorPan({
         clientX: e.clientX,
         clientY: e.clientY,
@@ -239,7 +242,7 @@ export function attachMouseController(
         orbitAnchorsHeld = true;
         camera.holdAnchors?.(orbitAnchors);
       }
-      const sensitivity = options.getSettings?.().sensitivity.mouse.orbit ?? 1;
+      const sensitivity = (options.getSettings?.().sensitivity.mouse.orbit ?? 1) * (commandOrbit ? rates().commandOrbitSensitivity : 1);
       const pitchSign = options.isOrbitMode?.() ? -1 : 1;
       orbitWith(
         camera,

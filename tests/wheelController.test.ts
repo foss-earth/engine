@@ -2,12 +2,12 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { attachWheelController } from "../src/browser/wheelController.js";
-import { DEFAULT_INPUT_SETTINGS, type InputModePreference } from "../src/input/inputSettings.js";
+import { DEFAULT_INPUT_RATES, DEFAULT_INPUT_SETTINGS, type InputModePreference } from "../src/input/inputSettings.js";
 import type { AnchorAcquisition, AnchorChoice, AnchorFamily, AnchorOperation, AnchorRequest, NavigationAnchor } from "../src/input/navigationAnchors.js";
 import { WHEEL_GESTURE_IDLE_MS } from "../src/input/wheelGesture.js";
 
 function createWheelEvent(
-  init: { deltaX?: number; deltaY?: number; deltaMode?: number; ctrlKey?: boolean; shiftKey?: boolean; clientX?: number; clientY?: number },
+  init: { deltaX?: number; deltaY?: number; deltaMode?: number; ctrlKey?: boolean; shiftKey?: boolean; metaKey?: boolean; clientX?: number; clientY?: number },
 ): Event {
   const event = new Event("wheel", { bubbles: true, cancelable: true });
   for (const [key, value] of Object.entries({ deltaX: 0, deltaY: 0, deltaMode: 0, ...init })) {
@@ -32,6 +32,37 @@ afterEach(() => {
 });
 
 describe("attachWheelController", () => {
+  it("can restore the original vertical Cmd-swipe direction without changing heading", () => {
+    const canvas = createCanvas();
+    const camera = { panBy: vi.fn(), orbitBy: vi.fn(), zoomBy: vi.fn() };
+    const cleanup = attachWheelController(canvas, camera, { nowMs: () => 1000, isSafariWithGestures: false,
+      getSettings: () => ({ ...DEFAULT_INPUT_SETTINGS, rates: { ...DEFAULT_INPUT_RATES, commandSwipePitchSign: 1 } }) });
+    canvas.dispatchEvent(createWheelEvent({ deltaX: 10, deltaY: 20, metaKey: true }));
+    expect(camera.orbitBy).toHaveBeenCalledWith(expect.closeTo(0.06, 9), expect.closeTo(-0.03, 9));
+    cleanup();
+  });
+
+  it("orbits Cmd swipes at 0.2 sensitivity, preserves momentum, then resumes pan", () => {
+    let now = 1000;
+    const canvas = createCanvas();
+    const camera = { panBy: vi.fn(), orbitBy: vi.fn(), zoomBy: vi.fn() };
+    const cleanup = attachWheelController(canvas, camera, { nowMs: () => now, isSafariWithGestures: false });
+    canvas.dispatchEvent(createWheelEvent({ deltaX: 10, deltaY: 20, metaKey: true }));
+    expect(camera.orbitBy).toHaveBeenLastCalledWith(expect.closeTo(-0.06, 9), expect.closeTo(-0.03, 9));
+    expect(camera.panBy).not.toHaveBeenCalled();
+    expect(camera.zoomBy).not.toHaveBeenCalled();
+    now += 20;
+    canvas.dispatchEvent(createWheelEvent({ deltaX: 5, deltaY: 10 }));
+    expect(camera.orbitBy).toHaveBeenCalledTimes(2);
+    now += WHEEL_GESTURE_IDLE_MS + 1;
+    canvas.dispatchEvent(createWheelEvent({ deltaX: 5.5, deltaY: 10.5 }));
+    expect(camera.panBy).toHaveBeenCalledTimes(1);
+    now += WHEEL_GESTURE_IDLE_MS + 1;
+    canvas.dispatchEvent(createWheelEvent({ deltaY: 1.5, metaKey: true, ctrlKey: true }));
+    expect(camera.zoomBy).toHaveBeenCalledTimes(1);
+    cleanup();
+  });
+
   it("pans the first fractional fine pixel wheel event after an idle pause", () => {
     vi.spyOn(performance, "now").mockReturnValue(1_000);
     const canvas = createCanvas();

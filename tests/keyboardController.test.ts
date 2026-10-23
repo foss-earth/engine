@@ -1,0 +1,72 @@
+// @vitest-environment jsdom
+import { expect, it, vi } from "vitest";
+import { createInertialCameraController } from "../src/input/inertialCameraController.js";
+import { DEFAULT_INPUT_RATES } from "../src/input/inputRates.js";
+import { attachKeyboardController } from "../src/browser/keyboardController.js";
+
+it("holds navigation keys, preserves typing and shortcuts, and clears on blur and disposal", () => {
+  let callback: FrameRequestCallback = () => {};
+  vi.spyOn(window, "requestAnimationFrame").mockImplementation(fn => { callback = fn; return 1; });
+  vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
+  const canvas = document.createElement("canvas");
+  Object.defineProperty(canvas, "clientHeight", { value: 800 });
+  const camera = { panBy: vi.fn(), orbitBy: vi.fn(), zoomBy: vi.fn() };
+  const detach = attachKeyboardController(canvas, camera, window);
+  const key = (type: string, code: string, extra = {}) => document.dispatchEvent(new KeyboardEvent(type, { code, cancelable: true, ...extra }));
+  key("keydown", "KeyW"); callback(0);
+  expect(camera.panBy).toHaveBeenCalledWith(0, expect.any(Number), 800);
+  expect(camera.panBy.mock.calls[0][1]).toBeLessThan(0);
+  key("keydown", "ShiftLeft", { shiftKey: true });
+  key("keydown", "KeyE"); key("keydown", "KeyR"); callback(16);
+  expect(camera.zoomBy).toHaveBeenCalledWith(expect.any(Number));
+  expect(camera.zoomBy.mock.calls[0][0]).toBeLessThan(1);
+  expect(camera.orbitBy).toHaveBeenCalledWith(expect.any(Number), expect.any(Number));
+  expect(camera.orbitBy.mock.calls[0].every(n => n > 0)).toBe(true);
+  window.dispatchEvent(new Event("blur"));
+  camera.panBy.mockClear(); camera.orbitBy.mockClear(); callback(32);
+  expect(camera.panBy).not.toHaveBeenCalled(); expect(camera.orbitBy).not.toHaveBeenCalled();
+  expect(key("keydown", "KeyW", { metaKey: true })).toBe(true);
+  const input = document.createElement("input"); document.body.append(input); input.focus();
+  expect(key("keydown", "KeyW")).toBe(true);
+  input.remove(); detach();
+  expect(key("keydown", "KeyW")).toBe(true);
+  vi.restoreAllMocks();
+});
+
+
+it("uses Shift/Control zoom, gates T/G behind opt-in, and keeps keyboard force while swiping with Cmd", () => {
+  let callback: FrameRequestCallback = () => {};
+  const raf = vi.spyOn(window, "requestAnimationFrame").mockImplementation(fn => { callback = fn; return 1; });
+  vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
+  const canvas = document.createElement("canvas");
+  Object.defineProperty(canvas, "clientHeight", { value: 800 });
+  const target = { panBy: vi.fn(), orbitBy: vi.fn(), zoomBy: vi.fn() };
+  const camera = createInertialCameraController(target, { nowMs: () => 0 });
+  const rates = { ...DEFAULT_INPUT_RATES, keyboardAccelerationMs: 0, keyboardSlowdownMs: 100 };
+  const detach = attachKeyboardController(canvas, camera, window, () => rates);
+  const key = (type: string, code: string, extra = {}) => document.dispatchEvent(new KeyboardEvent(type, { code, cancelable: true, ...extra }));
+  expect(key("keydown", "KeyT")).toBe(true);
+  expect(raf).not.toHaveBeenCalled();
+  key("keydown", "ShiftLeft", { shiftKey: true }); callback(0);
+  expect(camera.motion().zoom.log).toBeLessThan(0);
+  key("keyup", "ShiftLeft"); callback(100);
+  key("keydown", "ControlLeft", { ctrlKey: true }); callback(120);
+  expect(camera.motion().zoom.log).toBeGreaterThan(0);
+  key("keyup", "ControlLeft"); callback(220); callback(270);
+  rates.keyboardTGZoomEnabled = 1;
+  key("keydown", "KeyT"); callback(300);
+  expect(camera.motion().zoom.log).toBeLessThan(0);
+  key("keyup", "KeyT");
+  key("keydown", "KeyW"); callback(320);
+  const before = camera.motion().pan.y;
+  key("keydown", "MetaLeft", { metaKey: true });
+  canvas.dispatchEvent(new WheelEvent("wheel", { deltaY: 10, metaKey: true }));
+  callback(340);
+  expect(camera.motion().pan.y).toBeCloseTo(before);
+  expect(camera.motion().pan.y).toBeLessThan(0);
+  key("keyup", "KeyW"); callback(390);
+  expect(Math.abs(camera.motion().pan.y)).toBeLessThan(Math.abs(before));
+  detach();
+  expect(camera.motion().pan.y).toBe(0);
+  vi.restoreAllMocks();
+});

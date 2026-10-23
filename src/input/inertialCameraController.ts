@@ -53,6 +53,10 @@ export interface GlideAnchors {
 }
 
 export interface CameraInputTarget<TCanvas = unknown> {
+  /** Integrate an additive keyboard force (change in nominal-frame velocity per second). Keyboard braking never removes pointer momentum. */
+  applyNavigationForce?(force: GlideMotion, dtSeconds: number): void;
+  /** Remove only the keyboard contribution on focus loss, disposal or completion. */
+  clearNavigationForce?(): void;
   panBy(screenDxPx: number, screenDyPx: number, canvasHeight: number): void;
   /**
    * Turn and tilt the view about the compass. An anchor rides with the gesture;
@@ -192,6 +196,8 @@ export function createInertialCameraController<TCanvas = unknown>(target: Camera
   let zoomArmed = false;
   let panArmed = false;
   let recentOrbit: { t: number; pitch: number; heading: number }[] = [];
+  const keyboardVelocity = { pan: { x: 0, y: 0, canvasHeight: 1 }, orbit: { pitch: 0, heading: 0, anchor: null as NavigationAnchor | null }, zoom: { log: 0, anchor: null as NavigationAnchor | null } };
+  let keyboardMotion: typeof keyboardVelocity | null = null;
   let recentZoom: { t: number; log: number }[] = [];
   let recentPan: { t: number; x: number; y: number }[] = [];
   let lastOrbit: { t: number; pitch: number; heading: number } | null = null;
@@ -212,6 +218,7 @@ export function createInertialCameraController<TCanvas = unknown>(target: Camera
   const zoomMoving = (): boolean => Math.abs(zoomLogVelocity) > STOP_EPSILON_ZOOM_LOG;
 
   function cancel(): void {
+    keyboardMotion = null;
     panVelocityX = 0;
     panVelocityY = 0;
     orbitVelocityPitch = 0;
@@ -330,9 +337,9 @@ export function createInertialCameraController<TCanvas = unknown>(target: Camera
 
   function motion(): GlideMotion {
     return {
-      pan: { x: panVelocityX, y: panVelocityY, canvasHeight: panCanvasHeight },
-      orbit: { pitch: orbitVelocityPitch, heading: orbitVelocityHeading, anchor: orbitAnchor },
-      zoom: { log: zoomLogVelocity, anchor: zoomAnchor },
+      pan: { x: panVelocityX + (keyboardMotion?.pan.x ?? 0), y: panVelocityY + (keyboardMotion?.pan.y ?? 0), canvasHeight: keyboardMotion?.pan.canvasHeight ?? panCanvasHeight },
+      orbit: { pitch: orbitVelocityPitch + (keyboardMotion?.orbit.pitch ?? 0), heading: orbitVelocityHeading + (keyboardMotion?.orbit.heading ?? 0), anchor: keyboardMotion && (keyboardMotion.orbit.pitch || keyboardMotion.orbit.heading) ? keyboardMotion.orbit.anchor : orbitAnchor },
+      zoom: { log: zoomLogVelocity + (keyboardMotion?.zoom.log ?? 0), anchor: keyboardMotion?.zoom.log ? keyboardMotion.zoom.anchor : zoomAnchor },
     };
   }
 
@@ -346,7 +353,7 @@ export function createInertialCameraController<TCanvas = unknown>(target: Camera
     const orbitChanges = !sameAnchorPoint(orbitAnchor, next.orbit);
     const zoomChanges = !sameAnchorPoint(zoomAnchor, next.zoom);
     if ((orbitChanges || zoomChanges) && (panMoving() || orbitMoving() || zoomMoving())) {
-      const rebased = target.rebaseMotion?.(motion(), next);
+      const rebased = target.rebaseMotion?.({ pan: { x: panVelocityX, y: panVelocityY, canvasHeight: panCanvasHeight }, orbit: { pitch: orbitVelocityPitch, heading: orbitVelocityHeading, anchor: orbitAnchor }, zoom: { log: zoomLogVelocity, anchor: zoomAnchor } }, next);
       if (rebased) {
         panCanvasHeight = Math.max(1, rebased.pan.canvasHeight);
         panVelocityX = clamp(rebased.pan.x, -MAX_PAN_DELTA_PER_FRAME_PX, MAX_PAN_DELTA_PER_FRAME_PX);
@@ -410,28 +417,53 @@ export function createInertialCameraController<TCanvas = unknown>(target: Camera
     );
   }
 
+  function applyNavigationForce(force: GlideMotion, dtSeconds: number): void {
+    if (!Number.isFinite(dtSeconds) || dtSeconds <= 0) return;
+    const dt = Math.min(0.1, dtSeconds);
+    if (!keyboardMotion) {
+      keyboardVelocity.pan.x = keyboardVelocity.pan.y = keyboardVelocity.orbit.pitch = keyboardVelocity.orbit.heading = keyboardVelocity.zoom.log = 0;
+      keyboardMotion = keyboardVelocity;
+    }
+    keyboardMotion.pan.x += force.pan.x * dt; keyboardMotion.pan.y += force.pan.y * dt;
+    keyboardMotion.pan.canvasHeight = force.pan.canvasHeight;
+    keyboardMotion.orbit.pitch += force.orbit.pitch * dt; keyboardMotion.orbit.heading += force.orbit.heading * dt;
+    keyboardMotion.orbit.anchor = force.orbit.anchor;
+    keyboardMotion.zoom.log += force.zoom.log * dt; keyboardMotion.zoom.anchor = force.zoom.anchor;
+  }
+
   function update(nowMs = options.nowMs()): void {
     const deltaMs = lastUpdateMs === null ? FRAME_MS : Math.max(0, Math.min(100, nowMs - lastUpdateMs));
     lastUpdateMs = nowMs;
     feedRelease(nowMs, deltaMs || FRAME_MS);
+    const step = deltaMs / FRAME_MS;
+    // Force-integrated keyboard velocity and pointer impulses add before the camera moves.
+    // The keyboard's own braking force supplies its slowdown; pointer momentum keeps its glide.
+    const key = keyboardMotion;
+    const px = clamp(panVelocityX + (key?.pan.x ?? 0) * step, -MAX_PAN_DELTA_PER_FRAME_PX, MAX_PAN_DELTA_PER_FRAME_PX);
+    const py = clamp(panVelocityY + (key?.pan.y ?? 0) * step, -MAX_PAN_DELTA_PER_FRAME_PX, MAX_PAN_DELTA_PER_FRAME_PX);
+    const pitch = clamp(orbitVelocityPitch + (key?.orbit.pitch ?? 0) * step, -MAX_ORBIT_DELTA_PER_FRAME_DEG, MAX_ORBIT_DELTA_PER_FRAME_DEG);
+    const heading = clamp(orbitVelocityHeading + (key?.orbit.heading ?? 0) * step, -MAX_ORBIT_DELTA_PER_FRAME_DEG, MAX_ORBIT_DELTA_PER_FRAME_DEG);
+    const zoomLog = clamp(zoomLogVelocity + (key?.zoom.log ?? 0) * step, -MAX_ZOOM_LOG_DELTA_PER_FRAME, MAX_ZOOM_LOG_DELTA_PER_FRAME);
+    const turnAnchor = key && (key.orbit.pitch || key.orbit.heading) ? key.orbit.anchor : orbitAnchor;
+    const scaleAnchor = key?.zoom.log ? key.zoom.anchor : zoomAnchor;
 
     // Pan, then orbit, then zoom, once a frame.
-    if (panMoving()) {
-      target.panBy(panVelocityX, panVelocityY, panCanvasHeight);
+    if ((key && (key.pan.x || key.pan.y)) || Math.abs(px) > STOP_EPSILON_PX || Math.abs(py) > STOP_EPSILON_PX) {
+      target.panBy(px, py, key && (key.pan.x || key.pan.y) ? key.pan.canvasHeight : panCanvasHeight);
     }
 
-    const orbiting = orbitMoving();
-    const zooming = zoomMoving();
-    if (orbiting && zooming && orbitAnchor?.point && sameAnchorPoint(orbitAnchor, zoomAnchor) && target.orbitZoomBy) {
+    const orbiting = !!(key && (key.orbit.pitch || key.orbit.heading)) || Math.abs(pitch) > STOP_EPSILON_DEG || Math.abs(heading) > STOP_EPSILON_DEG;
+    const zooming = !!key?.zoom.log || Math.abs(zoomLog) > STOP_EPSILON_ZOOM_LOG;
+    if (orbiting && zooming && turnAnchor?.point && sameAnchorPoint(turnAnchor, scaleAnchor) && target.orbitZoomBy) {
       // One point for both: one step keeps it where it is.
-      if (blocked(target.orbitZoomBy(orbitVelocityPitch, orbitVelocityHeading, Math.exp(zoomLogVelocity), orbitAnchor))) {
+      if (blocked(target.orbitZoomBy(pitch, heading, Math.exp(zoomLog), turnAnchor))) {
         orbitVelocityPitch = 0; orbitVelocityHeading = 0; zoomLogVelocity = 0;
       }
     } else {
-      if (orbiting && blocked(orbitWith(target, orbitVelocityPitch, orbitVelocityHeading, orbitAnchor))) {
+      if (orbiting && blocked(orbitWith(target, pitch, heading, turnAnchor))) {
         orbitVelocityPitch = 0; orbitVelocityHeading = 0;
       }
-      if (zooming && blocked(zoomWith(target, Math.exp(zoomLogVelocity), zoomAnchor))) {
+      if (zooming && blocked(zoomWith(target, Math.exp(zoomLog), scaleAnchor))) {
         zoomLogVelocity = 0;
       }
     }
@@ -450,21 +482,23 @@ export function createInertialCameraController<TCanvas = unknown>(target: Camera
   }
 
   function isActive(): boolean {
-    return panMoving() || orbitMoving() || zoomMoving() || orbitTail !== null || zoomTail !== null || panTail !== null || zoomArmed;
+    return (keyboardMotion !== null && (Math.abs(keyboardMotion.pan.x) > 1e-10 || Math.abs(keyboardMotion.pan.y) > 1e-10 || Math.abs(keyboardMotion.orbit.pitch) > 1e-10 || Math.abs(keyboardMotion.orbit.heading) > 1e-10 || Math.abs(keyboardMotion.zoom.log) > 1e-10)) || panMoving() || orbitMoving() || zoomMoving() || orbitTail !== null || zoomTail !== null || panTail !== null || zoomArmed;
   }
 
   return {
-    panBy, orbitBy, zoomBy, update, cancel, isActive, motion, armReleaseMomentum, releaseMomentum,
+    panBy, orbitBy, zoomBy, applyNavigationForce, clearNavigationForce: () => { keyboardMotion = null; }, update, cancel,
+    cancelInertial() { const key = keyboardMotion; cancel(); keyboardMotion = key; }, isActive, motion, armReleaseMomentum, releaseMomentum,
     anchors: () => {
       const now = options.nowMs();
-      const zoom = zoomMoving() ? zoomAnchor : null;
+      const zoom = keyboardMotion?.zoom.log ? keyboardMotion.zoom.anchor : zoomMoving() ? zoomAnchor : null;
+      const keyOrbit = keyboardMotion && (keyboardMotion.orbit.pitch || keyboardMotion.orbit.heading);
       // Armed while a pinch is still in the fingers. A wheel zoom stays live for
       // the gesture's own idle, and a tail means the fingers have already left.
       const zoomHeld = zoom !== null && (zoomArmed || (zoomTail === null && lastZoom !== null && now - lastZoom.t <= WHEEL_GESTURE_IDLE_MS));
       return {
-        orbit: orbitMoving() ? orbitAnchor : null, zoom, ...(zoomHeld ? { zoomHeld: true } : {}),
-        ...(orbitMoving() && !orbitAnchor?.point
-          ? { compass: orbitHeld() ? 1 : orbitFade } : {}),
+        orbit: keyOrbit ? keyboardMotion!.orbit.anchor : orbitMoving() ? orbitAnchor : null, zoom, ...(zoomHeld ? { zoomHeld: true } : {}),
+        ...((keyOrbit || orbitMoving()) && !(keyOrbit ? keyboardMotion!.orbit.anchor : orbitAnchor)?.point
+          ? { compass: keyOrbit || orbitHeld() ? 1 : orbitFade } : {}),
       };
     },
     rebaseTo: switchAnchors,

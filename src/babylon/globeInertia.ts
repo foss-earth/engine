@@ -80,7 +80,7 @@ export function createGlobeInertia(controller: CameraController, ports: GlobeIne
   const syncUnified = (): void => {
     const on = ports.unified?.() ?? false;
     if (on === unifiedOn) return;
-    base.cancel();
+    base.cancelInertial?.();
     grabGlide = null;
     grabGlideSteppedMs = null;
     endTwistGlide();
@@ -198,6 +198,14 @@ export function createGlobeInertia(controller: CameraController, ports: GlobeIne
     }
   };
   return {
+    applyNavigationForce(force, dt) {
+      // Do not cancel pointer glides or grabs: simultaneous devices supply additive force.
+      const orbitAnchor = current(force.orbit.anchor), zoomAnchor = current(force.zoom.anchor);
+      base.applyNavigationForce?.(orbitAnchor === force.orbit.anchor && zoomAnchor === force.zoom.anchor ? force
+        : { ...force, orbit: { ...force.orbit, anchor: orbitAnchor }, zoom: { ...force.zoom, anchor: zoomAnchor } }, dt);
+      ports.renderer.requestRender();
+    },
+    clearNavigationForce() { base.clearNavigationForce?.(); ports.renderer.requestRender(); },
     panBy(dx, dy, height) {
       endRememberedGrab();
       foldGrabGlide();
@@ -281,7 +289,7 @@ export function createGlobeInertia(controller: CameraController, ports: GlobeIne
       // The frame the pan glide comes to rest reports no grabbed point, as a zoom or turn at rest reports no anchor.
       if (grabbed && !controller.isAnchorPanActive() && !grabGlide && !twistGlide && !panGliding()) grabbed = null;
     },
-    cancelInertial() { base.cancel(); grabGlide = null; grabGlideSteppedMs = null; endTwistGlide(); endRememberedGrab(); },
+    cancelInertial() { base.cancelInertial?.(); grabGlide = null; grabGlideSteppedMs = null; endTwistGlide(); endRememberedGrab(); },
     cancel() { base.cancel(); controller.cancelAnchorPan(); grabSteppedMs = null; grabGlide = null; grabGlideSteppedMs = null; endTwistGlide(); grabbed = null; },
     isActive: () => base.isActive() || controller.isAnchorPanMoving() || grabGlide !== null || twistGlide !== null,
     // The point stays for the glide. panHeld is the finger: once it is up, the marker is only showing where the grab was.

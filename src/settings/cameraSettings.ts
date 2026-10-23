@@ -35,7 +35,10 @@ export function createCameraSettings(settings: Pick<SettingsRegistry, "get">) {
     inputRates(): InputRates {
       const rates = { ...DEFAULT_INPUT_RATES };
       for (const [field, id] of Object.entries(INPUT_RATE_IDS) as Array<[keyof InputRates, string]>) {
-        const value = settings.get(id); if (typeof value === "number") rates[field] = value;
+        const value = settings.get(id);
+        if (field === "commandSwipePitchSign" && typeof value === "boolean") rates[field] = value ? -1 : 1;
+        else if (field === "keyboardTGZoomEnabled" && typeof value === "boolean") rates[field] = value ? 1 : 0;
+        else if (typeof value === "number") rates[field] = value;
       }
       return rates;
     },

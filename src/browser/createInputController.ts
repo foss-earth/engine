@@ -1,4 +1,5 @@
 import type { CameraInputTarget } from "../input/inertialCameraController.js";
+import { attachKeyboardController } from "./keyboardController.js";
 import { attachWheelController, watchWheelGestures } from "./wheelController.js";
 import { attachSafariGestures, isSafariGestureSupported } from "./safariGestures.js";
 import { attachTouchController, type HeldTouch } from "./touchController.js";
@@ -131,6 +132,7 @@ export function createInputController(
   const attachControllers = (handback?: InputHandback): (() => void) => {
     const keepWheel = handback?.keepWheelSince !== undefined && wheels.gestureStartMs() >= handback.keepWheelSince;
     const detachers = [
+      attachKeyboardController(canvas, camera, options.realm.window, () => settings.rates ?? DEFAULT_INPUT_RATES),
       attachWheelController(canvas, camera, { nowMs: options.realm.nowMs, isSafariWithGestures: hasSafariGestures, isOrbitMode: options.isOrbitMode, getSettings: () => settings, ...(keepWheel ? {} : { precedingWheelMs: wheels.lastEventMs() }) }),
       hasSafariGestures ? attachSafariGestures(canvas, camera, { getSettings: () => settings }) : (): void => undefined,
       attachTouchController(canvas, camera, { attachTouchDebugOverlay: options.attachTouchDebugOverlay, isOrbitMode: options.isOrbitMode, getSettings: () => settings, heldTouches: handback?.touches ?? null }),

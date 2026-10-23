@@ -1,10 +1,21 @@
-// A leaf module: the settings catalogue reads these defaults, so it imports nothing.
+import { DEFAULT_NAVIGATION_SPEED_CURVE } from "./navigationSpeedCurve.js";
 
 /**
  * The rates each device moves the camera at, at sensitivity 1: `input.mouse.*`,
  * `input.wheel.*`, `input.trackpad.*` and `input.touch.*`. Sensitivities multiply them.
  */
 export interface InputRates {
+  keyboardTGZoomEnabled: number;
+  commandSwipePitchSign: number;
+  keyboardAccelerationMs: number;
+  keyboardAccelerationPower: number;
+  keyboardSlowdownMs: number;
+  keyboardSlowdownPower: number;
+  keyboardPanSensitivity: number;
+  keyboardHeadingSensitivity: number;
+  keyboardPitchSensitivity: number;
+  keyboardZoomSensitivity: number;
+  commandOrbitSensitivity: number;
   /** Degrees of orbit per pixel of right-button drag. */
   mouseOrbitDegPerPx: number;
   /** Pan per pixel of left-button drag when the globe is not grabbed, as a multiple of the drag. */
@@ -33,6 +44,17 @@ export interface InputRates {
 
 /** The rates the controllers were tuned at, and the parameters' defaults. */
 export const DEFAULT_INPUT_RATES: InputRates = Object.freeze({
+  keyboardTGZoomEnabled: 0,
+  commandSwipePitchSign: -1,
+  keyboardAccelerationMs: DEFAULT_NAVIGATION_SPEED_CURVE.accelerationMs,
+  keyboardAccelerationPower: DEFAULT_NAVIGATION_SPEED_CURVE.accelerationPower,
+  keyboardSlowdownMs: DEFAULT_NAVIGATION_SPEED_CURVE.slowdownMs,
+  keyboardSlowdownPower: DEFAULT_NAVIGATION_SPEED_CURVE.slowdownPower,
+  keyboardPanSensitivity: 0.2,
+  keyboardHeadingSensitivity: 0.2,
+  keyboardPitchSensitivity: 0.2,
+  keyboardZoomSensitivity: 0.2,
+  commandOrbitSensitivity: 0.2,
   mouseOrbitDegPerPx: 0.03,
   // Mouse pan, trackpad pan and Safari's gestures shared this base before they were parameters.
   mousePanRate: 0.1,

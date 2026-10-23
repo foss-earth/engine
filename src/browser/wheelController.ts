@@ -103,11 +103,17 @@ export function attachWheelController(
     return orbitAnchor.anchor;
   }
 
+  let commandOrbit = false;
+
   function onWheel(e: WheelEvent): void {
     e.preventDefault();
     // Prevent Babylon's own wheel/zoom handler from firing on the same event.
     e.stopImmediatePropagation();
-    const { mode, begins } = read(e);
+    const reading = read(e);
+    const { begins } = reading;
+    // Keep the swipe and its momentum in the same mode after Cmd is released.
+    if (begins) commandOrbit = !!e.metaKey && !e.ctrlKey;
+    const mode = commandOrbit ? "orbit" : reading.mode;
     if (begins) {
       zoomAnchor = null;
       orbitAnchor = null;
@@ -129,8 +135,8 @@ export function attachWheelController(
         : settings?.sensitivity.trackpad.orbit ?? 1;
       // POI orbit mode maps trackpad swipe to orbit; invert pitch so swipe-up
       // tilts the view upward (matches pan drag direction users expect).
-      const pitchSign = options.isOrbitMode?.() ? -1 : 1;
-      const rate = rates().wheelOrbitDegPerPx;
+      const pitchSign = (options.isOrbitMode?.() ? -1 : 1) * (commandOrbit ? rates().commandSwipePitchSign : 1);
+      const rate = rates().wheelOrbitDegPerPx * (commandOrbit ? rates().commandOrbitSensitivity : 1);
       const pitchDeltaDeg = pitchSign * e.deltaY * rate * sensitivity;
       const headingDeltaDeg = -e.deltaX * rate * sensitivity;
       // In mouse mode a wheel that orbits is a mouse's; otherwise a trackpad's.
