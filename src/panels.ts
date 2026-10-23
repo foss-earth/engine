@@ -2,6 +2,7 @@ export * from "./map/mapDetailPanel.js";
 export * from "./map/mapDetailSlider.js";
 export * from "./map/mapCacheSection.js";
 export * from "./map/mapSourcePanel.js";
+export * from "./map/overviewMap.js";
 export * from "./panels/inputModeHud.js";
 export * from "./panels/controlsPanel.js";
 export * from "./panels/navigationAnchorPinSection.js";

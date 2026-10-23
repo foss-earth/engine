@@ -175,7 +175,7 @@ export function createMapSourceHud(container: HTMLElement, options: MapSourceHud
     const shortName = current.wordmark?.label ?? current.shortLabel ?? current.name;
     setMapSourceLabel(provider, shortName);
     warning.hidden = !status.lastError;
-    provider.setAttribute("aria-label", `Basemap: ${name}. Show or hide the Map tab`);
+    provider.setAttribute("aria-label", `Basemap: ${name}. Show or hide the Basemap tab`);
     provider.title = `${name}. Click to show or hide the Map tab.`;
     wordmark.hidden = current.wordmark === null;
     if (current.wordmark) {

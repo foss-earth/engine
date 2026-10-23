@@ -49,11 +49,11 @@ describe("the map source HUD", () => {
     expect(label.nextElementSibling).toBe(warning);
     // The sign is not read out; the button's name says it in words.
     expect(warning.getAttribute("aria-hidden")).toBe("true");
-    expect(provider.getAttribute("aria-label")).toBe("Basemap: USGS Imagery Topo warning. Show or hide the Map tab");
+    expect(provider.getAttribute("aria-label")).toBe("Basemap: USGS Imagery Topo warning. Show or hide the Basemap tab");
 
     hud.update(status(null));
     expect(warning.hidden).toBe(true);
-    expect(provider.getAttribute("aria-label")).toBe("Basemap: USGS Imagery Topo. Show or hide the Map tab");
+    expect(provider.getAttribute("aria-label")).toBe("Basemap: USGS Imagery Topo. Show or hide the Basemap tab");
     hud.destroy();
   });
 
@@ -64,7 +64,7 @@ describe("the map source HUD", () => {
     expect(label.textContent).toBe("3D Tiles");
     expect(logo.hidden).toBe(false);
     expect(logo.getAttribute("src")).toContain("4285F4");
-    expect(provider.getAttribute("aria-label")).toBe("Basemap: Google 3D Tiles. Show or hide the Map tab");
+    expect(provider.getAttribute("aria-label")).toBe("Basemap: Google 3D Tiles. Show or hide the Basemap tab");
     expect(provider.textContent).not.toContain("Google");
     hud.destroy();
   });

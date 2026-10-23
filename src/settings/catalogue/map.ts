@@ -350,3 +350,49 @@ export const MAP_DETAIL_PARAMETERS: readonly ParameterSpec[] = [
     source: "src/terrain/imagery/imagerySelector.ts",
   },
 ];
+
+/** The flat Map tab's provider. Separate from the basemap the globe is draped with. */
+export const OVERVIEW_PROVIDER_ID = "map.overview.provider";
+export const OVERVIEW_PROVIDER_CURRENT = "current";
+export const OVERVIEW_PROVIDER_CHARTS = "aeronautical";
+
+/** Sphere drapes the same tiles on a globe. Mercator is the flat map. */
+export const OVERVIEW_PROJECTION_ID = "map.overview.projection";
+export const OVERVIEW_PROJECTION_SPHERE = "sphere";
+export const OVERVIEW_PROJECTION_MERCATOR = "mercator";
+
+export const OVERVIEW_MAP_PARAMETERS: readonly ParameterSpec[] = [
+  {
+    id: OVERVIEW_PROVIDER_ID,
+    label: "Overview map",
+    description: "The flat map in the Map tab: the current basemap from above, or another provider.",
+    unit: "none",
+    kind: "choice",
+    choices: [
+      { id: OVERVIEW_PROVIDER_CURRENT, label: "Current basemap" },
+      { id: OVERVIEW_PROVIDER_CHARTS, label: "Aeronautical charts" },
+      ...RASTER_BASE_MAP_SOURCES.map(source => ({ id: source.id, label: source.label })),
+    ],
+    default: OVERVIEW_PROVIDER_CHARTS,
+    defaultReason: "The Map tab opens on aeronautical charts. The globe keeps its own basemap.",
+    home: { tab: "overview", section: "source", level: "main" },
+    appliesLive: true,
+    source: "src/map/overviewMap.ts",
+  },
+  {
+    id: OVERVIEW_PROJECTION_ID,
+    label: "Map shape",
+    description: "The Map tab draws a globe by default, draping the same tiles a flat map would. Aeronautical charts are published as flat tiles, so the sphere shows those tiles on the globe.",
+    unit: "none",
+    kind: "choice",
+    choices: [
+      { id: OVERVIEW_PROJECTION_SPHERE, label: "Sphere" },
+      { id: OVERVIEW_PROJECTION_MERCATOR, label: "2D" },
+    ],
+    default: OVERVIEW_PROJECTION_SPHERE,
+    defaultReason: "The Map tab opens on a globe. The same chart tiles are draped on it; 2D is the flat map.",
+    home: { tab: "overview", section: "source", level: "main" },
+    appliesLive: true,
+    source: "src/map/overviewMap.ts",
+  },
+];

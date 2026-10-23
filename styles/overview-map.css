@@ -1,0 +1,247 @@
+/* The map fills its tab. The provider name sits on the map, like the globe's basemap chip. */
+.foss-earth-dock-panel-body:has(.overview-map) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.foss-earth-element-tab:has(.overview-map) {
+  position: relative;
+  flex: 1 1 auto;
+  height: 100%;
+  min-height: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+.overview-map {
+  position: absolute;
+  inset: 0;
+  min-height: 0;
+  height: auto;
+  color: inherit;
+}
+
+.overview-map__view {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background: #d5deea;
+}
+
+.overview-map__view canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: grab;
+  touch-action: none;
+}
+
+.overview-map__note {
+  position: absolute;
+  top: 12px;
+  right: 42px;
+  left: 12px;
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.86);
+  color: #f8fafc;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.overview-map__chip {
+  position: absolute;
+  right: 6px;
+  bottom: 4px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: stretch;
+  max-width: calc(100% - 12px);
+  overflow: hidden;
+  border-radius: 4px;
+  background: rgba(15, 23, 42, 0.72);
+  color: #e2e8f0;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.2;
+}
+
+.overview-map__name {
+  margin: 0;
+  padding: 3px 6px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.overview-map__name:hover,
+.overview-map__credit:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.overview-map__credit {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 5px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.overview-map__credit[hidden] {
+  display: none;
+}
+
+.overview-map__credit .foss-earth-external-link-icon {
+  flex: none;
+  width: 1.05em;
+  height: 1.05em;
+}
+
+.overview-map__picker {
+  position: absolute;
+  right: 8px;
+  bottom: 32px;
+  left: 8px;
+  z-index: 3;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 4px;
+  padding: 6px;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.94);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.overview-map__picker[hidden] {
+  display: none;
+}
+
+.overview-map__provider {
+  margin: 0;
+  padding: 6px 8px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 6px;
+  background: rgba(148, 163, 184, 0.12);
+  color: #f8fafc;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+
+.overview-map__provider[aria-pressed="true"] {
+  border-color: #38bdf8;
+  background: rgba(56, 189, 248, 0.22);
+}
+
+.overview-map__name:focus-visible,
+.overview-map__credit:focus-visible,
+.overview-map__provider:focus-visible,
+.overview-map__menu:focus-visible,
+.overview-map__shape-choice:focus-visible,
+.overview-map__recenter:focus-visible {
+  outline: 2px solid #38bdf8;
+  outline-offset: 1px;
+}
+
+.overview-map__menu {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: rgba(15, 23, 42, 0.72);
+  color: #e2e8f0;
+  cursor: pointer;
+}
+
+.overview-map__menu:hover {
+  background: rgba(15, 23, 42, 0.88);
+}
+
+.overview-map__menu-panel {
+  position: absolute;
+  top: 38px;
+  right: 6px;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(240px, calc(100% - 12px));
+  padding: 8px;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.94);
+  color: #f8fafc;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.overview-map__menu-panel[hidden] {
+  display: none;
+}
+
+.overview-map__shape {
+  display: flex;
+  gap: 4px;
+}
+
+.overview-map__shape-choice {
+  flex: 1 1 auto;
+  margin: 0;
+  padding: 6px 8px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 6px;
+  background: rgba(148, 163, 184, 0.12);
+  color: #f8fafc;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.overview-map__shape-choice[aria-pressed="true"] {
+  border-color: #38bdf8;
+  background: rgba(56, 189, 248, 0.22);
+}
+
+.overview-map__menu-panel .foss-earth-tab-preset {
+  padding: 0;
+}
+
+.overview-map__menu-panel .foss-earth-parameter__action {
+  color: #f8fafc;
+}
+
+.overview-map__recenter {
+  position: absolute;
+  left: 6px;
+  bottom: 6px;
+  z-index: 2;
+  margin: 0;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 4px;
+  background: rgba(15, 23, 42, 0.86);
+  color: #f8fafc;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.overview-map__recenter[hidden] {
+  display: none;
+}
