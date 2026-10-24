@@ -95,6 +95,36 @@ describe("exact sparse terrain height inputs", () => {
     });
     expect(dropped).toBeGreaterThan(30);
   });
+  it("packs large batches and pixels past slot 255 or index 2^24 as each batch collects them, into exactly sized arrays", () => {
+    // The first batch outgrows every buffer at once.
+    const spread = grid(5, 9, 12, 256, 4);
+    const past = grid(3, 2, 2, 8), far = grid(3, 6, 6, 8, 2);
+    past.neighbors = [grid(3, 2, 3, 8, 3), ...Array<TerrainGrid>(259).fill(far), grid(3, 3, 2, 8, 1)];
+    // Slot 1 is read first, so the batch widens a key past slot 0; then every
+    // point reads sixteen pixels by the slot-261 edge.
+    const edge = Float64Array.from({ length: 8192 * 2 }, (_, i) => i < 2 ? [2.5, 2.999][i] : i % 2 ? 2 + ((i * 101) % 8191) / 8191 : 2.95 + ((i * 37) % 499) / 10000);
+    // Only the size is large: pixels past the heights read as NaN in both.
+    const large: TerrainGrid = { z: 4, x: 5, y: 7, size: 5000, heights: grid(0, 0, 0, 8).heights };
+    const cases: Array<[TerrainGrid, Float64Array]> = [
+      [spread, Float64Array.from({ length: 8192 * 2 }, (_, i) => i % 2 ? spread.y + ((i * 104729) % 65521) / 65521 : spread.x + ((i * 7919) % 65521) / 65521)],
+      [past, edge],
+      [large, new Float64Array([5.001, 7.001, 5.999, 7.999, 5.5, 7.5])],
+      [grid(2, 1, 1, 64), new Float64Array([1.5, 1.5, 1.25, 1.75])],
+    ];
+    const pack = packTerrainHeightPixels();
+    cases.forEach(([source, coordinates], i) => { pack.add(i + 1, source, coordinates, coordinates.length / 2, Infinity); });
+    const packed = pack.finish(), batches = unpackTerrainHeightPixels(packed);
+    batches.forEach((batch, i) => {
+      const [source, coordinates] = cases[i], collected = collectTerrainHeightPixels(source, coordinates);
+      const read = collected.neighbors?.filter(value => value.indices.length);
+      expect(batch.grid).toEqual({ ...collected, ...(read ? { neighbors: read } : {}) });
+      expect(batch.coordinates).toEqual(coordinates);
+    });
+    expect((batches[0].grid as TerrainHeightPixels).indices.length).toBeGreaterThan(2048);
+    expect((batches[1].grid as TerrainHeightPixels).neighbors?.map(value => [value.x, value.y])).toEqual([[2, 3], [3, 2]]);
+    expect(Math.max(...(batches[2].grid as TerrainHeightPixels).indices)).toBeGreaterThan(2 ** 24);
+    for (const array of [packed.coordinates, packed.heights, packed.indices]) expect(array.buffer.byteLength).toBe(array.byteLength);
+  });
   it("appends nothing for a batch over its byte budget", () => {
     const pack = packTerrainHeightPixels(), source = grid(2, 1, 1, 64);
     expect(pack.add(1, source, [1.5, 1.5], 1, 31)).toBeNull();

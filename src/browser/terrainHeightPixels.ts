@@ -69,11 +69,13 @@ export function collectTerrainHeightPixels(grid: TerrainGrid, coordinates: Float
   return { ...copy(grid, 0), ...(grid.neighbors ? { neighbors: grid.neighbors.map((neighbor, i) => copy(neighbor, i + 1)) } : {}) };
 }
 
-// A pixel's key is its slot times 2^32 plus its index, so one numeric sort
-// orders pixels by slot, then index. Indices of a 4096-square grid stay far
-// below 2^32, and the keys of 33 slots are exact doubles.
-const SLOT = 2 ** 32;
-let keys = new Float64Array(4096);
+// A pixel's key is its slot times a unit plus its index, so one numeric sort
+// orders pixels by slot, then index. Supported grids have at most 4096²
+// pixels and 33 slots, so their keys fit 32 bits with a unit of 2^24 and sort
+// as integers. A batch with any other pixel uses a unit of 2^32, whose keys
+// stay exact doubles for every index below 2^32 and every slot up to 2^20.
+const NARROW = 2 ** 24, WIDE = 2 ** 32;
+let narrowKeys = new Uint32Array(4096), wideKeys = new Float64Array(4096);
 /** The pixels of one request's sparse batches, as collectTerrainHeightPixels
  * would collect them, written into one table and three arrays. An unread
  * neighbour is left out: it is never the first to cover a pixel the
@@ -82,37 +84,61 @@ export function packTerrainHeightPixels(): {
   add(gridId: number, grid: TerrainGrid, coordinates: ArrayLike<number>, count: number, budget: number): number | null;
   finish(): PackedHeightBatches;
 } {
-  const table: number[] = [], coordinates: number[] = [], heights: number[] = [], indices: number[] = [];
-  let length = 0;
+  // Pixels and coordinates go straight into typed arrays, each converted as it is stored.
+  const table: number[] = [];
+  let coordinates = new Float64Array(1024), heights = new Float32Array(1024), indices = new Uint32Array(1024);
+  let filled = 0, pixels = 0, length = 0, wide = false;
   const visit = (slot: number, index: number) => {
-    if (length === keys.length) { const grown = new Float64Array(length * 2); grown.set(keys); keys = grown; }
-    keys[length++] = slot * SLOT + index;
+    if (!wide && !(slot < 256 && index >= 0 && index < NARROW && Number.isInteger(index))) {
+      // Widen the keys so far: each is an integer slot and index.
+      if (wideKeys.length < narrowKeys.length) wideKeys = new Float64Array(narrowKeys.length);
+      for (let k = 0; k < length; k++) { const key = narrowKeys[k], keySlot = Math.floor(key / NARROW); wideKeys[k] = keySlot * WIDE + (key - keySlot * NARROW); }
+      wide = true;
+    }
+    if (wide) {
+      if (length === wideKeys.length) { const grown = new Float64Array(length * 2); grown.set(wideKeys); wideKeys = grown; }
+      wideKeys[length++] = slot * WIDE + index;
+    } else {
+      if (length === narrowKeys.length) { const grown = new Uint32Array(length * 2); grown.set(narrowKeys); narrowKeys = grown; }
+      narrowKeys[length++] = slot * NARROW + index;
+    }
   };
   return {
     /** Append a batch of the first `count` coordinate pairs and return its
      * snapshot bytes, or append nothing and return null above `budget`. */
     add(gridId, grid, xy, count, budget) {
-      length = 0;
+      length = 0; wide = false;
       visitTerrainHeightPixels(grid, xy, count, visit);
-      const sorted = keys.subarray(0, length).sort();
+      const unit = wide ? WIDE : NARROW;
+      const sorted = wide ? wideKeys.subarray(0, length).sort() : narrowKeys.subarray(0, length).sort();
       let unique = 0;
       for (let k = 0; k < length; k++) if (!k || sorted[k] !== sorted[k - 1]) unique++;
       if (unique * 8 > budget) return null;
       const sources = [grid, ...(grid.neighbors ?? [])], row = table.length;
       table.push(gridId, count, 0, grid.neighbors ? 1 : 0);
-      for (let slot = 0, k = 0; slot < sources.length; slot++) {
-        const source = sources[slot], start = heights.length;
-        for (; k < length && sorted[k] < (slot + 1) * SLOT; k++) if (!k || sorted[k] !== sorted[k - 1]) {
-          const index = sorted[k] - slot * SLOT;
-          indices.push(index); heights.push(source.heights[index]);
-        }
-        if (slot && heights.length === start) continue;
-        table.push(source.z, source.x, source.y, source.size, heights.length - start); table[row + 2]++;
+      if (pixels + unique > heights.length) {
+        const size = Math.max(heights.length * 2, pixels + unique);
+        const grownHeights = new Float32Array(size), grownIndices = new Uint32Array(size);
+        grownHeights.set(heights.subarray(0, pixels)); grownIndices.set(indices.subarray(0, pixels));
+        heights = grownHeights; indices = grownIndices;
       }
-      for (let i = 0; i < count * 2; i++) coordinates.push(xy[i]);
+      for (let slot = 0, k = 0; slot < sources.length; slot++) {
+        const source = sources[slot], start = pixels;
+        for (; k < length && sorted[k] < (slot + 1) * unit; k++) if (!k || sorted[k] !== sorted[k - 1]) {
+          const index = sorted[k] - slot * unit;
+          indices[pixels] = index; heights[pixels++] = source.heights[index];
+        }
+        if (slot && pixels === start) continue;
+        table.push(source.z, source.x, source.y, source.size, pixels - start); table[row + 2]++;
+      }
+      if (filled + count * 2 > coordinates.length) {
+        const grown = new Float64Array(Math.max(coordinates.length * 2, filled + count * 2));
+        grown.set(coordinates.subarray(0, filled)); coordinates = grown;
+      }
+      for (let i = 0; i < count * 2; i++) coordinates[filled++] = xy[i];
       return unique * 8;
     },
-    finish: () => ({ table: new Float64Array(table), coordinates: new Float64Array(coordinates), heights: new Float32Array(heights), indices: new Uint32Array(indices) }),
+    finish: () => ({ table: new Float64Array(table), coordinates: coordinates.slice(0, filled), heights: heights.slice(0, pixels), indices: indices.slice(0, pixels) }),
   };
 }
 /** The sparse batches of a packed request, as views of its arrays. Pixel and
