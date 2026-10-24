@@ -27,19 +27,21 @@ export interface ImageryDisplayInput {
   leaves: readonly DisplayLeaf[];
   /** Root tiles kept resident as fallback coverage. */
   coverage: readonly TileId[];
-  /** Slots of a resident image in row-major page order, or null. */
+  /** Slots of a resident image in row-major page order, or null. A build may ask once for a key it needs several times. */
   slotsFor(imageKey: string): readonly number[] | null;
-  /** The standard image key for a tile of the displayed source. */
+  /** The standard image key for a tile of the displayed source, depending on the tile alone. */
   standardKey(tile: TileId): string;
-  /** True when the source has said it has no such image. */
+  /** True when the source has said it has no such image. Asked once for each selected leaf not resident. */
   isMissing?(imageKey: string): boolean;
 }
 
+type DisplayedPage = { slot: number; z: number };
+
 export interface ImageryDisplay {
   /** Displayed page node "z/x/y" at the page's own level → slot and level. */
-  pages: Map<string, { slot: number; z: number }>;
+  readonly pages: ReadonlyMap<string, DisplayedPage>;
   /** Every strict ancestor of a displayed page node. */
-  ancestors: Set<string>;
+  readonly ancestors: ReadonlySet<string>;
   /** Slots the display references; they must stay resident while published. */
   slots: Set<number>;
   /** Selected leaves shown by an ancestor while their own image loads; missing images do not count. */
@@ -62,8 +64,125 @@ function addAncestors(ancestors: Set<string>, z: number, x: number, y: number): 
   }
 }
 
+// The tree holds levels 0–30, so a node's x and y stay inside 32-bit shifts.
+const TREE_LEVELS = 30;
+// Node flags: a displayed page lies strictly below; a fallback search passed here.
+const ANCESTOR = 1, SEARCHED = 2;
+
+/** Whether a node is on the tree: an integer level 0–30 and integer coordinates on that level's grid. */
+function inTree(z: number, x: number, y: number): boolean {
+  return (z | 0) === z && z >= 0 && z <= TREE_LEVELS && (x | 0) === x && (y | 0) === y && x >= 0 && y >= 0 && x < 1 << z && y < 1 << z;
+}
+
+/**
+ * The display's page nodes as a quadtree, so building and reading it make no
+ * string keys. Node 0 is the root tile; nodes are made only on the way to a
+ * displayed page or a searched leaf, so a node without a page or the
+ * ancestor flag is the same as no node.
+ */
+class PageTree {
+  /** Four child nodes per node, in (dy, dx) order; 0 is none, since the root is no node's child. */
+  kids = new Int32Array(1024);
+  flags = new Uint8Array(256);
+  pages: Array<DisplayedPage | undefined> = [undefined];
+  count = 1;
+
+  private add(): number {
+    const node = this.count++;
+    if (node === this.flags.length) {
+      const kids = new Int32Array(this.kids.length * 2), flags = new Uint8Array(this.flags.length * 2);
+      kids.set(this.kids); flags.set(this.flags);
+      this.kids = kids; this.flags = flags;
+    }
+    this.pages.push(undefined);
+    return node;
+  }
+
+  /** The node at a tree position, made with its ancestors when absent; every node above it is flagged as an ancestor when `ancestors`. */
+  make(z: number, x: number, y: number, ancestors: boolean): number {
+    let node = 0;
+    for (let level = z - 1; level >= 0; level--) {
+      if (ancestors) this.flags[node] |= ANCESTOR;
+      const at = node * 4 + (((y >> level) & 1) << 1 | ((x >> level) & 1));
+      let next = this.kids[at];
+      if (next === 0) { next = this.add(); this.kids[at] = next; }
+      node = next;
+    }
+    return node;
+  }
+
+  /** Fills `into` with the nodes from the root down to a tree position's parent, by level, making them when absent. */
+  ancestorsOf(z: number, x: number, y: number, into: Int32Array): void {
+    let node = 0;
+    for (let level = 0; level < z; level++) {
+      into[level] = node;
+      if (level === z - 1) break;
+      const shift = z - level - 1;
+      const at = node * 4 + (((y >> shift) & 1) << 1 | ((x >> shift) & 1));
+      let next = this.kids[at];
+      if (next === 0) { next = this.add(); this.kids[at] = next; }
+      node = next;
+    }
+  }
+
+  /** The node at a tree position, or -1. */
+  find(z: number, x: number, y: number): number {
+    let node = 0;
+    for (let level = z - 1; level >= 0; level--) {
+      node = this.kids[node * 4 + (((y >> level) & 1) << 1 | ((x >> level) & 1))];
+      if (node === 0) return -1;
+    }
+    return node;
+  }
+
+  /** The deepest page on the way from the root to a tree position, the position's own included. */
+  deepestPage(z: number, x: number, y: number): DisplayedPage | undefined {
+    let node = 0, page = this.pages[0];
+    for (let level = z - 1; level >= 0; level--) {
+      node = this.kids[node * 4 + (((y >> level) & 1) << 1 | ((x >> level) & 1))];
+      if (node === 0) break;
+      page = this.pages[node] ?? page;
+    }
+    return page;
+  }
+}
+
+class TreeDisplay implements ImageryDisplay {
+  slots = new Set<number>();
+  fallbackLeaves = 0;
+  slotImages = new Map<number, string>();
+  ambiguousSlots = new Set<number>();
+  readonly tree = new PageTree();
+  /** Pages off the tree's grid, which no real tile reaches; with any, queries take the string-keyed path. */
+  offTree: Map<string, DisplayedPage> | null = null;
+  /** Every displayed page in the order shown, and its x and y, for the string-keyed views. */
+  readonly shown: DisplayedPage[] = [];
+  readonly shownAt: number[] = [];
+  private keyed: { pages: Map<string, DisplayedPage>; ancestors: Set<string> } | null = null;
+
+  get pages(): ReadonlyMap<string, DisplayedPage> { return (this.keyed ??= this.keyedViews()).pages; }
+  get ancestors(): ReadonlySet<string> { return (this.keyed ??= this.keyedViews()).ancestors; }
+
+  /** The string-keyed maps, filled in the order the pages were shown, as a build without the tree fills them. */
+  private keyedViews(): { pages: Map<string, DisplayedPage>; ancestors: Set<string> } {
+    const pages = new Map<string, DisplayedPage>(), ancestors = new Set<string>();
+    for (let index = 0; index < this.shown.length; index++) {
+      const page = this.shown[index], x = this.shownAt[index * 2], y = this.shownAt[index * 2 + 1];
+      pages.set(`${page.z}/${x}/${y}`, page);
+      addAncestors(ancestors, page.z, x, y);
+    }
+    return { pages, ancestors };
+  }
+}
+
+/** A display's tree when every page is on it; null sends a query down the string-keyed path. */
+function treeOf(display: ImageryDisplay): PageTree | null {
+  return display instanceof TreeDisplay && display.offTree === null ? display.tree : null;
+}
+
 export function buildImageryDisplay(input: ImageryDisplayInput): ImageryDisplay {
-  const display: ImageryDisplay = { pages: new Map(), ancestors: new Set(), slots: new Set(), fallbackLeaves: 0, slotImages: new Map(), ambiguousSlots: new Set() };
+  const display = new TreeDisplay();
+  const tree = display.tree;
   const remember = (slot: number, imageKey: string): void => {
     if (display.ambiguousSlots.has(slot)) return;
     const existing = display.slotImages.get(slot);
@@ -74,11 +193,18 @@ export function buildImageryDisplay(input: ImageryDisplayInput): ImageryDisplay 
     }
   };
   const show = (z: number, x: number, y: number, slot: number): void => {
-    const key = `${z}/${x}/${y}`;
-    if (display.pages.has(key)) return;
-    display.pages.set(key, { slot, z });
+    let page: DisplayedPage;
+    if (inTree(z, x, y)) {
+      const node = tree.make(z, x, y, true);
+      if (tree.pages[node] !== undefined) return;
+      tree.pages[node] = page = { slot, z };
+    } else {
+      const key = `${z}/${x}/${y}`;
+      if (display.offTree?.has(key)) return;
+      (display.offTree ??= new Map()).set(key, page = { slot, z });
+    }
+    display.shown.push(page); display.shownAt.push(x, y);
     display.slots.add(slot);
-    addAncestors(display.ancestors, z, x, y);
   };
   const showImage = (tile: TileId, slots: readonly number[], pagesPerSide: number, imageKey: string): void => {
     const shift = Math.round(Math.log2(pagesPerSide));
@@ -89,9 +215,11 @@ export function buildImageryDisplay(input: ImageryDisplayInput): ImageryDisplay 
     }
   };
   for (const root of input.coverage) {
-    const slots = input.slotsFor(input.standardKey(root));
-    if (slots) showImage(root, slots, 1, input.standardKey(root));
+    const key = input.standardKey(root);
+    const slots = input.slotsFor(key);
+    if (slots) showImage(root, slots, 1, key);
   }
+  const path = new Int32Array(TREE_LEVELS);
   for (const leaf of input.leaves) {
     const own = input.slotsFor(leaf.imageKey);
     if (own) {
@@ -100,6 +228,25 @@ export function buildImageryDisplay(input: ImageryDisplayInput): ImageryDisplay 
     }
     if (!leaf.presumedMissing && !input.isMissing?.(leaf.imageKey)) display.fallbackLeaves += 1;
     let { z, x, y } = leaf.tile;
+    if (inTree(z, x, y)) {
+      // Search up from the parent for the nearest resident ancestor. A search
+      // reaching a node an earlier leaf searched stops there: the rest of its
+      // path, and the page it would show again, are the same.
+      tree.ancestorsOf(z, x, y, path);
+      for (let level = z - 1; level >= 0; level--) {
+        const node = path[level];
+        if (tree.flags[node] & SEARCHED) break;
+        tree.flags[node] |= SEARCHED;
+        const ancestor = { z: level, x: x >> (z - level), y: y >> (z - level) };
+        const key = input.standardKey(ancestor);
+        const slots = input.slotsFor(key);
+        if (slots) {
+          showImage(ancestor, slots, 1, key);
+          break;
+        }
+      }
+      continue;
+    }
     while (z > 0) {
       z -= 1; x >>= 1; y >>= 1;
       const ancestor = { z, x, y };
@@ -124,10 +271,42 @@ function inheritedPage(display: ImageryDisplay, tile: TileId): { slot: number; z
   }
 }
 
+/** The page shown over a node: its own, else its nearest displayed ancestor's. */
+export function shownPage(display: ImageryDisplay, tile: TileId): DisplayedPage | undefined {
+  let { z, x, y } = tile;
+  const tree = treeOf(display);
+  if (tree && inTree(z, x, y)) return tree.deepestPage(z, x, y);
+  while (z >= 0) {
+    const page = display.pages.get(`${z}/${x}/${y}`);
+    if (page) return page;
+    if (z === 0) break;
+    z -= 1; x >>= 1; y >>= 1;
+  }
+  return undefined;
+}
+
 /** How many levels below the patch its displayed pages go, capped at the table's depth. */
 export function patchTableDepth(display: ImageryDisplay, patch: TileId): { cellsLog2: number; capped: boolean } {
   let deepest = 0;
   let capped = false;
+  const tree = treeOf(display);
+  if (tree && inTree(patch.z, patch.x, patch.y)) {
+    const { kids, flags, pages } = tree;
+    const visitNode = (node: number, depth: number): void => {
+      // As below: neither result changes once both bounds are known.
+      if (capped && deepest === IMAGERY_TABLE_MAX_CELLS_LOG2) return;
+      if (pages[node] !== undefined) deepest = Math.max(deepest, depth);
+      if ((flags[node] & ANCESTOR) === 0) return;
+      if (depth >= IMAGERY_TABLE_MAX_CELLS_LOG2) {
+        capped = true;
+        return;
+      }
+      for (let at = node * 4; at < node * 4 + 4; at++) if (kids[at] !== 0) visitNode(kids[at], depth + 1);
+    };
+    const node = tree.find(patch.z, patch.x, patch.y);
+    if (node >= 0) visitNode(node, 0);
+    return { cellsLog2: Math.min(IMAGERY_TABLE_MAX_CELLS_LOG2, deepest), capped };
+  }
   const visit = (z: number, x: number, y: number): void => {
     // Neither result can change once a page reaches the table's last level
     // and a descendant beyond that level has been found.
@@ -427,12 +606,8 @@ export function buildPatchTable(display: ImageryDisplay, patch: TileId, into?: U
   if (into) into.fill(0);
   const cellLevel = patch.z + cellsLog2;
   let emptyCells = 0;
-  const fill = (z: number, x: number, y: number, page: { slot: number; z: number } | null): void => {
-    const own = display.pages.get(`${z}/${x}/${y}`) ?? page;
-    if (z < cellLevel && display.ancestors.has(`${z}/${x}/${y}`)) {
-      for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) fill(z + 1, x * 2 + dx, y * 2 + dy, own);
-      return;
-    }
+  /** Points every cell under a node at its page. */
+  const cover = (z: number, x: number, y: number, own: { slot: number; z: number } | null | undefined): void => {
     const span = 2 ** (cellLevel - z);
     const cellX = x * span - patch.x * 2 ** cellsLog2;
     const cellY = y * span - patch.y * 2 ** cellsLog2;
@@ -442,6 +617,29 @@ export function buildPatchTable(display: ImageryDisplay, patch: TileId, into?: U
         else emptyCells += 1;
       }
     }
+  };
+  const tree = treeOf(display);
+  if (tree && inTree(patch.z, patch.x, patch.y)) {
+    const { kids, flags, pages } = tree;
+    // `node` is -1 where the tree has no node, which holds no page.
+    const fillNode = (node: number, z: number, x: number, y: number, page: DisplayedPage | undefined): void => {
+      const own = (node < 0 ? undefined : pages[node]) ?? page;
+      if (z < cellLevel && node >= 0 && (flags[node] & ANCESTOR) !== 0) {
+        for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) fillNode(kids[node * 4 + dy * 2 + dx] || -1, z + 1, x * 2 + dx, y * 2 + dy, own);
+        return;
+      }
+      cover(z, x, y, own);
+    };
+    fillNode(tree.find(patch.z, patch.x, patch.y), patch.z, patch.x, patch.y, tree.deepestPage(patch.z, patch.x, patch.y));
+    return { cellsLog2, data, capped, emptyCells };
+  }
+  const fill = (z: number, x: number, y: number, page: { slot: number; z: number } | null): void => {
+    const own = display.pages.get(`${z}/${x}/${y}`) ?? page;
+    if (z < cellLevel && display.ancestors.has(`${z}/${x}/${y}`)) {
+      for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) fill(z + 1, x * 2 + dx, y * 2 + dy, own);
+      return;
+    }
+    cover(z, x, y, own);
   };
   fill(patch.z, patch.x, patch.y, inheritedPage(display, patch));
   return { cellsLog2, data, capped, emptyCells };

@@ -23,7 +23,7 @@ import { rasterDetailKey, type DetailDistribution, type DetailLimit } from "../.
 import { createDetailDistribution, unavailableDetailDistribution } from "../../terrain/detailDistribution.js";
 import { createImageryAtlas, planAtlasForBackend, type ImageryAtlasDevicePorts, type ManagedImageryAtlasResources, type OwnedImageryTableJob, type AtlasCapabilities, type ImageryAtlas } from "./imageryAtlas.js";
 import { IMAGERY_TABLE_BLOCK, IMAGERY_TABLE_MAX_CELLS_LOG2, slotBytes, type ImageryAtlasLayout } from "../../terrain/imagery/imageryAtlasLayout.js";
-import { buildImageryDisplay, buildPatchTable, patchTableDepth, samePatchTableCells, createBoundLevels, loadedImageryPages, measureLoadedImagery, measureLoadedImageryDistribution, type ImageryDisplay, type LoadedImageryBinding, type LoadedImageryRegion } from "../../terrain/imagery/imageryBinding.js";
+import { buildImageryDisplay, buildPatchTable, patchTableDepth, samePatchTableCells, shownPage, createBoundLevels, loadedImageryPages, measureLoadedImagery, measureLoadedImageryDistribution, type ImageryDisplay, type LoadedImageryBinding, type LoadedImageryRegion } from "../../terrain/imagery/imageryBinding.js";
 import { prepareManagedPatchTable, type HeldPatchTable, type UnchangedPatchTable } from "../../terrain/imagery/managedPatchTable.js";
 import type { TextureTransferOutcome, TextureTransferRetirement } from "@foss-earth/renderer";
 import { ImageryAtlasMaterialPlugin } from "./imageryMaterialPlugin.js";
@@ -521,14 +521,7 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
       const pages = leaf.pages;
       const pageLevel = leaf.tile.z + Math.log2(Math.sqrt(pages));
       // Improvement over what the display shows there now, per byte to decode and upload.
-      let shownLevel = 0;
-      let { z, x, y } = leaf.tile;
-      while (z >= 0) {
-        const page = display?.pages.get(`${z}/${x}/${y}`);
-        if (page) { shownLevel = page.z; break; }
-        if (z === 0) break;
-        z -= 1; x >>= 1; y >>= 1;
-      }
+      const shownLevel = (display && shownPage(display, leaf.tile))?.z ?? 0;
       // A tile around the camera measures Infinity so that it splits. At the
       // source's finest level it cannot, so its page counts as reaching the target.
       const footprint = Number.isFinite(leaf.footprintPx) ? leaf.footprintPx : target;
@@ -727,8 +720,7 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
     return { tile, table: { cellsLog2: table.cellsLog2, data: table.data }, directLevel: null, imagesBySlot: snapshotImages(source, slots) };
   }
   function bindManagedDirect(patch: PatchState, nextAtlas: ImageryAtlas, candidate: ImageryDisplay, source: SourceState, selected: ImageryPlan, revision: number): void {
-    let page: { slot: number; z: number } | undefined; let { z, x, y } = patch.tile;
-    for (;;) { page = candidate.pages.get(`${z}/${x}/${y}`); if (page || z === 0) break; z -= 1; x >>= 1; y >>= 1; }
+    const page = shownPage(candidate, patch.tile);
     const directSignature = page ? `direct:${page.slot}:${page.z}` : "direct:empty";
     if (patch.atlas === nextAtlas && patch.tableSignature === directSignature && patch.boundSource === source) { patch.boundPlan = selected; patch.boundRevision = revision; return; }
     const oldAtlas = patch.atlas, oldBlock = patch.block, oldTable = patch.ownedTable;
@@ -903,13 +895,7 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
     fallbackPatches = 0;
     const tables: Array<{ patch: PatchState; table: ReturnType<typeof buildPatchTable>; bound: boolean }> = [];
     const bindSinglePage = (patch: PatchState): void => {
-      let page: { slot: number; z: number } | undefined;
-      let { z, x, y } = patch.tile;
-      for (;;) {
-        page = display!.pages.get(`${z}/${x}/${y}`);
-        if (page || z === 0) break;
-        z -= 1; x >>= 1; y >>= 1;
-      }
+      const page = shownPage(display!, patch.tile);
       patch.plugin.setTable(null, page ? { slot: page.slot, level: page.z } : null);
       patch.bound = directBinding(patch.tile, display!, page);
     };

@@ -9,7 +9,7 @@ import {
   encodeTableEntry,
   planAtlasLayout,
 } from "../src/terrain/imagery/imageryAtlasLayout.js";
-import { buildImageryDisplay, buildPatchTable, patchTableDepth, samePatchTableCells, loadedImageryPages, measureLoadedImagery, measureLoadedImageryDistribution, type DisplayLeaf, type LoadedImageryBinding, type LoadedImageryRegion } from "../src/terrain/imagery/imageryBinding.js";
+import { buildImageryDisplay, buildPatchTable, patchTableDepth, samePatchTableCells, shownPage, loadedImageryPages, measureLoadedImagery, measureLoadedImageryDistribution, type DisplayLeaf, type ImageryDisplay, type LoadedImageryBinding, type LoadedImageryRegion } from "../src/terrain/imagery/imageryBinding.js";
 
 const MiB = 1024 * 1024;
 
@@ -246,6 +246,19 @@ describe("imagery display and page tables", () => {
     expect(display.pages.get("5/8/12")?.slot).toBe(40);
     expect(display.fallbackLeaves).toBe(2);
     expect([...display.slots].sort((a, b) => a - b)).toEqual([...Array.from({ length: 16 }, (_, index) => index), 40, 41]);
+    // Both views keep the order the pages were shown in.
+    expect([...display.pages.keys()]).toEqual([...roots.map(tile => `2/${tile.x}/${tile.y}`), "6/17/24", "5/8/12"]);
+    expect([...display.ancestors]).toEqual(["1/0/0", "0/0/0", "1/1/0", "1/0/1", "1/1/1", "5/8/12", "4/4/6", "3/2/3", "2/1/1"]);
+  });
+
+  it("keeps the first page shown at a node", () => {
+    const slots: Record<string, number[]> = Object.fromEntries(roots.map((tile, index) => [std(tile), [index]]));
+    slots["s/2x/2/1/0"] = [70];
+    const display = buildImageryDisplay({ leaves: [leaf(2, 1, 0, 1, "2x")], coverage: roots, slotsFor: residentSlots(slots), standardKey: std });
+    expect(display.pages.get("2/1/0")?.slot).toBe(1);
+    expect(shownPage(display, { z: 5, x: 8, y: 0 })?.slot).toBe(1);
+    expect(display.slots.has(70)).toBe(false);
+    expect(display.slotImages.get(70)).toBe("s/2x/2/1/0");
   });
 
   it("shows an ancestor where the source has no image, without counting the leaf as loading", () => {
@@ -336,6 +349,84 @@ describe("imagery display and page tables", () => {
     expect(patchTableDepth(onlyCapped, patch)).toEqual({ cellsLog2: 0, capped: true });
     const onlyDeepest = buildImageryDisplay({ leaves: [leaf(8, 0, 0)], coverage: [patch], slotsFor: () => [1], standardKey: std });
     expect(patchTableDepth(onlyDeepest, patch)).toEqual({ cellsLog2: 6, capped: false });
+  });
+
+  it("searches each ancestor once while sibling leaves load, still asking whether every leaf is missing", () => {
+    const slots: Record<string, number[]> = Object.fromEntries(roots.map((tile, index) => [std(tile), [index]]));
+    slots[std({ z: 6, x: 32, y: 40 })] = [90];
+    const asked: string[] = [], missing: string[] = [];
+    const leaves = [leaf(10, 512, 640), leaf(10, 513, 640), leaf(10, 512, 641), leaf(10, 513, 641), leaf(9, 257, 320)];
+    const display = buildImageryDisplay({
+      leaves, coverage: roots, standardKey: std,
+      slotsFor: key => { asked.push(key); return slots[key] ?? null; },
+      isMissing: key => { missing.push(key); return false; },
+    });
+    expect(display.pages.get("6/32/40")?.slot).toBe(90);
+    expect(shownPage(display, { z: 10, x: 513, y: 641 })?.slot).toBe(90);
+    expect(display.fallbackLeaves).toBe(5);
+    expect(missing).toEqual(leaves.map(item => item.imageKey));
+    // Later leaves stop at a parent an earlier search passed through.
+    const searched = [std({ z: 9, x: 256, y: 320 }), std({ z: 8, x: 128, y: 160 }), std({ z: 7, x: 64, y: 80 }), std({ z: 6, x: 32, y: 40 })];
+    expect(asked.slice(roots.length)).toEqual([leaves[0].imageKey, ...searched, ...leaves.slice(1).map(item => item.imageKey)]);
+  });
+
+  it("answers from its tree as from its string-keyed pages and ancestors", () => {
+    let state = 0x2545f491;
+    const random = (n: number) => { state ^= state << 13; state ^= state >>> 17; state ^= state << 5; return (state >>> 0) % n; };
+    const keyedShown = (display: ImageryDisplay, tile: { z: number; x: number; y: number }) => {
+      let { z, x, y } = tile;
+      for (;;) { const page = display.pages.get(`${z}/${x}/${y}`); if (page || z === 0) return page; z -= 1; x >>= 1; y >>= 1; }
+    };
+    for (let trial = 0; trial < 80; trial++) {
+      const focus = { z: 3 + random(12), x: 0, y: 0 };
+      focus.x = random(2 ** focus.z); focus.y = random(2 ** focus.z);
+      const slots: Record<string, number[]> = Object.fromEntries(roots.map((tile, index) => [std(tile), [index]]));
+      const leaves: DisplayLeaf[] = [];
+      for (let count = random(150); count > 0; count--) {
+        const dz = random(9), z = focus.z + dz, x = focus.x * 2 ** dz + random(2 ** dz), y = focus.y * 2 ** dz + random(2 ** dz);
+        const wide = random(5) === 0;
+        leaves.push(leaf(z, x, y, wide ? 2 : 1, wide ? "2x" : "std"));
+        if (random(3) === 0) slots[leaves.at(-1)!.imageKey] = wide ? [100 + random(900), 100 + random(900), 100 + random(900), 100 + random(900)] : [100 + random(900)];
+        if (random(4) === 0) slots[std({ z: z - 1 - random(z - 1), x: x >> 1, y: y >> 1 })] = [1000 + random(9)];
+      }
+      const display = buildImageryDisplay({ leaves, coverage: roots, slotsFor: residentSlots(slots), standardKey: std });
+      const tiles = [{ z: 0, x: 0, y: 0 }, ...leaves.map(item => item.tile)];
+      for (let z = Math.max(0, focus.z - 2); z < focus.z + 6; z++) {
+        const scale = 2 ** (z - focus.z);
+        tiles.push({ z, x: Math.floor(focus.x * scale) + (scale >= 2 ? random(scale) : 0), y: Math.floor(focus.y * scale) + (scale >= 2 ? random(scale) : 0) });
+      }
+      const fromTree = tiles.map(tile => {
+        const depth = patchTableDepth(display, tile);
+        return { depth, table: buildPatchTable(display, tile, undefined, depth), page: shownPage(display, tile) };
+      });
+      // A plain object with the same maps reads them as before the tree.
+      const keyed: ImageryDisplay = { pages: display.pages, ancestors: display.ancestors, slots: display.slots, fallbackLeaves: display.fallbackLeaves, slotImages: display.slotImages, ambiguousSlots: display.ambiguousSlots };
+      tiles.forEach((tile, index) => {
+        const depth = patchTableDepth(keyed, tile), table = buildPatchTable(keyed, tile, undefined, depth), tree = fromTree[index];
+        expect(tree.depth).toEqual(depth);
+        expect({ ...tree.table, data: null, same: samePatchTableCells(tree.table.data, table.data, depth.cellsLog2) }).toEqual({ ...table, data: null, same: true });
+        expect(tree.page).toBe(keyedShown(keyed, tile));
+      });
+      const ancestors = new Set<string>();
+      for (const key of display.pages.keys()) {
+        let [z, x, y] = key.split("/").map(Number);
+        while (z > 0) { z -= 1; x >>= 1; y >>= 1; ancestors.add(`${z}/${x}/${y}`); }
+      }
+      expect(new Set(display.ancestors)).toEqual(ancestors);
+    }
+  });
+
+  it("keeps a page off the tile grid, and answers around it, through the string-keyed pages", () => {
+    const slots: Record<string, number[]> = Object.fromEntries(roots.map((tile, index) => [std(tile), [index]]));
+    // x = 4 is one past level 2's grid; its bits would name tile 2/0/0.
+    slots["s/std/2/4/0"] = [95];
+    const display = buildImageryDisplay({ leaves: [leaf(2, 4, 0)], coverage: roots, slotsFor: residentSlots(slots), standardKey: std });
+    expect(display.pages.get("2/4/0")?.slot).toBe(95);
+    expect(display.pages.get("2/0/0")?.slot).toBe(0);
+    expect(display.ancestors.has("1/2/0")).toBe(true);
+    expect(patchTableDepth(display, { z: 1, x: 2, y: 0 })).toEqual({ cellsLog2: 1, capped: false });
+    expect(shownPage(display, { z: 3, x: 9, y: 1 })?.slot).toBe(95);
+    expect(shownPage(display, { z: 3, x: 1, y: 1 })?.slot).toBe(0);
   });
 
   it("tells apart two tables whose cells have the same 32-bit FNV-1a hash", () => {
