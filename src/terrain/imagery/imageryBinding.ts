@@ -440,6 +440,9 @@ function pageAt(tile: TileId, level: number): TileId {
   return { z: level, x: tile.x << -shift, y: tile.y << -shift };
 }
 
+/** Each table column's last page in rows above, as level and page row; level −1 for none. */
+const pagesAbove = new Int32Array(IMAGERY_TABLE_BLOCK * 2);
+
 /**
  * Page tiles sampled by adopted bindings. The distribution measures these,
  * not the requested plan's leaves, so a new request cannot move a bar by
@@ -456,11 +459,26 @@ export function loadedImageryPages(bindings: readonly LoadedImageryBinding[]): T
     const { cellsLog2, data } = binding.table;
     const side = 2 ** cellsLog2;
     const cellLevel = binding.tile.z + cellsLog2;
-    for (let y = 0; y < side; y++) for (let x = 0; x < side; x++) {
-      const index = (y * IMAGERY_TABLE_BLOCK + x) * 4;
-      if (data[index + 3] !== 255) continue;
-      const cell = { z: cellLevel, x: binding.tile.x * side + x, y: binding.tile.y * side + y };
-      add(pageAt(cell, data[index + 2]));
+    // A page already added adds nothing new, so a cell showing the last page
+    // left of it or above it builds no key. At one level, the cells of a row
+    // share a page row and the cells of a column a page column.
+    pagesAbove.fill(-1);
+    for (let y = 0; y < side; y++) {
+      let leftLevel = -1, leftX = 0;
+      for (let x = 0; x < side; x++) {
+        const index = (y * IMAGERY_TABLE_BLOCK + x) * 4;
+        if (data[index + 3] !== 255) continue;
+        // `pageAt` of the cell.
+        const level = data[index + 2], shift = cellLevel - level;
+        const cellX = binding.tile.x * side + x, cellY = binding.tile.y * side + y;
+        const pageX = shift >= 0 ? cellX >> shift : cellX << -shift, pageY = shift >= 0 ? cellY >> shift : cellY << -shift;
+        const above = x < IMAGERY_TABLE_BLOCK ? x * 2 : -1;
+        if (!(level === leftLevel && pageX === leftX) && !(above >= 0 && level === pagesAbove[above] && pageY === pagesAbove[above + 1])) {
+          add({ z: level, x: pageX, y: pageY });
+        }
+        leftLevel = level; leftX = pageX;
+        if (above >= 0) { pagesAbove[above] = level; pagesAbove[above + 1] = pageY; }
+      }
     }
   }
   return [...pages.values()];

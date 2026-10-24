@@ -162,6 +162,39 @@ describe("loaded imagery tile distribution", () => {
     }]);
     expect(pages).toEqual([{ z: 6, x: 0, y: 0 }]);
   });
+
+  it("lists each page once, in the order its first cell is read, across repeated calls", () => {
+    let seed = 7;
+    const random = (n: number) => { seed = (seed * 1103515245 + 12345) % 2 ** 31; return seed % n; };
+    // Every cell, row by row, as the scan reads them.
+    const reference = (bindings: LoadedImageryBinding[]) => {
+      const pages = new Map<string, number[]>();
+      for (const { tile, table, directLevel } of bindings) {
+        const cells = table ? [...Array(4 ** table.cellsLog2).keys()].flatMap(at => {
+          const side = 2 ** table.cellsLog2, x = at % side, y = Math.floor(at / side), index = (y * IMAGERY_TABLE_BLOCK + x) * 4;
+          return table.data[index + 3] === 255 ? [{ z: tile.z + table.cellsLog2, x: tile.x * side + x, y: tile.y * side + y, level: table.data[index + 2] }] : [];
+        }) : directLevel === null ? [] : [{ ...tile, level: directLevel }];
+        for (const { z, x, y, level } of cells) {
+          const shift = z - level, page = shift >= 0 ? [level, x >> shift, y >> shift] : [level, x << -shift, y << -shift];
+          if (!pages.has(page.join())) pages.set(page.join(), page);
+        }
+      }
+      return [...pages.values()].map(([z, x, y]) => ({ z, x, y }));
+    };
+    for (let round = 0; round < 200; round++) {
+      const bindings = Array.from({ length: 1 + random(4) }, (): LoadedImageryBinding => {
+        const tile = { z: 8 + random(3), x: random(64), y: random(64) };
+        if (random(5) === 0) return { tile, table: null, directLevel: random(3) ? tile.z - random(4) : null };
+        const cellsLog2 = random(7), side = 2 ** cellsLog2, cells = [];
+        // Runs of one page, with gaps and pages deeper than their cells.
+        for (let y = 0; y < side; y++) for (let x = 0; x < side; x++) if (random(6)) {
+          cells.push({ x, y, slot: 1, level: random(8) ? tile.z + cellsLog2 - 1 - (round % 3) + (random(9) ? 0 : 2) : tile.z + random(cellsLog2 + 1) });
+        }
+        return { tile, table: cellTable(cells, cellsLog2), directLevel: null };
+      });
+      expect(loadedImageryPages(bindings)).toEqual(reference(bindings));
+    }
+  });
 });
 
 describe("imagery atlas layout", () => {
