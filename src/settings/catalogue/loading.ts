@@ -30,14 +30,14 @@ function gpuBudgetBounds(context: DeviceContext): ParameterBounds {
 
 function gpuBudgetDefault(context: DeviceContext): { value: number; derivedFrom: string } {
   const bounds = gpuBudgetBounds(context);
-  if (!context.deviceMemoryGiB) {
-    return { value: Math.min(bounds.max, 128), derivedFrom: "128 MiB, because this browser does not say how much memory the device has" };
-  }
-  const share = Math.round((context.deviceMemoryGiB * 1024) / 32);
+  const share = context.deviceMemoryGiB ? Math.round((context.deviceMemoryGiB * 1024) / 32) : 128;
   const value = Math.max(bounds.min, Math.min(bounds.max, share));
+  const origin = context.deviceMemoryGiB
+    ? `1/32 of the ${context.deviceMemoryGiB} GiB the browser reports`
+    : "128 MiB, because this browser does not say how much memory the device has";
   return {
     value,
-    derivedFrom: `1/32 of the ${context.deviceMemoryGiB} GiB the browser reports${value !== share ? `, limited to ${value} MiB by ${bounds.reason ?? "the bounds"}` : ""}`,
+    derivedFrom: `${origin}${value !== share ? `, limited to ${value} MiB by ${bounds.reason ?? "the bounds"}` : ""}`,
   };
 }
 

@@ -9,6 +9,8 @@ import { describeImageryConstraint } from "../src/map/mapDetailExplanations.js";
 import { createMapDetailPanel } from "../fixtures/composition/mapPanelHost.js";
 import type { ImageryConstraint } from "../src/terrain/imagery/imageryConstraints.js";
 import { createDetailDistribution } from "../src/terrain/detailDistribution.js";
+import { MAP_LOADING_PARAMETERS } from "../src/settings/catalogue/loading.js";
+import { createMapDetailSlider } from "../src/map/mapDetailSlider.js";
 
 const MISSING: ImageryConstraint = { cause: "source", missingRegions: 3, finestLevelRegions: 0, finestLevel: 16, outsideRegions: 0, scaleRegions: 0 };
 
@@ -146,6 +148,30 @@ describe("Map tab detail editor", () => {
     expect(status.textContent).toBe(`Coarsened to hold the frame time. ${describeImageryConstraint(MISSING)}`);
     controller.reportDelivery("raster:usgs-imagery", { pending: false, limits: [], constraints: [] });
     expect(status.hidden).toBe(true);
+  });
+
+  it("keeps the panel and rail's budget explanation current when the origin changes at the same value", () => {
+    const { controller, panel } = mountRaster();
+    controller.settings.register(MAP_LOADING_PARAMETERS);
+    const rail = createMapDetailSlider({ document, controller });
+    const status = panel.element.querySelector<HTMLElement>(".map-detail-panel__status")!;
+    controller.reportDelivery("raster:usgs-imagery", {
+      pending: false, limits: ["memory"], constraints: [{
+        cause: "gpu-budget", parameter: "map.imagery.gpuBudget", configuredMiB: 128,
+        atlasMiB: 128, atlasPages: 256, rendererCapped: false,
+        selectablePages: 201, selectedPages: 201, morePagesAtLeast: 166, regions: 63, reducedRegions: 54,
+      }],
+    });
+    expect(status.textContent).toContain("because this browser does not say how much memory the device has");
+    expect(rail.element.title).toContain("because this browser does not say how much memory the device has");
+    controller.settings.setDeviceContext({ deviceMemoryGiB: 4 });
+    expect(controller.settings.get("map.imagery.gpuBudget")).toBe(128);
+    expect(status.textContent).toContain("1/32 of the 4 GiB the browser reports");
+    expect(rail.element.title).toContain("1/32 of the 4 GiB the browser reports");
+    expect(status.textContent).not.toContain("does not say how much memory");
+    rail.destroy();
+    panel.destroy();
+    controller.dispose();
   });
 
   it("does not mutate a hidden settings panel when only the HUD's loaded-detail cursor moves", () => {

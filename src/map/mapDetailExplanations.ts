@@ -1,5 +1,6 @@
 import type { ImageryConstraint, ImageryConstraintCause } from "../terrain/imagery/imageryConstraints.js";
 import type { DetailLimit } from "../terrain/mapDetailPolicy.js";
+import type { SettingsRegistry } from "@foss-earth/ui/settings";
 
 const count = (value: number, one: string, many = `${one}s`): string => `${value} ${value === 1 ? one : many}`;
 const mebibytes = (value: number): string => `${value >= 10 ? Math.round(value) : Math.round(value * 10) / 10} MiB`;
@@ -38,13 +39,37 @@ const RELOAD_REASON: Record<"gpu-budget" | "page-tables" | "context-restored", s
 
 const reducedText = (regions: number): string => (regions > 0 ? ` ${act(regions, "region", "shown finer before is", "shown finer before are")} coarser now.` : "");
 
+/** The effective budget's origin, rather than an assumption based on its size. */
+export function describeImageryBudget(constraint: ImageryConstraint, settings?: SettingsRegistry): string {
+  if ((constraint.cause !== "gpu-budget" && constraint.cause !== "atlas-full") || !settings?.has(constraint.parameter)) return "";
+  const state = settings.inspect(constraint.parameter);
+  // Feedback may still describe the outgoing atlas while a new budget takes effect.
+  if (state.value !== constraint.configuredMiB) return "";
+  const sentence = (text: string): string => /[.!?]$/.test(text.trim()) ? text.trim() : `${text.trim()}.`;
+  let origin: string;
+  switch (state.provenance) {
+    case "default": origin = sentence(`The default budget is ${state.defaultDerivedFrom}`); break;
+    case "host-default": origin = sentence(`The app chose this default budget: ${state.defaultDerivedFrom}`); break;
+    case "preset": origin = state.preset ? `The “${state.preset}” preset set this budget.` : "A preset set this budget."; break;
+    case "user": origin = "The budget is your saved setting."; break;
+    case "url": origin = "The URL sets this budget for this visit."; break;
+    case "host": origin = sentence(`The app sets this budget: ${state.layers.forced?.reason ?? "required by the app"}`); break;
+  }
+  const note = state.note ? ` ${sentence(state.note)}` : "";
+  const location = `Map → Loading and memory → ${state.spec.label}`;
+  const action = state.provenance === "host" || state.spec.readOnly ? `See ${location}.` : `Change it in ${location}.`;
+  return `${origin}${note} ${action}`;
+}
+
 /**
- * One or two sentences on a limit to visible 2D imagery: what limits it, its
- * value, and what it does, all from the runtime's numbers. `still` words it
- * as an update of a limit already reported.
+ * A limit to visible 2D imagery: what limits it, its value and effect, and
+ * where a configured budget came from when settings are available. `still`
+ * words it as an update of a limit already reported.
  */
-export function describeImageryConstraint(constraint: ImageryConstraint, still = false): string {
+export function describeImageryConstraint(constraint: ImageryConstraint, still = false, settings?: SettingsRegistry): string {
   const limited = still ? "is still limited by" : "is limited by";
+  const budget = describeImageryBudget(constraint, settings);
+  const budgetText = budget ? ` ${budget}` : "";
   switch (constraint.cause) {
     case "source": {
       const parts: string[] = [];
@@ -58,10 +83,10 @@ export function describeImageryConstraint(constraint: ImageryConstraint, still =
     case "gpu-budget": {
       const lead = constraint.reducedRegions > 0 ? "2D imagery detail was reduced by" : `2D imagery ${limited}`;
       const capped = constraint.rendererCapped ? ` This renderer's texture size holds the atlas to ${mebibytes(constraint.atlasMiB)}.` : "";
-      return `${lead} the GPU budget (${mebibytes(constraint.configuredMiB)}): selection uses ${constraint.selectedPages} of the ${constraint.selectablePages} pages it may use in the ${constraint.atlasPages}-page atlas, and ${act(constraint.regions, "visible region", "needs", "need")} at least ${constraint.morePagesAtLeast} more.${reducedText(constraint.reducedRegions)}${capped}`;
+      return `${lead} the GPU budget (${mebibytes(constraint.configuredMiB)}).${budgetText} Selection uses ${constraint.selectedPages} of the ${constraint.selectablePages} pages it may use in the ${constraint.atlasPages}-page atlas, and ${act(constraint.regions, "visible region", "needs", "need")} at least ${constraint.morePagesAtLeast} more.${reducedText(constraint.reducedRegions)}${capped}`;
     }
     case "atlas-full":
-      return `2D imagery ${limited} a full imagery atlas (GPU budget ${mebibytes(constraint.configuredMiB)}): ${constraint.pinnedPages} of its ${constraint.atlasPages} pages are shown and the rest hold more important imagery, so ${act(constraint.waitingImages, "downloaded image", "waits", "wait")} for a slot.`;
+      return `2D imagery ${limited} a full imagery atlas (GPU budget ${mebibytes(constraint.configuredMiB)}).${budgetText} ${constraint.pinnedPages} of its ${constraint.atlasPages} pages are shown and the rest hold more important imagery, so ${act(constraint.waitingImages, "downloaded image", "waits", "wait")} for a slot.`;
     case "page-tables": {
       const effective = constraint.effective === constraint.configured ? `${constraint.effective} available` : `${constraint.effective} available, ${constraint.configured} set and rounded by the atlas layout`;
       return `2D imagery ${limited} the page tables: ${effective}, ${constraint.needed} needed by visible patches. ${act(constraint.patches, "patch", "draws", "draw", "patches")} one coarser page instead.`;

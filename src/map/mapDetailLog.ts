@@ -6,8 +6,9 @@ export interface MapDetailLogRuntime {
   getRasterDetailFeedback(): RasterDetailFeedback | null;
 }
 import type { GameLog, GameLogLine } from "@foss-earth/ui/browser";
+import type { SettingsRegistry } from "@foss-earth/ui/settings";
 import type { ImageryConstraint, ImageryConstraintCause } from "../terrain/imagery/imageryConstraints.js";
-import { constraintIdentity, describeImageryConstraint, describeImageryRecovery } from "./mapDetailExplanations.js";
+import { constraintIdentity, describeImageryBudget, describeImageryConstraint, describeImageryRecovery } from "./mapDetailExplanations.js";
 
 /**
  * A limit as the log reports it. A map source at its finest level, or at the
@@ -32,6 +33,7 @@ function forLog(constraint: ImageryConstraint): ImageryConstraint | null {
 export function connectMapDetailLog(
   runtime: MapDetailLogRuntime,
   log: Pick<GameLog, "print">,
+  settings?: SettingsRegistry,
 ): () => void {
   const stopAdjustments = runtime.onDetailAdjusted(decision => {
     const levels = Math.round(Math.abs(decision.to - decision.from) * 100) / 100;
@@ -59,13 +61,13 @@ export function connectMapDetailLog(
     const constraints = (current.constraints ?? []).map(forLog).filter(constraint => constraint !== null);
     for (const constraint of constraints) {
       if (!settled && constraint.cause !== "reload") continue;
-      const identity = constraintIdentity(constraint);
+      const identity = `${constraintIdentity(constraint)}/${describeImageryBudget(constraint, settings)}`;
       const previous = reported.get(constraint.cause);
       if (previous?.identity === identity) {
         previous.constraint = constraint;
         continue;
       }
-      const entry = { text: describeImageryConstraint(constraint, previous !== undefined), tone: "warning" as const };
+      const entry = { text: describeImageryConstraint(constraint, previous !== undefined, settings), tone: "warning" as const };
       if (previous) previous.line.update(entry);
       reported.set(constraint.cause, { identity, constraint, line: previous?.line ?? log.print(entry) });
     }
@@ -77,9 +79,13 @@ export function connectMapDetailLog(
     }
   };
   const stopFeedback = runtime.onRasterDetailFeedback(follow);
+  const stopSettings = settings?.subscribe(changed => {
+    if (changed.has("map.imagery.gpuBudget")) follow();
+  });
   follow();
   return () => {
     stopAdjustments();
     stopFeedback();
+    stopSettings?.();
   };
 }

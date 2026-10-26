@@ -14,6 +14,7 @@ import { describeLoadedTiles, layoutDetailDistribution, type DetailBinLayout } f
 import { MAP_DETAIL_LOADED_PRESENTATION_ID } from "../settings/catalogue/map.js";
 import type { MapDetailController } from "./mapDetailController.js";
 import { CONSTRAINT_LIMIT, describeImageryConstraint } from "./mapDetailExplanations.js";
+import type { SettingsRegistry } from "@foss-earth/ui/settings";
 
 export interface MapDetailSliderOptions {
   document: Document;
@@ -44,11 +45,11 @@ const LIMIT_TEXT: Record<DetailLimit, string> = {
  * limit the renderer explained with its values, and the general wording for
  * the rest, such as loading.
  */
-export function describeDetailStatus(state: DetailState): string | null {
+export function describeDetailStatus(state: DetailState, settings?: SettingsRegistry): string | null {
   const explained = new Set(state.constraints.map(constraint => CONSTRAINT_LIMIT[constraint.cause]));
   const parts = state.limits.filter(limit => limit === "loading" || !explained.has(limit)).map(limit => LIMIT_TEXT[limit]);
   if (state.pending && !state.limits.includes("loading")) parts.unshift("loading");
-  const sentences = state.constraints.map(constraint => describeImageryConstraint(constraint));
+  const sentences = state.constraints.map(constraint => describeImageryConstraint(constraint, false, settings));
   if (parts.length > 0) {
     const text = parts.join(", ");
     sentences.unshift(text.charAt(0).toUpperCase() + text.slice(1) + ".");
@@ -217,7 +218,7 @@ export function createMapDetailSlider(options: MapDetailSliderOptions): MapDetai
     if (!dragging) slider.value = String(detailPosition(kind, state.requestedTarget));
     // Equal ends leave nothing to choose, but the value stays readable.
     slider.disabled = !ready || Math.abs(coarser - finer) < 1e-9;
-    const status = ready ? describeDetailStatus(state) : null;
+    const status = ready ? describeDetailStatus(state, controller.settings) : null;
     const valueText = describeDetailValue(kind, state.requestedTarget);
     const active = state.activeTarget;
     const activeText = ready && active !== null && active !== state.requestedTarget
@@ -315,7 +316,7 @@ export function createMapDetailSlider(options: MapDetailSliderOptions): MapDetai
   slider.addEventListener("pointercancel", onPointerUp);
   const unsubscribe = controller.subscribe(() => update());
   const unsubscribeSettings = controller.settings.subscribe(changed => {
-    if (!changed.has(MAP_DETAIL_LOADED_PRESENTATION_ID)) return;
+    if (!changed.has(MAP_DETAIL_LOADED_PRESENTATION_ID) && !changed.has("map.imagery.gpuBudget")) return;
     shown = undefined;
     update();
   });

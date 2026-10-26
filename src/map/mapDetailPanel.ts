@@ -255,7 +255,7 @@ export function createMapDetailPanel(controller: MapDetailController, options: M
     about.textContent = `${kind === "raster"
       ? "Sharper or softer imagery than Normal, which shows each image pixel at about one screen pixel. Elevation is not affected."
       : "The screen-space error Google 3D Tiles may leave, in pixels. Smaller is finer and loads more."} The saved default is the detail each visit starts with, inside the range. Restore saved detail returns to it from this visit's own choice; Reset detail settings restores the range and default.`;
-    const sentence = ready ? describeDetailStatus(state) : null;
+    const sentence = ready ? describeDetailStatus(state, controller.settings) : null;
     status.hidden = sentence === null;
     status.textContent = sentence ?? "";
     const storageError = controller.getStorageError();
@@ -328,12 +328,18 @@ export function createMapDetailPanel(controller: MapDetailController, options: M
   restore.addEventListener("click", onRestore);
   reset.addEventListener("click", onReset);
   const unsubscribe = controller.subscribe(() => update());
+  const unsubscribeSettings = controller.settings.subscribe(changed => {
+    if (!changed.has("map.imagery.gpuBudget")) return;
+    shown = undefined;
+    update();
+  });
   update();
 
   return {
     element,
     destroy(): void {
       unsubscribe();
+      unsubscribeSettings();
       track.destroy();
       recommended.input.removeEventListener("change", onDefaultChoice);
       custom.input.removeEventListener("change", onDefaultChoice);
