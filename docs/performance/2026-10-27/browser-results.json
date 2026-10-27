@@ -1,0 +1,706 @@
+{
+  "cohort": "Three readiness-gated C172 pairs, 30 seconds at 1x and 4x, baseline/candidate; candidate/baseline; baseline/candidate",
+  "finalSourceSha256": {
+    "/Users/felg/gh/foss-earth/engine/src/terrain/imagery/imagerySelector.ts": "9f47e69c57be9cce7ea52a13ac5e7e3171eb3167693ae837f0fcd2bd59a984cb",
+    "/Users/felg/gh/foss-earth/engine/src/browser/terrainHeightPixels.ts": "56a0603c59bfd8a11ad1bbed1f944241ff5ad4c04c8c967dde23b10a8053de57",
+    "/Users/felg/gh/foss-earth/engine/src/babylon/imagery/createImageryRuntime.ts": "6c01224fb2f5d1337cfabaa73fb195883f16b0390337879d24c0431d55148a8d"
+  },
+  "runs": [
+    {
+      "label": "final-pair1",
+      "arm": "oct27-base",
+      "profileDirectory": "/Users/felg/gh/foss-earth/research/build/benchmarks/startup-audit/profile-fly-final-pair1-oct27-base/2026-10-27_090734",
+      "summarySha256": "5842627dca540084b850ad1a3e022e105ec52ab53c46474549a03620e65372c7",
+      "stretches": [
+        {
+          "rate": 1,
+          "fps": 59.63333112714276,
+          "median": 16.665000000000873,
+          "p95": 16.67000000000553,
+          "p99": 16.67000000000553,
+          "mainThread": 0.29205195578794096,
+          "script": 0.2320449070090674,
+          "heapUsed": 125099548,
+          "probe": {
+            "before": {
+              "outcome": "ready",
+              "assets": "ready",
+              "fallback": false,
+              "aircraft": "cessna-172",
+              "engineModel": null,
+              "engines": [
+                "running"
+              ]
+            },
+            "after": {
+              "outcome": "ready",
+              "assets": "ready",
+              "fallback": false,
+              "aircraft": "cessna-172",
+              "engineModel": null,
+              "engines": [
+                "running"
+              ]
+            }
+          },
+          "selfMsPerSecond": {
+            "selector": 46.1,
+            "geometry": 9.8,
+            "runtime": 12.5,
+            "heightPixels": 4.1,
+            "binding": 12.0
+          },
+          "inclusiveMsPerSecond": {
+            "selector": 67.7,
+            "geometry": 9.8,
+            "runtime": 112.8,
+            "heightPixels": null,
+            "binding": 12.0
+          },
+          "selfMsPerFrame": {
+            "selector": 0.773057602663707,
+            "geometry": 0.16433762486126527,
+            "runtime": 0.20961431742508324,
+            "heightPixels": 0.0687534961154273,
+            "binding": 0.20122974472807992
+          },
+          "mainThreadMsPerFrame": 4.897461709211988
+        },
+        {
+          "rate": 4,
+          "fps": 56.0463290145269,
+          "median": 16.66500000000815,
+          "p95": 33.32500000001164,
+          "p99": 33.3350000000064,
+          "mainThread": 0.9138204096322472,
+          "script": 0.7707890655673341,
+          "heapUsed": 236624608,
+          "probe": {
+            "before": {
+              "outcome": "ready",
+              "assets": "ready",
+              "fallback": false,
+              "aircraft": "cessna-172",
+              "engineModel": null,
+              "engines": [
+                "running"
+              ]
+            },
+            "after": {
+              "outcome": "ready",
+              "assets": "ready",
+              "fallback": false,
+              "aircraft": "cessna-172",
+              "engineModel": null,
+              "engines": [
+                "running"
+              ]
+            }
+          },
+          "selfMsPerSecond": {
+            "selector": 162.2,
+            "geometry": 28.9,
+            "runtime": 29.7,
+            "heightPixels": 13.7,
+            "binding": 25.6
+          },
+          "inclusiveMsPerSecond": {
+            "selector": 228.4,
+            "geometry": 28.9,
+            "runtime": 342.4,
+            "heightPixels": null,
+            "binding": 25.8
+          },
+          "selfMsPerFrame": {
+            "selector": 2.894034325744308,
+            "geometry": 0.5156448336252188,
+            "runtime": 0.5299187390542907,
+            "heightPixels": 0.2444406304728546,
+            "binding": 0.45676497373029773
+          },
+          "mainThreadMsPerFrame": 16.30473263280794
+        }
+      ]
+    },
+    {
+      "label": "final-pair1",
+      "arm": "oct27-final",
+      "profileDirectory": "/Users/felg/gh/foss-earth/research/build/benchmarks/startup-audit/profile-fly-final-pair1-oct27-final/2026-10-27_090938",
+      "summarySha256": "9c79d23575625383af08c45fe2fc0aec330a1097a7d60ed3c980a5beecd172d9",
+      "stretches": [
+        {
+          "rate": 1,
+          "fps": 59.65655295635774,
+          "median": 16.665000000000873,
+          "p95": 16.67000000000553,
+          "p99": 16.67000000000553,
+          "mainThread": 0.292706581080634,
+          "script": 0.23118833338847897,
+          "heapUsed": 109988436,
+          "probe": {
+            "before": {
+              "outcome": "ready",
+              "assets": "ready",
+              "fallback": false,
+              "aircraft": "cessna-172",
+              "engineModel": null,
+              "engines": [
+                "running"
+              ]
+            },
+            "after": {
+              "outcome": "ready",
+              "assets": "ready",
+              "fallback": false,
+              "aircraft": "cessna-172",
+              "engineModel": null,
+              "engines": [
+                "running"
+              ]
+            }
+          },
+          "selfMsPerSecond": {
+            "selector": 45.1,
+            "geometry": 7.2,
+            "runtime": 12.6,
+            "heightPixels": 3.7,
+            "binding": 10.8
+          },
+          "inclusiveMsPerSecond": {
+            "selector": 64.3,
+            "geometry": null,
+            "runtime": 108.5,
+            "heightPixels": null,
+            "binding": 10.9
+          },
+          "selfMsPerFrame": {
+            "selector": 0.7559940654464781,
+            "geometry": 0.12069084858569051,
+            "runtime": 0.21120898502495838,
+            "heightPixels": 0.062021686078757625,
+            "binding": 0.18103627287853577
+          },
+          "mainThreadMsPerFrame": 4.90652856350527
+        },
+        {
+          "rate": 4,
+          "fps": 52.92697252496247,
+          "median": 16.66500000000815,
+          "p95": 33.330000000001746,
+          "p99": 33.3350000000064,
+          "mainThread": 0.9584136918358023,
+          "script": 0.8055215688833779,
+          "heapUsed": 189800936,
+          "probe": {
+            "before": {
+              "outcome": "ready",
+              "assets": "ready",
+              "fallback": false,
+              "aircraft": "cessna-172",
+              "engineModel": null,
+              "engines": [
+                "running"
+              ]
+            },
+            "after": {
+              "outcome": "ready",
+              "assets": "ready",
+              "fallback": false,
+              "aircraft": "cessna-172",
+              "engineModel": null,
+              "engines": [
+                "running"
+              ]
+            }
+          },
+          "selfMsPerSecond": {
+            "selector": 159.8,
+            "geometry": 22.6,
+            "runtime": 31.8,
+            "heightPixels": 12.3,
+            "binding": 23.1
+          },
+          "inclusiveMsPerSecond": {
+            "selector": 221.8,
+            "geometry": null,
+            "runtime": 337.9,
+            "heightPixels": null,
+            "binding": null
+          },
+          "selfMsPerFrame": {
+            "selector": 3.019254500616523,
+            "geometry": 0.4270034525277436,
+            "runtime": 0.6008278668310728,
+            "heightPixels": 0.23239568434032062,
+            "binding": 0.43645043156596797
+          },
+          "mainThreadMsPerFrame": 18.108228113440195
+        }
+      ]
+    },
+    {
+      "label": "final-pair2",
+      "arm": "oct27-final",
+      "profileDirectory": "/Users/felg/gh/foss-earth/research/build/benchmarks/startup-audit/profile-fly-final-pair2-oct27-final/2026-10-27_091143",
+      "summarySha256": "393171f5de32644baae227eca8187ca696b35f5e39ce785f2f032dafa45aaa73",
+      "stretches": [
+        {
+          "rate": 1,
+          "fps": 59.546220152581,
+          "median": 16.665000000000873,
+          "p95": 16.67000000000189,
+          "p99": 16.67000000000553,
+          "mainThread": 0.2994825456587073,
+          "script": 0.23537933881568085,
+          "heapUsed": 159055264,
+          "probe": {
+            "before": {
+              "outcome": "ready",
+              "assets": "ready",
+              "fallback": false,
+              "aircraft": "cessna-172",
+              "engineModel": null,
+              "engines": [
+                "running"
+              ]
+            },
+            "after": {
+              "outcome": "ready",
+              "assets": "ready",
+              "fallback": false,
+              "aircraft": "cessna-172",
+              "engineModel": null,
+              "engines": [
+                "running"
+              ]
+            }
+          },
+          "selfMsPerSecond": {
+            "selector": 44.8,
+            "geometry": 7.1,
+            "runtime": 12.0,
+            "heightPixels": 3.5,
+            "binding": 11.9
+          },
+          "inclusiveMsPerSecond": {
+            "selector": 64.2,
+            "geometry": null,
+            "runtime": 109.2,
+            "heightPixels": null,
+            "binding": 12.0
+          },
+          "selfMsPerFrame": {
+            "selector": 0.7523567387687187,
+            "geometry": 0.1192351081530782,
+            "runtime": 0.2015241264559068,
+            "heightPixels": 0.058777870216306156,
+            "binding": 0.1998447587354409
+          },
+          "mainThreadMsPerFrame": 5.0294132002218515
+        },
+        {
+          "rate": 4,
+          "fps": 56.88642297650131,
+          "median": 16.66500000000815,
+          "p95": 16.670000000012806,
+          "p99": 33.33499999999185,
+          "mainThread": 0.8961878263707571,
+          "script": 0.7524051240208877,
+          "heapUsed": 216302376,
+          "probe": {
+            "before": {
+              "outcome": "ready",
+              "assets": "ready",
+              "fallback": false,
+              "aircraft": "cessna-172",
+              "engineModel": null,
+              "engines": [
+                "running"
+              ]
+            },
+            "after": {
+              "outcome": "ready",
+              "assets": "ready",
+              "fallback": false,
+              "aircraft": "cessna-172",
+              "engineModel": null,
+              "engines": [
+                "running"
+              ]
+            }
+          },
+          "selfMsPerSecond": {
+            "selector": 153.1,
+            "geometry": 22.0,
+            "runtime": 28.3,
+            "heightPixels": 11.7,
+            "binding": 24.1
+          },
+          "inclusiveMsPerSecond": {
+            "selector": 211.6,
+            "geometry": null,
+            "runtime": 320.8,
+            "heightPixels": null,
+            "binding": 24.3
+          },
+          "selfMsPerFrame": {
+            "selector": 2.6913275960986804,
+            "geometry": 0.3867355134825014,
+            "runtime": 0.49748250143430867,
+            "heightPixels": 0.20567297762478484,
+            "binding": 0.4236511761331038
+          },
+          "mainThreadMsPerFrame": 15.753984509466434
+        }
+      ]
+    },
+    {
+      "label": "final-pair2",
+      "arm": "oct27-base",
+      "profileDirectory": "/Users/felg/gh/foss-earth/research/build/benchmarks/startup-audit/profile-fly-final-pair2-oct27-base/2026-10-27_091348",
+      "summarySha256": "fd0782f0a2aadd445d616b32482bbe77779e57cb16ac20d66758807c09c87685",
+      "stretches": [
+        {
+          "rate": 1,
+          "fps": 59.61907281264467,
+          "median": 16.665000000000873,
+          "p95": 16.67000000000189,
+          "p99": 16.67000000000553,
+          "mainThread": 0.29415815752926394,
+          "script": 0.2348998082137425,
+          "heapUsed": 195512364,
+          "probe": {
+            "before": {
+              "outcome": "ready",
+              "assets": "ready",
+              "fallback": false,
+              "aircraft": "cessna-172",
+              "engineModel": null,
+              "engines": [
+                "running"
+              ]
+            },
+            "after": {
+              "outcome": "ready",
+              "assets": "ready",
+              "fallback": false,
+              "aircraft": "cessna-172",
+              "engineModel": null,
+              "engines": [
+                "running"
+              ]
+            }
+          },
+          "selfMsPerSecond": {
+            "selector": 46.1,
+            "geometry": 9.4,
+            "runtime": 13.7,
+            "heightPixels": 3.9,
+            "binding": 11.4
+          },
+          "inclusiveMsPerSecond": {
+            "selector": 67.8,
+            "geometry": 9.5,
+            "runtime": 113.0,
+            "heightPixels": null,
+            "binding": 11.5
+          },
+          "selfMsPerFrame": {
+            "selector": 0.7732424847476428,
+            "geometry": 0.15766766500277316,
+            "runtime": 0.2297922351636162,
+            "heightPixels": 0.0654153078202995,
+            "binding": 0.19121397670549084
+          },
+          "mainThreadMsPerFrame": 4.933960621186911
+        },
+        {
+          "rate": 4,
+          "fps": 56.01938250990407,
+          "median": 16.66500000000815,
+          "p95": 33.329999999987194,
+          "p99": 33.3350000000064,
+          "mainThread": 0.9290724224863308,
+          "script": 0.7850444946468914,
+          "heapUsed": 297055848,
+          "probe": {
+            "before": {
+              "outcome": "ready",
+              "assets": "ready",
+              "fallback": false,
+              "aircraft": "cessna-172",
+              "engineModel": null,
+              "engines": [
+                "running"
+              ]
+            },
+            "after": {
+              "outcome": "ready",
+              "assets": "ready",
+              "fallback": false,
+              "aircraft": "cessna-172",
+              "engineModel": null,
+              "engines": [
+                "running"
+              ]
+            }
+          },
+          "selfMsPerSecond": {
+            "selector": 161.1,
+            "geometry": 29.4,
+            "runtime": 34.2,
+            "heightPixels": 12.7,
+            "binding": 24.1
+          },
+          "inclusiveMsPerSecond": {
+            "selector": 228.7,
+            "geometry": 29.4,
+            "runtime": 344.6,
+            "heightPixels": null,
+            "binding": null
+          },
+          "selfMsPerFrame": {
+            "selector": 2.875790356516657,
+            "geometry": 0.5248183518410287,
+            "runtime": 0.6105029807130333,
+            "heightPixels": 0.2267072472238457,
+            "binding": 0.4302082407948568
+          },
+          "mainThreadMsPerFrame": 16.58483869082408
+        }
+      ]
+    },
+    {
+      "label": "final-pair3",
+      "arm": "oct27-base",
+      "profileDirectory": "/Users/felg/gh/foss-earth/research/build/benchmarks/startup-audit/profile-fly-final-pair3-oct27-base/2026-10-27_091555",
+      "summarySha256": "13137f0c7653e8d2cacecd649a9eefd808336b06426224896f6e160dd3a44d8e",
+      "stretches": [
+        {
+          "rate": 1,
+          "fps": 59.66247518199868,
+          "median": 16.665000000000873,
+          "p95": 16.67000000000553,
+          "p99": 16.67000000000553,
+          "mainThread": 0.3585573792190602,
+          "script": 0.2927082395764395,
+          "heapUsed": 150923752,
+          "probe": {
+            "before": {
+              "outcome": "ready",
+              "assets": "ready",
+              "fallback": false,
+              "aircraft": "cessna-172",
+              "engineModel": null,
+              "engines": [
+                "running"
+              ]
+            },
+            "after": {
+              "outcome": "ready",
+              "assets": "ready",
+              "fallback": false,
+              "aircraft": "cessna-172",
+              "engineModel": null,
+              "engines": [
+                "running"
+              ]
+            }
+          },
+          "selfMsPerSecond": {
+            "selector": 81.2,
+            "geometry": 16.0,
+            "runtime": 14.6,
+            "heightPixels": 3.3,
+            "binding": 13.9
+          },
+          "inclusiveMsPerSecond": {
+            "selector": 112.2,
+            "geometry": 16.1,
+            "runtime": 163.4,
+            "heightPixels": null,
+            "binding": 15.0
+          },
+          "selfMsPerFrame": {
+            "selector": 1.3609894620077647,
+            "geometry": 0.26817526344980586,
+            "runtime": 0.24470992789794785,
+            "heightPixels": 0.05531114808652245,
+            "binding": 0.23297726012201886
+          },
+          "mainThreadMsPerFrame": 6.009763727121464
+        },
+        {
+          "rate": 4,
+          "fps": 35.12987012987013,
+          "median": 33.32999999999447,
+          "p95": 50,
+          "p99": 50,
+          "mainThread": 0.9958856168831169,
+          "script": 0.8630249675324676,
+          "heapUsed": 203579820,
+          "probe": {
+            "before": {
+              "outcome": "ready",
+              "assets": "ready",
+              "fallback": false,
+              "aircraft": "cessna-172",
+              "engineModel": null,
+              "engines": [
+                "running"
+              ]
+            },
+            "after": {
+              "outcome": "ready",
+              "assets": "ready",
+              "fallback": false,
+              "aircraft": "cessna-172",
+              "engineModel": null,
+              "engines": [
+                "running"
+              ]
+            }
+          },
+          "selfMsPerSecond": {
+            "selector": 256.0,
+            "geometry": 49.1,
+            "runtime": 51.6,
+            "heightPixels": 16.5,
+            "binding": 41.2
+          },
+          "inclusiveMsPerSecond": {
+            "selector": 359.5,
+            "geometry": 49.1,
+            "runtime": 519.8,
+            "heightPixels": null,
+            "binding": 43.2
+          },
+          "selfMsPerFrame": {
+            "selector": 7.287245841035121,
+            "geometry": 1.397670979667283,
+            "runtime": 1.4688354898336415,
+            "heightPixels": 0.4696857670979668,
+            "binding": 1.1727911275415899
+          },
+          "mainThreadMsPerFrame": 28.348684842883554
+        }
+      ]
+    },
+    {
+      "label": "final-pair3",
+      "arm": "oct27-final",
+      "profileDirectory": "/Users/felg/gh/foss-earth/research/build/benchmarks/startup-audit/profile-fly-final-pair3-oct27-final/2026-10-27_091811",
+      "summarySha256": "7814f09e728e02982fff1cac2993743b9352aeff4df3af3d3112b882b317446b",
+      "stretches": [
+        {
+          "rate": 1,
+          "fps": 59.63925202713884,
+          "median": 16.665000000000873,
+          "p95": 16.67000000000553,
+          "p99": 16.67000000000553,
+          "mainThread": 0.28499371173258314,
+          "script": 0.22633503226874066,
+          "heapUsed": 124755100,
+          "probe": {
+            "before": {
+              "outcome": "ready",
+              "assets": "ready",
+              "fallback": false,
+              "aircraft": "cessna-172",
+              "engineModel": null,
+              "engines": [
+                "running"
+              ]
+            },
+            "after": {
+              "outcome": "ready",
+              "assets": "ready",
+              "fallback": false,
+              "aircraft": "cessna-172",
+              "engineModel": null,
+              "engines": [
+                "running"
+              ]
+            }
+          },
+          "selfMsPerSecond": {
+            "selector": 43.0,
+            "geometry": 7.4,
+            "runtime": 13.1,
+            "heightPixels": 3.6,
+            "binding": 10.5
+          },
+          "inclusiveMsPerSecond": {
+            "selector": 61.7,
+            "geometry": 7.4,
+            "runtime": 105.9,
+            "heightPixels": null,
+            "binding": 10.7
+          },
+          "selfMsPerFrame": {
+            "selector": 0.7210016648168701,
+            "geometry": 0.12407935627081022,
+            "runtime": 0.21965399556048834,
+            "heightPixels": 0.06036293007769145,
+            "binding": 0.1760585460599334
+          },
+          "mainThreadMsPerFrame": 4.778626526082131
+        },
+        {
+          "rate": 4,
+          "fps": 56.24836772003134,
+          "median": 16.66500000000815,
+          "p95": 16.670000000012806,
+          "p99": 33.33499999999913,
+          "mainThread": 0.9198606032906763,
+          "script": 0.7721461869939931,
+          "heapUsed": 189994704,
+          "probe": {
+            "before": {
+              "outcome": "ready",
+              "assets": "ready",
+              "fallback": false,
+              "aircraft": "cessna-172",
+              "engineModel": null,
+              "engines": [
+                "running"
+              ]
+            },
+            "after": {
+              "outcome": "ready",
+              "assets": "ready",
+              "fallback": false,
+              "aircraft": "cessna-172",
+              "engineModel": null,
+              "engines": [
+                "running"
+              ]
+            }
+          },
+          "selfMsPerSecond": {
+            "selector": 158.9,
+            "geometry": 20.7,
+            "runtime": 32.4,
+            "heightPixels": 13.4,
+            "binding": 21.8
+          },
+          "inclusiveMsPerSecond": {
+            "selector": 214.1,
+            "geometry": null,
+            "runtime": 326.8,
+            "heightPixels": null,
+            "binding": null
+          },
+          "selfMsPerFrame": {
+            "selector": 2.8249708647707488,
+            "geometry": 0.3680106790481718,
+            "runtime": 0.5760167150319211,
+            "heightPixels": 0.23822913522925132,
+            "binding": 0.387566802089379
+          },
+          "mainThreadMsPerFrame": 16.353551944283225
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+--- a/src/terrain/imagery/imagerySelector.ts
++++ b/src/terrain/imagery/imagerySelector.ts
+@@ -889,0 +890,9 @@
++  for (let i = 0; i < hullPoints.length; i++) {
++    const basis = tileSurfaceBasis(tile, hullPoints[i].u, hullPoints[i].v);
++    for (let j = 0; j < 2; j++) {
++      const expected = positionOnTileBasis(basis, j === 0 ? low : high), actual = hull[i * 2 + j];
++      if (!Object.is(expected.x, actual.x) || !Object.is(expected.y, actual.y) || !Object.is(expected.z, actual.z)) {
++        throw new Error("Reused hull point differs from its reference Float64 calculation");
++      }
++    }
++  }
+@@ -898,0 +908,5 @@
++  const referenceSphere = hullSphere(hull);
++  if (!Object.is(sphere.center.x, referenceSphere.center.x) || !Object.is(sphere.center.y, referenceSphere.center.y)
++    || !Object.is(sphere.center.z, referenceSphere.center.z) || !Object.is(sphere.radius, referenceSphere.radius)) {
++    throw new Error("Cached hull sphere differs from the current ordered hull calculation");
++  }

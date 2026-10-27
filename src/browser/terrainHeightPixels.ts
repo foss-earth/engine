@@ -112,7 +112,7 @@ export function packTerrainHeightPixels(): {
       const unit = wide ? WIDE : NARROW;
       const sorted = wide ? wideKeys.subarray(0, length).sort() : narrowKeys.subarray(0, length).sort();
       let unique = 0;
-      for (let k = 0; k < length; k++) if (!k || sorted[k] !== sorted[k - 1]) unique++;
+      for (let k = 0; k < length; k++) if (!unique || sorted[k] !== sorted[unique - 1]) sorted[unique++] = sorted[k];
       if (unique * 8 > budget) return null;
       const sources = [grid, ...(grid.neighbors ?? [])], row = table.length;
       table.push(gridId, count, 0, grid.neighbors ? 1 : 0);
@@ -124,7 +124,7 @@ export function packTerrainHeightPixels(): {
       }
       for (let slot = 0, k = 0; slot < sources.length; slot++) {
         const source = sources[slot], start = pixels;
-        for (; k < length && sorted[k] < (slot + 1) * unit; k++) if (!k || sorted[k] !== sorted[k - 1]) {
+        for (; k < unique && sorted[k] < (slot + 1) * unit; k++) {
           const index = sorted[k] - slot * unit;
           indices[pixels] = index; heights[pixels++] = source.heights[index];
         }

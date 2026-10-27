@@ -134,6 +134,26 @@ describe("exact sparse terrain height inputs", () => {
     expect([...packed.coordinates]).toEqual([1.5, 1.5]);
     expect(unpackTerrainHeightPixels(packed)).toHaveLength(1);
   });
+  it("keeps neighbour slot order across duplicate-heavy batches at the exact byte budget", () => {
+    const source = grid(2, 1, 1, 8), below = grid(2, 1, 2, 8, 1), right = grid(2, 2, 1, 8, 2);
+    // Coordinates read right before below; the table still follows source slots.
+    // The repeated right object and the tile above are never the first cover.
+    source.neighbors = [below, right, right, grid(2, 1, 0, 8, 3)];
+    const coordinates = Float64Array.from(Array.from({ length: 40 }, () => [1.999, 1.5, 1.5, 1.999, 1.5, 1.5]).flat());
+    const collected = collectTerrainHeightPixels(source, coordinates);
+    const neighbors = collected.neighbors!.filter(value => value.indices.length);
+    const bytes = [collected, ...neighbors].reduce((sum, value) => sum + value.indices.byteLength + value.heights.byteLength, 0);
+    const pack = packTerrainHeightPixels();
+    expect(pack.add(1, source, coordinates, coordinates.length / 2, bytes - 1)).toBeNull();
+    expect(pack.add(2, source, coordinates, coordinates.length / 2, bytes)).toBe(bytes);
+    // Reusing sort scratch for the next batch must retain the previous snapshot.
+    expect(pack.add(3, source, [1.5, 1.5], 1, 32)).toBe(32);
+    const batches = unpackTerrainHeightPixels(pack.finish());
+    expect(batches.map(batch => batch.gridId)).toEqual([2, 3]);
+    expect(batches[0].grid).toEqual({ ...collected, neighbors });
+    expect(batches[0].coordinates).toEqual(coordinates);
+    expect((batches[0].grid as TerrainHeightPixels).neighbors!.map(value => [value.x, value.y])).toEqual([[1, 2], [2, 1]]);
+  });
   it("rejects packed tables that do not describe their arrays exactly", () => {
     const pack = packTerrainHeightPixels(), source = { ...grid(2, 1, 1, 4), neighbors: [grid(2, 2, 1, 4, 1)] };
     pack.add(1, source, [1.99, 1.5], 1, Infinity);

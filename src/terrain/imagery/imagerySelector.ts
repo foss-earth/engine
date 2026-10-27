@@ -469,7 +469,11 @@ interface TileSurface {
   /** Lattice points' centre, east and south heights, as `heightsAt` answered them, and their samples once taken. */
   lattice: Map<number, LatticePoint>;
   /** The grid's hull positions, low then high at each point, at the heights they were taken at. */
-  hull: { low: number; high: number; positions: Vec3[] } | null;
+  hull: {
+    low: number; high: number; positions: Vec3[];
+    /** The grid plus the same nearest point gives the same sphere. */
+    sphere?: { u: number; v: number; center: Vec3; radius: number };
+  } | null;
   /** The revision's record, which counts the points kept for all tiles. */
   owner: { points: number };
 }
@@ -551,10 +555,23 @@ function surfaceSamples(input: Pick<ImagerySelectionInput, "surface">, tile: Til
     return samples;
   }
   // Lattice points known at this revision are not asked for again.
-  const lattice = new Array<number>(count), slots = new Array<number>(count);
+  const lattice = new Array<number>(count);
   let onLattice = false;
   for (let i = 0; i < count; i++) if ((lattice[i] = latticeIndex(points[i].u, points[i].v)) >= 0) onLattice = true;
   const known = onLattice ? tileSurface(surface, tile, key) : null;
+  // Return only ready samples taken with this fallback. This branch cannot
+  // call the surface or rebuild a sample, so reentry cannot replace a record
+  // gathered earlier in the loop. Any miss retains the complete old path.
+  if (known) {
+    let ready = 0;
+    for (; ready < count; ready++) {
+      const point = lattice[ready] < 0 ? undefined : known.lattice.get(lattice[ready]);
+      if (!point?.sample || !Object.is(point.fallback, fallbackHeight)) break;
+      samples[ready] = point.sample;
+    }
+    if (ready === count) return samples;
+  }
+  const slots = new Array<number>(count);
   let asked = 0;
   for (let i = 0; i < count; i++) slots[i] = !known || lattice[i] < 0 || !known.lattice.has(lattice[i]) ? asked++ : -1;
   let heights: Float64Array | null = null;
@@ -857,10 +874,14 @@ function evaluateView(job: ViewMeasurementContext, tile: TileId, bounds = job.in
   }
   // Each point's position is `sampleTileSurface`'s, from one basis for both heights.
   const kept = grid?.hull?.positions;
+  // A nearest corner is already one of the grid's exact low/high points.
+  const nearestCorner = (nearest.u === 0 || nearest.u === 1) && (nearest.v === 0 || nearest.v === 1)
+    ? nearest.v * 6 + nearest.u * 2 : -1;
   for (let i = 0; i < hullPoints.length; i++) {
-    const basis = kept && i < 9 ? null : tileSurfaceBasis(tile, hullPoints[i].u, hullPoints[i].v);
+    const keptIndex = i < 9 ? i : nearestCorner;
+    const basis = kept && keptIndex >= 0 ? null : tileSurfaceBasis(tile, hullPoints[i].u, hullPoints[i].v);
     for (let j = 0; j < 2; j++) {
-      const position = basis ? positionOnTileBasis(basis, j === 0 ? low : high) : kept![i * 2 + j];
+      const position = basis ? positionOnTileBasis(basis, j === 0 ? low : high) : kept![keptIndex * 2 + j];
       hull.push(position);
       // A point inside every plane leaves nothing for the others to clear.
       if (allOutside !== 0) allOutside &= clipOutcode(view, m, position);
@@ -872,8 +893,11 @@ function evaluateView(job: ViewMeasurementContext, tile: TileId, bounds = job.in
   // samples, so only small tiles are rejected point by point. Any tile is
   // rejected when its whole bounding sphere is behind the globe.
   if (!anyAboveHorizon && span < IMAGERY_SELECTION_CONSTANTS.horizonTileSpan) return result;
-  const { center, radius } = hullSphere(hull);
-  if (isSphereBelowHorizon(view.camera, center, radius)) return result;
+  const cachedSphere = grid?.hull?.sphere;
+  const sphere = cachedSphere && Object.is(cachedSphere.u, nearest.u) && Object.is(cachedSphere.v, nearest.v)
+    ? cachedSphere : hullSphere(hull);
+  if (grid?.hull && sphere !== cachedSphere) grid.hull.sphere = { u: nearest.u, v: nearest.v, ...sphere };
+  if (isSphereBelowHorizon(view.camera, sphere.center, sphere.radius)) return result;
   result.visible = true;
 
   const selectionWidth = job.cartographic ? view.logicalWidth : view.renderWidth;

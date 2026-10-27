@@ -363,7 +363,7 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
   const viewMeasurements = createImageryMeasurementCache();
   let loadedTarget: number | null = null;
   let distributionGeneration = 1;
-  let distributionPageKey = "";
+  let distributionPageKeys = new Set<string>();
   let distributionRegions: LoadedImageryRegion[] = [];
   let distributionView: ReturnType<typeof readImageryView> = null;
   let distributionSurface = -1;
@@ -1016,7 +1016,7 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
   }
 
   function clearDistributionPages(): void {
-    distributionPageKey = "";
+    distributionPageKeys = new Set();
     distributionRegions = [];
     distributionView = null;
     distributionSurface = -1;
@@ -1039,26 +1039,32 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
       loadedDistribution = unavailableDetailDistribution(sourceKey, "raster", distributionGeneration, "Loaded detail has not been measured.");
       return;
     }
-    const visible = [...patches.values()].filter(patch => patch.visible);
-    if (visible.length === 0) {
+    const bindings: LoadedImageryBinding[] = [];
+    let visible = 0;
+    for (const patch of patches.values()) if (patch.visible) {
+      visible++;
+      if (patch.bound) bindings.push(patch.bound);
+    }
+    if (visible === 0) {
       loadedDistribution = createDetailDistribution({ status: "empty", kind: "raster", sourceKey, generation: distributionGeneration });
       return;
     }
-    const bindings = visible.flatMap(patch => patch.bound ? [patch.bound] : []);
     const pages = loadedImageryPages(bindings);
-    const pageKey = pages.map(tile => `${tile.z}/${tile.x}/${tile.y}`).sort().join(",");
+    const pageKeys = new Set(pages.map(tile => `${tile.z}/${tile.x}/${tile.y}`));
     const surfaceRevision = options.surface.getRevision();
-    if (pageKey !== distributionPageKey || imageryViewChanged(distributionView, latestView) || surfaceRevision !== distributionSurface) {
+    let pagesChanged = pageKeys.size !== distributionPageKeys.size;
+    if (!pagesChanged) for (const key of pageKeys) if (!distributionPageKeys.has(key)) { pagesChanged = true; break; }
+    if (pagesChanged || imageryViewChanged(distributionView, latestView) || surfaceRevision !== distributionSurface) {
       const source = shownPlan.source.capabilities;
       distributionRegions = measureImageryView({ view: latestView, source, surface: options.surface }, pages, [], viewMeasurements).map(region => ({
         tile: region.tile, footprintPx: region.footprintPx, screenArea: region.screenArea, referenceLevel: region.tile.z,
       }));
-      distributionPageKey = pageKey;
+      distributionPageKeys = pageKeys;
       distributionView = latestView;
       distributionSurface = surfaceRevision;
     }
     const draft = measureLoadedImageryDistribution(distributionRegions, bindings, shownPlan.plan.physicalTarget * 2 ** shownPlan.plan.offset);
-    const incomplete = draft.incomplete || bindings.length < visible.length;
+    const incomplete = draft.incomplete || bindings.length < visible;
     loadedDistribution = createDetailDistribution({
       ...draft, kind: "raster", sourceKey, generation: distributionGeneration, incomplete,
       status: draft.status === "unavailable" ? "unavailable" : incomplete || draft.tileCount > 0 || draft.unknownCount > 0 ? "measured" : "empty",
@@ -1095,7 +1101,9 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
       scheduleWake(measuredAt + tuning.reselectWhileMovingMs);
       if (!bindingsChanged) return;
     }
-    loadedTarget = measureLoadedImagery(loadedRegions, [...patches.values()].filter(patch => patch.visible && patch.bound).map(patch => patch.bound!), shownPlan.plan.physicalTarget * 2 ** shownPlan.plan.offset);
+    const bindings: LoadedImageryBinding[] = [];
+    for (const patch of patches.values()) if (patch.visible && patch.bound) bindings.push(patch.bound);
+    loadedTarget = measureLoadedImagery(loadedRegions, bindings, shownPlan.plan.physicalTarget * 2 ** shownPlan.plan.offset);
     measuredPublish = counters.publishes;
     syncDistribution();
   }

@@ -1,0 +1,5 @@
+--- a/src/terrain/imagery/imagerySelector.ts
++++ b/src/terrain/imagery/imagerySelector.ts
+@@ -906 +906 @@
+-  const sphere = cachedSphere && Object.is(cachedSphere.u, nearest.u) && Object.is(cachedSphere.v, nearest.v)
++  const sphere = cachedSphere
