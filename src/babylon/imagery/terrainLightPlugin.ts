@@ -513,7 +513,8 @@ interface TerrainUniformWrite {
 const TERRAIN_UNIFORM_WRITES = new WeakMap<UniformBuffer, TerrainUniformWrite>();
 
 function boundEffect(buffer: UniformBuffer): object | null {
-  return (buffer as UniformBuffer & { _currentEffect?: object | null })._currentEffect ?? null;
+  // `_currentEffect` is private in Babylon's types, so read it through `unknown`.
+  return (buffer as unknown as { _currentEffect?: object | null })._currentEffect ?? null;
 }
 
 function uniformWrite(buffer: UniformBuffer): TerrainUniformWrite {
