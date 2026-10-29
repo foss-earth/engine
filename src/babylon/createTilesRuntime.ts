@@ -30,9 +30,19 @@ export interface GoogleTilesRenderer extends TilesRendererBase<TilesRendererBase
 
 const GOOGLE_3D_TILES_ROOT_URL = "https://tile.googleapis.com/v1/3dtiles/root.json";
 
+/** A person's own Maps key, or a signed-in session whose token the account service exchanges for that key. */
+export type GoogleTilesCredential =
+  | { kind: "device-key"; apiKey: string }
+  | { kind: "hosted"; rootUrl: string; authorization(request?: { refresh?: boolean }): Promise<string> };
+
 export interface GoogleTilesRuntimeOptions {
   scene: Scene;
-  apiKey: string;
+  /**
+   * Device-key shorthand. Ignored when `credential` is set. An empty key still
+   * fails before any request on the device-key path.
+   */
+  apiKey?: string;
+  credential?: GoogleTilesCredential;
   /**
    * Optional scene-space point used to choose Google tile refinement. The
    * active Babylon camera still controls the visible frustum.
@@ -745,6 +755,88 @@ function normaliseTerrainDetailTarget(errorTarget: number | null): number | null
   return Math.max(MIN_TERRAIN_ERROR_TARGET, Math.min(MAX_TERRAIN_ERROR_TARGET, errorTarget));
 }
 
+function credentialOf(options: GoogleTilesRuntimeOptions): GoogleTilesCredential {
+  if (options.credential) return options.credential;
+  return { kind: "device-key", apiKey: options.apiKey ?? "" };
+}
+
+function isTilesRoot(uri: string, rootUrl: string): boolean {
+  try {
+    return new URL(uri).href === new URL(rootUrl).href || new URL(uri, rootUrl).pathname.endsWith("/v1/3dtiles/root.json");
+  } catch {
+    return uri === rootUrl;
+  }
+}
+
+interface TileCopyrightEvent {
+  tile?: { engineData?: { metadata?: { asset?: { copyright?: string } } } };
+  visible?: boolean;
+}
+
+interface HostedTileSet {
+  errorTarget: number;
+  visibleTiles: { size: number };
+  addEventListener(type: string, listener: (event: TileCopyrightEvent) => void): void;
+  removeEventListener(type: string, listener: (event: TileCopyrightEvent) => void): void;
+}
+
+/** Fetches tiles with the account token and keeps Google's copyright line, without putting the token on the query. */
+function createHostedTilesPlugin(credential: Extract<GoogleTilesCredential, { kind: "hosted" }>, fetchImpl: typeof fetch) {
+  const counts = new Map<string, number>();
+  const attribution = { value: "", type: "string", collapsible: true };
+  let bound: ((event: TileCopyrightEvent) => void) | null = null;
+  let boundTiles: HostedTileSet | null = null;
+  const plugin = {
+    name: "FOSS_EARTH_HOSTED_TILES",
+    tiles: null as HostedTileSet | null,
+    init(tiles: HostedTileSet) {
+      tiles.errorTarget = 20;
+      plugin.tiles = tiles;
+      bound = event => {
+        const line = event.tile?.engineData?.metadata?.asset?.copyright ?? "";
+        if (!line) return;
+        for (const credit of line.split(";")) {
+          const next = (counts.get(credit) ?? 0) + (event.visible ? 1 : -1);
+          if (next <= 0) counts.delete(credit);
+          else counts.set(credit, next);
+        }
+      };
+      boundTiles = tiles;
+      tiles.addEventListener("tile-visibility-change", bound);
+    },
+    getAttributions(target: { value: string; type: string; collapsible: boolean }[]) {
+      if (!plugin.tiles || plugin.tiles.visibleTiles.size === 0) return;
+      attribution.value = [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([credit]) => credit).join("; ");
+      target.push(attribution);
+    },
+    async fetchData(uri: string, init?: RequestInit): Promise<Response> {
+      const load = async (refresh: boolean): Promise<Response> => {
+        const authorization = await credential.authorization(refresh ? { refresh: true } : undefined);
+        if (!authorization.startsWith("Bearer ") || authorization.trim().length < "Bearer ".length + 8) {
+          throw new Error("Sign in again to use Google 3D Tiles.");
+        }
+        const url = new URL(uri, credential.rootUrl);
+        url.searchParams.delete("key");
+        const headers = new Headers(init?.headers);
+        headers.set("Authorization", authorization);
+        return fetchImpl(url, { ...init, headers, credentials: "omit" });
+      };
+      let response = await load(false);
+      if (response.status === 401) response = await load(true);
+      if (response.status === 401) throw new Error("Sign in again to use Google 3D Tiles.");
+      if (response.status === 402) throw new Error("Google 3D Tiles are paused until the budget resets. Flat maps still work.");
+      return response;
+    },
+    dispose() {
+      if (bound && boundTiles) boundTiles.removeEventListener("tile-visibility-change", bound);
+      bound = null;
+      boundTiles = null;
+      plugin.tiles = null;
+    },
+  };
+  return plugin;
+}
+
 export function createGoogleTilesRuntime(options: GoogleTilesRuntimeOptions): SettledGoogleTilesRuntime {
   const {
     scene,
@@ -752,14 +844,15 @@ export function createGoogleTilesRuntime(options: GoogleTilesRuntimeOptions): Se
     onLoadStart,
     onLoadEnd,
   } = options;
-  const apiKey = options.apiKey.trim();
-
-  if (!apiKey) {
+  const credential = credentialOf(options);
+  const apiKey = credential.kind === "device-key" ? credential.apiKey.trim() : "";
+  if (credential.kind === "device-key" && !apiKey) {
     throw new Error("Google Maps API key is empty.");
   }
+  const rootUrl = credential.kind === "hosted" ? credential.rootUrl : GOOGLE_3D_TILES_ROOT_URL;
 
   const drawableLifetime = options.createAbortController();
-  const tiles = options.createTilesRenderer(GOOGLE_3D_TILES_ROOT_URL, scene);
+  const tiles = options.createTilesRenderer(rootUrl, scene);
   const work = createNativeMapSettlement();
   const setupCleanup: (() => void)[] = [() => work.close(), () => drawableLifetime.abort(), () => tiles.dispose()];
   try {
@@ -807,11 +900,13 @@ export function createGoogleTilesRuntime(options: GoogleTilesRuntimeOptions): Se
   // traversal still uses the view-error and parse hooks above.
   tiles.optimizedLoadStrategy = true;
 
-  const authPlugin = options.createAuthPlugin({
+  const hostedPlugin = credential.kind === "hosted" ? createHostedTilesPlugin(credential, fetch) : null;
+  const authPlugin = hostedPlugin ?? options.createAuthPlugin({
     apiToken: apiKey,
     autoRefreshToken: true,
     useRecommendedSettings: true,
   });
+  if (hostedPlugin) setupCleanup.push(() => hostedPlugin.dispose());
   // The plugin owns authenticated fetch and retries. Wrap its existing response
   // rather than replacing authentication or patching global fetch.
   const downloader = authPlugin as GoogleCloudAuthPlugin & {
@@ -820,7 +915,8 @@ export function createGoogleTilesRuntime(options: GoogleTilesRuntimeOptions): Se
   // A cached session expires while the browser still holds the root that
   // issued it. Renewal fetches that root with the failed request's options, so
   // it must skip the cache, or it gets the expired session back and every
-  // uncached model keeps failing.
+  // uncached model keeps failing. Hosted sessions refresh through the account
+  // token instead, so they have no Google refresh hook.
   const auth = (authPlugin as { auth?: { refreshToken?: (init: RequestInit) => Promise<unknown> } }).auth;
   if (auth?.refreshToken) {
     const refreshToken = auth.refreshToken.bind(auth);
@@ -830,7 +926,7 @@ export function createGoogleTilesRuntime(options: GoogleTilesRuntimeOptions): Se
   const fetchData = downloader.fetchData.bind(downloader);
   downloader.fetchData = (uri, fetchOptions) => work.run(async () => {
     options.recordMapRequest(uri);
-    const cache: RequestCache | undefined = uri === GOOGLE_3D_TILES_ROOT_URL ? "no-cache" : fetchOptions.cache;
+    const cache: RequestCache | undefined = isTilesRoot(uri, rootUrl) ? "no-cache" : fetchOptions.cache;
     const response = await fetchData(uri, { ...fetchOptions, cache, signal: options.combineSignals([drawableLifetime.signal, ...(fetchOptions.signal ? [fetchOptions.signal] : [])]) });
     if (response instanceof options.responseRealm.Response && !response.ok) {
       try {

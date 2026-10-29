@@ -173,6 +173,44 @@ describe("imagery residency", () => {
     expect(loader.load).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps bounded admission and coverage order across an empty, live, and expired missing set", async () => {
+    const { residency, pending, image, flush, advance } = harness({ queuedRequests: 1, concurrentRequests: 2 });
+    const wanted = [request("detail", 10), request("other", 5), request("root", 0, { coverage: true })];
+    residency.setDemand(wanted);
+    expect(residency.stats()).toMatchObject({ queued: 1, overflow: 2, missing: 0 });
+    residency.pump();
+    expect(pending.map(item => item.url)).toEqual(["https://tiles/root"]);
+    pending[0].resolve(image());
+    await flush();
+    residency.upload(Infinity);
+
+    residency.pump();
+    expect(pending.map(item => item.url)).toEqual(["https://tiles/root", "https://tiles/detail"]);
+    pending[1].reject(new ImageryMissingError("404"));
+    await flush();
+    residency.setDemand(wanted);
+    expect(residency.stats()).toMatchObject({ queued: 1, overflow: 0, missing: 1 });
+    residency.pump();
+    expect(pending.map(item => item.url)).toEqual(["https://tiles/root", "https://tiles/detail", "https://tiles/other"]);
+    pending[2].resolve(image());
+    await flush();
+    residency.upload(Infinity);
+
+    // Expiry removes the final missing record, and the same demand admits it again.
+    advance(1000);
+    residency.pump();
+    expect(pending.map(item => item.url)).toEqual([
+      "https://tiles/root", "https://tiles/detail", "https://tiles/other", "https://tiles/detail",
+    ]);
+    expect(residency.stats()).toMatchObject({ resident: 2, inFlight: 1, queued: 0, overflow: 0, missing: 0 });
+    pending[3].resolve(image());
+    await flush();
+    residency.upload(Infinity);
+    residency.pump();
+    expect(pending).toHaveLength(4);
+    expect(residency.stats()).toMatchObject({ resident: 3, inFlight: 0, queued: 0, overflow: 0, missing: 0 });
+  });
+
   it("wakes selection when missing imagery expires even after the coarse plan stops demanding it", async () => {
     const { residency, pending, flush, advance, onChange } = harness();
     residency.setDemand([request("detail")]);
@@ -305,5 +343,130 @@ describe("imagery residency disposal failures", () => {
     });
     residency.pump();
     expect(residency.stats()).toMatchObject({ staged: 1, inFlight: 1, inFlightReservedBytes: 256 * 256 * 4 * 2, queued: 0 });
+  });
+});
+
+describe("imagery residency stats cache", () => {
+  it("returns equal snapshots until something changes, each in its own object", () => {
+    const { residency } = harness({ queuedRequests: 2, concurrentRequests: 1 });
+    residency.setDemand([request("a", 2), request("b", 1), request("c", 0)]);
+    const first = residency.stats();
+    const second = residency.stats();
+    expect(second).toEqual(first);
+    expect(second).not.toBe(first);
+    expect(second.limits).not.toBe(first.limits);
+    expect(first).toMatchObject({ queued: 2, overflow: 1, resident: 0, demanded: 3 });
+    first.resident = 50;
+    first.uploads = 50;
+    first.limits.push("backend");
+    const third = residency.stats();
+    expect(third.resident).toBe(0);
+    expect(third.uploads).toBe(0);
+    expect(third.limits).not.toContain("backend");
+    expect(third).toEqual(second);
+    const pinned = residency.stats();
+    residency.setPinned(new Set([4, 9]));
+    expect(residency.stats().pinnedPages).toBe(2);
+    expect(pinned.pinnedPages).toBe(0);
+    expect(residency.stats()).toEqual(residency.stats());
+  });
+
+  it("shows an upload, an eviction, and an image left unplaced on the following stats call", async () => {
+    const { residency, pending, image, flush, onChange } = harness({}, 1);
+    residency.setDemand([request("a")]);
+    residency.pump();
+    pending[0].resolve(image());
+    await flush();
+    const beforeUpload = residency.stats();
+    expect(beforeUpload).toMatchObject({ staged: 1, resident: 0, uploads: 0, evictions: 0, unplaced: 0 });
+    expect(residency.stats()).toEqual(beforeUpload);
+    let uploadedDuringNotify: { resident: number; staged: number; uploads: number } | null = null;
+    onChange.mockImplementation(() => {
+      const stats = residency.stats();
+      uploadedDuringNotify = { resident: stats.resident, staged: stats.staged, uploads: stats.uploads };
+    });
+    residency.upload(Infinity);
+    expect(uploadedDuringNotify).toEqual({ resident: 1, staged: 0, uploads: 1 });
+    const uploaded = residency.stats();
+    expect(uploaded).toMatchObject({ resident: 1, residentPages: 1, staged: 0, uploads: 1, evictions: 0 });
+    expect(beforeUpload.resident).toBe(0);
+    expect(beforeUpload.uploads).toBe(0);
+    onChange.mockReset();
+    residency.pump();
+    expect(residency.upload(Infinity)).toBe(0);
+    expect(residency.stats()).toEqual(uploaded);
+
+    residency.setDemand([request("b")]);
+    residency.pump();
+    pending[1].resolve(image());
+    await flush();
+    const beforeEvict = residency.stats();
+    expect(beforeEvict).toMatchObject({ resident: 1, staged: 1, evictions: 0 });
+    residency.upload(Infinity);
+    const afterEvict = residency.stats();
+    expect(afterEvict.evictions).toBe(1);
+    expect(afterEvict.resident).toBe(1);
+    expect(residency.isResident("a")).toBe(false);
+    expect(residency.isResident("b")).toBe(true);
+    expect(beforeEvict.evictions).toBe(0);
+    expect(residency.stats()).toEqual(afterEvict);
+
+    const slot = residency.slotsFor("b")![0];
+    residency.setPinned(new Set([slot]));
+    residency.setDemand([request("b"), request("c")]);
+    residency.pump();
+    pending[2].resolve(image());
+    await flush();
+    const beforeUnplaced = residency.stats();
+    expect(beforeUnplaced).toMatchObject({ unplaced: 0, staged: 1, resident: 1, evictions: 1 });
+    expect(beforeUnplaced.limits).not.toContain("memory");
+    expect(residency.upload(Infinity)).toBe(0);
+    const unplaced = residency.stats();
+    expect(unplaced).toMatchObject({ unplaced: 1, staged: 1, resident: 1, evictions: 1 });
+    expect(unplaced.limits).toContain("memory");
+    expect(beforeUnplaced.unplaced).toBe(0);
+    expect(beforeUnplaced.limits).not.toContain("memory");
+  });
+
+  it("shows a newly missing image, and drops it after the record expires", async () => {
+    const { residency, pending, flush, advance, onChange } = harness();
+    residency.setDemand([request("gone")]);
+    residency.pump();
+    const before = residency.stats();
+    expect(before.missing).toBe(0);
+    expect(residency.stats()).toEqual(before);
+    let missingDuringNotify: number | null = null;
+    onChange.mockImplementation(() => { missingDuringNotify = residency.stats().missing; });
+    pending[0].reject(new ImageryMissingError("404"));
+    await flush();
+    expect(missingDuringNotify).toBe(1);
+    const missing = residency.stats();
+    expect(missing.missing).toBe(1);
+    expect(before.missing).toBe(0);
+    expect(residency.stats()).toEqual(missing);
+    onChange.mockReset();
+    advance(1001);
+    expect(residency.stats().missing).toBe(0);
+    expect(missing.missing).toBe(1);
+    expect(residency.isMissing("gone")).toBe(false);
+    expect(residency.stats().missing).toBe(0);
+  });
+
+  it("shows a retried failure as in flight on the next stats call", async () => {
+    const { residency, pending, flush, advance } = harness({ concurrentRequests: 1 });
+    residency.setDemand([request("flaky")]);
+    residency.pump();
+    pending[0].reject(new Error("429"));
+    await flush();
+    const failed = residency.stats();
+    expect(failed).toMatchObject({ failed: 1, inFlight: 0 });
+    expect(residency.stats()).toEqual(failed);
+    advance(2000);
+    residency.pump();
+    const retried = residency.stats();
+    expect(retried.failed).toBe(0);
+    expect(retried.inFlight).toBe(1);
+    expect(failed.failed).toBe(1);
+    expect(residency.stats()).toEqual(retried);
   });
 });

@@ -1,6 +1,6 @@
 import { sampleTerrainGrid, type TerrainGrid } from "../terrain/terrainGrid.js";
 import { sampleTerrainHeightPixels, unpackTerrainHeightPixels, type TerrainHeightPixels } from "./terrainHeightPixels.js";
-import type { HeightBatchWorkerScope, NativeHeightCore, NativeHeightSampler } from "./terrainHeightBatchProtocol.js";
+import type { HeightBatchWorkerScope, WasmHeightCore, WasmHeightSampler } from "./terrainHeightBatchProtocol.js";
 
 const MAX_SNAPSHOTS = 24 * 1024 ** 2;
 const MAX_BATCH = 8192;
@@ -15,12 +15,12 @@ function reference(grid: TerrainGrid, coordinates: Float64Array): Float64Array {
  * storage; the complete JS and WASM arms use the identical protocol. */
 export function installTerrainHeightBatchKernel(options: {
   scope: HeightBatchWorkerScope; kernel: "typescript" | "single" | "threaded";
-  now(): number; loadNative?(): Promise<NativeHeightCore>;
+  now(): number; loadWasm?(): Promise<WasmHeightCore>;
 }): { dispose(): void } {
-  const models = new Map<number, { grid: TerrainGrid; bytes: number; sourceIds: number[]; sampler: NativeHeightSampler | null }>();
+  const models = new Map<number, { grid: TerrainGrid; bytes: number; sourceIds: number[]; sampler: WasmHeightSampler | null }>();
   const sources = new Map<number, Float32Array>();
   // Sources required later in the current request remain alive even if their
-  // model is evicted. Include those pins in the same JS/native memory budget.
+  // model is evicted. Include those pins in the same JS/WASM memory budget.
   const jobSources = new Set<Float32Array>();
   const jobIndices = new Set<Uint32Array>();
   const sourceIdentities = new WeakMap<Float32Array, number>();
@@ -31,14 +31,14 @@ export function installTerrainHeightBatchKernel(options: {
     return [...arrays].reduce((sum, heights) => sum + heights.byteLength, 0)
       + [...jobIndices].reduce((sum, indices) => sum + indices.byteLength, 0);
   }
-  function nativeBytes(): number { return [...models.values()].reduce((sum, model) => sum + (model.sampler?.bytes ?? 0), 0); }
+  function wasmBytes(): number { return [...models.values()].reduce((sum, model) => sum + (model.sampler?.bytes ?? 0), 0); }
   function evict(id: number): void {
     const model = models.get(id);
     model?.sampler?.dispose();
     if (model) model.sampler = null;
     models.delete(id);
   }
-  let core: NativeHeightCore | null = null, started = false, disposed = false;
+  let core: WasmHeightCore | null = null, started = false, disposed = false;
   let actual: "typescript" | "single" = "typescript";
   let parity: "not compared" | "same" | "different" | "unchecked" = options.kernel === "single" ? "unchecked" : "not compared";
   let fallbackReason: string | null = options.kernel === "threaded" ? "threaded-unavailable" : null;
@@ -60,14 +60,14 @@ export function installTerrainHeightBatchKernel(options: {
       if (!started) {
         started = true;
         if (options.kernel === "single") {
-          try { core = await options.loadNative?.() ?? null; if (!core) throw new Error("No native height core"); }
-          catch { fallbackReason = "native-startup-failed"; }
+          try { core = await options.loadWasm?.() ?? null; if (!core) throw new Error("No WASM height core"); }
+          catch { fallbackReason = "wasm-startup-failed"; }
         }
       }
       if (disposed) { core?.dispose(); core = null; return; }
       const start = options.now();
       const batches = [];
-      let peakSnapshotBytes = 0, peakNativeBytes = 0;
+      let peakSnapshotBytes = 0, peakWasmBytes = 0;
       actual = "typescript";
       let samples = 0;
       // Keep the request's source catalogue through this job: an earlier new
@@ -114,11 +114,11 @@ export function installTerrainHeightBatchKernel(options: {
           // across generations would add no pixels and recreate cache churn.
           for (const id of [...models.keys()]) evict(id);
           if (core) {
-            let sampler: NativeHeightSampler | null = null;
+            let sampler: WasmHeightSampler | null = null;
             try {
               sampler = core.createHeightSampler(source);
-              peakSnapshotBytes = Math.max(peakSnapshotBytes, snapshotBytes()); peakNativeBytes = Math.max(peakNativeBytes, sampler.bytes);
-              if (!Number.isSafeInteger(sampler.bytes) || sampler.bytes < 0 || snapshotBytes() + sampler.bytes > MAX_SNAPSHOTS) throw new Error("Sparse native snapshot exceeds budget");
+              peakSnapshotBytes = Math.max(peakSnapshotBytes, snapshotBytes()); peakWasmBytes = Math.max(peakWasmBytes, sampler.bytes);
+              if (!Number.isSafeInteger(sampler.bytes) || sampler.bytes < 0 || snapshotBytes() + sampler.bytes > MAX_SNAPSHOTS) throw new Error("Sparse WASM snapshot exceeds budget");
               heights = sampler.sample(batch.coordinates);
               if (!sparseValidated) {
                 const expected = referencePixels();
@@ -126,7 +126,7 @@ export function installTerrainHeightBatchKernel(options: {
                   parity = "different"; retire("parity-mismatch"); heights = expected;
                 } else { sparseValidated = true; parity = "same"; batchActual = "single"; actual = "single"; }
               } else { batchActual = "single"; actual = "single"; }
-            } catch { retire("native-execution-failed"); heights = referencePixels(); }
+            } catch { retire("wasm-execution-failed"); heights = referencePixels(); }
             finally { sampler?.dispose(); }
           } else { peakSnapshotBytes = Math.max(peakSnapshotBytes, snapshotBytes()); heights = referencePixels(); }
           batches.push({ gridId: batch.gridId, heights, actual: batchActual });
@@ -172,8 +172,8 @@ export function installTerrainHeightBatchKernel(options: {
         models.delete(batch.gridId); models.set(batch.gridId, model);
         // Include re-admitted models captured at request start: an earlier
         // batch can have evicted them even when this batch needs no payload.
-        // Shared JavaScript sources count once; native samplers own copies.
-        while (models.size > 16 || snapshotBytes() + nativeBytes() > MAX_SNAPSHOTS) {
+        // Shared JavaScript sources count once; WASM samplers own copies.
+        while (models.size > 16 || snapshotBytes() + wasmBytes() > MAX_SNAPSHOTS) {
           const disposable = [...models.values()].find(item => item !== model && item.sampler);
           if (disposable) { disposable.sampler!.dispose(); disposable.sampler = null; continue; }
           const oldest = [...models.entries()].find(([, item]) => item !== model);
@@ -186,14 +186,14 @@ export function installTerrainHeightBatchKernel(options: {
           try {
             const first = !model.sampler;
             if (first) {
-              const nativeSize = model.bytes + (3 + (1 + (model.grid.neighbors?.length ?? 0)) * 6) * 8;
-              if (model.bytes + nativeSize > MAX_SNAPSHOTS) {
-                retire("native-snapshot-budget-exceeded");
+              const wasmSize = model.bytes + (3 + (1 + (model.grid.neighbors?.length ?? 0)) * 6) * 8;
+              if (model.bytes + wasmSize > MAX_SNAPSHOTS) {
+                retire("wasm-snapshot-budget-exceeded");
                 heights = reference(model.grid, batch.coordinates);
                 batches.push({ gridId: batch.gridId, heights });
                 continue;
               }
-              while (snapshotBytes() + nativeBytes() + nativeSize > MAX_SNAPSHOTS) {
+              while (snapshotBytes() + wasmBytes() + wasmSize > MAX_SNAPSHOTS) {
                 const disposable = [...models.values()].find(item => item !== model && item.sampler);
                 if (disposable) { disposable.sampler!.dispose(); disposable.sampler = null; continue; }
                 const oldest = [...models.entries()].find(([, item]) => item !== model);
@@ -202,19 +202,19 @@ export function installTerrainHeightBatchKernel(options: {
               }
               // Other batches can pin valid sources that cannot be freed yet.
               // Keep this batch exact in TS, and allow a later smaller request
-              // to use the still-healthy native core.
-              if (snapshotBytes() + nativeBytes() + nativeSize > MAX_SNAPSHOTS) {
-                fallbackReason = "native-request-budget-exceeded";
+              // to use the still-healthy WASM core.
+              if (snapshotBytes() + wasmBytes() + wasmSize > MAX_SNAPSHOTS) {
+                fallbackReason = "wasm-request-budget-exceeded";
                 heights = reference(model.grid, batch.coordinates);
                 batches.push({ gridId: batch.gridId, heights, actual: batchActual });
                 continue;
               }
               model.sampler = core!.createHeightSampler(model.grid);
               if (!Number.isSafeInteger(model.sampler.bytes) || model.sampler.bytes < 0
-                || snapshotBytes() + nativeBytes() > MAX_SNAPSHOTS) throw new Error("Native height sampler exceeds budget");
+                || snapshotBytes() + wasmBytes() > MAX_SNAPSHOTS) throw new Error("WASM height sampler exceeds budget");
             }
             const sampler = model.sampler;
-            if (!sampler) throw new Error("Native height sampler missing");
+            if (!sampler) throw new Error("WASM height sampler missing");
             heights = sampler.sample(batch.coordinates);
             batchActual = "single"; actual = "single";
             if (first) {
@@ -223,20 +223,20 @@ export function installTerrainHeightBatchKernel(options: {
                 parity = "different"; retire("parity-mismatch"); heights = expected; batchActual = "typescript";
               } else { parity = "same"; actual = "single"; }
             }
-          } catch { retire("native-execution-failed"); heights = reference(model.grid, batch.coordinates); batchActual = "typescript"; }
+          } catch { retire("wasm-execution-failed"); heights = reference(model.grid, batch.coordinates); batchActual = "typescript"; }
         } else heights = reference(model.grid, batch.coordinates);
-        peakSnapshotBytes = Math.max(peakSnapshotBytes, snapshotBytes()); peakNativeBytes = Math.max(peakNativeBytes, nativeBytes());
+        peakSnapshotBytes = Math.max(peakSnapshotBytes, snapshotBytes()); peakWasmBytes = Math.max(peakWasmBytes, wasmBytes());
         batches.push({ gridId: batch.gridId, heights, actual: batchActual });
       }
       if (disposed) return;
       jobSources.clear(); jobIndices.clear();
       // If admission failed later in this request, publish only reference
-      // cache provenance. Earlier valid native values still have exact bits.
+      // cache provenance. Earlier valid WASM values still have exact bits.
       if (!core) for (const batch of batches) batch.actual = "typescript";
       sources.clear();
       for (const model of models.values()) [model.grid, ...(model.grid.neighbors ?? [])].forEach((grid, index) => sources.set(model.sourceIds[index], grid.heights));
       options.scope.postMessage({ kind: "terrain-heights", version: 1, id: request.id, batches, retained: [...models.keys()], retainedSources: [...sources.keys()], actual, parity,
-        fallbackReason, workMs: options.now() - start, snapshotBytes: snapshotBytes(), nativeBytes: nativeBytes(), peakSnapshotBytes, peakNativeBytes },
+        fallbackReason, workMs: options.now() - start, snapshotBytes: snapshotBytes(), wasmBytes: wasmBytes(), peakSnapshotBytes, peakWasmBytes },
       batches.map(batch => batch.heights.buffer as ArrayBuffer));
     });
     // Throw on the worker's task queue so the owning page retires it. Never

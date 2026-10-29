@@ -71,8 +71,8 @@ test("rejects malformed or unbounded dimensions before allocating", () => {
 
 test("maps every decode status and alpha validation to visible failure while releasing allocations", () => {
   for (const [status, message] of [[1, "Invalid terrain image dimensions"], [2, "Invalid terrain image dimensions"],
-    [3, "Native raster output length does not match image dimensions"], [4, "Terrain image contains missing samples"],
-    [5, "Native raster allocation is unavailable or invalid"]]) {
+    [3, "WASM raster output length does not match image dimensions"], [4, "Terrain image contains missing samples"],
+    [5, "WASM raster allocation is unavailable or invalid"]]) {
     const fixture = rasterFixture({ decode: () => status });
     assert.throws(() => createRasterCore(fixture.exports).decodeTerrarium(pixel(), 1), { message });
     assert.equal(fixture.owned.size, 0);
@@ -154,9 +154,9 @@ test("validates ABI version, every export and linear-memory shape/bounds", () =>
   for (const name of ["raster_abi_version", "raster_alloc_rgba", "raster_alloc_heights", "raster_free_rgba", "raster_free_heights", "raster_decode"]) {
     const fixture = rasterFixture();
     delete fixture.exports[name];
-    assert.throws(() => createRasterCore(fixture.exports), /Invalid native raster ABI/);
+    assert.throws(() => createRasterCore(fixture.exports), /Invalid WASM raster ABI/);
   }
-  assert.throws(() => createRasterCore(rasterFixture({ abi: 2 }).exports), /Unsupported native raster ABI version/);
+  assert.throws(() => createRasterCore(rasterFixture({ abi: 2 }).exports), /Unsupported WASM raster ABI version/);
   assert.throws(() => createRasterCore({ ...rasterFixture().exports, memory: { buffer: new ArrayBuffer(65536) } }), /ABI memory/);
   const empty = rasterFixture();
   empty.exports.memory = new WebAssembly.Memory({ initial: 0 });

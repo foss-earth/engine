@@ -12,12 +12,12 @@ function setup(kernel: "single" | "typescript" | "threaded" = "single", mismatch
     postMessage: (request, transfer) => scope.onmessage?.({ data: structuredClone(request, { transfer: transfer as ArrayBuffer[] }) } as MessageEvent<HeightBatchRequest>), terminate: vi.fn() };
   const scope: HeightBatchWorkerScope = { onmessage: null,
     postMessage: reply => worker.onmessage?.({ data: structuredClone(reply) } as MessageEvent<HeightBatchReply>) };
-  const loadNative = vi.fn(async () => ({ createHeightSampler: (grid: TerrainGrid) => ({ bytes: grid.heights.byteLength,
+  const loadWasm = vi.fn(async () => ({ createHeightSampler: (grid: TerrainGrid) => ({ bytes: grid.heights.byteLength,
     sample(xy: Float64Array) { return Float64Array.from({ length: xy.length / 2 }, (_, i) => ("indices" in grid ? sampleTerrainHeightPixels(grid as TerrainHeightPixels, xy[i * 2], xy[i * 2 + 1]) : sampleTerrainGrid(grid, xy[i * 2], xy[i * 2 + 1])) + (mismatch ? 1 : 0)); }, dispose() {} }), dispose() {} }));
-  const installed = installTerrainHeightBatchKernel({ scope, kernel, now: () => performance.now(), loadNative });
+  const installed = installTerrainHeightBatchKernel({ scope, kernel, now: () => performance.now(), loadWasm });
   const batches = createTerrainHeightBatches({ kernel, createWorker: () => worker, now: () => performance.now(),
     schedule: callback => { scheduled.push(callback); }, after: callback => { timers.push(callback); return () => { timers.splice(timers.indexOf(callback), 1); }; } });
-  return { batches, worker, loadNative, timers, async flush() { while (scheduled.length) scheduled.shift()!(); await turn(); }, dispose() { batches.dispose(); installed.dispose(); } };
+  return { batches, worker, loadWasm, timers, async flush() { while (scheduled.length) scheduled.shift()!(); await turn(); }, dispose() { batches.dispose(); installed.dispose(); } };
 }
 const grid: TerrainGrid = { z: 1, x: 0, y: 0, size: 2, heights: new Float32Array([0.1, 10, -9, 1234.1234]) };
 const xy = new Float64Array([0.1, 0.2, 0.9, 0.7, 0.5, 0.5, 0, 0, 1, 1]);
@@ -34,7 +34,7 @@ describe("immutable batched imagery heights", () => {
       expect(test.batches.stats()).toMatchObject({ jobs: 1, cacheHits: 5, pageSamples: 5,
         actual: kernel === "single" ? "single" : "typescript", parity: kernel === "single" ? "same" : "not compared",
         fallbackReason: kernel === "threaded" ? "threaded-unavailable" : null });
-      expect(test.loadNative).toHaveBeenCalledTimes(kernel === "single" ? 1 : 0);
+      expect(test.loadWasm).toHaveBeenCalledTimes(kernel === "single" ? 1 : 0);
       const replacement = { ...grid, heights: new Float32Array([90, 10, 0, 30]) };
       expect(test.batches.sample(replacement, xy)).toEqual(reference(replacement));
       expect(test.batches.stats().pageSamples).toBe(10);
@@ -42,7 +42,7 @@ describe("immutable batched imagery heights", () => {
       expect(test.batches.sample(replacement, xy)).toEqual(reference(replacement));
     } finally { test.dispose(); }
   });
-  it("retires mismatched native output to the full worker reference before caching", async () => {
+  it("retires mismatched WASM output to the full worker reference before caching", async () => {
     const test = setup("single", true);
     try {
       test.batches.sample(grid, xy); await test.flush();
@@ -50,15 +50,15 @@ describe("immutable batched imagery heights", () => {
       expect(test.batches.stats()).toMatchObject({ actual: "typescript", parity: "different", fallbackReason: "parity-mismatch" });
     } finally { test.dispose(); }
   });
-  it("memoises immediate reference results separately from admitted native results", async () => {
+  it("memoises immediate reference results separately from admitted WASM results", async () => {
     const test = setup();
     try {
       test.batches.sample(grid, xy);
       expect(test.batches.sample({ ...grid }, xy)).toEqual(reference());
-      expect(test.batches.stats()).toMatchObject({ referenceCacheHits: 5, workerCacheHits: 0, nativeCacheHits: 0, pageSamples: 5, retainedGrids: 1 });
+      expect(test.batches.stats()).toMatchObject({ referenceCacheHits: 5, workerCacheHits: 0, wasmCacheHits: 0, pageSamples: 5, retainedGrids: 1 });
       await test.flush();
       expect(test.batches.sample({ ...grid }, xy)).toEqual(reference());
-      expect(test.batches.stats()).toMatchObject({ referenceCacheHits: 5, workerCacheHits: 5, nativeCacheHits: 5, pageSamples: 5, retainedGrids: 1 });
+      expect(test.batches.stats()).toMatchObject({ referenceCacheHits: 5, workerCacheHits: 5, wasmCacheHits: 5, pageSamples: 5, retainedGrids: 1 });
     } finally { test.dispose(); }
   });
   it("invalidates changed ordered neighbours even when the centre wrapper is reused", async () => {

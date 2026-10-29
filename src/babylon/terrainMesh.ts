@@ -11,7 +11,7 @@ export interface TerrainMeshOptions {
   nowMs(): number;
   performanceCapture?: { counters: { preparationCpuMs: number; geometryWrites: number } };
 }
-/** Explicit host admission; native worker success alone never grants rendering admission. */
+/** Explicit host admission; WASM worker success alone never grants rendering admission. */
 export type TerrainGeometryAdmission =
   | { backend: "typescript"; validationStatus: "reference" }
   | { backend: "wasm-single"; validationStatus: "validated"; evidence: string }

@@ -4,9 +4,9 @@ const MAX_MEMORY = 256 * 1024 ** 2;
 /** Retain one immutable grid plus ordered direct neighbours, never the page's
  * arrays. Repeated coordinate batches cross the ABI once, not once per point.
  * Heights may be shared; published grids are never written again. */
-export function createTerrainHeightSampler(native, grid, assertActive, onDispose) {
+export function createTerrainHeightSampler(wasm, grid, assertActive, onDispose) {
   assertActive();
-  if (typeof native.terrain_sample_batch !== "function") throw new Error("Native terrain height-batch ABI is unavailable");
+  if (typeof wasm.terrain_sample_batch !== "function") throw new Error("WASM terrain height-batch ABI is unavailable");
   const sources = [grid, ...(grid?.neighbors ?? [])];
   if (!grid || sources.length > 33) throw new RangeError("Height batches need a grid and at most 32 direct neighbours");
   const sparse = grid.indices !== undefined;
@@ -27,15 +27,15 @@ export function createTerrainHeightSampler(native, grid, assertActive, onDispose
   const owned = [];
   let closed = false;
   function buffer() {
-    const value = native.memory.buffer;
+    const value = wasm.memory.buffer;
     if (!(value instanceof ArrayBuffer) || !value.byteLength || value.byteLength > MAX_MEMORY) throw new Error("Invalid terrain memory");
     return value;
   }
   function allocate(kind, length, list) {
     const width = kind === 0 ? 8 : 4;
     if (!Number.isSafeInteger(length) || length <= 0 || length * width > MAX_BYTES) throw new RangeError("Height allocation exceeds bounds");
-    const pointer = native.terrain_alloc(kind, length);
-    if (!Number.isSafeInteger(pointer) || pointer <= 0 || pointer > 0xffff_ffff) throw new Error(`Height allocation failed (${native.terrain_last_error()})`);
+    const pointer = wasm.terrain_alloc(kind, length);
+    if (!Number.isSafeInteger(pointer) || pointer <= 0 || pointer > 0xffff_ffff) throw new Error(`Height allocation failed (${wasm.terrain_last_error()})`);
     list.push({ kind, pointer, length });
     if (pointer % width || pointer > buffer().byteLength || length * width > buffer().byteLength - pointer) throw new Error("Invalid height allocation span");
     return pointer;
@@ -43,11 +43,11 @@ export function createTerrainHeightSampler(native, grid, assertActive, onDispose
   function release(list) {
     const errors = [];
     for (const value of [...list].reverse()) try {
-      const status = native.terrain_free(value.kind, value.pointer, value.length);
+      const status = wasm.terrain_free(value.kind, value.pointer, value.length);
       if (status !== 0) throw new Error(`Height buffer release failed (${status})`);
       list.splice(list.indexOf(value), 1);
     } catch (error) { errors.push(error); }
-    if (errors.length) throw new AggregateError(errors, "Native height cleanup failed; retire its worker");
+    if (errors.length) throw new AggregateError(errors, "WASM height cleanup failed; retire its worker");
   }
   let descriptor, packed;
   try {
@@ -84,8 +84,8 @@ export function createTerrainHeightSampler(native, grid, assertActive, onDispose
         const output = allocate(0, count, temporary);
         const view = new DataView(buffer(), input, coordinates.byteLength);
         coordinates.forEach((value, index) => view.setFloat64(index * 8, value, true));
-        const status = native.terrain_sample_batch(descriptor, descriptorLength, packed, elements, input, coordinates.length, output, count);
-        if (status !== 0) throw new Error(`Native height batch failed (${status})`);
+        const status = wasm.terrain_sample_batch(descriptor, descriptorLength, packed, elements, input, coordinates.length, output, count);
+        if (status !== 0) throw new Error(`WASM height batch failed (${status})`);
         const result = new Float64Array(count), resultView = new DataView(buffer(), output, count * 8);
         for (let i = 0; i < count; i++) result[i] = resultView.getFloat64(i * 8, true);
         return result;

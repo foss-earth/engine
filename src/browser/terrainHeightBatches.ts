@@ -9,10 +9,10 @@ export interface TerrainHeightBatchStats {
   state: "idle" | "busy" | "retired";
   parity: HeightBatchReply["parity"];
   fallbackReason: string | null;
-  jobs: number; samples: number; cacheHits: number; referenceCacheHits: number; workerCacheHits: number; nativeCacheHits: number; pageSamples: number; dropped: number;
+  jobs: number; samples: number; cacheHits: number; referenceCacheHits: number; workerCacheHits: number; wasmCacheHits: number; pageSamples: number; dropped: number;
   workMs: number; roundTripMs: number; inputBytes: number; outputBytes: number;
-  snapshotBytes: number; nativeBytes: number; cachedSamples: number; pageSnapshotBytes: number; retainedGrids: number;
-  peakSnapshotBytes: number; peakNativeBytes: number;
+  snapshotBytes: number; wasmBytes: number; cachedSamples: number; pageSnapshotBytes: number; retainedGrids: number;
+  peakSnapshotBytes: number; peakWasmBytes: number;
 }
 interface GridState {
   id: number; key: string; grid: WeakRef<TerrainGrid>;
@@ -65,8 +65,8 @@ export function createTerrainHeightBatches(options: {
     return key;
   };
   const status: TerrainHeightBatchStats = { actual: "not started", state: "idle", parity: options.kernel === "single" ? "unchecked" : "not compared",
-    fallbackReason: null, jobs: 0, samples: 0, cacheHits: 0, referenceCacheHits: 0, workerCacheHits: 0, nativeCacheHits: 0, pageSamples: 0, dropped: 0,
-    workMs: 0, roundTripMs: 0, inputBytes: 0, outputBytes: 0, snapshotBytes: 0, nativeBytes: 0, cachedSamples: 0, pageSnapshotBytes: 0, retainedGrids: 0, peakSnapshotBytes: 0, peakNativeBytes: 0 };
+    fallbackReason: null, jobs: 0, samples: 0, cacheHits: 0, referenceCacheHits: 0, workerCacheHits: 0, wasmCacheHits: 0, pageSamples: 0, dropped: 0,
+    workMs: 0, roundTripMs: 0, inputBytes: 0, outputBytes: 0, snapshotBytes: 0, wasmBytes: 0, cachedSamples: 0, pageSnapshotBytes: 0, retainedGrids: 0, peakSnapshotBytes: 0, peakWasmBytes: 0 };
   function removeState(state: GridState): void {
     if (states.get(state.id) !== state) return;
     states.delete(state.id); generations.delete(state.key);
@@ -87,7 +87,7 @@ export function createTerrainHeightBatches(options: {
     wrapperGenerations = new WeakMap();
     for (const state of [...states.values()]) removeState(state);
     queued = 0;
-    status.snapshotBytes = 0; status.nativeBytes = 0;
+    status.snapshotBytes = 0; status.wasmBytes = 0;
   }
   function schedule(): void {
     if (scheduled || flight || admission || retired || disposed || !queued) return;
@@ -126,9 +126,9 @@ export function createTerrainHeightBatches(options: {
     status.actual = reply.actual; status.state = "idle"; status.parity = reply.parity; status.fallbackReason = reply.fallbackReason;
     status.jobs++; status.workMs += reply.workMs; status.roundTripMs += options.now() - current.start;
     status.outputBytes += reply.batches.reduce((sum, batch) => sum + batch.heights.byteLength, 0);
-    status.snapshotBytes = reply.snapshotBytes; status.nativeBytes = reply.nativeBytes;
+    status.snapshotBytes = reply.snapshotBytes; status.wasmBytes = reply.wasmBytes;
     status.peakSnapshotBytes = Math.max(status.peakSnapshotBytes, reply.peakSnapshotBytes ?? reply.snapshotBytes);
-    status.peakNativeBytes = Math.max(status.peakNativeBytes, reply.peakNativeBytes ?? reply.nativeBytes);
+    status.peakWasmBytes = Math.max(status.peakWasmBytes, reply.peakWasmBytes ?? reply.wasmBytes);
     schedule();
   }
   function flush(): void {
@@ -206,7 +206,7 @@ export function createTerrainHeightBatches(options: {
         if (origin) {
           result[i] = values.heights[slot]; status.cacheHits++;
           if (origin === ORIGIN.page) status.referenceCacheHits++;
-          else { status.workerCacheHits++; if (origin === ORIGIN.single) status.nativeCacheHits++; }
+          else { status.workerCacheHits++; if (origin === ORIGIN.single) status.wasmCacheHits++; }
           continue;
         }
         result[i] = sampleTerrainGrid(grid, x, y); status.pageSamples++;
@@ -229,7 +229,7 @@ export function createTerrainHeightBatches(options: {
       worker = null; flight = null;
       wrapperGenerations = new WeakMap();
       for (const state of [...states.values()]) removeState(state);
-      queued = 0; status.snapshotBytes = 0; status.nativeBytes = 0;
+      queued = 0; status.snapshotBytes = 0; status.wasmBytes = 0;
     },
   };
 }

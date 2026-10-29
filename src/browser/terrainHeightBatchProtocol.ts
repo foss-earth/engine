@@ -19,8 +19,8 @@ export interface HeightBatchReply {
   actual: "typescript" | "single";
   parity: "not compared" | "same" | "different" | "unchecked";
   fallbackReason: string | null;
-  workMs: number; snapshotBytes: number; nativeBytes: number;
-  peakSnapshotBytes?: number; peakNativeBytes?: number;
+  workMs: number; snapshotBytes: number; wasmBytes: number;
+  peakSnapshotBytes?: number; peakWasmBytes?: number;
 }
 export interface HeightBatchWorkerPort extends ComputeWorker {
   onmessage: ((event: MessageEvent<HeightBatchReply>) => void) | null;
@@ -33,5 +33,5 @@ export interface HeightBatchWorkerScope {
   onmessage: ((event: MessageEvent<HeightBatchRequest>) => void) | null;
   postMessage(reply: HeightBatchReply, transfer?: Transferable[]): void;
 }
-export interface NativeHeightSampler { bytes: number; sample(coordinates: Float64Array): Float64Array; dispose(): void }
-export interface NativeHeightCore { createHeightSampler(grid: TerrainGrid): NativeHeightSampler; dispose(): void }
+export interface WasmHeightSampler { bytes: number; sample(coordinates: Float64Array): Float64Array; dispose(): void }
+export interface WasmHeightCore { createHeightSampler(grid: TerrainGrid): WasmHeightSampler; dispose(): void }

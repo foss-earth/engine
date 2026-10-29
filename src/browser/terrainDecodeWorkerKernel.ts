@@ -1,6 +1,6 @@
 import { createTerrainImageDecoder, type TerrainImageDecoderPorts } from "./terrainImageDecoder.js";
 import { terrainDecodeFailure, type TerrainDecodeWorkerRequest, type TerrainDecodeWorkerScope } from "./terrainDecodeWorkerProtocol.js";
-import type { TerrainNativeDecoderStatus } from "./terrainNativeDecoder.js";
+import type { TerrainWasmDecoderStatus } from "./terrainWasmDecoder.js";
 
 export interface TerrainDecodeWorkerKernelPorts {
   scope: TerrainDecodeWorkerScope;
@@ -9,7 +9,7 @@ export interface TerrainDecodeWorkerKernelPorts {
   /** A canvas in this worker realm; null when it has no OffscreenCanvas. */
   createCanvas(width: number, height: number): OffscreenCanvas | null;
   decodeTerrarium?: TerrainImageDecoderPorts["decodeTerrarium"];
-  decodeBackendStatus?(): TerrainNativeDecoderStatus;
+  decodeBackendStatus?(): TerrainWasmDecoderStatus;
   /**
    * Publish heights in shared memory instead of transferring them, so other
    * workers the page sends a grid to read it without a copy. Hosts set this
@@ -29,7 +29,7 @@ export function installTerrainDecodeWorkerKernel(ports: TerrainDecodeWorkerKerne
   const { scope } = ports;
   let disposed = false, canvas: OffscreenCanvas | null = null;
   const report = (error: unknown): void => { try { ports.onError(error); } catch { /* Host error port attempted. */ } };
-  const backend = (): { backend?: TerrainNativeDecoderStatus } => {
+  const backend = (): { backend?: TerrainWasmDecoderStatus } => {
     try { return ports.decodeBackendStatus ? { backend: ports.decodeBackendStatus() } : {}; }
     catch (error) { report(error); return {}; }
   };

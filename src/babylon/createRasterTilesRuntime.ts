@@ -10,7 +10,7 @@ import { createTerrainMeshWorkers, type TerrainMeshWorkerPoolStats } from "../br
 import type { TerrainMeshWorkerPort } from "../browser/terrainMeshWorkerProtocol.js";
 import { createTerrainHeightBatches, type TerrainHeightBatchStats } from "../browser/terrainHeightBatches.js";
 import type { HeightBatchWorkerPort } from "../browser/terrainHeightBatchProtocol.js";
-import { nativeCorePlan } from "../settings/catalogue/native.js";
+import { wasmCorePlan } from "../settings/catalogue/wasm.js";
 import type { WorkerPoolTimers } from "../browser/workerPool.js";
 import {
   Color3,
@@ -777,8 +777,8 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
   };
   let terrain = createTerrainLoader();
   let terrainGeneration = 0;
-  const terrainPlan = options.settings && options.settings.has("native.tier")
-    ? nativeCorePlan(options.settings, "terrain")
+  const terrainPlan = options.settings && options.settings.has("wasm.tier")
+    ? wasmCorePlan(options.settings, "terrain")
     : null;
   const useMeshWorker = terrainPlan?.placement === "worker" && Boolean(options.createTerrainMeshWorker);
   const activeTimers = new Map<number, () => void>();
@@ -884,7 +884,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
     decodedGridsChanged(surfaceSampler.setDecodedGrid(record.key,
       isRobustOrbitLOD() && record.terrainGeneration === terrainGeneration ? record.decodedGrid ?? null : null));
   }
-  const heightPlan = settings.has("native.tier") ? nativeCorePlan(settings, "imagery") : null;
+  const heightPlan = settings.has("wasm.tier") ? wasmCorePlan(settings, "imagery") : null;
   const heightBatches = heightPlan?.placement === "worker" && options.createTerrainHeightWorker
     ? createTerrainHeightBatches({ kernel: heightPlan.kernel, createWorker: options.createTerrainHeightWorker,
         now: options.nowMs, schedule: callback => { options.after(callback, 0); }, after: options.after }) : null;

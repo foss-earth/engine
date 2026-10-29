@@ -53,5 +53,5 @@ test("fetch and ABI failures remain visible instead of returning a JS backend", 
   fetch.mock.mockImplementation(async () => ({ ok: true, status: 200, arrayBuffer: async () => bytes().buffer }));
   mock.method(WebAssembly, "instantiate", async () => ({ instance: { exports: rasterFixture({ abi: 99 }).exports } }));
   const invalid = await import("../index.js?fixture=invalid-abi");
-  await assert.rejects(invalid.loadRasterCore(), /Unsupported native raster ABI version/);
+  await assert.rejects(invalid.loadRasterCore(), /Unsupported WASM raster ABI version/);
 });

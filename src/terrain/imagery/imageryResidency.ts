@@ -194,6 +194,10 @@ export interface ImageryResidency {
   isBusy(): boolean;
   /** The earliest time a failed request may be retried or a missing record expires. */
   nextWakeAt(): number | null;
+  /**
+   * Counts for the current residency. Each call returns its own object;
+   * later updates do not write into an object already handed out.
+   */
   stats(): ImageryResidencyStats;
   /** Frees every slot and cancels every request, e.g. after the GPU context was lost. */
   reset(): void;
@@ -247,6 +251,18 @@ export function createImageryResidency<TSignal extends NavigationAbortSignal>(op
   };
   const pendingUploads = new Set<PendingUpload>();
   const counters = { uploads: 0, uploadBytes: 0, evictions: 0, aborted: 0, compressedBytes: 0 };
+  // stats() walks every entry. Update reads it several times a frame, so the
+  // counts stay cached until entries, demand, missing records, pins, overflow,
+  // unplaced, or upload state actually change. The cached object is never
+  // returned: callers get a copy, and a missing record due at missingWakeAt
+  // is treated as a change because expiry alters the missing count.
+  let statsEpoch = 0;
+  let statsCache: ImageryResidencyStats | null = null;
+  const invalidateStats = (): void => {
+    statsCache = null;
+    statsEpoch += 1;
+  };
+  const copyStats = (stats: ImageryResidencyStats): ImageryResidencyStats => ({ ...stats, limits: stats.limits.slice() });
 
   const changed = (): void => {
     revision += 1;
@@ -258,6 +274,7 @@ export function createImageryResidency<TSignal extends NavigationAbortSignal>(op
     missing.set(key, until);
     missingWakeAt = Math.min(missingWakeAt, until);
     missingRevision += 1;
+    invalidateStats();
   }
 
   function expireMissing(): void {
@@ -273,6 +290,7 @@ export function createImageryResidency<TSignal extends NavigationAbortSignal>(op
     }
     if (expired) {
       missingRevision += 1;
+      invalidateStats();
       changed();
     }
   }
@@ -288,11 +306,13 @@ export function createImageryResidency<TSignal extends NavigationAbortSignal>(op
   function freeSlots(entry: Entry<TSignal>): void {
     if (entry.owned) {
       const owned = entry.owned; entry.owned = null; entry.slots = null;
+      invalidateStats();
       owned.release(); return;
     }
     if (!entry.slots) return;
     const slots = entry.slots;
     entry.slots = null;
+    invalidateStats();
     const failures: unknown[] = [];
     for (const slot of slots) try { options.store.release(slot); } catch (error) { failures.push(error); }
     if (failures.length === 1) throw failures[0];
@@ -304,8 +324,10 @@ export function createImageryResidency<TSignal extends NavigationAbortSignal>(op
     const pending = [...pendingUploads].find(value => value.entry === entry && value.job === owned);
     if (pending && prepared === pending.image) pending.ownerClosed = true;
     if (entries.get(key) === entry) entries.delete(key);
+    if (abort) counters.aborted += 1;
+    invalidateStats();
     const failures: unknown[] = [];
-    if (abort) { counters.aborted += 1; try { abort.abort(); } catch (error) { failures.push(error); } }
+    if (abort) { try { abort.abort(); } catch (error) { failures.push(error); } }
     try { owned?.cancel(new Error("Atlas imagery entry retired.")); } catch (error) { failures.push(error); }
     try { prepared?.close?.(); } catch (error) { failures.push(error); }
     try { freeSlots(entry); } catch (error) { failures.push(error); }
@@ -315,6 +337,7 @@ export function createImageryResidency<TSignal extends NavigationAbortSignal>(op
 
   function dropAll(): void {
     const retiring = [...entries]; entries.clear();
+    invalidateStats();
     const failures: unknown[] = [];
     for (const [key, entry] of retiring) try { drop(key, entry); } catch (error) { failures.push(error); }
     if (failures.length === 1) throw failures[0];
@@ -338,6 +361,7 @@ export function createImageryResidency<TSignal extends NavigationAbortSignal>(op
     entry.state = "loading";
     entry.abort = controller;
     entry.reservedBytes = decodedBytes(request.width, request.height) * 2;
+    invalidateStats();
     const reportDetached = (error: unknown): void => {
       // Late cleanup must never recreate a retired entry or strand other work.
       options.onError?.(error instanceof Error ? error : new Error(String(error)), request.url);
@@ -357,6 +381,7 @@ export function createImageryResidency<TSignal extends NavigationAbortSignal>(op
         // A variant that is not the size it was declared is not that variant.
         entries.delete(request.imageKey);
         entry.prepared = null; entry.reservedBytes = 0;
+        invalidateStats();
         const failures: unknown[] = [];
         try { image.close?.(); } catch (error) { failures.push(error); }
         recordMissing(request.imageKey);
@@ -368,6 +393,7 @@ export function createImageryResidency<TSignal extends NavigationAbortSignal>(op
         // Stale work is not kept outside the bounded cache.
         entries.delete(request.imageKey);
         entry.prepared = null; entry.reservedBytes = 0;
+        invalidateStats();
         const failures: unknown[] = [];
         try { image.close?.(); } catch (error) { failures.push(error); }
         // Its concurrency/staging reservation may have been the only thing
@@ -380,16 +406,19 @@ export function createImageryResidency<TSignal extends NavigationAbortSignal>(op
       entry.state = "staged";
       entry.prepared = image;
       entry.reservedBytes = preparedBytes(image);
+      invalidateStats();
       changed();
     }).catch((error: unknown) => {
       if (disposed || entries.get(request.imageKey) !== entry) return;
       entry.abort = null;
       const prepared = entry.prepared; entry.prepared = null; entry.reservedBytes = 0;
+      invalidateStats();
       const failures: unknown[] = [error];
       try { prepared?.close?.(); } catch (cleanup) { failures.push(cleanup); }
       const reported = cleanupFailure(failures);
       if (controller.signal.aborted) {
         entries.delete(request.imageKey);
+        invalidateStats();
         return;
       }
       if (error instanceof ImageryMissingError && failures.length === 1) {
@@ -403,6 +432,7 @@ export function createImageryResidency<TSignal extends NavigationAbortSignal>(op
       entry.failures += 1;
       entry.retryAt = now() + retryDelayMs(entry.failures, limits.retryDelayMs);
       entry.reservedBytes = 0;
+      invalidateStats();
       try { options.onError?.(reported instanceof Error ? reported : new Error(String(reported)), request.url); }
       finally { changed(); }
     }).catch((error: unknown) => {
@@ -421,7 +451,11 @@ export function createImageryResidency<TSignal extends NavigationAbortSignal>(op
   const closeOwnedInput = (pending: PendingUpload, errors: unknown[]): void => {
     if (pending.ownerClosed) return;
     pending.ownerClosed = true;
-    if (pending.entry.prepared === pending.image) { pending.entry.prepared = null; pending.entry.reservedBytes = 0; }
+    if (pending.entry.prepared === pending.image) {
+      const reserved = pending.entry.reservedBytes;
+      pending.entry.prepared = null; pending.entry.reservedBytes = 0;
+      if (reserved !== 0) invalidateStats();
+    }
     try { pending.image.close(); } catch (error) { errors.push(error); }
   };
   const ownsEntry = (pending: PendingUpload): boolean => !disposed && entries.get(pending.request.imageKey) === pending.entry
@@ -434,6 +468,7 @@ export function createImageryResidency<TSignal extends NavigationAbortSignal>(op
       pending.entry.state = "failed"; pending.entry.failures += 1;
       pending.entry.retryAt = now() + retryDelayMs(pending.entry.failures, limits.retryDelayMs);
     }
+    invalidateStats();
     closeOwnedInput(pending, errors);
     try { pending.job.cancel(error); } catch (cleanup) { errors.push(cleanup); }
     try { pending.job.release(); } catch (cleanup) { errors.push(cleanup); }
@@ -442,6 +477,7 @@ export function createImageryResidency<TSignal extends NavigationAbortSignal>(op
   const finishOwned = (pending: PendingUpload): void => {
     if (!pending.outcome || !pending.retirement) return;
     pendingUploads.delete(pending);
+    invalidateStats();
     const errors: unknown[] = [];
     if (pending.retirement.cleanupError !== undefined) errors.push(pending.retirement.cleanupError);
     const demanded = demand.get(pending.request.imageKey);
@@ -453,17 +489,20 @@ export function createImageryResidency<TSignal extends NavigationAbortSignal>(op
       else if (!pending.failed && ownsEntry(pending) && demanded) failOwned(pending, new Error("Atlas native upload completed for a stale generation."));
       try { pending.job.release(); } catch (error) { reportOwned(error, pending.request.url); }
       if (pending.entry.owned === pending.job) { pending.entry.owned = null; pending.entry.slots = null; pending.entry.reservedBytes = 0; }
+      invalidateStats();
       if (errors.length && pending.failed) reportOwned(cleanupFailure(errors), pending.request.url);
       wakeOwned(); return;
     }
     pending.entry.slots = [...pending.job.slots]; pending.entry.prepared = null; pending.entry.reservedBytes = 0;
     pending.entry.state = "resident"; pending.entry.lastUsed = tick;
     counters.uploads += 1; counters.uploadBytes += pending.job.bytes;
+    invalidateStats();
     wakeOwned();
   };
   const beginOwned = (entry: Entry<TSignal>, image: RetainedPreparedImage, job: OwnedImageryUploadJob): void => {
     const pending: PendingUpload = { entry, request: { ...entry.request }, image, job, outcome: null, retirement: null, failed: false, ownerClosed: false };
     entry.owned = job; entry.state = "uploading"; pendingUploads.add(pending);
+    invalidateStats();
     // Both observers and ownership are registered before any native callback.
     void job.settled.then(outcome => {
       pending.outcome = outcome;
@@ -502,6 +541,7 @@ export function createImageryResidency<TSignal extends NavigationAbortSignal>(op
     freeSlots(best);
     entries.delete(best.request.imageKey);
     counters.evictions += 1;
+    invalidateStats();
     return true;
   }
 
@@ -541,17 +581,22 @@ export function createImageryResidency<TSignal extends NavigationAbortSignal>(op
   function fillQueue(): void {
     // Missing images are asked about in demand order, before anything is queued.
     let skipped: Set<string> | null = null;
-    for (const request of demand.values()) if (isMissing(request.imageKey)) (skipped ??= new Set()).add(request.imageKey);
+    if (missing.size > 0) {
+      for (const request of demand.values()) if (isMissing(request.imageKey)) (skipped ??= new Set()).add(request.imageKey);
+    }
     const ordered = queueingOrder(skipped);
     let queued = 0;
     for (const entry of entries.values()) if (entry.state === "queued") queued += 1;
+    const overflowBefore = overflow;
     overflow = 0;
+    let entriesChanged = false;
     for (const request of ordered) {
       if (skipped?.has(request.imageKey)) continue;
       const entry = entries.get(request.imageKey);
       if (entry) {
         if (entry.state === "failed" && !entry.owned && now() >= entry.retryAt) {
           entry.state = "queued";
+          entriesChanged = true;
           queued += 1;
         }
         continue;
@@ -564,8 +609,48 @@ export function createImageryResidency<TSignal extends NavigationAbortSignal>(op
         request, state: "queued", prepared: null, slots: null, owned: null, abort: null,
         failures: 0, retryAt: 0, lastUsed: tick, reservedBytes: 0,
       });
+      entriesChanged = true;
       queued += 1;
     }
+    if (entriesChanged || overflow !== overflowBefore) invalidateStats();
+  }
+
+  function collectStats(): ImageryResidencyStats {
+    // One pass over the entries, in their order: the update asks for these several times a frame.
+    const count: Record<EntryState, number> = { queued: 0, loading: 0, staged: 0, uploading: 0, resident: 0, failed: 0 };
+    let residentPages = 0, stagedBytes = 0, inFlightReservedBytes = 0, loadingDemanded = false;
+    for (const entry of entries.values()) {
+      count[entry.state] += 1;
+      residentPages += entry.slots?.length ?? 0;
+      if (entry.state === "staged") stagedBytes += entry.reservedBytes;
+      else if (entry.state === "loading") inFlightReservedBytes += entry.reservedBytes;
+      if (!loadingDemanded && entry.state !== "resident" && demand.has(entry.request.imageKey)) loadingDemanded = true;
+    }
+    const detailLimits: DetailLimit[] = [];
+    // Only a full atlas is a memory limit. A long queue is loading: what
+    // it left out is queued as it drains.
+    if (unplaced > 0) detailLimits.push("memory");
+    if (loadingDemanded || overflow > 0) detailLimits.push("loading");
+    return {
+      resident: count.resident,
+      residentPages,
+      staged: count.staged,
+      stagedBytes,
+      inFlight: count.loading,
+      inFlightReservedBytes,
+      queued: count.queued,
+      demanded: demand.size,
+      overflow,
+      unplaced,
+      pinnedPages: pinned.size,
+      failed: count.failed,
+      missing: [...missing.keys()].filter(isMissing).length,
+      ...counters,
+      limits: detailLimits,
+      uploading: count.uploading,
+      quarantinedPages: [...pendingUploads].filter(pending => pending.failed || !ownsEntry(pending)).reduce((sum, pending) => sum + pending.job.slots.length, 0),
+      uploadRefusals,
+    };
   }
 
   return {
@@ -599,13 +684,20 @@ export function createImageryResidency<TSignal extends NavigationAbortSignal>(op
       // Retire identities before supplied abort/close callbacks can reenter;
       // one failing disposer must not strand the rest of the obsolete demand.
       for (const [key, entry] of retiring) if (entries.get(key) === entry) entries.delete(key);
+      invalidateStats();
       const failures: unknown[] = [];
       for (const [key, entry] of retiring) try { drop(key, entry); } catch (error) { failures.push(error); }
       try { if (!disposed) fillQueue(); } catch (error) { failures.push(error); }
       if (failures.length) throw cleanupFailure(failures);
     },
     setPinned(slots) {
+      if (slots.size === pinned.size) {
+        let same = true;
+        for (const slot of slots) if (!pinned.has(slot)) { same = false; break; }
+        if (same) return;
+      }
       pinned = new Set(slots);
+      invalidateStats();
     },
     pump() {
       if (disposed) return;
@@ -637,7 +729,10 @@ export function createImageryResidency<TSignal extends NavigationAbortSignal>(op
     },
     upload(deadline, clock = now) {
       if (disposed) return 0;
-      unplaced = 0;
+      if (unplaced !== 0) {
+        unplaced = 0;
+        invalidateStats();
+      }
       let bytes = 0, legacyBytes = 0;
       const staged = [...entries.values()]
         .filter(entry => entry.state === "staged" && entry.prepared)
@@ -654,7 +749,7 @@ export function createImageryResidency<TSignal extends NavigationAbortSignal>(op
             if (bytes > 0 && (bytes + cost > limits.uploadBytesPerUpdate || clock() >= deadline)) break;
             while (options.store.freeSlots && options.store.freeSlots() < image.pages.length && evictOne(entry.request.coverage ? Infinity : entry.request.priority)) { /* Original unpinned safe eviction policy. */ }
             const job = options.store.prepareOwnedUpload(image as RetainedPreparedImage);
-            if (!job) { uploadRefusals += 1; unplaced += 1; continue; }
+            if (!job) { uploadRefusals += 1; unplaced += 1; invalidateStats(); continue; }
             if (disposed || entries.get(entry.request.imageKey) !== entry || !image.isCurrent!() || !job.isCurrent()) {
               const errors: unknown[] = [];
               try { job.cancel(new Error("Atlas entry changed during native admission.")); } catch (error) { errors.push(error); }
@@ -668,6 +763,7 @@ export function createImageryResidency<TSignal extends NavigationAbortSignal>(op
           entry.prepared = null; entry.reservedBytes = 0;
           entry.state = "failed"; entry.failures += 1;
           entry.retryAt = now() + retryDelayMs(entry.failures, limits.retryDelayMs);
+          invalidateStats();
           try { image.close?.(); } catch (error) { failures.push(error); }
           const reported = cleanupFailure(failures);
           try { options.onError?.(reported instanceof Error ? reported : new Error(String(reported)), entry.request.url); }
@@ -679,6 +775,7 @@ export function createImageryResidency<TSignal extends NavigationAbortSignal>(op
         const slots = allocate(image.pages.length, entry.request.coverage ? Infinity : entry.request.priority);
         if (!slots) {
           unplaced += 1;
+          invalidateStats();
           continue;
         }
         image.pages.forEach((levels, index) => options.store.upload(slots[index], levels));
@@ -690,6 +787,7 @@ export function createImageryResidency<TSignal extends NavigationAbortSignal>(op
         bytes += cost; legacyBytes += cost;
         counters.uploads += 1;
         counters.uploadBytes += cost;
+        invalidateStats();
       }
       if (legacyBytes > 0) changed();
       return bytes;
@@ -713,41 +811,15 @@ export function createImageryResidency<TSignal extends NavigationAbortSignal>(op
       return earliest === Infinity ? null : earliest;
     },
     stats() {
-      // One pass over the entries, in their order: the update asks for these several times a frame.
-      const count: Record<EntryState, number> = { queued: 0, loading: 0, staged: 0, uploading: 0, resident: 0, failed: 0 };
-      let residentPages = 0, stagedBytes = 0, inFlightReservedBytes = 0, loadingDemanded = false;
-      for (const entry of entries.values()) {
-        count[entry.state] += 1;
-        residentPages += entry.slots?.length ?? 0;
-        if (entry.state === "staged") stagedBytes += entry.reservedBytes;
-        else if (entry.state === "loading") inFlightReservedBytes += entry.reservedBytes;
-        if (!loadingDemanded && entry.state !== "resident" && demand.has(entry.request.imageKey)) loadingDemanded = true;
-      }
-      const limits: DetailLimit[] = [];
-      // Only a full atlas is a memory limit. A long queue is loading: what
-      // it left out is queued as it drains.
-      if (unplaced > 0) limits.push("memory");
-      if (loadingDemanded || overflow > 0) limits.push("loading");
-      return {
-        resident: count.resident,
-        residentPages,
-        staged: count.staged,
-        stagedBytes,
-        inFlight: count.loading,
-        inFlightReservedBytes,
-        queued: count.queued,
-        demanded: demand.size,
-        overflow,
-        unplaced,
-        pinnedPages: pinned.size,
-        failed: count.failed,
-        missing: [...missing.keys()].filter(isMissing).length,
-        ...counters,
-        limits,
-        uploading: count.uploading,
-        quarantinedPages: [...pendingUploads].filter(pending => pending.failed || !ownsEntry(pending)).reduce((sum, pending) => sum + pending.job.slots.length, 0),
-        uploadRefusals,
-      };
+      // No missing record can expire before missingWakeAt, and an empty
+      // missing set has nothing left to expire. Every other input bumps
+      // statsEpoch. A walk that expires a record, or is reentered by its
+      // notification, must not store the counts it took before that change.
+      if (statsCache !== null && (missing.size === 0 || now() < missingWakeAt)) return copyStats(statsCache);
+      const epoch = statsEpoch;
+      const computed = collectStats();
+      if (epoch === statsEpoch) statsCache = computed;
+      return copyStats(computed);
     },
     setLimits(next) {
       limits = next;
@@ -763,6 +835,7 @@ export function createImageryResidency<TSignal extends NavigationAbortSignal>(op
       if (disposed) return;
       disposed = true;
       missing.clear();
+      invalidateStats();
       dropAll();
     },
   };

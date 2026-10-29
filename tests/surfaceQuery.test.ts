@@ -163,6 +163,57 @@ describe("visible map surface queries", () => {
     expect(query.raycast(origin, direction, 40)?.point.x).toBeCloseTo(before.point.x, 4);
     engine.dispose();
   });
+  it("reads the world transform, surface meshes and bounds once per frame and answers exactly as without one", () => {
+    const engine = new NullEngine({ ...new NullEngineOptions(), useHighPrecisionMatrix: true }); const scene = new Scene(engine);
+    const root = new TransformNode("world", scene);
+    root.rotation.set(0.2, -0.4, 1.1); root.position.set(-500000, -866000, 15); root.computeWorldMatrix(true);
+    const tiles = [0, 1, 2].map(at => { const tile = MeshBuilder.CreateGround(`tile-${at}`, { width: 30, height: 30, subdivisions: 6 }, scene);
+      tile.parent = root; tile.position.set(at * 30, -at, 0); tile.computeWorldMatrix(true); return tile; });
+    const aircraft = MeshBuilder.CreateBox("aircraft", { size: 4 }, scene); aircraft.parent = root; aircraft.position.y = 3; aircraft.computeWorldMatrix(true);
+    const isSurface = vi.fn((mesh: unknown) => tiles.includes(mesh as never));
+    const framed = createSurfaceQuery(scene, () => root, isSurface, () => 7), reference = createSurfaceQuery(scene, () => root, mesh => tiles.includes(mesh as never), () => 7);
+    const rays = [0, 7, 31, 44, 100].map(x => ({ origin: { x: x + 0.17, y: 10, z: 0.31 }, direction: { x: 0.05, y: -1, z: 0.02 } }));
+    const expected = rays.map(ray => reference.raycast(ray.origin, ray.direction, 20));
+    expect(expected.filter(Boolean)).toHaveLength(4);
+    const rootMatrix = vi.spyOn(root, "computeWorldMatrix");
+    framed.beginFrame();
+    expect(rootMatrix).not.toHaveBeenCalled();
+    for (let pass = 0; pass < 2; pass++) expect(rays.map(ray => framed.raycast(ray.origin, ray.direction, 20))).toEqual(expected);
+    // One read for the whole frame: the root's transform, and each mesh's surface test once.
+    expect(rootMatrix).toHaveBeenCalledOnce(); expect(isSurface).toHaveBeenCalledTimes(scene.meshes.length);
+    // A render ends the frame early: the next query reads the world again.
+    scene.incrementRenderId(); framed.raycast(rays[0].origin, rays[0].direction, 20);
+    expect(rootMatrix).toHaveBeenCalledTimes(2);
+    framed.endFrame();
+    // After the frame the world moves, and the next query, framed or not, sees it.
+    root.position.x += 3; root.computeWorldMatrix(true); for (const tile of tiles) tile.computeWorldMatrix(true);
+    const moved = rays.map(ray => reference.raycast(ray.origin, ray.direction, 20));
+    expect(moved).not.toEqual(expected);
+    expect(rays.map(ray => framed.raycast(ray.origin, ray.direction, 20))).toEqual(moved);
+    framed.beginFrame(); expect(rays.map(ray => framed.raycast(ray.origin, ray.direction, 20))).toEqual(moved);
+    // Moving the world inside a frame, without a render, ends it as well.
+    root.position.x -= 3; for (const tile of tiles) tile.computeWorldMatrix(true);
+    expect(rays.map(ray => framed.raycast(ray.origin, ray.direction, 20))).toEqual(expected);
+    // A mesh added during a frame ends it too.
+    framed.beginFrame(); expect(framed.raycast(rays[0].origin, rays[0].direction, 20)).toEqual(expected[0]);
+    const added = MeshBuilder.CreateGround("tile-3", { width: 30, height: 30 }, scene); added.parent = root; added.position.y = 5; added.computeWorldMatrix(true);
+    tiles.push(added);
+    expect(framed.raycast(rays[0].origin, rays[0].direction, 20)).toEqual(reference.raycast(rays[0].origin, rays[0].direction, 20));
+    expect(framed.raycast(rays[0].origin, rays[0].direction, 20)?.meshId).toBe("tile-3");
+    framed.endFrame();
+    engine.dispose();
+  });
+  it("samples through a frame exactly as without one, Google refinement included", () => {
+    const engine = new NullEngine({ ...new NullEngineOptions(), useHighPrecisionMatrix: true }); const scene = new Scene(engine);
+    const query = createSurfaceQuery(scene, () => null, () => true);
+    googleSurface(scene, 6800, 262979); googleSurface(scene, 600, 2054); googleSurface(scene, 400, 1027); googleSurface(scene, 260, 8);
+    const expected = query.sample(0, 0);
+    query.beginFrame();
+    expect(query.sample(0, 0)).toEqual(expected); expect(query.sample(0, 0)?.geometricErrorMeters).toBe(8);
+    expect(query.raycast({ x: 6378137 + 20000, y: 0, z: 0 }, { x: -1, y: 0, z: 0 }, 40000)?.heightMeters).toBeCloseTo(6800, 3);
+    query.endFrame();
+    engine.dispose();
+  });
   it("samples the actual rendered terrain triangles, including Earth curvature", () => {
     const engine = new NullEngine({ ...new NullEngineOptions(), useHighPrecisionMatrix: true }); const scene = new Scene(engine);
     const tile = { z: 15, x: 7898, y: 11805 };

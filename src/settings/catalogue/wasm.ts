@@ -1,12 +1,12 @@
 import type { ParameterSpec, SettingsRegistry } from "@foss-earth/ui/settings";
-import type { NativeTierPreference } from "../../browser/terrainNativeDecoder.js";
+import type { WasmTierPreference } from "../../browser/terrainWasmDecoder.js";
 
-export const NATIVE_TIER_ID = "native.tier";
-export const NATIVE_THREADS_ID = "native.threads";
+export const WASM_TIER_ID = "wasm.tier";
+export const WASM_THREADS_ID = "wasm.threads";
 /** Sky → Shared memory: a sky that runs WebAssembly runs its shared-memory build. */
-export const NATIVE_SHARED_SKY_ID = "native.sharedSky";
+export const WASM_SHARED_SKY_ID = "wasm.sharedSky";
 /** The shared builds' stack slots: a coordinator and at most seven helpers. */
-export const NATIVE_MAX_THREADS = 8;
+export const WASM_MAX_THREADS = 8;
 
 /**
  * Where a converted core runs and with which numbers, chosen at startup.
@@ -14,33 +14,33 @@ export const NATIVE_MAX_THREADS = 8;
  * `typescript-worker` and `single`: the same workers, inputs and quality, with
  * the TypeScript reference or the single-threaded WASM core inside them.
  * `auto` takes each core's recorded choice. `threaded` runs a core's
- * shared-memory WASM build, with `native.threads` cooperating threads over one
+ * shared-memory WASM build, with `wasm.threads` cooperating threads over one
  * memory, where the core has one (sky) and the page is cross-origin isolated;
  * otherwise it reports its fallback and why, never a threaded backend.
- * `native.sharedSky` also runs the sky's shared build when it would run
+ * `wasm.sharedSky` also runs the sky's shared build when it would run
  * single-threaded WASM, so a WASM selection can share memory without `threaded`.
  */
-export type NativeExecutionTier = "typescript" | "typescript-worker" | "single" | "auto" | "threaded" | "custom";
-export const NATIVE_EXECUTION_TIERS: readonly NativeExecutionTier[] = ["typescript", "typescript-worker", "single", "auto", "threaded", "custom"];
+export type WasmExecutionTier = "typescript" | "typescript-worker" | "single" | "auto" | "threaded" | "custom";
+export const WASM_EXECUTION_TIERS: readonly WasmExecutionTier[] = ["typescript", "typescript-worker", "single", "auto", "threaded", "custom"];
 
-/** The cores the apps run through `native.tier`. */
-export type NativeCoreId = "raster" | "sky" | "terrain" | "imagery" | "google" | "ground";
+/** The cores the apps run through `wasm.tier`. */
+export type WasmCoreId = "raster" | "sky" | "terrain" | "imagery" | "google" | "ground";
 
-export interface NativeCoreFacts {
+export interface WasmCoreFacts {
   label: string;
   /** What the core computes, and what stays where it was. */
   scope: string;
   /** Where the original TypeScript runs. */
   original: "page" | "worker";
   /** `auto`'s choice for this core, and why. */
-  auto: Exclude<NativeExecutionTier, "auto" | "custom">;
+  auto: Exclude<WasmExecutionTier, "auto" | "custom">;
   autoReason: string;
   /** Whether a shared-memory threaded build exists; `threaded` falls back without one. */
   sharedBuild: boolean;
   source: string;
 }
 
-export const NATIVE_CORES: Readonly<Record<NativeCoreId, NativeCoreFacts>> = {
+export const WASM_CORES: Readonly<Record<WasmCoreId, WasmCoreFacts>> = {
   raster: {
     label: "Terrain heights",
     scope: "Terrarium RGBA-to-height conversion inside the terrain decode workers; image decoding stays the browser's, and the page's own decoding stays TypeScript.",
@@ -48,7 +48,7 @@ export const NATIVE_CORES: Readonly<Record<NativeCoreId, NativeCoreFacts>> = {
     auto: "typescript",
     autoReason: "The paired in-app runs measured WASM decode at 11.8–14.1 ms versus TypeScript 8.9–10.7 ms in the same decode workers, with no page-time gain. Keep TypeScript in auto; single remains force-selectable with first-input parity.",
     sharedBuild: false,
-    source: "src/browser/terrainNativeDecoder.ts",
+    source: "src/browser/terrainWasmDecoder.ts",
   },
   sky: {
     label: "Sky",
@@ -94,13 +94,13 @@ export const NATIVE_CORES: Readonly<Record<NativeCoreId, NativeCoreFacts>> = {
   },
 };
 
-export const NATIVE_CORE_SETTING_IDS: Readonly<Record<NativeCoreId, string>> = {
-  raster: "native.core.raster",
-  sky: "native.core.sky",
-  terrain: "native.core.terrain",
-  imagery: "native.core.imagery",
-  google: "native.core.google",
-  ground: "native.core.ground",
+export const WASM_CORE_SETTING_IDS: Readonly<Record<WasmCoreId, string>> = {
+  raster: "wasm.core.raster",
+  sky: "wasm.core.sky",
+  terrain: "wasm.core.terrain",
+  imagery: "wasm.core.imagery",
+  google: "wasm.core.google",
+  ground: "wasm.core.ground",
 };
 
 export type ComponentImplementation = "typescript" | "wasm";
@@ -111,10 +111,10 @@ export interface ComponentExecutionChoices {
   placement: ComponentPlacement;
   parallelism: ComponentParallelism;
 }
-export const NATIVE_MANUAL_FIELDS = ["implementation", "placement", "parallelism"] as const;
-export type ComponentExecutionField = typeof NATIVE_MANUAL_FIELDS[number];
-export const componentExecutionSettingId = (field: ComponentExecutionField, core?: NativeCoreId): string =>
-  `${core ? NATIVE_CORE_SETTING_IDS[core] : "native"}.${field}`;
+export const WASM_MANUAL_FIELDS = ["implementation", "placement", "parallelism"] as const;
+export type ComponentExecutionField = typeof WASM_MANUAL_FIELDS[number];
+export const componentExecutionSettingId = (field: ComponentExecutionField, core?: WasmCoreId): string =>
+  `${core ? WASM_CORE_SETTING_IDS[core] : "wasm"}.${field}`;
 
 const FIELD_CHOICES = {
   implementation: [{ id: "typescript", label: "TypeScript" }, { id: "wasm", label: "WebAssembly", shortLabel: "WASM" }],
@@ -127,14 +127,14 @@ const FIELD_DESCRIPTIONS = {
   placement: "Component default retains its original placement: raster decoding already uses workers, while the other components run on the main thread. Background workers use the same inputs and visual quality. WebAssembly always runs in a background worker.",
   parallelism: "One worker per component limits independent raster and terrain jobs to one worker each. Worker pools permit concurrent independent jobs within the existing worker budget. Sky, imagery, Google and ground currently have one worker each. This does not enable shared-memory Rust threads.",
 };
-const manualParameters = (core?: NativeCoreId): ParameterSpec[] => NATIVE_MANUAL_FIELDS.map(field => ({
+const manualParameters = (core?: WasmCoreId): ParameterSpec[] => WASM_MANUAL_FIELDS.map(field => ({
   id: componentExecutionSettingId(field, core), label: FIELD_LABELS[field], kind: "choice", unit: "none",
   description: FIELD_DESCRIPTIONS[field],
   choices: [...(core ? [{ id: "inherit", label: "Global" }] : []), ...FIELD_CHOICES[field]],
   default: core ? "inherit" : field === "implementation" ? "typescript" : field === "placement" ? "original" : "auto",
   defaultReason: core ? "Inherit each decision from the global configuration." : "Retain the original TypeScript placement and existing independent-job pools.",
-  home: { tab: "native", section: core ? "cores" : "selection", level: "main" }, appliesLive: false,
-  source: "src/settings/catalogue/native.ts",
+  home: { tab: "wasm", section: core ? "cores" : "selection", level: "main" }, appliesLive: false,
+  source: "src/settings/catalogue/wasm.ts",
 }));
 
 /** Shared-memory threads by default: the hardware threads but the page's own, at most 4. */
@@ -156,45 +156,45 @@ const TIER_CHOICES = [
 ] as const;
 
 export const COMPUTE_PARAMETERS: readonly ParameterSpec[] = [{
-  id: "native.compute", label: "Compute scheduling", kind: "choice", unit: "none",
+  id: "wasm.compute", label: "Compute scheduling", kind: "choice", unit: "none",
   choices: [{ id: "legacy", label: "Off" }, { id: "fixed", label: "Fixed" }], default: "legacy",
   description: "After reload, Fixed shares an active-compute allowance across preparation workers, including cooperating sky threads. Capacity waits queue without choosing a page fallback. Off retains existing scheduling. Fixed is an experiment, with no established energy saving; it does not change quality, FPS or simulation frequency.",
   defaultReason: "Keep current scheduling until fixed candidates and adaptation have qualified responsiveness, content readiness and power evidence.",
-  home: { tab: "native", section: "selection", level: "all" }, appliesLive: false, source: "src/settings/catalogue/native.ts",
+  home: { tab: "wasm", section: "selection", level: "all" }, appliesLive: false, source: "src/settings/catalogue/wasm.ts",
 }, {
-  id: "native.computeLanes", label: "Active compute lanes", kind: "number", unit: "count",
+  id: "wasm.computeLanes", label: "Active compute lanes", kind: "number", unit: "count",
   default: 32, bounds: () => ({ min: 1, max: 32 }), step: 1,
   description: "After reload, limits simultaneous admitted preparation lanes in Fixed mode, independently of live Worker objects and memory. The effective allowance cannot exceed Total preparation workers. The sky coordinator and helpers each count. Smaller values are candidates to compare, not energy recommendations.",
   defaultReason: "Start at the full existing allowed worker capacity; no CPU topology or efficiency-core ceiling is assumed.",
-  home: { tab: "native", section: "selection", level: "all" }, appliesLive: false, source: "src/settings/catalogue/native.ts",
+  home: { tab: "wasm", section: "selection", level: "all" }, appliesLive: false, source: "src/settings/catalogue/wasm.ts",
 }, {
-  id: "native.computeInitialization", label: "Concurrent worker preparation", kind: "number", unit: "count",
+  id: "wasm.computeInitialization", label: "Concurrent worker preparation", kind: "number", unit: "count",
   default: 1, bounds: () => ({ min: 1, max: 32 }), step: 1,
   description: "After reload, how many worker module preparation requests may proceed together in Fixed mode. Module I/O and compilation use this separate initialization allowance before numeric compute admission. Worker objects and shared helper startup remain subject to their existing lifetime limits.",
   defaultReason: "A bounded experimental startup policy, not a device or energy recommendation; compare startup readiness before increasing or adopting it.",
-  home: { tab: "native", section: "selection", level: "all" }, appliesLive: false, source: "src/settings/catalogue/native.ts",
+  home: { tab: "wasm", section: "selection", level: "all" }, appliesLive: false, source: "src/settings/catalogue/wasm.ts",
 }, {
-  id: "native.computeAging", label: "Compute queue aging", kind: "number", unit: "ms",
+  id: "wasm.computeAging", label: "Compute queue aging", kind: "number", unit: "ms",
   default: 1000, bounds: () => ({ min: 1, max: 60000 }), step: 1,
   description: "After reload, each elapsed aging interval raises waiting work's urgency by one at the next real grant/release event. There is no aging timer. Equal urgency uses submission order, and a whole sky team cannot be bypassed by younger equal-urgency jobs.",
   defaultReason: "A visible experimental fairness interval, to qualify with required content readiness; it does not estimate energy or CPU topology.",
-  home: { tab: "native", section: "selection", level: "all" }, appliesLive: false, source: "src/settings/catalogue/native.ts",
+  home: { tab: "wasm", section: "selection", level: "all" }, appliesLive: false, source: "src/settings/catalogue/wasm.ts",
 }, {
-  id: "native.computeObserve", label: "Compute observations", kind: "boolean", unit: "none", default: false,
+  id: "wasm.computeObserve", label: "Compute observations", kind: "boolean", unit: "none", default: false,
   description: "After reload, retain bounded per-component admission wait, oldest queue age, admitted elapsed spans and useful/stale/retired replies in Fixed mode. Elapsed spans are not thread CPU time, watts or core residency. Actual rendered frames and content snapshots are available in Copy report.",
   defaultReason: "Observation is off until requested; no idle polling or permanent tuning loop.",
-  home: { tab: "native", section: "selection", level: "all" }, appliesLive: false, source: "src/settings/catalogue/native.ts",
+  home: { tab: "wasm", section: "selection", level: "all" }, appliesLive: false, source: "src/settings/catalogue/wasm.ts",
 }];
 
-export const NATIVE_PARAMETERS: readonly ParameterSpec[] = [...COMPUTE_PARAMETERS, {
-  id: NATIVE_TIER_ID, label: "Execution selection", kind: "choice", unit: "none",
+export const WASM_PARAMETERS: readonly ParameterSpec[] = [...COMPUTE_PARAMETERS, {
+  id: WASM_TIER_ID, label: "Execution selection", kind: "choice", unit: "none",
   description: "After a reload, chooses how every converted core runs. TypeScript keeps each core where it always ran. For an A/B, compare TypeScript in workers with single-threaded WASM: both use the same workers, inputs and quality. WASM is admitted only after its first result equals the TypeScript reference; a failed fetch, compile, start or comparison returns that core to TypeScript and says why. Threaded runs the sky's shared-memory build with cooperating threads where the page is cross-origin isolated, and otherwise its single-threaded core; the other cores have no shared build and report their fallback.",
   choices: [...TIER_CHOICES],
   default: "single", defaultReason: "WebAssembly in worker pools, chosen on 19 October 2026 after it was tried on a Mac and an Android phone and judged to work well enough. It is not a speed claim: paired runs measured Terrain heights and Terrain geometry slower in WASM than in TypeScript, and Auto keeps each core's recorded choice. Each core is admitted only after its first result equals the TypeScript reference, and otherwise returns to TypeScript and says why.",
-  home: { tab: "native", section: "selection", level: "main" }, appliesLive: false,
-  source: "src/settings/catalogue/native.ts",
+  home: { tab: "wasm", section: "selection", level: "main" }, appliesLive: false,
+  source: "src/settings/catalogue/wasm.ts",
 }, {
-  id: "native.workers", label: "Total preparation workers", kind: "number", unit: "count",
+  id: "wasm.workers", label: "Total preparation workers", kind: "number", unit: "count",
   description: "After reload, limits the combined imagery decode, elevation, mesh, sky, imagery height, Google and ground worker factories. The elevation pool gets what the other workers leave, so a smaller budget decodes more elevation tiles on the page. A full budget keeps the complete JavaScript fallback usable.",
   default: context => {
     const threads = context.hardwareConcurrency ?? 4;
@@ -205,48 +205,48 @@ export const NATIVE_PARAMETERS: readonly ParameterSpec[] = [...COMPUTE_PARAMETER
   },
   bounds: () => ({ min: 1, max: 32 }), step: 1,
   defaultReason: "Keeps the elevation pool its recommended size beside the default WebAssembly selection's sky, imagery height, Google, ground and terrain mesh workers and the shared sky's helpers. Those are idle between bursts of work, so they are counted rather than taken from the elevation pool.",
-  home: { tab: "native", section: "selection", level: "all" }, appliesLive: false,
-  source: "src/settings/catalogue/native.ts",
+  home: { tab: "wasm", section: "selection", level: "all" }, appliesLive: false,
+  source: "src/settings/catalogue/wasm.ts",
 }, {
-  id: NATIVE_THREADS_ID, label: "Shared-memory threads", kind: "number", unit: "count",
+  id: WASM_THREADS_ID, label: "Shared-memory threads", kind: "number", unit: "count",
   description: "After reload, how many cooperating threads a threaded core uses over one shared memory, its coordinator included. Only a threaded request of a core with a shared build uses them; each helper thread is a worker taken from the total preparation workers.",
   default: context => {
     const threads = context.hardwareConcurrency;
     const value = defaultSharedThreads(threads);
     return { value, derivedFrom: threads ? `the ${threads} hardware threads the browser reports but the page's own, at most 4` : "1 helper beside the coordinator, because this browser does not say how many hardware threads the device has" };
   },
-  bounds: () => ({ min: 1, max: NATIVE_MAX_THREADS }), step: 1,
+  bounds: () => ({ min: 1, max: WASM_MAX_THREADS }), step: 1,
   defaultReason: "Leaves the page a thread. In the measured app sky, 8 threads saved little worker time over 4 and used more CPU in all.",
-  home: { tab: "native", section: "selection", level: "all" }, appliesLive: false,
-  source: "src/settings/catalogue/native.ts",
+  home: { tab: "wasm", section: "selection", level: "all" }, appliesLive: false,
+  source: "src/settings/catalogue/wasm.ts",
 }, {
-  id: NATIVE_SHARED_SKY_ID, label: "Sky in shared memory", kind: "boolean", unit: "none",
+  id: WASM_SHARED_SKY_ID, label: "Sky in shared memory", kind: "boolean", unit: "none",
   description: "After a reload, a sky that runs WebAssembly runs its shared-memory build: its worker coordinates helper threads over one shared memory, and Shared-memory threads says how many. Used only on a cross-origin isolated page; elsewhere the sky runs its single-threaded WASM core and says why. TypeScript selections are unchanged. Turn it off to compare single-threaded WASM with TypeScript in workers.",
   default: true,
   defaultReason: "On since 19 October 2026, with WebAssembly in worker pools, after the shared-memory sky was tried in isolated browsers and judged to work well enough. It is not a speed claim.",
-  home: { tab: "native", section: "cores", level: "all" }, appliesLive: false,
-  source: "src/settings/catalogue/native.ts",
-}, ...(Object.keys(NATIVE_CORE_SETTING_IDS) as NativeCoreId[]).map((core): ParameterSpec => ({
-  id: NATIVE_CORE_SETTING_IDS[core], label: NATIVE_CORES[core].label, kind: "choice", unit: "none",
-  description: `After a reload, overrides global execution for this component alone, to attribute a difference to it. ${NATIVE_CORES[core].scope}`,
+  home: { tab: "wasm", section: "cores", level: "all" }, appliesLive: false,
+  source: "src/settings/catalogue/wasm.ts",
+}, ...(Object.keys(WASM_CORE_SETTING_IDS) as WasmCoreId[]).map((core): ParameterSpec => ({
+  id: WASM_CORE_SETTING_IDS[core], label: WASM_CORES[core].label, kind: "choice", unit: "none",
+  description: `After a reload, overrides global execution for this component alone, to attribute a difference to it. ${WASM_CORES[core].scope}`,
   choices: [{ id: "inherit", label: "Global" }, ...TIER_CHOICES],
   default: "inherit", defaultReason: "One selection governs every core unless an A/B isolates one.",
-  home: { tab: "native", section: "cores", level: "main" }, appliesLive: false,
-  source: NATIVE_CORES[core].source,
-})), ...manualParameters(), ...(Object.keys(NATIVE_CORE_SETTING_IDS) as NativeCoreId[]).flatMap(core => manualParameters(core))];
+  home: { tab: "wasm", section: "cores", level: "main" }, appliesLive: false,
+  source: WASM_CORES[core].source,
+})), ...manualParameters(), ...(Object.keys(WASM_CORE_SETTING_IDS) as WasmCoreId[]).flatMap(core => manualParameters(core))];
 
-const isTier = (value: unknown): value is NativeExecutionTier => NATIVE_EXECUTION_TIERS.includes(value as NativeExecutionTier);
+const isTier = (value: unknown): value is WasmExecutionTier => WASM_EXECUTION_TIERS.includes(value as WasmExecutionTier);
 
-export interface NativeCorePlan {
-  core: NativeCoreId;
+export interface WasmCorePlan {
+  core: WasmCoreId;
   /** The tier asked for, and the setting that asked. */
-  requested: NativeExecutionTier;
+  requested: WasmExecutionTier;
   requestedBy: string;
   /** `auto` resolved to this core's recorded choice; otherwise the request. */
-  resolved: Exclude<NativeExecutionTier, "auto" | "custom">;
+  resolved: Exclude<WasmExecutionTier, "auto" | "custom">;
   /** Original: the code and place the core always had. Worker: the A/B placement. */
   placement: "original" | "worker";
-  /** The numbers inside that placement; a single-threaded sky with native.sharedSky is threaded. */
+  /** The numbers inside that placement; a single-threaded sky with wasm.sharedSky is threaded. */
   kernel: "typescript" | "single" | "threaded";
   /** Why `auto` chose as it did; null otherwise. */
   autoReason: string | null;
@@ -255,7 +255,7 @@ export interface NativeCorePlan {
   /**
    * Cooperating threads over one shared memory, the coordinator included, for
    * a threaded request of a core with a shared build; 1 otherwise. Helpers are
-   * workers from `native.workers`, so fewer may start; the report says how many did.
+   * workers from `wasm.workers`, so fewer may start; the report says how many did.
    */
   threads: number;
   /** Whether this plan asks for shared WebAssembly memory. */
@@ -265,7 +265,7 @@ export interface NativeCorePlan {
 }
 
 type ExecutionSettings = Pick<SettingsRegistry, "get">;
-const fieldValue = (settings: ExecutionSettings, field: ComponentExecutionField, core?: NativeCoreId): string => {
+const fieldValue = (settings: ExecutionSettings, field: ComponentExecutionField, core?: WasmCoreId): string => {
   // Old host/test readers may only expose the legacy tier settings.
   const value = settings.get(componentExecutionSettingId(field, core));
   const valid = FIELD_CHOICES[field].some(choice => choice.id === value);
@@ -273,45 +273,45 @@ const fieldValue = (settings: ExecutionSettings, field: ComponentExecutionField,
 };
 
 /** Values shown by the separate manual controls, including retained legacy URL selections. */
-export function componentExecutionChoices(settings: ExecutionSettings, core?: NativeCoreId): Record<ComponentExecutionField, string> {
-  const tier = settings.get(core ? NATIVE_CORE_SETTING_IDS[core] : NATIVE_TIER_ID);
+export function componentExecutionChoices(settings: ExecutionSettings, core?: WasmCoreId): Record<ComponentExecutionField, string> {
+  const tier = settings.get(core ? WASM_CORE_SETTING_IDS[core] : WASM_TIER_ID);
   if (core && tier === "inherit") return { implementation: "inherit", placement: "inherit", parallelism: "inherit" };
-  if (tier === "custom" || tier === "auto") return Object.fromEntries(NATIVE_MANUAL_FIELDS.map(field => [field, fieldValue(settings, field, core)])) as Record<ComponentExecutionField, string>;
+  if (tier === "custom" || tier === "auto") return Object.fromEntries(WASM_MANUAL_FIELDS.map(field => [field, fieldValue(settings, field, core)])) as Record<ComponentExecutionField, string>;
   return { implementation: tier === "single" || tier === "threaded" ? "wasm" : "typescript",
     placement: tier === "typescript" ? "original" : "worker", parallelism: fieldValue(settings, "parallelism", core) };
 }
 
 /** Atomic edits preserve the other manual decisions and legacy URL compatibility. */
-export function componentExecutionEdits(settings: ExecutionSettings, core: NativeCoreId | undefined,
+export function componentExecutionEdits(settings: ExecutionSettings, core: WasmCoreId | undefined,
   field: ComponentExecutionField | "mode", value: string): Record<string, string> {
-  const tierId = core ? NATIVE_CORE_SETTING_IDS[core] : NATIVE_TIER_ID;
+  const tierId = core ? WASM_CORE_SETTING_IDS[core] : WASM_TIER_ID;
   const current = settings.get(tierId);
   const choices = field === "mode" && value === "custom" && current === "inherit"
-    ? Object.fromEntries(NATIVE_MANUAL_FIELDS.map(key => [key, fieldValue(settings, key, core)])) as Record<ComponentExecutionField, string>
+    ? Object.fromEntries(WASM_MANUAL_FIELDS.map(key => [key, fieldValue(settings, key, core)])) as Record<ComponentExecutionField, string>
     : componentExecutionChoices(settings, core);
   if (field === "mode" && value !== "custom") return { [tierId]: value,
-    ...(current !== "auto" && current !== "inherit" ? Object.fromEntries(NATIVE_MANUAL_FIELDS.map(key => [componentExecutionSettingId(key, core), choices[key]])) : {}) };
+    ...(current !== "auto" && current !== "inherit" ? Object.fromEntries(WASM_MANUAL_FIELDS.map(key => [componentExecutionSettingId(key, core), choices[key]])) : {}) };
   if (field !== "mode") choices[field] = value;
   // A local implementation choice is enough to opt into its required placement.
   if (choices.implementation === "wasm" && choices.placement === "original") choices.placement = "worker";
-  return { [tierId]: "custom", ...Object.fromEntries(NATIVE_MANUAL_FIELDS.map(key => [componentExecutionSettingId(key, core), choices[key]])) };
+  return { [tierId]: "custom", ...Object.fromEntries(WASM_MANUAL_FIELDS.map(key => [componentExecutionSettingId(key, core), choices[key]])) };
 }
 
 /** Read once when the component's services are created: changes require applying/reloading. */
-export function nativeCorePlan(settings: ExecutionSettings, core: NativeCoreId): NativeCorePlan {
-  const global = settings.get(NATIVE_TIER_ID);
-  if (!isTier(global)) throw new Error(`Native execution must be one of ${NATIVE_EXECUTION_TIERS.join(", ")}.`);
-  const own = settings.get(NATIVE_CORE_SETTING_IDS[core]);
-  if (own !== "inherit" && !isTier(own)) throw new Error(`${NATIVE_CORE_SETTING_IDS[core]} must be inherit or an execution selection.`);
+export function wasmCorePlan(settings: ExecutionSettings, core: WasmCoreId): WasmCorePlan {
+  const global = settings.get(WASM_TIER_ID);
+  if (!isTier(global)) throw new Error(`WASM execution must be one of ${WASM_EXECUTION_TIERS.join(", ")}.`);
+  const own = settings.get(WASM_CORE_SETTING_IDS[core]);
+  if (own !== "inherit" && !isTier(own)) throw new Error(`${WASM_CORE_SETTING_IDS[core]} must be inherit or an execution selection.`);
   const requested = own === "inherit" ? global : own;
-  const facts = NATIVE_CORES[core];
+  const facts = WASM_CORES[core];
   const globalTier = global === "auto" ? facts.auto : global;
   const base: ComponentExecutionChoices = globalTier === "custom"
     ? { implementation: fieldValue(settings, "implementation") as ComponentImplementation,
       placement: fieldValue(settings, "placement") as ComponentPlacement, parallelism: fieldValue(settings, "parallelism") as ComponentParallelism }
     : { implementation: globalTier === "single" || globalTier === "threaded" ? "wasm" : "typescript",
       placement: globalTier === "typescript" ? "original" : "worker", parallelism: fieldValue(settings, "parallelism") as ComponentParallelism };
-  if (own === "custom") for (const field of NATIVE_MANUAL_FIELDS) {
+  if (own === "custom") for (const field of WASM_MANUAL_FIELDS) {
     const value = fieldValue(settings, field, core);
     if (value !== "inherit") Object.assign(base, { [field]: value });
   }
@@ -319,24 +319,24 @@ export function nativeCorePlan(settings: ExecutionSettings, core: NativeCoreId):
     ? base.implementation === "wasm" ? "single" : base.placement === "worker" ? "typescript-worker" : "typescript"
     : requested;
   const placement = resolved === "typescript" ? "original" : "worker";
-  // Old host/test readers may not expose native.sharedSky: single-threaded WASM.
-  const sharedSky = core === "sky" && resolved === "single" && settings.get(NATIVE_SHARED_SKY_ID) === true;
+  // Old host/test readers may not expose wasm.sharedSky: single-threaded WASM.
+  const sharedSky = core === "sky" && resolved === "single" && settings.get(WASM_SHARED_SKY_ID) === true;
   const kernel = resolved === "single" ? sharedSky ? "threaded" : "single" : resolved === "threaded" ? "threaded" : "typescript";
   const sharedMemory = kernel === "threaded" && facts.sharedBuild;
-  const asked = Number(settings.get(NATIVE_THREADS_ID));
+  const asked = Number(settings.get(WASM_THREADS_ID));
   // Old host/test readers may not expose the thread count: the coordinator alone.
-  const threads = sharedMemory ? Number.isFinite(asked) ? Math.max(1, Math.min(NATIVE_MAX_THREADS, Math.round(asked))) : 1 : 1;
-  return { core, requested, requestedBy: own === "inherit" ? NATIVE_TIER_ID : NATIVE_CORE_SETTING_IDS[core], resolved, placement, kernel,
+  const threads = sharedMemory ? Number.isFinite(asked) ? Math.max(1, Math.min(WASM_MAX_THREADS, Math.round(asked))) : 1 : 1;
+  return { core, requested, requestedBy: own === "inherit" ? WASM_TIER_ID : WASM_CORE_SETTING_IDS[core], resolved, placement, kernel,
     autoReason: requested === "auto" ? facts.autoReason : null, parallelism: base.parallelism,
     threads, sharedMemory, threadedFallback: kernel === "threaded" && !facts.sharedBuild ? "no-shared-build" : null };
 }
 
 /** The terrain decoder's tier for a plan: its workers are its original placement. */
-export function terrainDecoderTier(plan: NativeCorePlan): NativeTierPreference {
+export function terrainDecoderTier(plan: WasmCorePlan): WasmTierPreference {
   return plan.kernel;
 }
 
-/** @deprecated Use `nativeCorePlan(settings, "raster")`; kept for hosts that read the decoder's tier directly. */
-export function nativeTierPreference(settings: Pick<SettingsRegistry, "get">): NativeTierPreference {
-  return terrainDecoderTier(nativeCorePlan(settings, "raster"));
+/** @deprecated Use `wasmCorePlan(settings, "raster")`; kept for hosts that read the decoder's tier directly. */
+export function wasmTierPreference(settings: Pick<SettingsRegistry, "get">): WasmTierPreference {
+  return terrainDecoderTier(wasmCorePlan(settings, "raster"));
 }

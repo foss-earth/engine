@@ -821,3 +821,65 @@ describe("Google proximity detail", () => {
     } finally { f.runtime.dispose(); }
   });
 });
+
+describe("hosted Google tiles", () => {
+  function hosted(tokens: string[], statuses: number[]) {
+    const seen: { url: string; authorization: string | null; cache: RequestCache | undefined }[] = [];
+    const refreshes: boolean[] = [];
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const headers = new Headers(init?.headers);
+      seen.push({ url: String(input), authorization: headers.get("Authorization"), cache: init?.cache });
+      return new Response("{}", { status: statuses[seen.length - 1] ?? 200 });
+    });
+    vi.stubGlobal("fetch", fetchImpl);
+    let root = "";
+    let plugin: { fetchData(uri: string, init: RequestInit): Promise<Response> } | null = null;
+    const runtime = createGoogleTilesRuntime({
+      scene: {} as Scene,
+      credential: {
+        kind: "hosted",
+        rootUrl: "https://login.foss.earth/v1/3dtiles/root.json",
+        authorization: async request => {
+          refreshes.push(Boolean(request?.refresh));
+          const token = tokens.shift();
+          if (!token) throw new Error("no token");
+          return token;
+        },
+      },
+      createTilesRenderer: (url, scene) => {
+        root = url;
+        const tiles = new TilesRenderer(url, scene);
+        tiles.registerPlugin = (next: unknown) => { plugin = next as NonNullable<typeof plugin>; };
+        return tiles;
+      },
+    });
+    return { runtime, plugin: () => plugin, seen, refreshes, root: () => root };
+  }
+
+  it("sends the account token, retries a rejected one once, and never puts a key on the query", async () => {
+    const session = hosted(["Bearer first-token", "Bearer second-token"], [401, 200]);
+    try {
+      expect(session.root()).toBe("https://login.foss.earth/v1/3dtiles/root.json");
+      const response = await session.plugin()!.fetchData("https://login.foss.earth/v1/3dtiles/root.json?key=stolen", { cache: "force-cache" });
+      expect(response.status).toBe(200);
+      expect(session.seen.map(call => call.authorization)).toEqual(["Bearer first-token", "Bearer second-token"]);
+      expect(session.refreshes).toEqual([false, true]);
+      expect(session.seen[0]?.url).not.toContain("key=");
+      expect(session.seen[0]?.url).not.toContain("stolen");
+      expect(session.seen[0]?.cache).toBe("no-cache");
+    } finally {
+      session.runtime.dispose();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("stops with the budget message when the account refuses a root", async () => {
+    const session = hosted(["Bearer session-token"], [402]);
+    try {
+      await expect(session.plugin()!.fetchData("https://login.foss.earth/v1/3dtiles/datasets/a.json", {})).rejects.toThrow("Google 3D Tiles are paused until the budget resets. Flat maps still work.");
+    } finally {
+      session.runtime.dispose();
+      vi.unstubAllGlobals();
+    }
+  });
+});

@@ -1,12 +1,12 @@
 import { adoptTerrainNumericGeometry, copyTerrainNumericGeometry, prepareTerrainNumericGeometry, validateTerrainNumericRequest } from "../../terrain-TS/terrainNumericGeometry.js";
-import { TERRAIN_MESH_PROTOCOL, type NativeTerrainGeometryPort, type TerrainMeshActualBackend,
+import { TERRAIN_MESH_PROTOCOL, type WasmTerrainGeometryPort, type TerrainMeshActualBackend,
   type TerrainMeshValidation, type TerrainMeshWorkerRequest, type TerrainMeshWorkerScope } from "./terrainMeshWorkerProtocol.js";
 
 export interface TerrainMeshWorkerKernelPorts {
   scope: TerrainMeshWorkerScope;
-  /** Explicit native injection. Missing WASM never silently becomes TypeScript. */
-  native?: NativeTerrainGeometryPort;
-  loadNative?: () => Promise<NativeTerrainGeometryPort>;
+  /** Explicit WASM injection. Missing WASM never silently becomes TypeScript. */
+  wasm?: WasmTerrainGeometryPort;
+  loadWasm?: () => Promise<WasmTerrainGeometryPort>;
   onError(error: unknown): void;
 }
 
@@ -14,8 +14,8 @@ export interface TerrainMeshWorkerKernelPorts {
 export function installTerrainMeshWorkerKernel(ports: TerrainMeshWorkerKernelPorts): { dispose(): void } {
   const { scope } = ports;
   let disposed = false;
-  let nativePort: NativeTerrainGeometryPort | null = ports.native ?? null;
-  let nativeState: "unchecked" | "ready" | "fallback" = "unchecked";
+  let wasmPort: WasmTerrainGeometryPort | null = ports.wasm ?? null;
+  let wasmState: "unchecked" | "ready" | "fallback" = "unchecked";
   let parity: "unchecked" | "same" | "different" | "not compared" = "unchecked";
   let fallbackReason: string | null = null;
 
@@ -38,38 +38,38 @@ export function installTerrainMeshWorkerKernel(ports: TerrainMeshWorkerKernelPor
         parity = "not compared";
         produced = prepareTerrainNumericGeometry(request.input);
       } else {
-        if (nativeState === "fallback") {
+        if (wasmState === "fallback") {
           actualBackend = "typescript";
           validationStatus = "reference";
           produced = prepareTerrainNumericGeometry(request.input);
-        } else if (nativeState === "unchecked") {
-          if (!nativePort && ports.loadNative) {
-            try { nativePort = await ports.loadNative(); }
-            catch { nativeState = "fallback"; fallbackReason = "startup-failed"; }
+        } else if (wasmState === "unchecked") {
+          if (!wasmPort && ports.loadWasm) {
+            try { wasmPort = await ports.loadWasm(); }
+            catch { wasmState = "fallback"; fallbackReason = "startup-failed"; }
           }
-          if (!nativePort || nativePort.actualTier !== "single") {
-            nativeState = "fallback";
-            fallbackReason = fallbackReason ?? "native-core-unavailable";
+          if (!wasmPort || wasmPort.actualTier !== "single") {
+            wasmState = "fallback";
+            fallbackReason = fallbackReason ?? "wasm-core-unavailable";
             actualBackend = "typescript";
             validationStatus = "reference";
             produced = prepareTerrainNumericGeometry(request.input);
           } else {
             const ref = prepareTerrainNumericGeometry(request.input);
             try {
-              const act = await nativePort.buildSurface(request.input);
+              const act = await wasmPort.buildSurface(request.input);
               const matches = act.targetPositions.length === ref.targetPositions.length
                 && Object.is(act.heightBounds.min, ref.heightBounds.min)
                 && Object.is(act.heightBounds.max, ref.heightBounds.max)
                 && act.targetPositions.every((v, i) => Object.is(v, ref.targetPositions[i]));
               if (matches) {
                 parity = "same";
-                nativeState = "ready";
+                wasmState = "ready";
                 actualBackend = "wasm-single";
                 validationStatus = "validated";
                 produced = ref;
               } else {
                 parity = "different";
-                nativeState = "fallback";
+                wasmState = "fallback";
                 fallbackReason = "parity-mismatch";
                 actualBackend = "typescript";
                 validationStatus = "reference";
@@ -77,8 +77,8 @@ export function installTerrainMeshWorkerKernel(ports: TerrainMeshWorkerKernelPor
               }
             } catch {
               parity = "different";
-              nativeState = "fallback";
-              fallbackReason = "native-execution-failed";
+              wasmState = "fallback";
+              fallbackReason = "wasm-execution-failed";
               actualBackend = "typescript";
               validationStatus = "reference";
               produced = ref;
@@ -89,10 +89,10 @@ export function installTerrainMeshWorkerKernel(ports: TerrainMeshWorkerKernelPor
             actualBackend = "wasm-single";
             validationStatus = "validated";
             parity = "same";
-            produced = await nativePort!.buildSurface(request.input);
+            produced = await wasmPort!.buildSurface(request.input);
           } catch {
-            nativeState = "fallback";
-            fallbackReason = "native-execution-failed";
+            wasmState = "fallback";
+            fallbackReason = "wasm-execution-failed";
             actualBackend = "typescript";
             validationStatus = "reference";
             produced = prepareTerrainNumericGeometry(request.input);
@@ -100,7 +100,7 @@ export function installTerrainMeshWorkerKernel(ports: TerrainMeshWorkerKernelPor
         }
       }
       if (disposed) return;
-      // TypeScript geometry was allocated for this job; native output may be
+      // TypeScript geometry was allocated for this job; WASM output may be
       // a view the core reuses, so it is copied before transfer.
       const geometry = actualBackend === "typescript" ? adoptTerrainNumericGeometry(produced) : copyTerrainNumericGeometry(produced);
       const expectedSegments = Math.max(1, Math.round(request.input.segments ?? 64));
@@ -124,6 +124,6 @@ export function installTerrainMeshWorkerKernel(ports: TerrainMeshWorkerKernelPor
     if (disposed) return;
     disposed = true;
     if (scope.onmessage === receive) scope.onmessage = null;
-    try { nativePort?.dispose?.(); } catch (error) { report(error); }
+    try { wasmPort?.dispose?.(); } catch (error) { report(error); }
   } };
 }

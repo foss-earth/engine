@@ -45,7 +45,7 @@ All transcendental and rounding functions are imported from this worker's
 `Math`: `sin`, `cos`, `atan`, `sinh`, `sqrt`, `pow`, `floor`, `round`, `min` and
 `max`. There is no Rust libm substitution or fast-math. Bilinear sums and WGS84
 expressions retain reference operation order. Scoped differential checks cover
-the executing test realm; hosts compare their first native output before
+the executing test realm; hosts compare their first WASM output before
 admission. They do not establish every browser's Math or NaN payload bits. Imported
 Math must be trusted and non-throwing. A thrown import may strand a WASM job;
 discard that instance and its owning worker. Reentry is explicitly rejected:
@@ -98,12 +98,12 @@ index slots. A query needing a missing pixel fails explicitly. Dense snapshots
 continue to use descriptor version 1, with the same public sampler method.
 
 The app's imagery worker receives compact snapshots for each batch and frees
-its native sampler after that batch. The page resolves the exact required leaf
+its WASM sampler after that batch. The page resolves the exact required leaf
 pixels; the worker still selects source grids, maps the original coordinates
 and evaluates the complete interpolation. Both worker arms use these same
 inputs. No whole source height array crosses that boundary. At the app's 8,192
 point limit, sparse pixels occupy at most 1 MiB, coordinates 128 KiB, and the
-native packed pixel copy another 1 MiB plus at most 1,608 descriptor bytes.
+WASM packed pixel copy another 1 MiB plus at most 1,608 descriptor bytes.
 Page misses use the immediate complete reference; all live replies must match
 those saved exact values before entering the numeric cache. Worker startup,
 parity, execution and timeout failures preserve the page reference path.
@@ -116,8 +116,8 @@ recorded in `build/height-sparse-2026-10-18/functional.md`.
 
 Engine exposes an optional renderer-free worker protocol through
 `installTerrainMeshWorkerKernel` and `createTerrainMeshWorkers`. Inject this
-core as the worker's `native` port and request the `wasm` backend explicitly;
-missing native code is an error. The reply identifies the requested and actual
+core as the worker's `wasm` port and request the `wasm` backend explicitly;
+missing WASM code is an error. The reply identifies the requested and actual
 backend and retains `unvalidated` status. The TypeScript backend is a separate
 explicit reference request. Host generation checks reject retired map results.
 `createTerrainMeshFromGeometry` requires a separate host admission argument:

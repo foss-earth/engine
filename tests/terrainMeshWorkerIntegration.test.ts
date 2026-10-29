@@ -5,7 +5,7 @@ import { createRasterTilesRuntime } from "../src/babylon/createRasterTilesRuntim
 import { installTerrainMeshWorkerKernel } from "../src/browser/terrainMeshWorkerKernel.js";
 import type { TerrainMeshWorkerPort, TerrainMeshWorkerReply, TerrainMeshWorkerRequest } from "../src/browser/terrainMeshWorkerProtocol.js";
 import { RASTER_BASE_MAP_SOURCES } from "../src/map/rasterBaseMaps.js";
-import { NATIVE_PARAMETERS } from "../src/settings/catalogue/native.js";
+import { WASM_PARAMETERS } from "../src/settings/catalogue/wasm.js";
 import type { TerrainGrid, TerrainTile } from "../src/terrain/terrainGrid.js";
 
 // Counts the targets the page works out itself; the mesh builder does not go through this export.
@@ -42,8 +42,8 @@ describe("terrain mesh worker integration at applyGrid seam", () => {
     const engine = new NullEngine();
     const scene = new Scene(engine);
     const settings = createEngineSettings();
-    settings.register(NATIVE_PARAMETERS);
-    settings.set("native.tier", "typescript");
+    settings.register(WASM_PARAMETERS);
+    settings.set("wasm.tier", "typescript");
 
     const workerFactory = vi.fn(createMockTerrainMeshWorker);
 
@@ -88,8 +88,8 @@ describe("terrain mesh worker integration at applyGrid seam", () => {
     const engine = new NullEngine();
     const scene = new Scene(engine);
     const settings = createEngineSettings();
-    settings.register(NATIVE_PARAMETERS);
-    settings.set("native.tier", "typescript-worker");
+    settings.register(WASM_PARAMETERS);
+    settings.set("wasm.tier", "typescript-worker");
 
     const workerFactory = vi.fn(createMockTerrainMeshWorker);
 
@@ -151,8 +151,8 @@ describe("terrain mesh worker integration at applyGrid seam", () => {
     const engine = new NullEngine();
     const scene = new Scene(engine);
     const settings = createEngineSettings();
-    settings.register(NATIVE_PARAMETERS);
-    settings.set("native.tier", "typescript-worker");
+    settings.register(WASM_PARAMETERS);
+    settings.set("wasm.tier", "typescript-worker");
 
     const runtime = createRasterTilesRuntime({
       scene,
@@ -231,8 +231,8 @@ describe("terrain mesh worker integration at applyGrid seam", () => {
 
   it("leaves target preparation to the workers, apart from one parity check", async () => {
     const engine = new NullEngine(), scene = new Scene(engine), settings = createEngineSettings();
-    settings.register(NATIVE_PARAMETERS);
-    settings.set("native.tier", "typescript-worker");
+    settings.register(WASM_PARAMETERS);
+    settings.set("wasm.tier", "typescript-worker");
     const runtime = workerRuntime(scene, settings, createMockTerrainMeshWorker);
     pageTargets.count = 0;
     runtime.update();
@@ -244,8 +244,8 @@ describe("terrain mesh worker integration at applyGrid seam", () => {
 
   it("does not upload a target prepared before a segments change onto the rebuilt mesh", async () => {
     const engine = new NullEngine(), scene = new Scene(engine), settings = createEngineSettings();
-    settings.register(NATIVE_PARAMETERS);
-    settings.set("native.tier", "typescript-worker");
+    settings.register(WASM_PARAMETERS);
+    settings.set("wasm.tier", "typescript-worker");
     // Holds every job until released, so the rebuild lands while they run.
     const held: (() => void)[] = [];
     const createHeldWorker = (): TerrainMeshWorkerPort => {

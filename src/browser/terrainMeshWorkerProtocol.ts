@@ -32,8 +32,8 @@ export interface TerrainMeshWorkerScope {
   onmessage: ((event: MessageEvent<TerrainMeshWorkerRequest>) => void) | null;
   postMessage(message: TerrainMeshWorkerReply, transfer?: Transferable[]): void;
 }
-/** This optional library port is the only native dependency; no native package is imported by engine. */
-export interface NativeTerrainGeometryPort {
+/** This optional library port is the only WASM dependency; no WASM package is imported by engine. */
+export interface WasmTerrainGeometryPort {
   readonly actualTier: "single";
   buildSurface(request: TerrainMeshNumericInput): TerrainNumericGeometry | Promise<TerrainNumericGeometry>;
   dispose?(): void;

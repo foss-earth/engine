@@ -493,6 +493,69 @@ const UNIFORMS: ReadonlyArray<readonly [string, number]> = [
 ];
 
 /**
+ * The last components written into one uniform buffer. Every terrain submesh
+ * binds the same light, so a later bind skips `updateFloat4` and
+ * `updateFloatArray` when every component is `Object.is` to that write. The
+ * first bind on a buffer writes them all. Arrays are copied: the local-light
+ * arrays are filled in place, and the ground-light table can be updated in
+ * place. A new buffer is a different key and cannot see this entry.
+ *
+ * Without storage of its own, Babylon forwards those writes to the effect
+ * currently bound (`_currentEffect`). A new effect is empty, so the entry is
+ * dropped and the next bind writes every uniform again.
+ */
+interface TerrainUniformWrite {
+  effect: object | null;
+  float4: Map<string, [number, number, number, number]>;
+  arrays: Map<string, Float32Array>;
+}
+
+const TERRAIN_UNIFORM_WRITES = new WeakMap<UniformBuffer, TerrainUniformWrite>();
+
+function boundEffect(buffer: UniformBuffer): object | null {
+  return (buffer as UniformBuffer & { _currentEffect?: object | null })._currentEffect ?? null;
+}
+
+function uniformWrite(buffer: UniformBuffer): TerrainUniformWrite {
+  const effect = boundEffect(buffer);
+  const existing = TERRAIN_UNIFORM_WRITES.get(buffer);
+  if (existing && existing.effect === effect) return existing;
+  const write: TerrainUniformWrite = { effect, float4: new Map(), arrays: new Map() };
+  TERRAIN_UNIFORM_WRITES.set(buffer, write);
+  return write;
+}
+
+function sameFloat4(cached: readonly [number, number, number, number], x: number, y: number, z: number, w: number): boolean {
+  return Object.is(cached[0], x) && Object.is(cached[1], y) && Object.is(cached[2], z) && Object.is(cached[3], w);
+}
+
+function sameFloats(cached: Float32Array, value: ArrayLike<number>): boolean {
+  if (cached.length !== value.length) return false;
+  for (let index = 0; index < cached.length; index++) if (!Object.is(cached[index], value[index])) return false;
+  return true;
+}
+
+function writeFloat4(buffer: UniformBuffer, write: TerrainUniformWrite, name: string, x: number, y: number, z: number, w: number): void {
+  const previous = write.float4.get(name);
+  if (previous && sameFloat4(previous, x, y, z, w)) return;
+  buffer.updateFloat4(name, x, y, z, w);
+  if (previous) {
+    previous[0] = x;
+    previous[1] = y;
+    previous[2] = z;
+    previous[3] = w;
+  } else write.float4.set(name, [x, y, z, w]);
+}
+
+function writeFloatArray(buffer: UniformBuffer, write: TerrainUniformWrite, name: string, value: Float32Array): void {
+  const previous = write.arrays.get(name);
+  if (previous && sameFloats(previous, value)) return;
+  buffer.updateFloatArray(name, value);
+  if (previous && previous.length === value.length) previous.set(value);
+  else write.arrays.set(name, new Float32Array(value));
+}
+
+/**
  * Shows a terrain tile's imagery under the scene's terrain light, whichever
  * way the imagery reaches the tile: its own texture, the paged atlas, whose
  * plugin runs before this one, or a glTF material's albedo. Without a light
@@ -554,7 +617,8 @@ class TerrainLightMaterialPlugin extends MaterialPluginBase {
   override bindForSubMesh(uniformBuffer: UniformBuffer): void {
     const lighting = this.light.lighting;
     if (!lighting) return;
-    const vec = (name: string, value: Vec3 | Readonly<Rgb>): void => uniformBuffer.updateFloat4(name, value[0], value[1], value[2], 0);
+    const cached = uniformWrite(uniformBuffer);
+    const vec = (name: string, value: Vec3 | Readonly<Rgb>): void => writeFloat4(uniformBuffer, cached, name, value[0], value[1], value[2], 0);
     // With large-world rendering a shader's positions are relative to the eye: places are given the same way, as Babylon's own lights are.
     const eye = this._material.getScene().floatingOriginOffset;
     vec("terrainLightCentre", [lighting.centre[0] - eye.x, lighting.centre[1] - eye.y, lighting.centre[2] - eye.z]);
@@ -563,7 +627,7 @@ class TerrainLightMaterialPlugin extends MaterialPluginBase {
     vec("terrainLightSunScale", lighting.sunScale);
     vec("terrainLightMoonScale", lighting.moonScale);
     vec("terrainLightAmbient", lighting.ambient);
-    uniformBuffer.updateFloatArray("terrainLightTable", lighting.table);
+    writeFloatArray(uniformBuffer, cached, "terrainLightTable", lighting.table);
     const { position, direction, factor } = this.localArrays;
     position.fill(0);
     direction.fill(0);
@@ -573,18 +637,18 @@ class TerrainLightMaterialPlugin extends MaterialPluginBase {
       direction.set([light.direction[0], light.direction[1], light.direction[2], light.cosOuter], index * 4);
       factor.set([light.factor[0], light.factor[1], light.factor[2], light.cosInner], index * 4);
     });
-    uniformBuffer.updateFloatArray("terrainLocalPosition", position);
-    uniformBuffer.updateFloatArray("terrainLocalDirection", direction);
-    uniformBuffer.updateFloatArray("terrainLocalFactor", factor);
+    writeFloatArray(uniformBuffer, cached, "terrainLocalPosition", position);
+    writeFloatArray(uniformBuffer, cached, "terrainLocalDirection", direction);
+    writeFloatArray(uniformBuffer, cached, "terrainLocalFactor", factor);
     const night = lighting.night;
     const map = this.light.nightMap;
     if (!night || !map) return;
     vec("terrainNightAxisX", night.axes[0]);
     vec("terrainNightAxisY", night.axes[1]);
     vec("terrainNightAxisZ", night.axes[2]);
-    uniformBuffer.updateFloat4("terrainNightWindow", map.x, map.y, 2 ** map.zoom, map.tiles);
-    uniformBuffer.updateFloat4("terrainNightLight", night.light[0], night.light[1], night.light[2], night.floor);
-    uniformBuffer.updateFloat4("terrainNightPicture", night.picture[0], night.picture[1], night.picture[2], night.switchSine ?? LAMPS_ALWAYS_ON);
+    writeFloat4(uniformBuffer, cached, "terrainNightWindow", map.x, map.y, 2 ** map.zoom, map.tiles);
+    writeFloat4(uniformBuffer, cached, "terrainNightLight", night.light[0], night.light[1], night.light[2], night.floor);
+    writeFloat4(uniformBuffer, cached, "terrainNightPicture", night.picture[0], night.picture[1], night.picture[2], night.switchSine ?? LAMPS_ALWAYS_ON);
     uniformBuffer.setTexture("terrainNightMap", map.texture);
   }
 

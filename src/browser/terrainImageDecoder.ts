@@ -8,7 +8,7 @@ export interface TerrainImageDecoderPorts {
   createCanvas(width: number, height: number): HTMLCanvasElement | OffscreenCanvas;
   nowMs(): number;
   limits(): TerrainImageDecodeLimits;
-  /** Optional worker-only numeric decoder; it owns native parity and JS fallback. */
+  /** Optional worker-only numeric decoder; it owns WASM parity and JS fallback. */
   decodeTerrarium?(data: Uint8ClampedArray, size: number): Promise<Float32Array>;
   onDecodeCpu?(milliseconds: number): void;
 }

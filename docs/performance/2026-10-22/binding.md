@@ -2,7 +2,7 @@
 
 Measured on 22 October 2026 against engine `b7a0bbb`. The source change is confined to
 `src/terrain/imagery/imageryBinding.ts`, with a focused edge-case test in
-`tests/imageryBinding.test.ts`. Preexisting `AGENTS.md` and `docs/agent-native.md` work is preserved.
+`tests/imageryBinding.test.ts`. Preexisting `AGENTS.md` and `docs/agent-wasm.md` work is preserved.
 
 `patchTableDepth` returns the deepest displayed page within the table's six levels, plus whether
 deeper pages were capped. Once it has found both a page at the last addressable level and a

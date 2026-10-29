@@ -35,7 +35,7 @@ provenance, revision checks, stale reply handling, fallback or retirement behavi
 scratch buffer itself deserves scrutiny under nested packers; do not claim that case is already
 safe without testing it.
 
-Run existing pixel/batch/adversarial suites, selector identity guards and relevant native parity
+Run existing pixel/batch/adversarial suites, selector identity guards and relevant WASM parity
 after a candidate shows exactness. Benchmark small and large batches across spatial spreads,
 interleaved with the frozen reference, then use a pinned flight A/B if the gain survives. All
 benchmarks must wait for the shared exclusive measurement slot; no CPU-heavy work during Chrome.

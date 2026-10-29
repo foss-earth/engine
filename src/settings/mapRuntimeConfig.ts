@@ -48,6 +48,12 @@ export interface ResolveMapRuntimeConfigOptions {
   searchParams?: Pick<URLSearchParams, "get">;
   /** The required host registry to read and to give the app's defaults to. */
   settings: SettingsRegistry;
+  /**
+   * A signed-in session is using hosted tiles, so a key saved earlier on the
+   * device is not the credential for this visit. An explicit `googleApiKey`
+   * still is.
+   */
+  ignoreSavedGoogleKey?: boolean;
 }
 
 export function getGoogleApiKeyFromSearchParams(searchParams: Pick<URLSearchParams, "get">): string | null {
@@ -101,7 +107,8 @@ export function resolveMapRuntimeConfig(
   const settings = options.settings;
   const configuredBaseMap = resolveRasterBaseMapSource(options.baseMap ?? DEFAULT_RASTER_BASE_MAP_ID);
   const savedKey = settings.get("map.source.googleKey");
-  const googleApiKey = options.googleApiKey?.trim() || (typeof savedKey === "string" && savedKey.trim() ? savedKey.trim() : null);
+  const googleApiKey = options.googleApiKey?.trim()
+    || (!options.ignoreSavedGoogleKey && typeof savedKey === "string" && savedKey.trim() ? savedKey.trim() : null);
   const preferGoogleTiles = options.preferGoogleTiles !== false;
   if (preferGoogleTiles && googleApiKey) {
     settings.setHostDefault("map.source.basemap", "google", "a Google Maps API key was given");

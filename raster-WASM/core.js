@@ -20,42 +20,42 @@ export function copyRasterHeights(buffer, pointer, length, littleEndian = LITTLE
 function decodeError(status) {
   switch (status) {
     case 1: case 2: return new Error(DIMENSIONS_ERROR);
-    case 3: return new Error("Native raster output length does not match image dimensions");
+    case 3: return new Error("WASM raster output length does not match image dimensions");
     case 4: return new Error(MISSING_ERROR);
-    case 5: return new Error("Native raster allocation is unavailable or invalid");
-    default: return new Error(`Native raster decode returned invalid status: ${String(status)}`);
+    case 5: return new Error("WASM raster allocation is unavailable or invalid");
+    default: return new Error(`WASM raster decode returned invalid status: ${String(status)}`);
   }
 }
 
 /** Internal ABI boundary, separately exercised with explicit mock exports. */
 export function createRasterCore(exports) {
-  if (!exports || typeof exports !== "object") throw new Error("Invalid native raster ABI exports");
+  if (!exports || typeof exports !== "object") throw new Error("Invalid WASM raster ABI exports");
   for (const name of FUNCTIONS) {
-    if (typeof exports[name] !== "function") throw new Error(`Invalid native raster ABI: missing ${name}`);
+    if (typeof exports[name] !== "function") throw new Error(`Invalid WASM raster ABI: missing ${name}`);
   }
   const memory = exports.memory;
-  if (!(memory instanceof WebAssembly.Memory)) throw new Error("Invalid native raster ABI memory");
+  if (!(memory instanceof WebAssembly.Memory)) throw new Error("Invalid WASM raster ABI memory");
   const buffer = () => {
     const current = memory.buffer;
     if (!(current instanceof ArrayBuffer) || current.byteLength === 0 || current.byteLength > MAX_MEMORY_BYTES) {
-      throw new Error("Native raster memory exceeds the single-core 256 MiB bound or is invalid");
+      throw new Error("WASM raster memory exceeds the single-core 256 MiB bound or is invalid");
     }
     return current;
   };
   buffer();
-  if (exports.raster_abi_version() !== 1) throw new Error("Unsupported native raster ABI version");
+  if (exports.raster_abi_version() !== 1) throw new Error("Unsupported WASM raster ABI version");
   buffer();
 
   const allocation = (value, kind) => {
     if (!Number.isSafeInteger(value) || value < 0 || value > 0xffff_ffff) {
-      throw new Error(`Native raster ${kind} allocator returned an invalid pointer`);
+      throw new Error(`WASM raster ${kind} allocator returned an invalid pointer`);
     }
-    if (value === 0) throw new Error(`Native raster ${kind} allocation failed`);
+    if (value === 0) throw new Error(`WASM raster ${kind} allocation failed`);
     return value;
   };
   const span = (current, pointer, byteLength, alignment) => {
     if (pointer % alignment !== 0 || pointer > current.byteLength || byteLength > current.byteLength - pointer) {
-      throw new Error("Native raster allocation is misaligned or outside linear memory");
+      throw new Error("WASM raster allocation is misaligned or outside linear memory");
     }
   };
 
@@ -76,7 +76,7 @@ export function createRasterCore(exports) {
         span(before, rgba, rgbaBytes, 1);
         span(before, heights, heightBytes, Float32Array.BYTES_PER_ELEMENT);
         if (rgba < heights + heightBytes && heights < rgba + rgbaBytes) {
-          throw new Error("Native raster allocations overlap");
+          throw new Error("WASM raster allocations overlap");
         }
         // Both allocations may grow memory. Construct the view only after
         // them, and copy even an unaligned caller-owned RGBA subarray.
@@ -102,12 +102,12 @@ export function createRasterCore(exports) {
           if (pointer === 0) continue;
           try {
             const status = free(pointer, length);
-            if (status !== 0) throw new Error(`Native raster ${kind} release failed (${String(status)})`);
+            if (status !== 0) throw new Error(`WASM raster ${kind} release failed (${String(status)})`);
           } catch (error) { cleanup.push(error); }
         }
         if (cleanup.length > 0) {
-          if (failed) throw new AggregateError([failure, ...cleanup], "Native raster operation and cleanup failed", { cause: failure });
-          throw new AggregateError(cleanup, "Native raster cleanup failed");
+          if (failed) throw new AggregateError([failure, ...cleanup], "WASM raster operation and cleanup failed", { cause: failure });
+          throw new AggregateError(cleanup, "WASM raster cleanup failed");
         }
       }
     },

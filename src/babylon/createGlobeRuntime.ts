@@ -431,6 +431,9 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
   try {
   const savedGoogleKey = settings.get("map.source.googleKey");
   let normalizedApiKey = options.googleApiKey?.trim() || (typeof savedGoogleKey === "string" ? savedGoogleKey.trim() : "");
+  const hostedCredential = options.googleCredential?.kind === "hosted" ? options.googleCredential : null;
+  const visitSuppliedKey = Boolean(options.googleApiKey?.trim());
+  const useHosted = Boolean(hostedCredential) && !visitSuppliedKey;
   const mapDebugEnabled = options.observations?.mapDebug === true;
   const mapDebugEvents: MapDebugEvent[] = [];
   const recordMapDebugEvent = (event: string, detail?: Record<string, unknown>): void => {
@@ -438,7 +441,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
     mapDebugEvents.push({ at: clock.nowMs(), event, detail });
     while (mapDebugEvents.length > Math.max(0, Math.floor(options.budgets.debugEventCapacity()))) mapDebugEvents.shift();
   };
-  const hasGoogleApiKey = normalizedApiKey.length > 0;
+  const hasGoogleApiKey = normalizedApiKey.length > 0 || useHosted;
   const shouldStartGoogle = hasGoogleApiKey && options.preferGoogleTiles !== false;
   const simMode = options.external !== undefined;
   // Relative display controls preserve the existing material-processing path.
@@ -1359,7 +1362,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
       retireMap(rasterTilesRuntime);
       rasterTilesRuntime = null;
     }
-    if (!normalizedApiKey) {
+    if (!useHosted && !normalizedApiKey) {
       if (activeRasterBaseMap) enableRasterBaseMapMode("Google 3D Tiles need an API key.");
       else enableFallbackMode("Google 3D Tiles need an API key.");
       return;
@@ -1393,6 +1396,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
         onDownloadBytes: downloadMeter.addBytes,
         scene,
         apiKey: normalizedApiKey,
+        credential: useHosted && hostedCredential ? hostedCredential : { kind: "device-key", apiKey: normalizedApiKey },
         onDetailFeedback: () => {
           if (status.mode === "google-tiles") for (const listener of [...googleDetailListeners]) listener();
         },
@@ -1650,7 +1654,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
         const nextKey = typeof savedKey === "string" ? savedKey.trim() : "";
         keyChanged = nextKey !== normalizedApiKey;
         normalizedApiKey = nextKey;
-        status.googleApiKeyProvided = normalizedApiKey.length > 0;
+        status.googleApiKeyProvided = normalizedApiKey.length > 0 || useHosted;
       }
       if (!sourceChanged && !keyChanged) return;
       const id = String(settings.get("map.source.basemap"));

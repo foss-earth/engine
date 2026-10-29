@@ -1,20 +1,22 @@
 import { buildGroundBvh, validateGroundBvh, type GroundBvhSnapshot } from "../../ground-TS/groundBvh.js";
-import type { GroundBvhPreparation, GroundBvhWorkerRequest, GroundBvhWorkerScope, GroundBuildKernel, GroundNumericCore, GroundWorkerTimers } from "./groundBvhProtocol.js";
+import { GROUND_BUILD_QUEUE_FULL, type GroundBvhPreparation, type GroundBvhWorkerRequest, type GroundBvhWorkerScope, type GroundBuildKernel, type GroundNumericCore, type GroundWorkerTimers } from "./groundBvhProtocol.js";
 
-/** Starts no native module in the TypeScript arm. The single-threaded core loads with the worker and,
+/** Starts no WASM module in the TypeScript arm. The single-threaded core loads with the worker and,
  * before it builds any mesh, must build a fixed fixture's index bit for bit as the reference does. Each
- * mesh is then built once, natively, and its index checked against the mesh's own geometry, which gives
- * the reference's hits whatever the tree; the page also checks each mesh's first query against Babylon.
- * One build in flight, with bounded startup. */
-export function installGroundBvhWorker(options: { scope: GroundBvhWorkerScope; kernel: GroundBuildKernel; loadNumericCore?: () => Promise<GroundNumericCore>; now(): number; timers: GroundWorkerTimers; startupTimeoutMs?: number }): void {
-  let core: GroundNumericCore | null = null, starting: Promise<void> | null = null, busy = false;
+ * mesh is then built once, in WASM, and its index checked against the mesh's own geometry, which gives
+ * the reference's hits whatever the tree; the page validates each index against its geometry again.
+ * One build at a time, in arrival order: up to `maxQueuedBuilds` wait behind it, and one more is refused
+ * with GROUND_BUILD_QUEUE_FULL. Startup is bounded. */
+export function installGroundBvhWorker(options: { scope: GroundBvhWorkerScope; kernel: GroundBuildKernel; loadNumericCore?: () => Promise<GroundNumericCore>; now(): number; timers: GroundWorkerTimers; startupTimeoutMs?: number; maxQueuedBuilds?: number }): void {
+  let core: GroundNumericCore | null = null, starting: Promise<void> | null = null, building = false;
+  const queue: GroundBvhWorkerRequest[] = [], maxQueued = Math.max(0, options.maxQueuedBuilds ?? 16);
   let fallbackReason: string | null = options.kernel === "threaded" ? "threaded-unsupported" : null;
   let parity: GroundBvhPreparation["parity"] = "not-run";
   // A core that trapped cannot release its handles; drop it rather than fail the worker.
   const abandon = () => { try { core?.dispose(); } catch { /* abandoned */ } core = null; };
   const start = (): Promise<void> => starting ??= (async () => {
     if (options.kernel !== "single") return;
-    if (!options.loadNumericCore) { fallbackReason = "native-core-unavailable"; return; }
+    if (!options.loadNumericCore) { fallbackReason = "wasm-core-unavailable"; return; }
     let timer: unknown, cancelled = false;
     try {
       core = await Promise.race([
@@ -24,7 +26,7 @@ export function installGroundBvhWorker(options: { scope: GroundBvhWorkerScope; k
     } catch (error) { fallbackReason = error instanceof Error && error.message === "startup-timeout" ? "startup-timeout" : "startup-failed"; }
     finally { if (timer !== undefined) options.timers.clear(timer); }
     if (!core) return;
-    try { parity = admits(core) ? "same" : "different"; } catch { fallbackReason = "native-build-failed"; }
+    try { parity = admits(core) ? "same" : "different"; } catch { fallbackReason = "wasm-build-failed"; }
     if (parity === "different") fallbackReason = "startup-parity-mismatch";
     if (fallbackReason) abandon();
   })();
@@ -33,37 +35,42 @@ export function installGroundBvhWorker(options: { scope: GroundBvhWorkerScope; k
   options.scope.addEventListener("message", event => {
     const message = event.data as GroundBvhWorkerRequest;
     if (!message || message.type !== "build" || !Number.isSafeInteger(message.id)) return;
-    if (busy) { options.scope.postMessage({ type: "failed", id: message.id, message: "Ground worker queue is full." }, []); return; }
-    busy = true;
-    void (async () => {
-      try {
-        await start();
-        const started = options.now(), { positions, indices, generation } = message.request;
-        if (!Number.isSafeInteger(generation) || generation < 0) throw new RangeError("Invalid ground generation.");
-        let snapshot: GroundBvhSnapshot | null = null;
-        let actual: GroundBvhPreparation["actual"] = "typescript";
-        if (core && !fallbackReason) {
-          let invalid = false;
-          try {
-            const mesh = core.buildBvh(positions, indices, { generation });
-            let built: GroundBvhSnapshot;
-            try {
-              built = mesh.snapshot();
-              try { validateGroundBvh(built, indices.length / 3, { positions, indices }); } catch (error) { invalid = true; throw error; }
-            } finally { mesh.dispose(); }
-            snapshot = built; actual = "single";
-          } catch {
-            fallbackReason = invalid ? "native-index-invalid" : "native-build-failed";
-            abandon();
-          }
-        }
-        snapshot ??= buildGroundBvh(positions, indices);
-        const result: GroundBvhPreparation = { generation, snapshot, actual, parity, fallbackReason, workMs: options.now() - started };
-        options.scope.postMessage({ type: "built", id: message.id, result }, [snapshot.buffer as ArrayBuffer]);
-      } catch (error) { options.scope.postMessage({ type: "failed", id: message.id, message: error instanceof Error ? error.message : String(error) }, []); }
-      finally { busy = false; }
-    })();
+    if (building && queue.length >= maxQueued) { options.scope.postMessage({ type: "failed", id: message.id, message: GROUND_BUILD_QUEUE_FULL }, []); return; }
+    queue.push(message);
+    if (!building) void drain();
   });
+  async function drain(): Promise<void> {
+    building = true;
+    try { for (let message = queue.shift(); message; message = queue.shift()) await build(message); }
+    finally { building = false; }
+  }
+  async function build(message: GroundBvhWorkerRequest): Promise<void> {
+    try {
+      await start();
+      const started = options.now(), { positions, indices, generation } = message.request;
+      if (!Number.isSafeInteger(generation) || generation < 0) throw new RangeError("Invalid ground generation.");
+      let snapshot: GroundBvhSnapshot | null = null;
+      let actual: GroundBvhPreparation["actual"] = "typescript";
+      if (core && !fallbackReason) {
+        let invalid = false;
+        try {
+          const mesh = core.buildBvh(positions, indices, { generation });
+          let built: GroundBvhSnapshot;
+          try {
+            built = mesh.snapshot();
+            try { validateGroundBvh(built, indices.length / 3, { positions, indices }); } catch (error) { invalid = true; throw error; }
+          } finally { mesh.dispose(); }
+          snapshot = built; actual = "single";
+        } catch {
+          fallbackReason = invalid ? "wasm-index-invalid" : "wasm-build-failed";
+          abandon();
+        }
+      }
+      snapshot ??= buildGroundBvh(positions, indices);
+      const result: GroundBvhPreparation = { generation, snapshot, actual, parity, fallbackReason, workMs: options.now() - started };
+      options.scope.postMessage({ type: "built", id: message.id, result }, [snapshot.buffer as ArrayBuffer]);
+    } catch (error) { options.scope.postMessage({ type: "failed", id: message.id, message: error instanceof Error ? error.message : String(error) }, []); }
+  }
 }
 
 /** The fixture's index must equal the reference's bit for bit. The core's own ray queries are not

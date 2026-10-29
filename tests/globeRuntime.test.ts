@@ -61,12 +61,17 @@ class TerrainTilesFixture {
 
 /** Real runtime and settings/control behavior, with authenticated transport
  * replaced at its public port. No live key, network or GPU is required. */
-function createGoogleKeyHost(initialKey: string | null = null, ready?: GlobeRuntimeOptions["mapPorts"]["google"]["ready"]) {
+function createGoogleKeyHost(
+  initialKey: string | null = null,
+  ready?: GlobeRuntimeOptions["mapPorts"]["google"]["ready"],
+  googleCredential?: GlobeRuntimeOptions["googleCredential"],
+) {
   const tokens: string[] = [];
   const renderers: TerrainTilesFixture[] = [];
   const host = createTerrainHost(defaults => ({
     googleApiKey: initialKey,
-    preferGoogleTiles: initialKey !== null,
+    googleCredential,
+    preferGoogleTiles: initialKey !== null || googleCredential?.kind === "hosted",
     mapPorts: { ...defaults.mapPorts, google: { ...defaults.mapPorts.google,
       createTilesRenderer(_rootUrl, scene) {
         void _rootUrl;
@@ -158,6 +163,19 @@ describe("live Google key activation", () => {
       host.settings.set("map.source.googleKey", "retry-fixture-key");
       expect(host.runtime.status).toMatchObject({ mode: "google-tiles", googleApiKeyProvided: true, lastError: null });
       expect(host.tokens).toEqual(["retry-fixture-key"]);
+    } finally { host.disposeHost(); }
+  });
+
+  it("uses a signed-in session and leaves a key saved on the device unused", () => {
+    const host = createGoogleKeyHost(null, undefined, {
+      kind: "hosted",
+      rootUrl: "https://login.foss.earth/v1/3dtiles/root.json",
+      authorization: async () => "Bearer session-token",
+    });
+    try {
+      host.settings.set("map.source.googleKey", "saved-on-device");
+      expect(host.runtime.status).toMatchObject({ mode: "google-tiles", googleApiKeyProvided: true, lastError: null });
+      expect(host.tokens).toEqual([]);
     } finally { host.disposeHost(); }
   });
 

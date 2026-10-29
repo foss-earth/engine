@@ -10,7 +10,7 @@ import type { TerrainPerformanceCapture } from "../terrain/terrainPerformanceCap
 import type { InputControllerOptions } from "../browser/createInputController.js";
 import type { PassToWorldOptions } from "../browser/passToWorld.js";
 import type { MapCacheLimits } from "../browser/mapCache.js";
-import type { GoogleTilesRuntimeOptions } from "./createTilesRuntime.js";
+import type { GoogleTilesCredential, GoogleTilesRuntimeOptions } from "./createTilesRuntime.js";
 import type { RasterTilesRuntimeOptions } from "./createRasterTilesRuntime.js";
 import type { BabylonRuntimeStatus } from "./createGlobeRuntime.js";
 import type { BorrowedGlobeScheduler } from "./borrowedRuntimeAuthority.js";
@@ -93,6 +93,12 @@ export interface GlobeRuntimeOptions {
   external?: GlobeExternalCamera;
   /** Startup credential; later map.source.googleKey saves/clears replace it live. */
   googleApiKey?: string | null;
+  /**
+   * A signed-in session. It loads Google 3D Tiles without a device key, and a
+   * key only saved on the device does not replace it. `googleApiKey` still
+   * wins when the visit supplied one.
+   */
+  googleCredential?: Extract<GoogleTilesCredential, { kind: "hosted" }> | null;
   preferGoogleTiles?: boolean;
   rasterBaseMap?: RasterBaseMapSource | null;
   getSurfaceHeightMeters?: (latDeg: number, lonDeg: number) => number | null;

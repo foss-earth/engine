@@ -14,7 +14,7 @@ function page() {
   const batches = createTerrainHeightBatches({ kernel: "typescript", createWorker: () => worker, now: () => 0,
     schedule: callback => { scheduled.push(callback); }, after: () => () => {} });
   return { batches, worker, requests, flush() { while (scheduled.length) scheduled.shift()!(); }, reply(request = requests.at(-1)!, value = 3) {
-    worker.onmessage?.({ data: { kind: "terrain-heights", version: 1, id: request.id, batches: sent(request).map(batch => ({ gridId: batch.gridId, heights: new Float64Array(batch.coordinates.length / 2).fill(value) })), retained: [], actual: "typescript", parity: "not compared", fallbackReason: null, workMs: 0, snapshotBytes: 0, nativeBytes: 0 } } as unknown as MessageEvent<HeightBatchReply>);
+    worker.onmessage?.({ data: { kind: "terrain-heights", version: 1, id: request.id, batches: sent(request).map(batch => ({ gridId: batch.gridId, heights: new Float64Array(batch.coordinates.length / 2).fill(value) })), retained: [], actual: "typescript", parity: "not compared", fallbackReason: null, workMs: 0, snapshotBytes: 0, wasmBytes: 0 } } as unknown as MessageEvent<HeightBatchReply>);
   } };
 }
 describe("height snapshot lifecycle and bounded admission", () => {
@@ -67,29 +67,29 @@ describe("height snapshot lifecycle and bounded admission", () => {
     expect(test.batches.sample(grid(), xy)[0]).toBe(3);
     expect(test.batches.stats().retainedGrids).toBe(0);
   });
-  it("bounds JS plus native worker snapshots together and disposes evicted models", async () => {
+  it("bounds JS plus WASM worker snapshots together and disposes evicted models", async () => {
     let reply: HeightBatchReply | undefined;
     const scope: HeightBatchWorkerScope = { onmessage: null, postMessage(value) { reply = value; } };
     const disposed = vi.fn();
-    const installed = installTerrainHeightBatchKernel({ scope, kernel: "single", now: () => 0, loadNative: async () => ({
+    const installed = installTerrainHeightBatchKernel({ scope, kernel: "single", now: () => 0, loadWasm: async () => ({
       createHeightSampler(source) { return { bytes: source.heights.byteLength + 72, sample(coordinates) { return Float64Array.from({ length: coordinates.length / 2 }, (_, i) => sampleTerrainGrid(source, coordinates[i * 2], coordinates[i * 2 + 1])); }, dispose: disposed }; }, dispose() {} }) });
     try {
       scope.onmessage?.({ data: { kind: "terrain-heights", version: 1, id: 1, batches: Array.from({ length: 13 }, (_, i) => ({ gridId: i + 1, grid: grid(512), coordinates: xy })) } } as MessageEvent<HeightBatchRequest>);
       await turn();
       expect(reply?.batches).toHaveLength(13);
-      expect(reply!.snapshotBytes + reply!.nativeBytes).toBeLessThanOrEqual(24 * 1024 ** 2);
+      expect(reply!.snapshotBytes + reply!.wasmBytes).toBeLessThanOrEqual(24 * 1024 ** 2);
       expect(reply?.actual).toBe("single"); expect(disposed.mock.calls.length).toBeGreaterThanOrEqual(2);
     } finally { installed.dispose(); }
   });
-  it("keeps an individually oversized native snapshot on the complete worker reference", async () => {
+  it("keeps an individually oversized WASM snapshot on the complete worker reference", async () => {
     let reply: HeightBatchReply | undefined;
     const scope: HeightBatchWorkerScope = { onmessage: null, postMessage(value) { reply = value; } };
     const createHeightSampler = vi.fn();
-    const installed = installTerrainHeightBatchKernel({ scope, kernel: "single", now: () => 0, loadNative: async () => ({ createHeightSampler, dispose() {} }) });
+    const installed = installTerrainHeightBatchKernel({ scope, kernel: "single", now: () => 0, loadWasm: async () => ({ createHeightSampler, dispose() {} }) });
     try {
       scope.onmessage?.({ data: { kind: "terrain-heights", version: 1, id: 1, batches: [{ gridId: 1, grid: grid(2048, 7), coordinates: xy }] } } as MessageEvent<HeightBatchRequest>);
       await turn();
-      expect(reply).toMatchObject({ actual: "typescript", fallbackReason: "native-snapshot-budget-exceeded", nativeBytes: 0 });
+      expect(reply).toMatchObject({ actual: "typescript", fallbackReason: "wasm-snapshot-budget-exceeded", wasmBytes: 0 });
       expect(reply?.batches[0].heights[0]).toBe(7); expect(createHeightSampler).not.toHaveBeenCalled();
     } finally { installed.dispose(); }
   });
@@ -103,7 +103,7 @@ describe("height snapshot lifecycle and bounded admission", () => {
     const scope: HeightBatchWorkerScope = { onmessage: null, postMessage(value) {
       reply = value; worker.onmessage?.({ data: structuredClone(value) } as MessageEvent<HeightBatchReply>);
     } };
-    const installed = installTerrainHeightBatchKernel({ scope, kernel: "single", now: () => 0, loadNative: async () => ({ createHeightSampler(source) {
+    const installed = installTerrainHeightBatchKernel({ scope, kernel: "single", now: () => 0, loadWasm: async () => ({ createHeightSampler(source) {
       return { bytes: [source, ...(source.neighbors ?? [])].reduce((sum, value) => sum + value.heights.byteLength, 456),
         sample(coordinates) { return Float64Array.from({ length: coordinates.length / 2 }, (_, i) => ("indices" in source ? sampleTerrainHeightPixels(source as TerrainHeightPixels, coordinates[i * 2], coordinates[i * 2 + 1]) : sampleTerrainGrid(source, coordinates[i * 2], coordinates[i * 2 + 1]))); }, dispose() {} };
     }, dispose() {} }) });
@@ -125,16 +125,16 @@ describe("height snapshot lifecycle and bounded admission", () => {
       expect(sent(requests[0]).every(batch => batch.sparse)).toBe(true);
       for (let repeat = 0; repeat < 10; repeat++) sample();
       await flush(); expect(requests).toHaveLength(1);
-      expect(batches.stats()).toMatchObject({ retainedGrids: 9, pageSamples: 18, workerCacheHits: 180, nativeCacheHits: 180, pageSnapshotBytes: 0 });
+      expect(batches.stats()).toMatchObject({ retainedGrids: 9, pageSamples: 18, workerCacheHits: 180, wasmCacheHits: 180, pageSnapshotBytes: 0 });
       for (let iteration = 0; iteration < 20; iteration++) {
         const index = iteration % tiles.length;
         tiles[index] = { ...tiles[index], heights: new Float32Array(512 ** 2).fill(100 + iteration) };
         sample(); await flush();
         expect(sent(requests.at(-1)!).every(batch => batch.sparse)).toBe(true);
-        expect(reply!.snapshotBytes + reply!.nativeBytes).toBeLessThanOrEqual(24 * 1024 ** 2);
+        expect(reply!.snapshotBytes + reply!.wasmBytes).toBeLessThanOrEqual(24 * 1024 ** 2);
       }
       expect(batches.stats().inputBytes).toBeLessThan(64 * 1024);
-      expect(batches.stats().peakSnapshotBytes + batches.stats().peakNativeBytes).toBeLessThan(24 * 1024 ** 2);
+      expect(batches.stats().peakSnapshotBytes + batches.stats().peakWasmBytes).toBeLessThan(24 * 1024 ** 2);
       expect(batches.stats()).toMatchObject({ actual: "single", parity: "same", fallbackReason: null });
     } finally { batches.dispose(); installed.dispose(); }
   });
@@ -163,7 +163,7 @@ describe("height snapshot lifecycle and bounded admission", () => {
       scope.onmessage?.({ data: { kind: "terrain-heights", version: 1, id: 2, batches: [{ gridId: 17, sources: [source(17)], coordinates: xy }, { gridId: 1, coordinates: xy }] } } as MessageEvent<HeightBatchRequest>);
       await turn();
       expect(reply?.id).toBe(2); expect(reply?.batches.map(batch => batch.heights[0])).toEqual([17, 1]);
-      expect(reply!.snapshotBytes + reply!.nativeBytes).toBeLessThanOrEqual(24 * 1024 ** 2);
+      expect(reply!.snapshotBytes + reply!.wasmBytes).toBeLessThanOrEqual(24 * 1024 ** 2);
     } finally { installed.dispose(); }
   });
   it("drops queued source generations collected before dispatch without retiring the worker", () => {

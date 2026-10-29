@@ -46,6 +46,12 @@ run(binaryen, [input, ...optimize, "-o", path.join(root, output)]);
 const bytes = readFileSync(path.join(root, output));
 if (!WebAssembly.validate(bytes)) throw new Error(`${output} does not validate in this Node runtime`);
 if (bytes.length > lock.maximumBinaryBytes) throw new Error(`${output} exceeds the declared binary size limit`);
+// Every function the wrapper requires, and its memory.
+const exported = new Set(WebAssembly.Module.exports(new WebAssembly.Module(bytes)).map(entry => entry.name));
+const wrapper = readFileSync(path.join(root, "index.js"), "utf8").match(/const functions = \[([^\]]*)\]/)?.[1].match(/"[a-z_]+"/g)?.map(name => name.slice(1, -1));
+if (!wrapper?.length) throw new Error("index.js lists no ABI functions");
+const missing = [...wrapper, "memory"].filter(name => !exported.has(name));
+if (missing.length) throw new Error(`${output} lacks exports index.js requires: ${missing.join(", ")}`);
 // The wrapper and pins beside the binary ship with it, so they are inputs too.
 const beside = readdirSync(root, { withFileTypes: true })
   .filter(entry => entry.isFile() && /\.(js|ts|json)$/.test(entry.name) && !entry.name.endsWith("build-metadata.json")).map(entry => entry.name);

@@ -2,6 +2,8 @@ import type { GroundBvhSnapshot } from "../../ground-TS/groundBvh.js";
 import type { ComputeWorker } from "./computeAdmission.js";
 
 export type GroundBuildKernel = "typescript" | "single" | "threaded";
+/** A build refused because its queue is full: not a failure; the page asks again on a later query. */
+export const GROUND_BUILD_QUEUE_FULL = "Ground build queue is full.";
 export interface GroundBvhBuild { positions: Float32Array; indices: Uint32Array; generation: number }
 export interface GroundBvhPreparation {
   generation: number;
@@ -18,6 +20,8 @@ export interface GroundBvhPreparerStatus {
   parity: GroundBvhPreparation["parity"];
   failure: string | null;
   jobs: number;
+  /** Builds waiting behind the one in flight. */
+  queued: number;
   lastJob: { workMs: number; roundTripMs: number; inputBytes: number; outputBytes: number } | null;
 }
 export interface GroundBvhPreparer {

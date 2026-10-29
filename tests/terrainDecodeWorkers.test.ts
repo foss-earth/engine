@@ -3,7 +3,7 @@ import { createTerrainImageDecoder, type TerrainImageDecodeLimits } from "../src
 import { installTerrainDecodeWorkerKernel, type TerrainDecodeWorkerKernelPorts } from "../src/browser/terrainDecodeWorkerKernel.js";
 import { createTerrainDecodeWorkers, type TerrainDecodeWorkersOptions } from "../src/browser/terrainDecodeWorkers.js";
 import type { TerrainDecodeWorkerPort, TerrainDecodeWorkerReply, TerrainDecodeWorkerRequest } from "../src/browser/terrainDecodeWorkerProtocol.js";
-import { createTerrainNativeDecoder } from "../src/browser/terrainNativeDecoder.js";
+import { createTerrainWasmDecoder } from "../src/browser/terrainWasmDecoder.js";
 import { decodeTerrarium } from "../src/terrain/terrainGrid.js";
 import { createComputeAdmission, type ComputeAdmissionPort } from "../src/browser/computeAdmission.js";
 
@@ -89,21 +89,21 @@ describe("terrain decode workers", () => {
     sky.release(); expect(await next).toEqual(await f.reference(blob)); expect(f.onPage).toHaveBeenCalledOnce();
     f.workers.dispose(); expect(admission.snapshot()).toMatchObject({ active: 0, queued: 0 });
   });
-  it("retains page-vs-worker parity and reports native admission/fallback for the individual worker", async () => {
-    const native = vi.fn(decodeTerrarium);
-    const backend = createTerrainNativeDecoder({ workerId: "worker-test", requestedTier: "single", start: async () => ({ decodeTerrarium: native }),
+  it("retains page-vs-worker parity and reports WASM admission/fallback for the individual worker", async () => {
+    const wasm = vi.fn(decodeTerrarium);
+    const backend = createTerrainWasmDecoder({ workerId: "worker-test", requestedTier: "single", start: async () => ({ decodeTerrarium: wasm }),
       timers: { setTimeout: (callback, ms) => setTimeout(callback, ms), clearTimeout: handle => clearTimeout(handle as ReturnType<typeof setTimeout>) } });
     const f = fixture({ kernel: { decodeTerrarium: backend.decode, decodeBackendStatus: backend.status } }); f.setSize(1);
     const blob = f.add(tile(2, index => [index, 2, 3, 255]));
     for (let index = 0; index < 2; index++) expect(await f.workers.decode(blob, f.onPage)).toEqual(await f.reference(blob));
     expect(f.onPage).toHaveBeenCalledOnce();
-    expect(f.workers.stats()).toMatchObject({ parity: "same", nativeWorkers: [{ workerId: "worker-test", actualTier: "single", nativeDecodes: 1, typescriptDecodes: 1 }] });
-    native.mockImplementationOnce(() => { throw new Error("native trap"); });
+    expect(f.workers.stats()).toMatchObject({ parity: "same", wasmWorkers: [{ workerId: "worker-test", actualTier: "single", wasmDecodes: 1, typescriptDecodes: 1 }] });
+    wasm.mockImplementationOnce(() => { throw new Error("WASM trap"); });
     expect(await f.workers.decode(blob, f.onPage)).toEqual(await f.reference(blob));
     const stats = f.workers.stats();
-    expect(stats.nativeWorkers).toMatchObject([{ actualTier: "typescript", fallbackReason: "decode-failed" }]);
-    stats.nativeWorkers[0].actualTier = "single";
-    expect(f.workers.stats().nativeWorkers[0].actualTier).toBe("typescript");
+    expect(stats.wasmWorkers).toMatchObject([{ actualTier: "typescript", fallbackReason: "decode-failed" }]);
+    stats.wasmWorkers[0].actualTier = "single";
+    expect(f.workers.stats().wasmWorkers[0].actualTier).toBe("typescript");
     expect(f.onPage).toHaveBeenCalledOnce(); expect(f.onError).not.toHaveBeenCalled(); f.workers.dispose();
   });
   it("return the page decoder's exact heights, transfer them, and reuse one cleared canvas per worker", async () => {

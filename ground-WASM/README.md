@@ -11,10 +11,18 @@ length, and first original face on tied distances. BVH traversal preserves
 face IDs despite partitioning. The actual binary and its exported immutable
 index passed focused differential checks against Babylon over 514 deterministic
 finite rays, nonplanar Float32 triangles, oblique directions, boundary samples
-and original-face ties.
+and original-face ties. It also adopts an exported index without rebuilding
+it, and answers world rays for one mesh as Babylon's `scene.pickWithRay` does,
+transform, distance and normal included (below).
 
-Load only in a browser worker or Node worker, then call `buildBvh` and `query`.
-Inputs and outputs are copied. Each BVH owns its geometry until `dispose()`;
+Load in a browser worker or Node worker, then call `buildBvh` or
+`importSnapshot`, and `query` or a world batch. The page main thread is
+refused unless `loadGroundCore`, `instantiateGroundCore` or
+`createGroundCore` is given `{ page: true }`: world picks answer a frame's
+synchronous queries, which a worker cannot. Until world batches, no Rust export
+ran on the page; that is now the page's choice, per core, and the core reports
+it as `page`. Inputs and outputs are copied, except a world batch's `rays` and
+`output`, views of WASM memory replaced when it grows. Each BVH owns its geometry until `dispose()`;
 dispose the old generation only after the host has released all references.
 There is no shared memory, atomic publication, or concurrent Rust access in
 this version. The host supplies job IDs, cancels stale jobs and keeps using
@@ -29,24 +37,29 @@ without running WASM or waiting for a worker in a physics step.
 
 ABI v1 uses registry-owned typed allocations (kind 1 Float32, 2 Uint32,
 3 Float64). Lengths count elements. Unknown pointers, kind/length mismatches,
-double releases and aliased ray/output buffers are rejected. Limits are
+double releases and aliased ray/output buffers are rejected.
+`ground_import_snapshot`, `ground_set_bounds` and `ground_query_world_batch`
+joined v1 without changing the other exports, and `build.mjs` refuses a binary
+that lacks any the wrapper requires. A failure's status, the thrown error's
+`status`, is 1 invalid argument, 2 allocation, 3 geometry, 4 unknown mesh,
+5 rays, 6 snapshot or 7 transform. Limits are
 262144 triangles, 1048576 vertices, 65536 rays per batch, 64 BVHs, 64 transient
 buffers, 128 MiB live payload and 256 MiB linear memory. No caller-provided
 pointer is dereferenced. The wrapper refreshes views after memory growth and
 copies output before freeing. It never selects a JavaScript fallback silently.
 
-This core operates in mesh-local coordinates. Scene eligibility, submesh and
-mesh tie ordering, transform inversion, world-space distance/normalisation,
+`query` operates in mesh-local coordinates; its `ray parameter` is not a world
+distance under a scaled transform. World batches take over the transform,
+world distance and normal. Scene eligibility, mesh order, transform inversion,
 height conversion, the raster grid walker and per-frame ground cache still
-belong to the host integration. In particular `ray parameter` is not a world
-distance under a scaled transform. Engine's `createGroundAcceleration` now
+belong to the host integration. Engine's `createGroundAcceleration` now
 integrates those synchronous queries through `createSurfaceQuery`'s optional
 sixth argument. Static indexed Float32 Mesh/GroundMesh geometry with one full
 triangle submesh is eligible; pending, changing, morphed, skinned, instanced,
 camera-dependent and custom-picking meshes use the original picker. Geometry
-updates invalidate synchronously, stale build generations are dropped, and the
-first real query is compared with Babylon before accepting the index. Mesh
-transforms and normals are evaluated in the current synchronous frame.
+updates invalidate synchronously, stale build generations are dropped, and
+each index is validated against its mesh before it is used (Admission, below).
+Mesh transforms and normals are evaluated in the current synchronous frame.
 
 ## Admission
 
@@ -57,7 +70,7 @@ and before it builds any mesh the core must build a fixed fixture's index
 exactly as `buildGroundBvh` does, compared with `Object.is`: 1,088 faces with
 repeated and degenerate faces, -0 and +0 centroid ties at the root median, and
 nodes of 17 faces. Otherwise the worker builds with TypeScript and reports
-`startup-parity-mismatch`, or `native-build-failed` if the core failed or
+`startup-parity-mismatch`, or `wasm-build-failed` if the core failed or
 trapped.
 
 After admission each mesh is built once, by Rust, and its index is validated
@@ -66,11 +79,18 @@ node's box its children's. `queryGroundBvh` reaches every face whose hit is no
 farther than its best and breaks distance ties by face, so on any such index
 it gives the reference's hits, whatever the tree's shape. A mesh whose index
 fails is built with TypeScript, and so is every later one
-(`native-index-invalid`). The page validates each index the same way before
-using it and compares each mesh's first query with Babylon; what it rejects
-stays in its report. The native handle is released after exporting each
-index. Runtime reports separate the actual construction kernel from synchronous
-TypeScript queries, along with copy/work/round-trip counts. Raster
+(`wasm-index-invalid`). The page validates each index the same way before
+using it; what it rejects stays in its report. Comparing each mesh's first
+query with Babylon's own pick of that mesh is a diagnostic, off unless
+`compareFirstQueries` is set: validation already gives Babylon's hits, and the
+comparison scans every triangle of a tile on the frame its index arrives.
+Builds run one at a time, in the order the page asked for them: the page keeps
+up to eight meshes in flight and the preparer and worker queue up to sixteen,
+so the tiles under several rays are all built in turn. A build refused for a
+full queue is asked for again by a later query, not counted as a failure.
+The WASM handle is released after exporting each index. Runtime reports
+separate the actual construction kernel from synchronous TypeScript queries,
+along with copy/work/round-trip counts. Raster
 latitude/longitude samples keep their existing cell walker and the flight
 ground cache is unchanged. Whole-family W6 and in-app performance
 qualification remain incomplete.
@@ -96,6 +116,55 @@ reaches the same index this way:
   and face IDs are each reserved once, within the memory budget, before the
   build starts.
 
+## Importing a snapshot
+
+`importSnapshot(snapshot, positions, indices)` adopts an index as it is, so a
+holder of ground-TS's or an exported snapshot gets a WASM mesh without a
+build. It reads the snapshot once, depth first from the root, and sorts
+nothing: the same nodes, bounds and face order, so `snapshot()` returns it bit
+for bit and queries give the same hits. It accepts what `validateGroundBvh`
+accepts with the geometry: every node reached once from the root, the leaves
+holding a permutation of the faces, finite ordered boxes inside their parents,
+and every leaf's box holding its faces' corners. It is stricter in two ways.
+Fields traversal ignores, a leaf's children and an internal node's start, must
+still be indices, and no leaf may lie deeper than 48 levels, which bounds the
+traversal stack; median splits stay under 20. Anything else fails with status
+6 and keeps nothing. Triangle edges and origins and Babylon's face normals are
+computed once, as in a build. Memory is accounted as for a build of the same
+mesh, plus a byte per node and per face while the import validates.
+
+## World picks
+
+`createWorldBatch(capacity)` allocates rays and hit rows in WASM memory once.
+The host fills `rays` with world rays `[origin xyz, direction xyz, length,
+epsilon]`, calls `reset()`, then `run(mesh, transform)` for each eligible mesh
+in the scene's order. The rows then hold what `scene.pickWithRay` with that
+predicate and `getNormal(true, false)` give: `[mesh handle, distance, face, bu,
+bv, point xyz, unit normal xyz]`, mesh 0 for none. `mesh.queryWorld(rays,
+transform, previous)` does the same with copies. For each ray, as Babylon
+8.56.2 does it:
+
+- `Ray.TransformToRef` by `worldToLocal`: the origin as coordinates, the
+  direction as a normal, normalised with the length scaled unless its length
+  is 0 or 1.
+- The bounding sphere, then the box, then the BVH, whose traversal tests both
+  children of a node at once with f64x2 slab tests. `setBounds` gives the
+  host's `getBoundingInfo()` as mesh-space minimum, maximum, sphere centre and
+  radius; until then the root box stands in.
+- The point is the local hit transformed by `localToWorld`, the distance its
+  world distance from the transformed origin, and a barycentric that is not a
+  number becomes 0, as `bu || 0` makes it.
+- A row changes only for a hit nearer than the one it holds, so the first mesh
+  wins a tie, as in the scene.
+- The normal is Babylon's `(v1 - v2) × (v3 - v2)` by `normalToWorld`, flipped
+  when it runs along the ray, then normalised.
+
+`normalToWorld` must be the matrix `getNormal` uses: the world matrix, or under
+non-uniform scaling the translation-free inverse transpose it computes in
+`TmpVectors.Matrix`, which stay Float32Array when the engine uses
+high-precision matrices. It defaults to `localToWorld`. Matrices are passed as
+the scene stores them; the core neither fuses nor reorders arithmetic.
+
 ## Evidence
 
 `npm run check:parity` runs `scripts/check-index.mjs`, which builds 13 meshes
@@ -115,7 +184,24 @@ an index not containing its mesh or a core that traps leads to TypeScript
 builds, and that the page keeps reporting what it rejected. It also checks that
 a one-leaf index and one with every box enlarged give the reference's hits.
 
-The binary that moved here from the native workspace (`1fb1c9d0…0e0a`, 30,911
+`check-index.mjs` also imports each ground-TS snapshot and compares its round
+trip and hits. It feeds the import 20 broken snapshots, 18 that ground-TS
+rejects and 2 that only the import refuses, a 48-level caterpillar index that
+imports and a 49-level one that does not, a valid reordering, which is adopted
+as it is, and boxes padded past the float64 range by an epsilon of 10^307 or
+bounds of ±10^308. It checks the page guard with a stand-in `document`. Then it
+runs `scripts/check-world.mjs` once per matrix precision, since
+`PerformanceConfigurator.SetMatrixPrecision` holds for a process, against
+Babylon 8.56.2's `scene.pickWithRay` and `getNormal(true, false)` on a
+NullEngine: grids of 4,418 and 1,058 faces and a 1,500-face soup with unused
+vertices, under seven transforms (identity, far ECEF translation, rotation,
+uniform and non-uniform scale, mirrored, and mirrored non-uniform), each with
+Babylon's bounding info and, where the root box equals it, the default, plus
+three meshes and a duplicate picked in the scene's order. All 636,416 row
+values of 57,856 rays (28,802 hits) match with `Object.is` at each precision,
+and `queryWorld` matches the batch.
+
+The binary that moved here from the old shared Rust workspace (`1fb1c9d0…0e0a`, 30,911
 bytes) gave the same hits on all 13 meshes and the same index on six of them,
 the four terrain grids among them. On the other seven its index differed:
 zeros of the other sign in bounds (17 values at 20,000 faces, 180 at 200,000),
@@ -154,13 +240,30 @@ first mesh in TypeScript to compare the two:
 | 262,088 | 386.1 ms | 46.2 ms | 32.3 ms |
 
 Admission takes 4.3 ms in a fresh process: instantiation 0.3 ms, the fixture
-0.4 ms, its TypeScript build 2.6 ms, and its native build and comparison
+0.4 ms, its TypeScript build 2.6 ms, and its WASM build and comparison
 0.95 ms. Compiling the module takes 0.17 ms in a fresh Node process, so
 streaming compilation would save little. These timings were taken on battery
 in Low Power Mode; the kernel timings above reproduced within 1% that way.
+They were taken with the 49,399-byte binary that preceded import and world
+batches.
+
+`bench.mjs import` and `bench.mjs world` were run on AC power while charging,
+so compare them with each other, not with the tables above. Importing
+ground-TS's index of the 262,088-face grid takes 3.70 ms, against 24.8 ms to
+build it in WASM (medians of 15, copies in included; the first of each, 7.2
+and 33.3 ms). World picks of that grid placed at an ECEF position, with 1,024
+vertical rays at epsilon 0.001 that all hit, take 251 and 269 ns per ray in two
+runs. The TypeScript path the page takes today (`Ray.TransformToRef`, the
+bounding tests, `queryGroundBvh`, the point and `getNormal`) takes 541 and
+560 ns, so the batch is 2.1 to 2.2 times as fast. Babylon's own brute-force
+`pickWithRay` takes 4.0 to 4.1 ms per ray. Alternating in one process over
+4,096 mixed rays, copies included, the local `query` is 4 to 8% faster than
+the previous binary's in five runs. Storing both children's boxes side by
+side, so that each pair test loads whole lanes, gained nothing measurable and
+was not kept.
 
 `node ground-WASM/scripts/build.mjs` rebuilds `single/ground.wasm` and its
 receipt offline; `node ground-WASM/scripts/check.mjs` verifies them. After
-`npm run build`, `node ground-WASM/scripts/bench.mjs <ts|wasm|first> [grid size]`
-times one build kind or the first mesh, and `GROUND_WASM=<file>` times another
-binary.
+`npm run build`, `node ground-WASM/scripts/bench.mjs <ts|wasm|first|import|world> [grid size]`
+times one build kind or the first mesh, `import` an import against a build and
+`world` world picks; `GROUND_WASM=<file>` times another binary.

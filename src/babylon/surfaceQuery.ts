@@ -1,4 +1,4 @@
-import { Matrix, Ray, Vector3, type AbstractMesh, type Scene, type TransformNode } from "@babylonjs/core";
+import { Matrix, Ray, Vector3, type AbstractMesh, type BoundingBox, type Scene, type TransformNode } from "@babylonjs/core";
 import { DEG_TO_RAD, ecefToGeodetic, geodeticToEcef, type EcefCoord } from "../camera/cameraMath.js";
 
 import type { SurfaceHit, SurfaceQuery } from "../surface/contracts.js";
@@ -39,22 +39,69 @@ export function intersectsSegmentBounds(ray: Ray, minimum: Vector3, maximum: Vec
   return step !== MISS;
 }
 
+/** A surface mesh as the frame's first query found it: its world bounds, or null for a camera-dependent mesh. */
+interface FrameCandidate { box: BoundingBox | null; googleErrorMeters: number | undefined }
+/** What one query frame reuses; see SurfaceQuery.beginFrame. */
+interface QueryFrame {
+  renderId: number; meshCount: number; ready: boolean;
+  root: TransformNode | null; rootFlag: number;
+  transform: Matrix; inverse: Matrix; revision: number;
+  candidates: Map<AbstractMesh, FrameCandidate>;
+}
+
 /** Query only currently visible map triangles. Input/output are always ECEF,
- * even when a consumer moves the map under a floating origin. No cached heights. */
+ * even when a consumer moves the map under a floating origin. No cached heights.
+ * Inside beginFrame()/endFrame() the world transform, the surface meshes with
+ * their world bounds, and the revision are read once, by the frame's first query. */
 export function createSurfaceQuery(scene: Scene, getWorldRoot: () => TransformNode | null,
   isSurface: (mesh: AbstractMesh) => boolean, getRevision: () => number = () => 0,
   sampleOverride?: (latDeg: number, lonDeg: number) => SurfaceHit | null | undefined, acceleration?: GroundAcceleration | null): Required<SurfaceQuery> {
+  let frame: QueryFrame | null = null;
+  let spare: QueryFrame | null = null;
+  /** The open frame, read by its first query; null outside one, or once the scene has rendered, changed its
+   * meshes or moved its world root since. A world moved without a render is caught too, as a safeguard. */
+  function openFrame(): QueryFrame | null {
+    if (!frame) return null;
+    const root = getWorldRoot();
+    if (frame.ready) {
+      if (frame.renderId === scene.getRenderId() && frame.meshCount === scene.meshes.length && frame.root === root
+        && (!root || (root.isSynchronized() && root.worldMatrixFromCache.updateFlag === frame.rootFlag))) return frame;
+      frame.candidates.clear(); frame.root = null; spare = frame; frame = null;
+      return null;
+    }
+    const rootMatrix = root?.computeWorldMatrix(true);
+    frame.root = root; frame.rootFlag = rootMatrix?.updateFlag ?? -1;
+    frame.transform.copyFrom(rootMatrix ?? Matrix.IdentityReadOnly);
+    frame.transform.invertToRef(frame.inverse);
+    frame.revision = getRevision();
+    frame.candidates.clear();
+    for (const mesh of scene.meshes) {
+      if (!mesh.isEnabled() || !mesh.isVisible || !isSurface(mesh)) continue;
+      const googleErrorMeters = mesh.metadata?.googleGeometricErrorMeters;
+      if (mesh.isWorldMatrixCameraDependent()) { frame.candidates.set(mesh, { box: null, googleErrorMeters }); continue; }
+      mesh.computeWorldMatrix();
+      frame.candidates.set(mesh, { box: mesh.getBoundingInfo().boundingBox, googleErrorMeters });
+    }
+    frame.renderId = scene.getRenderId(); frame.meshCount = scene.meshes.length; frame.ready = true;
+    return frame;
+  }
   /** The first surface along a ray; with `finerThanMeters`, the first Google surface of a smaller geometric error. */
   function cast(origin: EcefCoord, direction: EcefCoord, lengthMeters: number, finerThanMeters = Infinity): SurfaceHit | null {
     if (![origin.x, origin.y, origin.z, direction.x, direction.y, direction.z, lengthMeters].every(Number.isFinite)
       || lengthMeters <= 0) return null;
     const dir = new Vector3(direction.x, direction.y, direction.z);
     if (dir.lengthSquared() === 0) return null;
-    const transform = getWorldRoot()?.computeWorldMatrix(true) ?? Matrix.Identity();
-    const inverse = Matrix.Invert(transform);
+    const current = openFrame();
+    const transform = current ? current.transform : getWorldRoot()?.computeWorldMatrix(true) ?? Matrix.Identity();
+    const inverse = current ? current.inverse : Matrix.Invert(transform);
     const ecefRay = new Ray(new Vector3(origin.x, origin.y, origin.z), dir.normalize(), lengthMeters);
     const ray = Ray.Transform(ecefRay, transform);
-    const predicate = (mesh: AbstractMesh): boolean => {
+    const predicate = current ? (mesh: AbstractMesh): boolean => {
+      const candidate = current.candidates.get(mesh);
+      if (!candidate) return false;
+      if (finerThanMeters !== Infinity && !((candidate.googleErrorMeters as number) < finerThanMeters)) return false;
+      return !candidate.box || intersectsSegmentBounds(ray, candidate.box.minimumWorld, candidate.box.maximumWorld);
+    } : (mesh: AbstractMesh): boolean => {
       if (finerThanMeters !== Infinity && !(mesh.metadata?.googleGeometricErrorMeters < finerThanMeters)) return false;
       if (!mesh.isEnabled() || !mesh.isVisible || !isSurface(mesh)) return false;
       // Let Babylon select the picking camera for billboard/infinite-distance
@@ -73,7 +120,7 @@ export function createSurfaceQuery(scene: Scene, getWorldRoot: () => TransformNo
     if (![point.x, point.y, point.z, normal.x, normal.y, normal.z, heightMeters].every(Number.isFinite)) return null;
     return { point: { x: point.x, y: point.y, z: point.z }, normal: { x: normal.x, y: normal.y, z: normal.z },
       distanceMeters: Vector3.Distance(point, ecefRay.origin),
-      heightMeters, meshId: pick.pickedMesh.id, revision: getRevision(), quality: pick.pickedMesh.metadata?.terrainZoom ?? -1,
+      heightMeters, meshId: pick.pickedMesh.id, revision: current ? current.revision : getRevision(), quality: pick.pickedMesh.metadata?.terrainZoom ?? -1,
       geometricErrorMeters: pick.pickedMesh.metadata?.googleGeometricErrorMeters };
   }
   function sample(latDeg: number, lonDeg: number): SurfaceHit | null {
@@ -102,5 +149,13 @@ export function createSurfaceQuery(scene: Scene, getWorldRoot: () => TransformNo
   }
   /** Changes when the displayed geometry does; a caller re-samples only then. */
   const revision = (): number => getRevision();
-  return { raycast, sample, revision };
+  function beginFrame(): void {
+    // A frame's matrices and map are kept for the next one, which reads them afresh.
+    const next = frame ?? spare ?? { renderId: 0, meshCount: 0, ready: false, root: null, rootFlag: -1, transform: new Matrix(), inverse: new Matrix(), revision: 0, candidates: new Map() };
+    next.candidates.clear(); next.ready = false; next.root = null; spare = null; frame = next;
+  }
+  function endFrame(): void {
+    if (frame) { frame.candidates.clear(); frame.root = null; spare = frame; frame = null; }
+  }
+  return { raycast, sample, revision, beginFrame, endFrame };
 }

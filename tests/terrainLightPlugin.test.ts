@@ -404,6 +404,102 @@ baseColor.rgb = pow(pow(baseColor.rgb, vec3(2.2)) * (terrainLightAt(vPositionW) 
     expect(buffer.updateFloat4).toHaveBeenLastCalledWith("terrainNightPicture", 0.01, 0.02, 0.03, -0.08);
   });
 
+  it("writes each terrain-light uniform once per buffer, and again when a component, the effect, or the buffer changes", () => {
+    const target = scene();
+    const plugin = new TerrainLightMaterialPlugin(new StandardMaterial("a", target));
+    const light = lighting({ sunScale: [3, 2, 1], night: NIGHT });
+    setTerrainLighting(target, light);
+    setTerrainLocalLights(target, [{ position: [1, 2, 3], direction: [0, -1, 0], cosInner: 0.9, cosOuter: 0.8, factor: [4, 5, 6] }]);
+    const map = nightMap();
+    setTerrainNightLightMap(target, map);
+    const buffer = { updateFloat4: vi.fn(), updateFloatArray: vi.fn(), setTexture: vi.fn() };
+    plugin.bindForSubMesh(buffer as unknown as UniformBuffer);
+    const float4Writes = buffer.updateFloat4.mock.calls.length;
+    const arrayWrites = buffer.updateFloatArray.mock.calls.length;
+    expect(float4Writes).toBeGreaterThan(0);
+    expect(arrayWrites).toBeGreaterThan(0);
+
+    plugin.bindForSubMesh(buffer as unknown as UniformBuffer);
+    expect(buffer.updateFloat4).toHaveBeenCalledTimes(float4Writes);
+    expect(buffer.updateFloatArray).toHaveBeenCalledTimes(arrayWrites);
+    // The map is bound on every submesh. Only the unchanged numbers are skipped.
+    expect(buffer.setTexture).toHaveBeenCalledTimes(2);
+    expect(buffer.setTexture).toHaveBeenLastCalledWith("terrainNightMap", map.texture);
+
+    const other = { updateFloat4: vi.fn(), updateFloatArray: vi.fn(), setTexture: vi.fn() };
+    plugin.bindForSubMesh(other as unknown as UniformBuffer);
+    expect(other.updateFloat4).toHaveBeenCalledTimes(float4Writes);
+    expect(other.updateFloatArray).toHaveBeenCalledTimes(arrayWrites);
+    expect(other.updateFloat4).toHaveBeenCalledWith("terrainLightSunScale", 3, 2, 1, 0);
+    expect(other.updateFloatArray).toHaveBeenCalledWith("terrainLightTable", light.table);
+    expect(other.setTexture).toHaveBeenCalledExactlyOnceWith("terrainNightMap", map.texture);
+
+    light.sunDirection = [0, 1, 0];
+    plugin.bindForSubMesh(buffer as unknown as UniformBuffer);
+    expect(buffer.updateFloat4).toHaveBeenCalledTimes(float4Writes + 1);
+    expect(buffer.updateFloat4).toHaveBeenLastCalledWith("terrainLightSun", 0, 1, 0, 0);
+    expect(buffer.updateFloatArray).toHaveBeenCalledTimes(arrayWrites);
+
+    const table0 = light.table[0];
+    light.table[0] = table0 + 1;
+    plugin.bindForSubMesh(buffer as unknown as UniformBuffer);
+    expect(buffer.updateFloatArray).toHaveBeenCalledTimes(arrayWrites + 1);
+    expect(buffer.updateFloatArray).toHaveBeenLastCalledWith("terrainLightTable", light.table);
+    expect(buffer.updateFloat4).toHaveBeenCalledTimes(float4Writes + 1);
+
+    setTerrainLocalLights(target, [{ position: [1, 2, 3], direction: [0, -1, 0], cosInner: 0.9, cosOuter: 0.8, factor: [9, 5, 6] }]);
+    plugin.bindForSubMesh(buffer as unknown as UniformBuffer);
+    expect(buffer.updateFloatArray).toHaveBeenCalledTimes(arrayWrites + 2);
+    const packed = buffer.updateFloatArray.mock.calls.at(-1)![1] as Float32Array;
+    expect(buffer.updateFloatArray.mock.calls.at(-1)![0]).toBe("terrainLocalFactor");
+    expect([...packed.slice(0, 4)].map(value => Math.round(value * 10) / 10)).toEqual([9, 5, 6, 0.9]);
+
+    const shown = { ...light, night: { ...NIGHT, floor: 1.25 } };
+    setTerrainLighting(target, shown);
+    plugin.bindForSubMesh(buffer as unknown as UniformBuffer);
+    expect(buffer.updateFloat4).toHaveBeenCalledTimes(float4Writes + 2);
+    expect(buffer.updateFloat4).toHaveBeenLastCalledWith("terrainNightLight", 0.1, 0.2, 0.3, 1.25);
+
+    setTerrainLighting(target, { ...shown, ambient: [0, 0, 0] });
+    plugin.bindForSubMesh(buffer as unknown as UniformBuffer);
+    expect(buffer.updateFloat4).toHaveBeenLastCalledWith("terrainLightAmbient", 0, 0, 0, 0);
+    setTerrainLighting(target, { ...shown, ambient: [-0, 0, 0] });
+    plugin.bindForSubMesh(buffer as unknown as UniformBuffer);
+    const ambient = buffer.updateFloat4.mock.calls.at(-1)!;
+    expect(ambient[0]).toBe("terrainLightAmbient");
+    expect(Object.is(ambient[1], -0)).toBe(true);
+
+    const large = new Scene(target.getEngine(), { useFloatingOrigin: true });
+    const largePlugin = new TerrainLightMaterialPlugin(new StandardMaterial("b", large));
+    setTerrainLighting(large, lighting({ centre: [10, 20, 30] }));
+    large.activeCamera = new FreeCamera("eye", new Vector3(1, 1, 1), large);
+    large.activeCamera.getViewMatrix(true);
+    const offset = { updateFloat4: vi.fn(), updateFloatArray: vi.fn() };
+    largePlugin.bindForSubMesh(offset as unknown as UniformBuffer);
+    const centreWrites = offset.updateFloat4.mock.calls.length;
+    largePlugin.bindForSubMesh(offset as unknown as UniformBuffer);
+    expect(offset.updateFloat4).toHaveBeenCalledTimes(centreWrites);
+    large.activeCamera.position.set(2, 1, 1);
+    large.activeCamera.getViewMatrix(true);
+    largePlugin.bindForSubMesh(offset as unknown as UniformBuffer);
+    expect(offset.updateFloat4).toHaveBeenCalledTimes(centreWrites + 1);
+    expect(offset.updateFloat4).toHaveBeenLastCalledWith("terrainLightCentre", 8, 19, 29, 0);
+
+    const rebound = { _currentEffect: {} as object, updateFloat4: vi.fn(), updateFloatArray: vi.fn(), setTexture: vi.fn() };
+    plugin.bindForSubMesh(rebound as unknown as UniformBuffer);
+    const reboundFloat4 = rebound.updateFloat4.mock.calls.length;
+    const reboundArrays = rebound.updateFloatArray.mock.calls.length;
+    expect(reboundFloat4).toBe(float4Writes);
+    expect(reboundArrays).toBe(arrayWrites);
+    plugin.bindForSubMesh(rebound as unknown as UniformBuffer);
+    expect(rebound.updateFloat4).toHaveBeenCalledTimes(reboundFloat4);
+    rebound._currentEffect = {};
+    plugin.bindForSubMesh(rebound as unknown as UniformBuffer);
+    expect(rebound.updateFloat4).toHaveBeenCalledTimes(reboundFloat4 * 2);
+    expect(rebound.updateFloatArray).toHaveBeenCalledTimes(reboundArrays * 2);
+    expect(rebound.setTexture).toHaveBeenCalledTimes(3);
+  });
+
   it("adds the lamps' light above the floor to the factor it computes for readings", () => {
     const night = lighting({ ambient: [0, 0, 0], night: NIGHT });
     const ground = pointUnderSun(-60);

@@ -11,7 +11,7 @@ function compare(data, size) {
   const input = Buffer.from(data), expected = decodeTerrarium(data, size), actual = core.decodeTerrarium(data, size);
   if (!(actual instanceof Float32Array) || actual.length !== expected.length
     || !Buffer.from(actual.buffer, actual.byteOffset, actual.byteLength).equals(Buffer.from(expected.buffer, expected.byteOffset, expected.byteLength))) throw new Error("raster-WASM differs from raster-TS height bytes");
-  if (!Buffer.from(data).equals(input)) throw new Error("Native decoder changed the caller's input");
+  if (!Buffer.from(data).equals(input)) throw new Error("WASM decoder changed the caller's input");
   comparedPixels += expected.length; cases++;
 }
 // All 2^24 RGB colours, in bounded 256x256 batches rather than giant buffers.
@@ -34,7 +34,7 @@ let failures = 0;
 for (const alpha of [0, 1, 127, 254]) {
   const data = new Uint8ClampedArray([128, 0, 0, alpha]);
   const errors = [decodeTerrarium, core.decodeTerrarium].map(fn => { try { fn(data, 1); } catch (error) { return { name: error.name, message: error.message }; } });
-  if (!errors[0] || JSON.stringify(errors[0]) !== JSON.stringify(errors[1])) throw new Error("Native alpha failure differs from TypeScript");
+  if (!errors[0] || JSON.stringify(errors[0]) !== JSON.stringify(errors[1])) throw new Error("WASM alpha failure differs from TypeScript");
   failures++;
 }
 const result = { implementation: "raster-WASM (Rust) versus raster-TS, the built @foss-earth/engine/raster-TS", wasmSha256: sha(bytes), cases, comparedPixels,

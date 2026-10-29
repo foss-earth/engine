@@ -34,7 +34,7 @@ export * from "./browser/describeGoogleTileFailure.js";
 export * from "./browser/boundedAtlasImageryLoader.js";
 
 export * from "./browser/terrainImageDecoder.js";
-export * from "./browser/terrainNativeDecoder.js";
+export * from "./browser/terrainWasmDecoder.js";
 export * from "./browser/atlasImageryWorkerBridge.js";
 export * from "./browser/atlasImageryWorkerKernel.js";
 export * from "./browser/atlasImageryWorkerProtocol.js";

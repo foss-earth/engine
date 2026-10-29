@@ -88,7 +88,7 @@ function validHit(hit: SurfaceHit): boolean {
 }
 
 /** No clock, loop, renderer, source inference, cached height or loading policy. */
-export function createCurrentDisplayedSurface(query: Required<SurfaceQuery>, ownerState: () => CurrentSurfaceOwnerState): CurrentDisplayedSurfaceAuthority {
+export function createCurrentDisplayedSurface(query: Required<Pick<SurfaceQuery, "sample" | "raycast" | "revision">>, ownerState: () => CurrentSurfaceOwnerState): CurrentDisplayedSurfaceAuthority {
   const observations = new Set<{ refresh(): void; dispose(): void }>();
   let ownerDisposed = false;
   const pendingCallbacks: Array<() => void> = [];

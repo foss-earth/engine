@@ -7,7 +7,7 @@ import * as selector from "../src/terrain/terrainSelector.js";
 import * as meshWorkerRuntime from "../src/browser/terrainMeshWorkers.js";
 import * as imageryRuntimeModule from "../src/babylon/imagery/createImageryRuntime.js";
 import { readImageryView } from "../src/babylon/imagery/imageryView.js";
-import { NATIVE_PARAMETERS } from "../src/settings/catalogue/native.js";
+import { WASM_PARAMETERS } from "../src/settings/catalogue/wasm.js";
 import { createTerrainMesh, terrainMeshTarget } from "../src/babylon/terrainMesh.js";
 import { createTerrainLightingFixture } from "../fixtures/composition/terrainLightHost.js";
 import { GROUND_LIGHT_LEAST_SINE, GROUND_LIGHT_SAMPLES, GROUND_LIGHT_TABLE, MERCATOR_MAX_LAT_DEG, NIGHT_RADIANCE_UNITS, groundLightAt } from "@foss-earth/sky";
@@ -142,8 +142,8 @@ describe("raster imagery and terrain lifecycle", () => {
   });
 
   it("answers batched imagery heights as each point's own query, over tiles of two levels in any order", async () => {
-    settings.register(NATIVE_PARAMETERS);
-    settings.set("native.tier", "typescript-worker");
+    settings.register(WASM_PARAMETERS);
+    settings.set("wasm.tier", "typescript-worker");
     let surface!: imageryRuntimeModule.ImageryRuntimeOptions["surface"];
     vi.spyOn(imageryRuntimeModule, "createImageryRuntime").mockImplementation(options => {
       surface = options.surface;
@@ -191,8 +191,8 @@ describe("raster imagery and terrain lifecycle", () => {
   });
 
   it("names terrain tiles touching every point whose imagery height changed since a revision", async () => {
-    settings.register(NATIVE_PARAMETERS);
-    settings.set("native.tier", "typescript-worker");
+    settings.register(WASM_PARAMETERS);
+    settings.set("wasm.tier", "typescript-worker");
     let surface!: imageryRuntimeModule.ImageryRuntimeOptions["surface"];
     vi.spyOn(imageryRuntimeModule, "createImageryRuntime").mockImplementation(options => {
       surface = options.surface;
@@ -274,8 +274,8 @@ describe("raster imagery and terrain lifecycle", () => {
   });
 
   it("invalidates imagery heights only when adopted grids, bounds, or coverage change", async () => {
-    settings.register(NATIVE_PARAMETERS);
-    settings.set("native.tier", "typescript-worker");
+    settings.register(WASM_PARAMETERS);
+    settings.set("wasm.tier", "typescript-worker");
     settings.set("map.terrain.robustOrbitLOD", true);
     settings.set("map.terrain.tileSegments", 8);
     let surface!: imageryRuntimeModule.ImageryRuntimeOptions["surface"];
@@ -379,9 +379,9 @@ describe("raster imagery and terrain lifecycle", () => {
   });
 
   it("prioritizes safety-core workers, publishes decoded shared heights before preparation, and aborts retired jobs", async () => {
-    settings.register(NATIVE_PARAMETERS);
+    settings.register(WASM_PARAMETERS);
     settings.set("map.terrain.robustOrbitLOD", true);
-    settings.set("native.tier", "typescript-worker");
+    settings.set("wasm.tier", "typescript-worker");
     const tile = { z: 4, x: 8, y: 7 }, key = "4/8/7";
     vi.spyOn(selector, "selectTerrain").mockReturnValue({ leaves: [{ tile, key, needed: true, distanceMeters: 20,
       errorPx: 42.7, inCore: true, inProximity: true, inFrustum: false }], rootLevel: 2, split: new Set(), nodes: 1, truncated: false });
@@ -467,8 +467,8 @@ describe("raster imagery and terrain lifecycle", () => {
   });
 
   it("requeues an ordinary pending mesh at safety-core priority without publishing its aborted result", async () => {
-    settings.register(NATIVE_PARAMETERS);
-    settings.set("native.tier", "typescript-worker");
+    settings.register(WASM_PARAMETERS);
+    settings.set("wasm.tier", "typescript-worker");
     settings.set("map.terrain.robustOrbitLOD", true);
     const tile = { z: 2, x: 2, y: 1 }, key = "2/2/1";
     const leaf = { tile, key, needed: true, distanceMeters: 20, errorPx: 42.7, inCore: false, inProximity: true, inFrustum: false };

@@ -59,7 +59,7 @@ const missingInput = grid(0, 0, 0, 17);
 const missingPixels = collectTerrainHeightPixels(missingInput, new Float64Array([0.25, 0.25, 0.75, 0.75]));
 const incomplete = { ...missingPixels, indices: missingPixels.indices.slice(1), heights: missingPixels.heights.slice(1) };
 const missingSampler = core.createHeightSampler(incomplete);
-assert.throws(() => missingSampler.sample(new Float64Array([0.25, 0.25])), /Native height batch failed/);
+assert.throws(() => missingSampler.sample(new Float64Array([0.25, 0.25])), /WASM height batch failed/);
 missingSampler.dispose();
 assert.throws(() => core.createHeightSampler({ ...missingPixels, indices: Uint32Array.from(missingPixels.indices, () => 0) }), /Invalid height-batch grid/);
 const input = grid(0, 0, 0, 2);

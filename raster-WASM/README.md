@@ -2,7 +2,7 @@
 
 The Rust twin of [raster-TS](../raster-TS/terrarium.ts): Terrarium RGBA tiles
 to Float32 heights. The app's terrain decode workers can select it
-(`native.core.raster`). It is single-threaded only.
+(`wasm.core.raster`). It is single-threaded only.
 
 ```js
 // In a worker. Nothing is fetched or compiled until the first call.
