@@ -10,6 +10,8 @@ export interface TerrainResourceEstimate {
   meshBytes: number;
   textureBytes: number;
   decodedDemBytes: number | null;
+  /** Unique backing buffers retained by terrain records, including their neighbors. Overlaps the loader cache estimate. */
+  retainedDemBytes: number;
   pendingTiles: number;
   activeDemRequests: number | null;
   queuedDemRequests: number | null;

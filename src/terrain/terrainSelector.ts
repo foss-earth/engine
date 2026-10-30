@@ -164,6 +164,8 @@ export interface TerrainSelectionInput {
   /** Opt-in: Keep tiles directly under the camera eye refined so safe-space checks have fine elevation. */
   robustOrbitLOD?: boolean;
   proximity?: TerrainProximityConfig;
+  /** Host-owned volume intersection; does not alter the visible camera or saved focus. */
+  regionRequirement?(tile: TileId, bounds: { min: number; max: number }): { level: number; priority: number } | null;
 }
 
 export interface TerrainLeaf {
@@ -178,6 +180,8 @@ export interface TerrainLeaf {
   inFrustum?: boolean;
   inProximity?: boolean;
   inCore?: boolean;
+  regionLevel?: number;
+  regionPriority?: number;
 }
 
 export interface TerrainSelection {
@@ -614,8 +618,11 @@ export function selectTerrain(input: TerrainSelectionInput): TerrainSelection {
     const key = cachedTileKey(tile);
     const result: Measured = { tile, key, needed: false, distanceMeters: Infinity, errorPx: 0 };
     if (proximity) { result.inFrustum = false; result.inProximity = false; result.inCore = false; }
-    if (!view || pixelAngle <= 0) return result;
     const bounds = input.boundsFor(tile);
+    const region = input.regionRequirement?.(tile, bounds);
+    if (region) { result.needed = true; result.regionLevel = region.level; result.regionPriority = region.priority;
+      result.inFrustum = true; result.distanceMeters = region.priority; }
+    if (!view || pixelAngle <= 0) return result;
     prepareTileGeometry(tile, key);
     const error = geometrySlot < 0 ? terrainTileErrorMeters(tile, input.segments, input.errorPerSpacing)
       : input.errorPerSpacing * geometryWidths[geometrySlot] / input.segments;
@@ -764,13 +771,25 @@ export function selectTerrain(input: TerrainSelectionInput): TerrainSelection {
       }
       result.errorPx = blendTerrainErrors(result.errorPx, proximityError, proximity.blendMode, proximity.blendPower);
     }
+    if (region) { result.needed = true; result.inFrustum = true; result.distanceMeters = Math.min(result.distanceMeters, region.priority); }
     return result;
   }
 
   const root = Math.max(input.minLevel, Math.min(TERRAIN_SELECTION_CONSTANTS.rootLevel, input.maxLevel));
   const count = 2 ** root;
   const heap: Measured[] = [];
-  const higherPriority = (a: Measured, b: Measured): boolean => Boolean(a.inCore) !== Boolean(b.inCore) ? Boolean(a.inCore) : a.errorPx > b.errorPx;
+  const requiresRegionSplit = (node: Measured) => node.regionLevel !== undefined && node.tile.z < Math.min(input.maxLevel, node.regionLevel);
+  const higherPriority = (a: Measured, b: Measured): boolean => {
+    // Satisfy every regional requirement before optional visual refinement,
+    // including refinement of a nearer region that has already met its level.
+    // Otherwise that nearer branch can consume the entire working set forever.
+    if (requiresRegionSplit(a) !== requiresRegionSplit(b)) return requiresRegionSplit(a);
+    if (a.regionPriority !== undefined || b.regionPriority !== undefined) {
+      if ((a.regionPriority ?? Infinity) !== (b.regionPriority ?? Infinity)) return (a.regionPriority ?? Infinity) < (b.regionPriority ?? Infinity);
+      if (a.tile.z !== b.tile.z) return a.tile.z < b.tile.z;
+    }
+    return Boolean(a.inCore) !== Boolean(b.inCore) ? Boolean(a.inCore) : a.errorPx > b.errorPx;
+  };
   const push = (item: Measured): void => {
     heap.push(item);
     let index = heap.length - 1;
@@ -810,7 +829,8 @@ export function selectTerrain(input: TerrainSelectionInput): TerrainSelection {
     const threshold = previous?.split.has(node.key) ? input.hysteresis.coarsenBelow
       : previous?.leaves.has(node.key) ? input.hysteresis.refineAbove : 1;
     const wants = node.tile.z < input.maxLevel && ((node.needed && node.errorPx > input.targetPx * threshold)
-      || (node.inCore && node.tile.z < Math.min(input.maxLevel, proximity!.minProximityZoom)));
+      || (node.inCore && node.tile.z < Math.min(input.maxLevel, proximity!.minProximityZoom))
+      || (node.regionLevel !== undefined && node.tile.z < Math.min(input.maxLevel, node.regionLevel)));
     if (wants && leafCount + 3 > input.maxTiles) truncated = true;
     if (!wants || leafCount + 3 > input.maxTiles) {
       leaves.push(node);
@@ -823,7 +843,7 @@ export function selectTerrain(input: TerrainSelectionInput): TerrainSelection {
       push(measure({ z: z + 1, x: x * 2 + child % 2, y: y * 2 + Math.floor(child / 2) }));
     }
   }
-  leaves.sort((a, b) => Number(b.needed) - Number(a.needed) || a.distanceMeters - b.distanceMeters);
+  leaves.sort((a, b) => (a.regionPriority ?? Infinity) - (b.regionPriority ?? Infinity) || Number(b.needed) - Number(a.needed) || a.distanceMeters - b.distanceMeters);
   return {
     leaves,
     split,

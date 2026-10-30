@@ -15,6 +15,9 @@ import { createNativeMapSettlement, NativeMapStartupError } from "./nativeMapSet
 import { finishOwnedCleanup } from "./ownedCleanup.js";
 import { createGoogleDetailDistribution, unavailableDetailDistribution } from "../terrain/detailDistribution.js";
 import type { DetailDistribution } from "../terrain/mapDetailPolicy.js";
+import { terrainRegionPriority, terrainRegionSupportPriority, type TerrainRegionDemand, type TerrainRegionOutlineSink } from "./terrainRegionBounds.js";
+import { attachTerrainRegionHighlight } from "./terrainRegionHighlight.js";
+import type { TerrainRegionCoverage } from "../surface/terrainRegion.js";
 import { blendTerrainErrors, TERRAIN_PROXIMITY_DEFAULTS } from "../terrain/terrainSelector.js";
 
 /** Structural Babylon binding over the public core traversal contract. */
@@ -48,6 +51,8 @@ export interface GoogleTilesRuntimeOptions {
    * active Babylon camera still controls the visible frustum.
    */
   getTerrainDetailAnchor?: () => Vector3 | null;
+  /** Aircraft regions refined to their detail targets, independent of the camera. */
+  getTerrainRegions?: () => readonly TerrainRegionDemand[];
   /**
    * A region loaded around a focus point, beyond or instead of the view:
    * `map.focus.*`. Read once per update. Null or omitted: the view only.
@@ -85,6 +90,11 @@ export interface GoogleTilesRuntimeOptions {
 
 export interface GoogleTilesRuntime {
   tiles: GoogleTilesRenderer;
+  /**
+   * The region's tiles at a tier's detail, or at the finest this map has there.
+   * `outline` receives the box of each tile still to load.
+   */
+  getRegionCoverage(demand: TerrainRegionDemand, tier: "minimum" | "final", outline?: TerrainRegionOutlineSink): TerrainRegionCoverage;
   /** Changes when the visible collision surface is replaced or removed. */
   getRevision(): number;
   /** What the `map.google.*` budgets bound right now. */
@@ -421,6 +431,7 @@ function applyViewMeasure(
   settings: SettingsRegistry,
   getProximityFocus: GoogleTilesRuntimeOptions["getProximityFocus"],
   nowMs: GoogleTilesRuntimeOptions["nowMs"],
+  getTerrainRegions: GoogleTilesRuntimeOptions["getTerrainRegions"],
 ): () => void {
   const renderer = tiles as GoogleTilesRendererWithViewError;
   const nativeCalculateTileViewError = renderer.calculateTileViewError.bind(renderer);
@@ -462,6 +473,7 @@ function applyViewMeasure(
   let maxProximityErrorPx = 8;
   let hasDetailAnchor = false;
   let focus: GoogleFocus | null = null;
+  let regions: readonly TerrainRegionDemand[] = [];
   let focusMinDistance = 0;
   let focusErrorScale = 1;
   let focusViewer = { x: 0, y: 0, z: 0 };
@@ -495,6 +507,7 @@ function applyViewMeasure(
   tiles.update = () => {
     hasDetailAnchor = false;
     focus = null;
+    regions = getTerrainRegions?.() ?? [];
     const anchor = getTerrainDetailAnchor?.() ?? null;
     const nextFocus = getFocus?.() ?? null;
     const camera = scene.activeCamera;
@@ -693,6 +706,21 @@ function applyViewMeasure(
     return error;
   };
 
+  const applyRegions = (tile: TileWithBabylonBounds, target: TileViewErrorTarget): void => {
+    for (const demand of regions) {
+      const distance = (point: Vector3) => tile.engineData.boundingVolume.distanceToPoint(point);
+      const priority = terrainRegionPriority(demand, distance);
+      const support = terrainRegionSupportPriority(demand, distance);
+      if (priority === null && support === null) continue;
+      const errorMeters = priority === null ? demand.minimum.googleErrorMeters : demand.final.googleErrorMeters;
+      target.inView = true;
+      // Metres of geometric error, explicitly independent of camera SSE.
+      target.error = Math.max(target.error, tiles.errorTarget * tile.geometricError / errorMeters * 1.001);
+      // Sphere first; the cone follows predicted time to arrival.
+      target.distanceFromCamera = Math.min(target.distanceFromCamera, priority ?? support!);
+    }
+  };
+
   renderer.calculateTileViewError = (tile, target) => {
     nativeCalculateTileViewError(tile, target);
     if (hasDetailAnchor) {
@@ -717,7 +745,7 @@ function applyViewMeasure(
         target.distanceFromCamera = Math.min(target.distanceFromCamera, distance);
       }
     }
-    if (!proximityEnabled) return;
+    if (!proximityEnabled) { applyRegions(tile, target); return; }
     let gaze = 1;
     const sphere = target.inView && losWeight > 0 && gazeExponent > 0 ? tileSphere(tile) : null;
     if (sphere) {
@@ -746,6 +774,7 @@ function applyViewMeasure(
     if (cached.inView) { target.inView = true; target.distanceFromCamera = Math.min(target.distanceFromCamera, cached.distance); }
     const proxError = cached.error;
     target.error = blendTerrainErrors(losError, proxError, blendMode, blendPower);
+    applyRegions(tile, target);
   };
   return () => { settingsDirty = true; };
 }
@@ -877,7 +906,7 @@ export function createGoogleTilesRuntime(options: GoogleTilesRuntimeOptions): Se
   const readLoadedError = observeLoadedError(tiles);
   let loadedErrorTarget: number | null = null;
   let loadedDistribution: DetailDistribution = unavailableDetailDistribution("google", "google", 1, "Loaded detail has not been measured.");
-  const refreshViewSettings = applyViewMeasure(tiles, scene, options.getTerrainDetailAnchor, options.getFocus, options.settings, options.getProximityFocus, options.nowMs);
+  const refreshViewSettings = applyViewMeasure(tiles, scene, options.getTerrainDetailAnchor, options.getFocus, options.settings, options.getProximityFocus, options.nowMs, options.getTerrainRegions);
   const settings = options.settings;
   let suspended = false;
   applyLoadingParameters(tiles, settings);
@@ -979,6 +1008,8 @@ export function createGoogleTilesRuntime(options: GoogleTilesRuntimeOptions): Se
       mesh.metadata = { ...mesh.metadata, googleGeometricErrorMeters: event.tile.geometricError };
       // A tile whose material comes unlit is shown under the sky's light on the ground, as 2D imagery is.
       if (mesh.material) options.lighting.followTerrainLight(mesh.material);
+      // Its surface inside a shown aircraft region is tinted red.
+      if (mesh.material) attachTerrainRegionHighlight(mesh.material);
     }
     options.onSurfaceChange?.("loading");
   };
@@ -1018,6 +1049,29 @@ export function createGoogleTilesRuntime(options: GoogleTilesRuntimeOptions): Se
 
   return {
     tiles, whenSettled: () => work.whenSettled(),
+    getRegionCoverage(demand, tier, outline) {
+      const result: TerrainRegionCoverage = { readyTiles: 0, totalTiles: 0, pendingTiles: 0, unavailable: false };
+      const target = demand[tier].googleErrorMeters;
+      const visit = (tile: Tile): void => {
+        const bound = (tile as TileWithBabylonBounds).engineData?.boundingVolume;
+        if (!bound) { result.totalTiles++; result.pendingTiles++; return; }
+        if (terrainRegionPriority(demand, point => bound.distanceToPoint(point)) === null) return;
+        const node = (tile as Tile & { engineData?: { scene?: TransformNode } }).engineData?.scene;
+        const loaded = tiles.visibleTiles.has(tile) && tileDrawable(tile) && (!node || node.isEnabled());
+        if (loaded && tile.geometricError <= target) { result.totalTiles++; result.readyTiles++; return; }
+        if (tile.children?.length) { for (const child of tile.children) visit(child); return; }
+        result.totalTiles++;
+        // A drawn terminal tile is the finest this map has here, however far it
+        // is from the target. Missing content/metadata is pending, never proof
+        // that the region is empty or sufficiently fine.
+        if (loaded) { result.readyTiles++; return; }
+        result.pendingTiles++;
+        if (outline && bound.obb?.points?.length === 8) outline(bound.obb.points);
+      };
+      if (tiles.root) visit(tiles.root);
+      else { result.totalTiles = 1; result.pendingTiles = 1; }
+      return result;
+    },
     getRevision: () => surfaceRevision,
     getLoadingState() {
       // Present at run time in 0.4.24, though its declarations leave them out.

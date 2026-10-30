@@ -11,6 +11,14 @@ const core = await loadRasterCore();
 const heights = core.decodeTerrarium(rgba, size); // an owned copy
 ```
 
+`decodeTerrarium(rgba, size, true)` consumes caller-owned RGBA storage when its
+byte offset is float32 aligned, returning a height view over that same buffer.
+An unaligned input uses a separate output and keeps its bytes. The default
+two-argument form preserves input. Consume mode relinquishes the input even if
+decoding fails; it is intended for disposable native image readbacks. Both the
+TypeScript reference and WASM wrapper support it, with the same float32 results.
+The returned view never borrows memory that WASM will free.
+
 `instantiateRasterCore(bytes)` takes the binary directly, for offline callers
 and equivalent-output A/B tests. The ABI uses explicit owned buffers without
 wasm-bindgen. All lengths and allocation ownership are validated, output is

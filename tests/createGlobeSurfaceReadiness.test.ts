@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { VertexBuffer } from "@babylonjs/core";
 import type { CurrentSurfaceReadiness } from "../src/index.js";
 import { createLocalSurfaceHost } from "../fixtures/surface-readiness/mapHost.js";
+import { getTerrainRegionHighlight } from "../src/babylon/terrainRegionHighlight.js";
 import { RASTER_BASE_MAP_SOURCES } from "../src/map/rasterBaseMaps.js";
 
 const center = { samples: [{ latDeg: 0, lonDeg: 0 }] };
@@ -180,4 +181,47 @@ describe("public GlobeRuntime current displayed surface wiring", () => {
       expect(observation.read().disposed).toBe(true); expect(host.timers.size).toBe(0); expect(tiles.listenerCount()).toBe(0);
     } finally { host.disposeHost(); }
   });
+});
+
+it("prepares an aircraft region without taking the camera or adjusting its requested altitude", () => {
+  const host = createLocalSurfaceHost(document);
+  try {
+    const ground = host.tiles().addGround(100), camera = host.scene.activeCamera;
+    Object.assign(ground.tile, { internal: { hasRenderableContent: true, loadingState: 4 } });
+    Object.assign(ground.tile.engineData, { boundingVolume: { distanceToPoint: () => 0 } });
+    Object.assign(host.tiles(), { root: ground.tile });
+    const progress = vi.fn();
+    const lease = host.runtime.prepareTerrainRegion({ region: { center: { latDeg: 0, lonDeg: 0, altitudeMeters: 100.5 }, radiusMeters: 15 },
+      minimum: { googleErrorMeters: 32, rasterZoom: 12 }, final: { googleErrorMeters: 16, rasterZoom: 14 }, onProgress: progress });
+    expect(host.scene.activeCamera).toBe(camera);
+    host.runtime.prepareFrame(200); host.runtime.afterFrame(200, true);
+    expect(lease.read()).toMatchObject({ state: "ready", finalReady: true, groundHeightMeters: expect.closeTo(100, 3) });
+    expect(host.scene.activeCamera).toBe(camera); expect(progress).toHaveBeenCalledOnce();
+    lease.release(); lease.release();
+  } finally { host.disposeHost(); }
+});
+
+it("shows a prepared region in the world on request, and nothing once hidden", async () => {
+  const host = createLocalSurfaceHost(document);
+  try {
+    const ground = host.tiles().addGround(100);
+    Object.assign(ground.tile, { internal: { hasRenderableContent: true, loadingState: 4 } });
+    Object.assign(ground.tile.engineData, { boundingVolume: { distanceToPoint: () => 0 } });
+    Object.assign(host.tiles(), { root: ground.tile });
+    const lease = host.runtime.prepareTerrainRegion({ region: { center: { latDeg: 0, lonDeg: 0, altitudeMeters: 100.5 }, radiusMeters: 15 },
+      minimum: { googleErrorMeters: 32, rasterZoom: 12 }, final: { googleErrorMeters: 16, rasterZoom: 14 } });
+    let now = 200;
+    const frame = () => { host.runtime.prepareFrame(now); host.runtime.afterFrame(now, true); now += 200; };
+    frame();
+    expect(host.scene.getMeshByName("terrain-region-zone")).toBeNull();
+    lease.setVisible(true);
+    // The overlay's module is fetched when a region is first shown, and draws from the next frame.
+    await vi.waitFor(() => { frame(); expect(host.scene.getMeshByName("terrain-region-zone")).not.toBeNull(); });
+    expect(getTerrainRegionHighlight(host.scene)).toMatchObject({ radiusMeters: 15 });
+    expect(host.scene.getMeshByName("terrain-region-zone")!.isPickable).toBe(false);
+    lease.setVisible(false); frame();
+    expect(host.scene.getMeshByName("terrain-region-zone")).toBeNull();
+    expect(getTerrainRegionHighlight(host.scene)).toBeNull();
+    lease.release();
+  } finally { host.disposeHost(); }
 });

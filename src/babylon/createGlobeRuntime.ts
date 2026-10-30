@@ -9,6 +9,8 @@ import { createSurfaceQuery } from "./surfaceQuery.js";
 import type { SurfaceQuery } from "../surface/contracts.js";
 import { createCurrentDisplayedSurface, type CurrentDisplayedSurface, type CurrentSurfaceOwnerState, type SurfaceOwnerChange } from "../surface/currentReadiness.js";
 import { resolveTerrainSource, type TerrainSource } from "../terrain/terrainGrid.js";
+import { createTerrainRegions } from "../surface/terrainRegionController.js";
+import type { TerrainRegionOptions, TerrainRegionLease } from "../surface/terrainRegion.js";
 import { terrainReadinessSamples } from "../surface/coverageSamples.js";
 import { validateTerrainPreparation, type TerrainPreparationOptions, type TerrainPreparationResult } from "../surface/terrainPreparation.js";
 import { createGoogleTilesRuntime, type GoogleTerrainDetailState } from "./createTilesRuntime.js";
@@ -42,6 +44,7 @@ import { createNavigationCameraAdapter } from "./navigationCamera.js";
 import { createGlobeIntentMotion } from "../input/globeIntentMotion.js";
 import { createNavigationAnchorService, type GlobeNavigationAnchors, type NavigationAnchorService, type NavigationAnchorStatus } from "./navigationAnchorService.js";
 import type { CompassCenterSphere } from "../visualization/compassCenterSphere.js";
+import type { TerrainRegionOverlay } from "./terrainRegionOverlay.js";
 import { ANCHOR_FALLBACK_MESSAGES, ANCHOR_FAMILIES, NAVIGATION_ANCHOR_SETTING_IDS, SHOW_COMPASS_CENTER_ID, SHOW_NAVIGATION_ANCHORS_ID, ZOOM_CENTER_ID, navigationAnchorSettingId, navigationAnchorsFromSettings, type AnchorFamily, type NavigationAnchorPreferences } from "../input/navigationAnchors.js";
 import { pointInViewProblem } from "../camera/anchoredMotion.js";
 import { ecefToVector3, projectEcefToClient } from "./anchorPan.js";
@@ -145,6 +148,8 @@ export interface GlobeRuntime {
   setExternalFrameCallback(callback: ((deltaSeconds: number) => void) | null): void;
   /** Stream and refine a destination before creating or relocating an aircraft. */
   prepareTerrain(options: TerrainPreparationOptions): Promise<TerrainPreparationResult>;
+  /** Camera-independent aircraft sphere/cone loading; releasing the lease retires its demand. */
+  prepareTerrainRegion(options: TerrainRegionOptions): TerrainRegionLease;
   /** Collision and placement queries against the currently displayed map mesh. */
   surface: SurfaceQuery;
   /** Engine-owned current local displayed query evidence and paused-safe subscriptions. */
@@ -507,6 +512,9 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
   // The compass center's ball (input.showCompassCenter, a developer tool), made only while it is switched on.
   let compassSphere: CompassCenterSphere | null = null;
   let compassSphereLoading = false;
+  // Shown aircraft regions (`TerrainRegionLease.setVisible`), drawn once one is shown.
+  let regionOverlay: TerrainRegionOverlay | null = null;
+  let regionOverlayLoading = false, regionOverlayFailed = false;
   const anchorListeners = new Set<() => void>();
   let simRunning = simMode && options.external?.running !== false;
   let simTick: ((deltaSeconds: number) => void) | null = options.external?.onFrame ?? null;
@@ -518,6 +526,16 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
   let preparationPreviousCamera: Camera | null = null;
   let preparationTick: ((now: number) => void) | null = null;
   let cancelPreparation: ((error: Error) => void) | null = null;
+  const terrainRegions = createTerrainRegions({
+    nowMs: clock.nowMs, sourceGeneration: () => readCurrentSurfaceState().sourceGeneration,
+    coverage: (demand, tier, outline) => status.mode === "google-tiles" ? tilesRuntime?.getRegionCoverage(demand, tier, outline) ?? null
+      : status.mode === "raster-basemap" ? rasterTilesRuntime?.getRegionCoverage(demand, tier, outline) ?? null : null,
+    groundHeight: (lat, lon) => { const hit = surface.sample(lat, lon); return hit && Number.isFinite(hit.heightMeters) ? hit.heightMeters : null; },
+    unavailableReason: () => status.mode === "fallback" ? status.lastError ?? "Map geometry is not available. You can spawn now and let the map continue loading." : null,
+    beginContinuous: () => scheduler.beginContinuous(), endContinuous: () => scheduler.endContinuous(), requestRender: () => scheduler.requestRender(),
+  });
+  authority.own(() => terrainRegions.dispose());
+
   let activeRasterBaseMap = options.rasterBaseMap ?? null;
   let requestedRenderPause = false;
   // The maps can call this during initialization, before the query is created.
@@ -576,6 +594,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
   authority.own(() => { inputController?.destroy(); inputController = null; });
   authority.own(() => { inertialCameraController?.cancel(); inertialCameraController = null; });
   authority.own(() => { const owned = compassSphere; compassSphere = null; owned?.dispose(); });
+  authority.own(() => { const owned = regionOverlay; regionOverlay = null; owned?.dispose(); });
   authority.own(() => {
     // The pin, Pick point, gestures' anchors and markers go with the runtime; Controls says nothing of them after.
     const owned = navigationAnchors, markers = anchorMarkers;
@@ -747,6 +766,8 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
     profiler.add("sky", started);
     // After the camera has moved this frame, so the ball is drawn where the view turns about now.
     showCompassSphere();
+    // After the host has placed the world: the red tint is set in the scene's coordinates.
+    showTerrainRegions();
     } catch (error) {
       // A failed map operation can have partially changed actual triangles.
       // Publish that owner's new evidence before retiring this frame boundary.
@@ -760,7 +781,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
     const failures: unknown[] = [];
     try {
       if (rendered) {
-        const started = profiler.clock(); preparationTick?.(frameNow);
+        const started = profiler.clock(); preparationTick?.(frameNow); terrainRegions.tick(frameNow);
         profiler.add("map/terrain preparation", started);
         showAnchorMarkers();
         if (mapDebugEnabled) recordMapDebugEvent("scene-render", { mode: status.mode, enabledMeshes: scene.meshes.filter(mesh => mesh.isEnabled()).length });
@@ -1019,6 +1040,27 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
     }
   }
 
+  /**
+   * Draws the first shown aircraft region (terrainRegionOverlay.ts). Its module
+   * is fetched when a region is first shown: a page that shows none never
+   * downloads it.
+   */
+  function showTerrainRegions(): void {
+    const displays = terrainRegions.displays();
+    if (regionOverlay) { regionOverlay.update(displays); return; }
+    if (displays.length === 0 || regionOverlayLoading || regionOverlayFailed) return;
+    regionOverlayLoading = true;
+    void import("./terrainRegionOverlay.js").then(({ createTerrainRegionOverlay }) => {
+      regionOverlayLoading = false;
+      if (disposed || regionOverlay) return;
+      regionOverlay = createTerrainRegionOverlay(scene, { parent: worldRoot, ecefToScene });
+      scheduler.requestRender();
+    }, (error: unknown) => {
+      regionOverlayLoading = false; regionOverlayFailed = true;
+      console.warn("The aircraft region's overlay could not be loaded.", error);
+    });
+  }
+
   /** Stands the compass center's ball while the view turns about the compass, as faint as the turn has slowed. */
   function showCompassSphere(): void {
     if (!compassSphere) return;
@@ -1268,6 +1310,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
         },
         getRefinePoint: () => (settings.get("map.focus.refineBasemapFrom") === "camera" ? null : focusPosition()),
         getProximityFocusPoint: focusPosition,
+        getTerrainRegions: terrainRegions.demands,
         worldRoot: worldRoot ?? undefined,
         getSurfaceHeightMeters: options.getSurfaceHeightMeters,
         terrainSource: activeTerrainSource,
@@ -1406,6 +1449,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
         // its normal camera-based detail selection remains the safe behavior.
         settings,
         getProximityFocus: focusPosition,
+        getTerrainRegions: terrainRegions.demands,
         getTerrainDetailAnchor: () => {
           if (googleTerrainDetailAnchor === "focus-point") {
             const focus = focusPosition();
@@ -2154,6 +2198,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
     surface,
     displayedSurface,
     prepareTerrain,
+    prepareTerrainRegion: terrainRegions.prepare,
     engine: renderer.engine,
     scene,
     renderer,

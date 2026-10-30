@@ -10,9 +10,9 @@ const FUNCTIONS = ["raster_abi_version", "raster_alloc_rgba", "raster_free_rgba"
 const LITTLE_ENDIAN = new Uint8Array(new Uint32Array([0x0a0b0c0d]).buffer)[0] === 0x0d;
 
 /** WASM memory is little-endian even on a host whose typed arrays are not. */
-export function copyRasterHeights(buffer, pointer, length, littleEndian = LITTLE_ENDIAN) {
-  if (littleEndian) return new Float32Array(new Float32Array(buffer, pointer, length));
-  const output = new Float32Array(length), view = new DataView(buffer, pointer, length * 4);
+export function copyRasterHeights(buffer, pointer, length, littleEndian = LITTLE_ENDIAN, output = new Float32Array(length)) {
+  if (littleEndian) { output.set(new Float32Array(buffer, pointer, length)); return output; }
+  const view = new DataView(buffer, pointer, length * 4);
   for (let index = 0; index < length; index++) output[index] = view.getFloat32(index * 4, true);
   return output;
 }
@@ -60,7 +60,7 @@ export function createRasterCore(exports) {
   };
 
   return {
-    decodeTerrarium(data, size) {
+    decodeTerrarium(data, size, reuseInput = false) {
       if (!Number.isSafeInteger(size) || size < 1 || size > MAX_SIDE
         || !ArrayBuffer.isView(data) || Object.prototype.toString.call(data) !== "[object Uint8ClampedArray]"
         || data.length !== size * size * 4) throw new Error(DIMENSIONS_ERROR);
@@ -88,7 +88,9 @@ export function createRasterCore(exports) {
         const after = buffer();
         span(after, rgba, rgbaBytes, 1);
         span(after, heights, heightBytes, Float32Array.BYTES_PER_ELEMENT);
-        return copyRasterHeights(after, heights, pixels);
+        const output = reuseInput && (data.byteOffset & 3) === 0 && data.buffer !== after && data.byteLength === heightBytes
+          ? new Float32Array(data.buffer, data.byteOffset, pixels) : undefined;
+        return copyRasterHeights(after, heights, pixels, LITTLE_ENDIAN, output);
       } catch (error) {
         failed = true;
         failure = error;

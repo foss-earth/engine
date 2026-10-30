@@ -3,17 +3,29 @@ import { createTerrainImageDecoder, DEFAULT_TERRAIN_IMAGE_DECODE_LIMITS } from "
 function fixture(width = 1, height = width) {
   const data = new Uint8ClampedArray(width * height * 4); for (let index = 0; index < data.length; index += 4) data.set([127,255,128,255],index);
   const close = vi.fn(), bitmap = { width, height, close } as unknown as ImageBitmap;
-  const drawImage = vi.fn(), context = { drawImage, getImageData: () => ({ data }) };
+  const readbacks: Uint8ClampedArray[] = [];
+  const drawImage = vi.fn(), context = { drawImage, getImageData: () => { const pixels = data.slice(); readbacks.push(pixels); return { data: pixels }; } };
   const canvas = { width: 0, height: 0, getContext: vi.fn(() => context) } as unknown as HTMLCanvasElement;
   const createImageBitmap = vi.fn(async () => bitmap), createCanvas = vi.fn(() => canvas), onDecodeCpu = vi.fn(); let time = 8;
   const ports = { createImageBitmap, createCanvas, nowMs: () => { time += 3; return time; }, limits: () => DEFAULT_TERRAIN_IMAGE_DECODE_LIMITS, onDecodeCpu };
-  const decode = createTerrainImageDecoder(ports); return { data, close, bitmap, canvas, context, createImageBitmap, createCanvas, onDecodeCpu, ports, decode };
+  const decode = createTerrainImageDecoder(ports); return { data, readbacks, close, bitmap, canvas, context, createImageBitmap, createCanvas, onDecodeCpu, ports, decode };
 }
 describe("original native Terrarium decode with explicit host ports", () => {
+  it("reuses one cleared canvas for successive page decodes without reusing height results", async () => {
+    const f = fixture(8);
+    const first = await f.decode(new Blob());
+    const second = await f.decode(new Blob());
+    expect(f.createCanvas).toHaveBeenCalledOnce();
+    expect(first.heights).toEqual(second.heights); expect(first.heights).not.toBe(second.heights);
+    expect(first.heights.buffer).toBe(f.readbacks[0].buffer);
+    expect(second.heights.buffer).toBe(f.readbacks[1].buffer);
+    expect(f.context.drawImage).toHaveBeenCalledTimes(2);
+    expect(f.canvas.width).toBe(0); expect(f.canvas.height).toBe(0);
+  });
   it("passes a WebP blob unchanged with raw color/alpha options and the original height formula", async () => {
     const f = fixture(), blob = new Blob(["native fixture"], { type: "image/webp" });
     expect(await f.decode(blob)).toEqual({ size: 1, heights: new Float32Array([-0.5]) });
-    expect(f.createImageBitmap).toHaveBeenCalledWith(blob,{colorSpaceConversion:"none",premultiplyAlpha:"none"}); expect(f.canvas.width).toBe(1); expect(f.canvas.height).toBe(1);
+    expect(f.createImageBitmap).toHaveBeenCalledWith(blob,{colorSpaceConversion:"none",premultiplyAlpha:"none"}); expect(f.canvas.width).toBe(0); expect(f.canvas.height).toBe(0);
     expect(f.context.drawImage).toHaveBeenCalledWith(f.bitmap,0,0); expect(f.close).toHaveBeenCalledOnce(); expect(f.onDecodeCpu).toHaveBeenCalledWith(3);
   });
   it("accepts the original 1024-pixel boundary and honors a smaller named limit", async () => {
@@ -41,7 +53,16 @@ describe("original native Terrarium decode with explicit host ports", () => {
     const decoding = createTerrainImageDecoder({ ...f.ports, decodeTerrarium })(new Blob());
     await Promise.resolve();
     expect(decodeTerrarium).toHaveBeenCalledWith(f.data, 1); expect(f.close).not.toHaveBeenCalled();
+    expect(f.canvas.width).toBe(1); expect(f.canvas.height).toBe(1);
     const heights = new Float32Array([-0.5]); finish(heights);
     expect((await decoding).heights).toBe(heights); expect(f.close).toHaveBeenCalledOnce();
+  });
+  it("releases native canvas storage when numeric decoding fails and bitmap cleanup throws", async () => {
+    const f = fixture(512), decodeFailure = new Error("decode"), closeFailure = new Error("close");
+    f.close.mockImplementationOnce(() => { throw closeFailure; });
+    const error = await createTerrainImageDecoder({ ...f.ports, decodeTerrarium: async () => { throw decodeFailure; } })(new Blob()).catch(error => error);
+    expect(error).toBeInstanceOf(AggregateError);
+    expect(error.errors).toEqual([decodeFailure, closeFailure]);
+    expect(f.canvas.width).toBe(0); expect(f.canvas.height).toBe(0);
   });
 });

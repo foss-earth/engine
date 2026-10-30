@@ -5,6 +5,18 @@ import { rasterFixture } from "./fixture.mjs";
 
 const pixel = () => new Uint8ClampedArray([129, 0, 64, 255]);
 
+test("consume mode reuses aligned caller storage and keeps it independent of freed WASM memory", () => {
+  const fixture = rasterFixture(), core = createRasterCore(fixture.exports), input = pixel();
+  const result = core.decodeTerrarium(input, 1, true);
+  assert.equal(result.buffer, input.buffer); assert.deepEqual([...result], [256.25]);
+  assert.equal(fixture.owned.size, 0);
+  core.decodeTerrarium(pixel(), 1);
+  assert.deepEqual([...result], [256.25]);
+  const unaligned = new Uint8ClampedArray(new ArrayBuffer(5), 1, 4); unaligned.set(pixel());
+  const copied = core.decodeTerrarium(unaligned, 1, true);
+  assert.notEqual(copied.buffer, unaligned.buffer); assert.deepEqual([...unaligned], [...pixel()]);
+});
+
 test("ABI mock preserves float32 colour values and frees both buffers after copying the result", () => {
   const fixture = rasterFixture();
   const core = createRasterCore(fixture.exports);

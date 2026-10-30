@@ -1161,7 +1161,8 @@ describe("raster imagery and terrain lifecycle", () => {
       }
     });
 
-    it("retains recently viewed HD tiles in cache across a 360-degree orbit instead of evicting them", async () => {
+    it("retains recently viewed HD tiles across a 360-degree orbit when the cache budget allows", async () => {
+      getAppSettings().set("map.terrain.cachedTiles", 2000);
       getAppSettings().set("map.terrain.reselectWhileMoving", 0);
       getAppSettings().set("map.terrain.meshRebuildTimePerFrame", 500);
       getAppSettings().set("map.terrain.robustOrbitLOD", true);
@@ -1422,3 +1423,32 @@ describe("raster imagery and terrain lifecycle", () => {
   });
 });
 
+
+it("accepts the finest elevation shown for a regional target beyond its source and configuration", async () => {
+  const { createTerrainRegionDemand } = await import("../src/babylon/terrainRegionBounds.js");
+  // Tiles stop at level 8 here, far coarser than the target's 16.
+  settings.set("map.terrain.maxLevel", 8);
+  const demand = createTerrainRegionDemand({ center: { latDeg: 0.001, lonDeg: 0.001, altitudeMeters: 101 }, radiusMeters: 15 },
+    { googleErrorMeters: 8, rasterZoom: 12 }, { googleErrorMeters: 1, rasterZoom: 16 });
+  const engine = new NullEngine(), scene = new Scene(engine);
+  const runtime = createRasterTilesRuntime({ scene, source: RASTER_BASE_MAP_SOURCES[0], getViewState: () => view, getTerrainRegions: () => [demand] });
+  try {
+    runtime.update();
+    // Each cell still to load is outlined by its corners.
+    const outlines: unknown[][] = [];
+    const waiting = runtime.getRegionCoverage(demand, "final", corners => outlines.push([...corners]));
+    expect(waiting).toMatchObject({ unavailable: false, readyTiles: 0 });
+    expect(waiting.pendingTiles).toBeGreaterThan(0);
+    expect(outlines).toHaveLength(waiting.pendingTiles);
+    expect(outlines.every(corners => corners.length === 8)).toBe(true);
+    for (let round = 0; round < 30 && (pending.terrain.length > 0 || pending.imagery.length > 0); round++) {
+      pending.imagery.splice(0).forEach(loaded => loaded());
+      for (const load of pending.terrain.splice(0)) load.resolve({ ...load.tile, size: 2, heights: new Float32Array([100, 100, 100, 100]) });
+      await flush(); runtime.update();
+    }
+    const done = runtime.getRegionCoverage(demand, "final");
+    expect(done).toMatchObject({ unavailable: false, pendingTiles: 0 });
+    expect(done.readyTiles).toBe(done.totalTiles);
+    expect(done.totalTiles).toBeGreaterThan(0);
+  } finally { runtime.dispose(); engine.dispose(); }
+});

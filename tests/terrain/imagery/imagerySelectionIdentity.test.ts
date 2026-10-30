@@ -18,7 +18,12 @@ import { createTestView, type TestViewOptions } from "../../../src/terrain/image
 // give the same leaves, footprints and areas, bit for bit.
 const SHIPPED_DIGEST = "b2a7e123117cd19b3ce19096c5d40df6524d12468d361f1490b4a4750eed8100";
 // The same for 400 random cases (`randomCase`), from the selector at engine `b2ddff9`.
-const SHIPPED_RANDOM_DIGEST = "d28ae1399bcaf036109288e05c3bc881e7a91d11fb3bb85b989f8e32fafeb225";
+// The cases and the selector raise numbers to fractional powers (`10 ** x`,
+// `2 ** -0.5`), which Node 22 (V8 12) rounds differently from Node 26 (V8 14),
+// so each `**` has its own shipped digest.
+const SHIPPED_RANDOM_DIGEST = 2 ** -0.5 === Math.SQRT1_2
+  ? "d28ae1399bcaf036109288e05c3bc881e7a91d11fb3bb85b989f8e32fafeb225"
+  : "8fb9155963826932c46a4ae3f6e1f600f2606088fb96bb7e3aef3ea7db78c0cf";
 
 const PHOTO: ImagerySourceCapabilities = {
   id: "photo", version: "1", kind: "photographic", minLevel: 0, maxLevel: 19,

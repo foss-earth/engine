@@ -323,8 +323,9 @@ describe("raster runtime with atlas imagery", () => {
     engine.dispose();
   });
 
-  it("keeps no more terrain tiles than its budget beyond what the view needs", async () => {
+  it.each([false, true])("keeps no more terrain tiles than its budget beyond what the view needs (robust %s)", async robust => {
     const settings = getAppSettings();
+    settings.set("map.terrain.robustOrbitLOD", robust);
     // Select the second view at once, however fast the frames run.
     settings.set("map.terrain.reselectWhileMoving", 0);
     const visit = async (cachedTiles: number) => {

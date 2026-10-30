@@ -883,3 +883,57 @@ describe("hosted Google tiles", () => {
     }
   });
 });
+
+// Aircraft demands must load outside the camera and judge only the local tree.
+describe("aircraft regional Google readiness", () => {
+  it("refines an off-camera volume and ignores unrelated global queue work", async () => {
+    const { createTerrainRegionDemand } = await import("../src/babylon/terrainRegionBounds.js");
+    const region = createTerrainRegionDemand({ center: { latDeg: 0, lonDeg: 0, altitudeMeters: 1 }, radiusMeters: 15 },
+      { googleErrorMeters: 8, rasterZoom: 14 }, { googleErrorMeters: 1, rasterZoom: 16 });
+    const runtime = createGoogleTilesRuntime({ scene: { activeCamera: null } as unknown as Scene, apiKey: "test", getTerrainRegions: () => [region] });
+    const box = Array.from({ length: 8 }, (_, i) => ({ x: i, y: 0, z: 0 }));
+    const child = { geometricError: 1, internal: { hasRenderableContent: true, loadingState: 4 }, engineData: { boundingVolume: { distanceToPoint: () => 0, obb: { points: box } } } };
+    const parent = { geometricError: 8, children: [child], engineData: { boundingVolume: { distanceToPoint: () => 0 } } };
+    const renderer = runtime.tiles as unknown as { root: object; calculateTileViewError(tile: object, target: { inView: boolean; error: number; distanceFromCamera: number }): void };
+    renderer.root = parent; runtime.tiles.visibleTiles.add(parent as never);
+    try {
+      runtime.update();
+      const target = { inView: false, error: 0, distanceFromCamera: 999 };
+      renderer.calculateTileViewError(parent, target);
+      expect(target.inView).toBe(true); expect(target.error).toBeGreaterThan(runtime.tiles.errorTarget);
+      expect(runtime.getRegionCoverage(region, "minimum")).toMatchObject({ readyTiles: 1, pendingTiles: 0 });
+      // The tile still to load is outlined by its box.
+      const outlines: unknown[] = [];
+      expect(runtime.getRegionCoverage(region, "final", corners => outlines.push(corners))).toMatchObject({ readyTiles: 0, pendingTiles: 1 });
+      expect(outlines).toEqual([box]);
+      runtime.tiles.visibleTiles.add(child as never);
+      Object.assign(runtime.tiles.downloadQueue, { currJobs: 7 });
+      outlines.length = 0;
+      expect(runtime.getRegionCoverage(region, "final", corners => outlines.push(corners))).toMatchObject({ readyTiles: 1, pendingTiles: 0, unavailable: false });
+      expect(outlines).toEqual([]);
+      // A drawn tile with nothing finer is the finest this map has there: a target beyond it is not waited for.
+      child.geometricError = 2;
+      expect(runtime.getRegionCoverage(region, "final")).toMatchObject({ readyTiles: 1, pendingTiles: 0, unavailable: false });
+      // Until it is drawn, it is waited for.
+      runtime.tiles.visibleTiles.delete(child as never);
+      expect(runtime.getRegionCoverage(region, "final")).toMatchObject({ readyTiles: 0, pendingTiles: 1, unavailable: false });
+    } finally { runtime.dispose(); }
+  });
+});
+
+it("loads center-height support at minimum detail when the spawn sphere is far above the ground", async () => {
+  const { createTerrainRegionDemand } = await import("../src/babylon/terrainRegionBounds.js");
+  const demand = createTerrainRegionDemand({ center: { latDeg: 0, lonDeg: 0, altitudeMeters: 1524 }, radiusMeters: 15 },
+    { googleErrorMeters: 8, rasterZoom: 14 }, { googleErrorMeters: 1, rasterZoom: 16 });
+  const runtime = createGoogleTilesRuntime({ scene: { activeCamera: null } as unknown as Scene, apiKey: "test", getTerrainRegions: () => [demand] });
+  const point = new Vector3(6378137, 0, 0), tile = { geometricError: 32, engineData: { boundingVolume: {
+    distanceToPoint: (center: Vector3) => Vector3.Distance(center, point) } } };
+  const renderer = runtime.tiles as unknown as { calculateTileViewError(tile: object, target: { inView: boolean; error: number; distanceFromCamera: number }): void };
+  try {
+    runtime.update(); const target = { inView: false, error: 0, distanceFromCamera: 999 };
+    renderer.calculateTileViewError(tile, target);
+    expect(target.inView).toBe(true); expect(target.error).toBeCloseTo(runtime.tiles.errorTarget * 32 / 8 * 1.001);
+    demand.supportRequired = false;
+    renderer.calculateTileViewError(tile, target); expect(target.inView).toBe(false);
+  } finally { runtime.dispose(); }
+});

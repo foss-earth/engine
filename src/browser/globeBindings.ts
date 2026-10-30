@@ -180,8 +180,8 @@ export function createBrowserGlobeBindings(options: BrowserGlobeBindingOptions) 
         },
         createTerrainLoader(source, onBytes, trackMemory, onPreparationMs) {
           if (disposed) throw new Error("Browser globe bindings have retired.");
-          const onPage = (blob: Blob) => createTerrainImageDecoder({ createImageBitmap: (body, decodeOptions) => realm.window.createImageBitmap(body, decodeOptions),
-            createCanvas: options.createCanvas, nowMs: () => options.clock.nowMs(), limits: createTerrainImageDecodeLimits(settings), onDecodeCpu: onPreparationMs })(blob);
+          const onPage = createTerrainImageDecoder({ createImageBitmap: (body, decodeOptions) => realm.window.createImageBitmap(body, decodeOptions),
+            createCanvas: options.createCanvas, nowMs: () => options.clock.nowMs(), limits: createTerrainImageDecodeLimits(settings), onDecodeCpu: onPreparationMs });
           const actual = createTerrainTileLoader<Blob, AbortSignal>({ source, onBytes, trackMemory, limits: options.terrainLoaderLimits,
             // Downloads go on while workers decode; tiles decoded on the page keep their download slot.
             decodeSlots: () => terrainWorkers?.capacity() ?? 0,

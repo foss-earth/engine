@@ -12,6 +12,14 @@ function compare(data, size) {
   if (!(actual instanceof Float32Array) || actual.length !== expected.length
     || !Buffer.from(actual.buffer, actual.byteOffset, actual.byteLength).equals(Buffer.from(expected.buffer, expected.byteOffset, expected.byteLength))) throw new Error("raster-WASM differs from raster-TS height bytes");
   if (!Buffer.from(data).equals(input)) throw new Error("WASM decoder changed the caller's input");
+  for (const decode of [decodeTerrarium, core.decodeTerrarium]) {
+    const owned = new Uint8ClampedArray(new ArrayBuffer(data.byteOffset + data.byteLength), data.byteOffset, data.length);
+    owned.set(data);
+    const reused = decode(owned, size, true);
+    if (!Buffer.from(reused.buffer, reused.byteOffset, reused.byteLength).equals(Buffer.from(expected.buffer, expected.byteOffset, expected.byteLength))) throw new Error("Consumed RGBA decode differs from reference heights");
+    if ((reused.buffer === owned.buffer) !== ((owned.byteOffset & 3) === 0)) throw new Error("Consumed RGBA decode did not honor storage alignment");
+    if ((owned.byteOffset & 3) !== 0 && !Buffer.from(owned).equals(input)) throw new Error("Unaligned RGBA fallback changed input");
+  }
   comparedPixels += expected.length; cases++;
 }
 // All 2^24 RGB colours, in bounded 256x256 batches rather than giant buffers.
@@ -38,7 +46,7 @@ for (const alpha of [0, 1, 127, 254]) {
   failures++;
 }
 const result = { implementation: "raster-WASM (Rust) versus raster-TS, the built @foss-earth/engine/raster-TS", wasmSha256: sha(bytes), cases, comparedPixels,
-  alphaFailureCases: failures, outputBytes: "identical", inputOwnership: "unchanged", performanceClaim: false };
+  alphaFailureCases: failures, outputBytes: "identical", inputOwnership: "unchanged by default; aligned consume mode identical in both twins", performanceClaim: false };
 mkdirSync(new URL("../../build/raster-WASM/", import.meta.url), { recursive: true });
 writeFileSync(new URL("../../build/raster-WASM/raster-parity.json", import.meta.url), JSON.stringify(result, null, 2) + "\n");
 console.log(JSON.stringify(result, null, 2));

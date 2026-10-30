@@ -52,6 +52,20 @@ function expectCover(selection: TerrainSelection): void {
 }
 
 describe("terrain selection by screen-space error", () => {
+  it("finishes required regional levels before spending a small tile budget on extra visual detail", () => {
+    const near: TileId = { z: 8, x: 48, y: 100 };
+    const far: TileId = { z: 8, x: 78, y: 100 };
+    const selection = selectTerrain(input(OVERHEAD, {
+      targetPx: 0.001, maxTiles: 52,
+      regionRequirement: tile => tileContains(tile, near) ? { level: 8, priority: 0 }
+        : tileContains(tile, far) ? { level: 8, priority: 1 } : null,
+    }));
+    for (const target of [near, far]) {
+      expect(selection.leaves.some(leaf => tileContains(target, leaf.tile)), JSON.stringify(target)).toBe(true);
+    }
+    expect(selection.leaves.length).toBeLessThanOrEqual(52);
+    expectCover(selection);
+  });
   it("keeps only the root level without a camera", () => {
     const selection = selectTerrain(input(null));
     expect(selection.leaves).toHaveLength(16);

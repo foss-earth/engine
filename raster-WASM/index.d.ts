@@ -1,6 +1,6 @@
 export interface RasterCore {
-  /** Returns an owned copy; malformed input and WASM failures throw. No JavaScript fallback. */
-  decodeTerrarium(data: Uint8ClampedArray, size: number): Float32Array;
+  /** Returns an owned copy by default. reuseInput consumes aligned caller RGBA storage. Never borrows WASM memory. */
+  decodeTerrarium(data: Uint8ClampedArray, size: number, reuseInput?: boolean): Float32Array;
 }
 
 /** Lazy, shared loading of this package's single-threaded WASM artifact. */

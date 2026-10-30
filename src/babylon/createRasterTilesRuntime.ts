@@ -23,10 +23,12 @@ import {
   type BaseTexture,
 } from "@babylonjs/core";
 
-import { sampleTerrainGrid, type TerrainGrid, type TerrainSource } from "../terrain/terrainGrid.js";
+import { resolveTerrainSource, sampleTerrainGrid, type TerrainGrid, type TerrainSource } from "../terrain/terrainGrid.js";
 import { GLOBAL_TERRAIN } from "../terrain/globalTerrain.js";
 import { createRasterSurfaceSampler } from "./rasterSurfaceSampler.js";
 import type { SurfaceHit } from "../surface/contracts.js";
+import { terrainRegionCellCorners, terrainRegionTilePriority, terrainRegionSupportTilePriority, type TerrainRegionDemand, type TerrainRegionOutlineSink } from "./terrainRegionBounds.js";
+import type { TerrainRegionCoverage } from "../surface/terrainRegion.js";
 import type { SurfaceOwnerChange } from "../surface/currentReadiness.js";
 import type { TerrainPerformanceCapture } from "../terrain/terrainPerformanceCapture.js";
 import { retryDelayMs, type RetryDelay } from "../terrain/retryDelay.js";
@@ -43,6 +45,7 @@ import type { ImageryLoader } from "../terrain/imagery/imageryResidency.js";
 import type { RasterBaseMapSource } from "../map/rasterBaseMaps.js";
 import type { SettingsRegistry } from "@foss-earth/ui/settings";
 import { IMAGERY_LIMIT_IDS, IMAGERY_TUNING_IDS, imageryLimitsFrom, imageryTuningFrom } from "../settings/imageryParameters.js";
+import { attachTerrainRegionHighlight } from "./terrainRegionHighlight.js";
 import { readImageryView, imageryViewChanged } from "./imagery/imageryView.js";
 import type { ImageryView } from "../terrain/imagery/imageryGeometry.js";
 import { selectTerrain, TERRAIN_PROXIMITY_DEFAULTS, type TerrainFocus, type TerrainLeaf, type TerrainProximityConfig, type TerrainRefinePoint, type TerrainSelection } from "../terrain/terrainSelector.js";
@@ -139,6 +142,7 @@ export interface RasterTilesRuntimeOptions {
    */
   getRefinePoint?: () => { x: number; y: number; z: number } | null;
   /** Orbit focus for proximity, independent of the LOS refine-point choice. */
+  getTerrainRegions?: () => readonly TerrainRegionDemand[];
   getProximityFocusPoint?: () => { x: number; y: number; z: number } | null;
   /** Called when automatic adjustment moves detail, for the host's log. */
   onDetailAdjusted?: (decision: AutoDetailDecision) => void;
@@ -191,6 +195,12 @@ export interface RasterTilesRuntime {
    */
   setSuspended(suspended: boolean): void;
   getMetrics(): RasterTileMetrics;
+  /**
+   * The region's tiles at a tier's elevation level, or at the finest the
+   * elevation source and the finest terrain level allow. `outline` receives
+   * the box of each tile still to load.
+   */
+  getRegionCoverage(demand: TerrainRegionDemand, tier: "minimum" | "final", outline?: TerrainRegionOutlineSink): TerrainRegionCoverage;
   getRevision(): number;
   sample(latDeg: number, lonDeg: number): SurfaceHit | null;
   /** Height-only contact query; avoids building point/normal objects for decoded grids. */
@@ -319,6 +329,8 @@ function createTileRecord(
   const material = new StandardMaterial(`raster-basemap-material-${source.id}-${key}`, scene);
   // Shows the tile's imagery under the scene's terrain light, when a sky model sets one.
   options.attachTerrainLighting(material);
+  // Its surface inside a shown aircraft region is tinted red.
+  attachTerrainRegionHighlight(material);
   const record: RasterTileRecord = {
     key,
     tile,
@@ -897,6 +909,8 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
   // What the last terrain selection was made from, and what it chose.
   let selectionDirty = true;
   let selectedView: ImageryView | null = null;
+  let selectedRegions = "";
+  let regionDemands: readonly TerrainRegionDemand[] = [];
   let selectedFocus: TerrainFocus | null = null;
   let selectedRefine: TerrainRefinePoint | null = null;
   let selectedProximity: TerrainProximityConfig | undefined;
@@ -959,7 +973,8 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
     let { z, x, y } = tile;
     for (;;) {
       const record = cache.get(`${z}/${x}/${y}`);
-      if (record?.heightBounds && (record.grid || (options.getSurfaceHeightMeters && record.loaded))) return record.heightBounds;
+      if (record?.heightBounds && record.appliedTerrainGeneration === terrainGeneration
+        && ((record.grid && record.grid !== GLOBAL_TERRAIN) || (options.getSurfaceHeightMeters && record.loaded))) return record.heightBounds;
       if (z === 0) return null;
       z -= 1; x >>= 1; y >>= 1;
     }
@@ -1468,10 +1483,9 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
   function evictIfNeeded(): void {
     if (!evictionDirty) return;
     evictionDirty = false;
-    const baseMax = Math.round(setting("map.terrain.cachedTiles"));
-    const maxCachedTiles = isRobustOrbitLOD()
-      ? Math.max(baseMax, Math.round(setting("map.terrain.maxTiles") * 2))
-      : baseMax;
+    // Required/displayed tiles and their ancestors are protected below. Do
+    // not silently enlarge the budget for unrelated historical tiles.
+    const maxCachedTiles = Math.round(setting("map.terrain.cachedTiles"));
     if (cache.size <= maxCachedTiles) return;
     const candidates: Array<{ key: string; tick: number }> = [];
     for (const [key, record] of cache) {
@@ -1717,6 +1731,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
     selectedSinceDrop = true;
     heightsArrived = false;
     selectedView = view;
+    selectedRegions = JSON.stringify(regionDemands.map(d => [d.region, d.final, d.supportRequired]));
     selectedFocus = focus;
     selectedRefine = refine;
     selectedProximity = proximity;
@@ -1740,6 +1755,17 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
       previous: previous && { split: previous.split, leaves: new Set(previous.leaves.map(leaf => leaf.key)) },
       robustOrbitLOD: isRobustOrbitLOD(),
       proximity,
+      regionRequirement: (tile, heights) => {
+        let level = -1, priority = Infinity;
+        for (const demand of regionDemands) {
+          const rank = terrainRegionTilePriority(demand, tile, heights);
+          const support = terrainRegionSupportTilePriority(demand, tile, heights);
+          if (rank === null && support === null) continue;
+          level = Math.max(level, rank === null ? demand.minimum.rasterZoom : demand.final.rasterZoom);
+          priority = Math.min(priority, rank ?? support!);
+        }
+        return level < 0 ? null : { level, priority };
+      },
       boundsFor: tile => {
         const bounds = knownHeightBounds(tile);
         return bounds ? { min: bounds.min - 50, max: bounds.max + 50 } : { min: -500, max: 9000 };
@@ -1782,7 +1808,10 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
   function captureResources(now: number): void {
     if (!capture?.needsResources(now)) return;
     let cachedTriangles = 0, adoptedTriangles = 0, meshBytes = 0, textureBytes = 0;
+    const grids: TerrainGrid[] = [], seen = new Set<TerrainGrid>(), buffers = new Set<ArrayBufferLike>();
     for (const record of cache.values()) {
+      if (record.grid) grids.push(record.grid);
+      if (record.decodedGrid) grids.push(record.decodedGrid);
       const triangles = record.mesh.getTotalIndices() / 3;
       cachedTriangles += triangles;
       if (visibleTileKeys.has(record.key)) adoptedTriangles += triangles;
@@ -1795,14 +1824,48 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
       }
     }
     textureBytes += imageryRuntime?.getDiagnostics().atlas?.estimatedGpuBytes ?? 0;
+    for (let grid = grids.pop(); grid; grid = grids.pop()) {
+      if (seen.has(grid)) continue;
+      seen.add(grid); buffers.add(grid.heights.buffer);
+      grids.push(...grid.neighbors ?? []);
+    }
+    const retainedDemBytes = [...buffers].reduce((sum, buffer) => sum + buffer.byteLength, 0);
     const dem = terrain.getMetrics();
     capture.recordResources({ adoptedTiles: visibleTileKeys.size, cachedTiles: cache.size, adoptedTriangles,
-      cachedTriangles, meshBytes, textureBytes, decodedDemBytes: dem.decodedBytes, pendingTiles: loadingCount,
+      cachedTriangles, meshBytes, textureBytes, decodedDemBytes: dem.decodedBytes, retainedDemBytes, pendingTiles: loadingCount,
       activeDemRequests: dem.active, queuedDemRequests: dem.queued }, now);
   }
 
   return {
     get source(): RasterBaseMapSource { return imagerySource; },
+    getRegionCoverage(demand, tier, outline) {
+      const result: TerrainRegionCoverage = { readyTiles: 0, totalTiles: 0, pendingTiles: 0, unavailable: false };
+      // The finest elevation shown here: tiles stop at the finest terrain level,
+      // a tile's heights come `coarserElevation` levels up, and the source's
+      // last level serves every finer one. A target beyond them is not waited for.
+      const level = Math.min(demand[tier].rasterZoom, zoomLimits().maxZoom ?? 18);
+      const required = Math.min(Math.max(0, level - Math.max(0, Math.round(setting("map.terrain.coarserElevation")))), resolveTerrainSource(terrainSource).maxZoom);
+      if (!selection || selectedRegions !== JSON.stringify((options.getTerrainRegions?.() ?? []).map(d => [d.region, d.final, d.supportRequired]))) {
+        result.totalTiles = result.pendingTiles = 1; return result;
+      }
+      for (const leaf of selection.leaves) {
+        const bounds = knownHeightBounds(leaf.tile) ?? { min: -500, max: 9000 };
+        if (terrainRegionTilePriority(demand, leaf.tile, bounds) === null) continue;
+        result.totalTiles++;
+        let { z, x, y } = leaf.tile;
+        let ready = false;
+        while (z >= selection.rootLevel) {
+          const key = `${z}/${x}/${y}`, record = cache.get(key);
+          if (record && visibleTileKeys.has(key) && record.loaded && !record.failed
+            && record.appliedTerrainGeneration === terrainGeneration && !dirtyGeometryKeys.has(key)
+            && (record.mesh.metadata.terrainZoom ?? -1) >= required) { ready = true; break; }
+          z--; x = Math.floor(x / 2); y = Math.floor(y / 2);
+        }
+        if (ready) result.readyTiles++;
+        else { result.pendingTiles++; outline?.(terrainRegionCellCorners(leaf.tile, bounds)); }
+      }
+      return result;
+    },
     hasPendingTiles() {
       if (loadingCount > 0) return true;
       for (const key of neededKeys) {
@@ -1831,6 +1894,8 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
       if (disposed || suspended) return;
       const started = capture ? options.nowMs() : 0, oldRevision = revision;
       const previousPreparation = capture?.counters.preparationCpuMs ?? 0;
+      regionDemands = options.getTerrainRegions?.() ?? [];
+      if (JSON.stringify(regionDemands.map(d => [d.region, d.final, d.supportRequired])) !== selectedRegions) selectionDirty = true;
       const view = readImageryView(options.scene, options.worldRoot ?? null);
       const focus = terrainFocus(view);
       const refine = terrainRefine(view);

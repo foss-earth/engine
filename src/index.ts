@@ -42,6 +42,7 @@ export * from "./camera/cameraDefaults.js";
 export * from "./input/globeIntentMotion.js";
 export * from "./visualization/index.js";
 export * from "./surface/terrainPreparation.js";
+export * from "./surface/terrainRegion.js";
 export * from "./navigation/globeOverview.js";
 
 export { navigationCurveShare, createNavigationSpeedAxis, DEFAULT_NAVIGATION_SPEED_CURVE, type NavigationSpeedCurve } from "./input/navigationSpeedCurve.js";

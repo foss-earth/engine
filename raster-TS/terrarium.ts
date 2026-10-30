@@ -1,9 +1,11 @@
 /** Terrarium RGB to metres: the TypeScript twin of raster-WASM's Rust decoder. */
 const LITTLE_ENDIAN = new Uint8Array(new Uint32Array([0x0a0b0c0d]).buffer)[0] === 0x0d;
 
-export function decodeTerrarium(data: Uint8ClampedArray, size: number): Float32Array {
+/** reuseInput consumes aligned RGBA storage; the default preserves caller bytes. */
+export function decodeTerrarium(data: Uint8ClampedArray, size: number, reuseInput = false): Float32Array {
   if (data.length !== size * size * 4) throw new Error("Invalid terrain image dimensions");
-  const heights = new Float32Array(size * size);
+  const heights = reuseInput && (data.byteOffset & 3) === 0
+    ? new Float32Array(data.buffer, data.byteOffset, size * size) : new Float32Array(size * size);
   // One little-endian word per pixel. The float32 heights match the byte formula
   // for every colour; an unaligned view keeps the byte formula.
   if (LITTLE_ENDIAN && (data.byteOffset & 3) === 0) {
