@@ -121,8 +121,6 @@ class TerrainLightDefines extends MaterialDefines {
   TERRAIN_LIGHT = false;
   /** The Sun's and the Moon's height found at each pixel's place, rather than one factor for all. */
   TERRAIN_LIGHT_PER_POINT = false;
-  /** Local lights the shader evaluates, such as an aircraft's landing lights. */
-  TERRAIN_LOCAL_LIGHTS = 0;
   /** Night lights read from a map of the radiance a satellite saw, at each pixel's place. */
   TERRAIN_NIGHT_LIGHTS = false;
 }
@@ -243,18 +241,16 @@ function getTerrainNightLightMap(scene: Scene): TerrainNightLightMap | null {
 
 /**
  * Sets the local lights terrain is lit by, at most `TERRAIN_LOCAL_LIGHTS_MAX`.
- * A change in their number recompiles; moving or dimming them is uniforms.
- * They show only while a terrain light is set. Returns whether anything
- * changed.
+ * Their number, places and brightness are uniforms: the shader evaluates as
+ * many as are set, none without any, and never recompiles for them. They
+ * show only while a terrain light is set. Returns whether anything changed.
  */
 function setTerrainLocalLights(scene: Scene, lights: readonly TerrainLocalLight[]): boolean {
   const light = sceneLight(scene);
   // A shader's smoothstep is undefined when its edges meet: a light every way gets an edge of its own.
   const next = lights.slice(0, TERRAIN_LOCAL_LIGHTS_MAX).map(local => ({ ...local, cosInner: Math.max(local.cosInner, local.cosOuter + BEAM_EDGE_COSINE) }));
   if (next.length === 0 && light.local.length === 0) return false;
-  const recount = next.length !== light.local.length;
   light.local = next;
-  if (recount) for (const plugin of light.plugins) plugin.markAllDefinesAsDirty();
   return true;
 }
 
@@ -420,15 +416,14 @@ vec3 terrainLightAt(vec3 positionW) {
   light += terrainGroundLight(dot(up, terrainLightSun.xyz)) * terrainLightSunScale.rgb
     + terrainGroundLight(dot(up, terrainLightMoon.xyz)) * terrainLightMoonScale.rgb;
 #endif
-#if TERRAIN_LOCAL_LIGHTS > 0
-  for (int i = 0; i < TERRAIN_LOCAL_LIGHTS; i++) {
+  for (int i = 0; i < ${TERRAIN_LOCAL_LIGHTS_MAX}; i++) {
+    if (float(i) >= terrainLightAmbient.w) break;
     vec3 toLight = terrainLocalPosition[i].xyz - positionW;
     float squared = max(dot(toLight, toLight), 1.0);
     vec3 l = toLight * inversesqrt(squared);
     float spot = smoothstep(terrainLocalDirection[i].w, terrainLocalFactor[i].w, -dot(l, terrainLocalDirection[i].xyz));
     light += terrainLocalFactor[i].rgb * (spot * max(dot(up, l), 0.0) / squared);
   }
-#endif
   return light;
 }
 ${GLSL_NIGHT}
@@ -455,15 +450,14 @@ fn terrainLightAt(positionW: vec3f) -> vec3f {
   light = light + terrainGroundLight(dot(up, uniforms.terrainLightSun.xyz)) * uniforms.terrainLightSunScale.rgb
     + terrainGroundLight(dot(up, uniforms.terrainLightMoon.xyz)) * uniforms.terrainLightMoonScale.rgb;
 #endif
-#if TERRAIN_LOCAL_LIGHTS > 0
-  for (var i = 0; i < TERRAIN_LOCAL_LIGHTS; i++) {
+  for (var i = 0; i < ${TERRAIN_LOCAL_LIGHTS_MAX}; i++) {
+    if (f32(i) >= uniforms.terrainLightAmbient.w) { break; }
     let toLight = uniforms.terrainLocalPosition[i].xyz - positionW;
     let squared = max(dot(toLight, toLight), 1.0);
     let l = toLight * inverseSqrt(squared);
     let spot = smoothstep(uniforms.terrainLocalDirection[i].w, uniforms.terrainLocalFactor[i].w, -dot(l, uniforms.terrainLocalDirection[i].xyz));
     light = light + uniforms.terrainLocalFactor[i].rgb * (spot * max(dot(up, l), 0.0) / squared);
   }
-#endif
   return light;
 }
 ${WGSL_NIGHT}
@@ -476,6 +470,7 @@ const UNIFORMS: ReadonlyArray<readonly [string, number]> = [
   ["terrainLightMoon", 0],
   ["terrainLightSunScale", 0],
   ["terrainLightMoonScale", 0],
+  // The light every point has in rgb, and in w the number of local lights: the shader stops at it, so their number is no define.
   ["terrainLightAmbient", 0],
   ["terrainLightTable", GROUND_LIGHT_SAMPLES],
   ["terrainLocalPosition", TERRAIN_LOCAL_LIGHTS_MAX],
@@ -596,7 +591,6 @@ class TerrainLightMaterialPlugin extends MaterialPluginBase {
     const lighting = this.light.lighting;
     defines.TERRAIN_LIGHT = lighting !== null;
     defines.TERRAIN_LIGHT_PER_POINT = lighting?.perPoint ?? false;
-    defines.TERRAIN_LOCAL_LIGHTS = lighting ? this.light.local.length : 0;
     defines.TERRAIN_NIGHT_LIGHTS = hasNightLights(this.light);
   }
 
@@ -627,20 +621,23 @@ class TerrainLightMaterialPlugin extends MaterialPluginBase {
     vec("terrainLightMoon", lighting.moonDirection);
     vec("terrainLightSunScale", lighting.sunScale);
     vec("terrainLightMoonScale", lighting.moonScale);
-    vec("terrainLightAmbient", lighting.ambient);
+    const local = this.light.local;
+    writeFloat4(uniformBuffer, cached, "terrainLightAmbient", lighting.ambient[0], lighting.ambient[1], lighting.ambient[2], local.length);
     writeFloatArray(uniformBuffer, cached, "terrainLightTable", lighting.table);
-    const { position, direction, factor } = this.localArrays;
-    position.fill(0);
-    direction.fill(0);
-    factor.fill(0);
-    this.light.local.forEach((light, index) => {
-      position.set([light.position[0] - eye.x, light.position[1] - eye.y, light.position[2] - eye.z, 0], index * 4);
-      direction.set([light.direction[0], light.direction[1], light.direction[2], light.cosOuter], index * 4);
-      factor.set([light.factor[0], light.factor[1], light.factor[2], light.cosInner], index * 4);
-    });
-    writeFloatArray(uniformBuffer, cached, "terrainLocalPosition", position);
-    writeFloatArray(uniformBuffer, cached, "terrainLocalDirection", direction);
-    writeFloatArray(uniformBuffer, cached, "terrainLocalFactor", factor);
+    // The shader reads only the local lights the ambient's w counts: entries past them are left as they were, and none are written without any.
+    if (local.length > 0) {
+      const { position, direction, factor } = this.localArrays;
+      for (let index = 0; index < local.length; index++) {
+        const lamp = local[index];
+        const at = index * 4;
+        position[at] = lamp.position[0] - eye.x; position[at + 1] = lamp.position[1] - eye.y; position[at + 2] = lamp.position[2] - eye.z;
+        direction[at] = lamp.direction[0]; direction[at + 1] = lamp.direction[1]; direction[at + 2] = lamp.direction[2]; direction[at + 3] = lamp.cosOuter;
+        factor[at] = lamp.factor[0]; factor[at + 1] = lamp.factor[1]; factor[at + 2] = lamp.factor[2]; factor[at + 3] = lamp.cosInner;
+      }
+      writeFloatArray(uniformBuffer, cached, "terrainLocalPosition", position);
+      writeFloatArray(uniformBuffer, cached, "terrainLocalDirection", direction);
+      writeFloatArray(uniformBuffer, cached, "terrainLocalFactor", factor);
+    }
     const night = lighting.night;
     const map = this.light.nightMap;
     if (!night || !map) return;

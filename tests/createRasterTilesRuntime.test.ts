@@ -674,10 +674,10 @@ describe("raster imagery and terrain lifecycle", () => {
         const material = mesh.material as StandardMaterial;
         const plugin = material.pluginManager?.getPlugin("TerrainLight") as { prepareDefines(defines: Record<string, unknown>): void; getCustomCode(shaderType: string): Record<string, string> | null } | null;
         expect(plugin, mesh.name).toBeTruthy();
-        const defines = { TERRAIN_LIGHT: false, TERRAIN_LIGHT_PER_POINT: false, TERRAIN_LOCAL_LIGHTS: 0, TERRAIN_NIGHT_LIGHTS: false };
+        const defines = { TERRAIN_LIGHT: false, TERRAIN_LIGHT_PER_POINT: false, TERRAIN_NIGHT_LIGHTS: false };
         plugin!.prepareDefines(defines);
-        // The light is on, including a local light, and it never injects a vertex shader.
-        expect(defines, mesh.name).toEqual({ TERRAIN_LIGHT: true, TERRAIN_LIGHT_PER_POINT: true, TERRAIN_LOCAL_LIGHTS: 1, TERRAIN_NIGHT_LIGHTS: false });
+        // The light is on, with a local light, which is uniforms and no define, and it never injects a vertex shader.
+        expect(defines, mesh.name).toEqual({ TERRAIN_LIGHT: true, TERRAIN_LIGHT_PER_POINT: true, TERRAIN_NIGHT_LIGHTS: false });
         expect(plugin!.getCustomCode("vertex"), mesh.name).toBeNull();
         const fragment = Object.values(plugin!.getCustomCode("fragment") ?? {}).join("\n");
         expect(fragment, mesh.name).not.toMatch(/\bvNormal\b|normalW/);

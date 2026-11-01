@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEG_TO_RAD, geodeticToEcef, WGS84_E2 } from "../src/camera/cameraMath.js";
 import { mercatorXY, nightPixelAt } from "@foss-earth/sky";
 import { GROUND_LIGHT_LEAST_SINE, GROUND_LIGHT_SAMPLES, groundLightTableElevationDeg, groundLightWeight } from "@foss-earth/sky";
-import { isMaterialOfClass, type TerrainLighting, type TerrainLocalLight, type TerrainNightLighting, type TerrainNightLightMap } from "../src/babylon/imagery/terrainLightPlugin.js";
+import { isMaterialOfClass, TERRAIN_LOCAL_LIGHTS_MAX, type TerrainLighting, type TerrainLocalLight, type TerrainNightLighting, type TerrainNightLightMap } from "../src/babylon/imagery/terrainLightPlugin.js";
 import { GROUND_LIGHT_TABLE, MERCATOR_MAX_LAT_DEG, NIGHT_RADIANCE_UNITS, groundLightAt } from "@foss-earth/sky";
 import { createTerrainLightingFixture } from "../fixtures/composition/terrainLightHost.js";
 const { MaterialPlugin: TerrainLightMaterialPlugin, followTerrainLight, getTerrainLighting, getTerrainLocalLights,
@@ -123,13 +123,13 @@ describe("terrain light", () => {
   it("leaves the shader untouched without a light, and declares its uniforms in both shader languages", () => {
     const target = scene();
     const plugin = new TerrainLightMaterialPlugin(new StandardMaterial("terrain", target));
-    const defines = { TERRAIN_LIGHT: true, TERRAIN_LIGHT_PER_POINT: true, TERRAIN_LOCAL_LIGHTS: 3, TERRAIN_NIGHT_LIGHTS: true };
+    const defines = { TERRAIN_LIGHT: true, TERRAIN_LIGHT_PER_POINT: true, TERRAIN_NIGHT_LIGHTS: true };
     plugin.prepareDefines(defines as never);
-    expect(defines).toEqual({ TERRAIN_LIGHT: false, TERRAIN_LIGHT_PER_POINT: false, TERRAIN_LOCAL_LIGHTS: 0, TERRAIN_NIGHT_LIGHTS: false });
+    expect(defines).toEqual({ TERRAIN_LIGHT: false, TERRAIN_LIGHT_PER_POINT: false, TERRAIN_NIGHT_LIGHTS: false });
     setTerrainLighting(target, lighting());
     setTerrainLocalLights(target, [{ position: [0, 0, 0], direction: [0, -1, 0], cosInner: 0.9, cosOuter: 0.8, factor: [1, 1, 1] }]);
     plugin.prepareDefines(defines as never);
-    expect(defines).toEqual({ TERRAIN_LIGHT: true, TERRAIN_LIGHT_PER_POINT: true, TERRAIN_LOCAL_LIGHTS: 1, TERRAIN_NIGHT_LIGHTS: false });
+    expect(defines).toEqual({ TERRAIN_LIGHT: true, TERRAIN_LIGHT_PER_POINT: true, TERRAIN_NIGHT_LIGHTS: false });
 
     expect(plugin.getCustomCode("vertex")).toBeNull();
     for (const language of [ShaderLanguage.GLSL, ShaderLanguage.WGSL]) {
@@ -248,6 +248,44 @@ describe("terrain light", () => {
     expect(dirty).not.toHaveBeenCalled();
   });
 
+  it("counts its local lights in a uniform: their number changing recompiles nothing, and the shader stops at it", () => {
+    const target = scene();
+    const plugin = new TerrainLightMaterialPlugin(new StandardMaterial("terrain", target));
+    setTerrainLighting(target, lighting({ ambient: [0.1, 0.2, 0.3] }));
+    const dirty = vi.spyOn(plugin, "markAllDefinesAsDirty");
+    const lamp = (x: number): TerrainLocalLight => ({ position: [x, 2, 3], direction: [0, -1, 0], cosInner: 0.9, cosOuter: 0.8, factor: [4, 5, 6] });
+    const buffer = { updateFloat4: vi.fn(), updateFloatArray: vi.fn() };
+    const bind = () => {
+      buffer.updateFloat4.mockClear(); buffer.updateFloatArray.mockClear();
+      plugin.bindForSubMesh(buffer as unknown as UniformBuffer);
+      const ambient = buffer.updateFloat4.mock.calls.find(([name]) => name === "terrainLightAmbient");
+      return { count: ambient?.[4] as number | undefined, arrays: buffer.updateFloatArray.mock.calls.map(([name]) => name as string).filter(name => name.startsWith("terrainLocal")) };
+    };
+    // None: a count of none, and no arrays.
+    expect(bind()).toEqual({ count: 0, arrays: [] });
+    expect(setTerrainLocalLights(target, [lamp(1), lamp(2)])).toBe(true);
+    expect(bind()).toEqual({ count: 2, arrays: ["terrainLocalPosition", "terrainLocalDirection", "terrainLocalFactor"] });
+    // Going back to none is the count alone: the shader reads no entry past it.
+    expect(setTerrainLocalLights(target, [])).toBe(true);
+    expect(bind()).toEqual({ count: 0, arrays: [] });
+    expect(setTerrainLocalLights(target, [])).toBe(false);
+    expect(setTerrainLocalLights(target, [lamp(1), lamp(2), lamp(3), lamp(4), lamp(5)])).toBe(true);
+    expect(bind().count).toBe(4);
+    expect(dirty).not.toHaveBeenCalled();
+    // Every shader loops to the most there can be, and stops at the count.
+    const engine = target.getEngine() as unknown as { webGLVersion: number };
+    Object.defineProperty(engine, "webGLVersion", { value: 1, configurable: true });
+    const walked = plugin.getCustomCode("fragment", ShaderLanguage.GLSL)!.CUSTOM_FRAGMENT_DEFINITIONS;
+    Object.defineProperty(engine, "webGLVersion", { value: 2, configurable: true });
+    const indexed = plugin.getCustomCode("fragment", ShaderLanguage.GLSL)!.CUSTOM_FRAGMENT_DEFINITIONS;
+    for (const code of [walked, indexed]) {
+      expect(code).toContain(`for (int i = 0; i < ${TERRAIN_LOCAL_LIGHTS_MAX}; i++) {\n    if (float(i) >= terrainLightAmbient.w) break;`);
+    }
+    const wgsl = plugin.getCustomCode("fragment", ShaderLanguage.WGSL)!.CUSTOM_FRAGMENT_DEFINITIONS;
+    expect(wgsl).toContain(`for (var i = 0; i < ${TERRAIN_LOCAL_LIGHTS_MAX}; i++) {\n    if (f32(i) >= uniforms.terrainLightAmbient.w) { break; }`);
+    for (const code of [walked, indexed, wgsl]) expect(code).not.toContain("TERRAIN_LOCAL_LIGHTS");
+  });
+
   it("puts unlit materials from a source such as Google 3D Tiles under the light once, and leaves lit ones to the scene's lights", () => {
     const target = scene();
     const unlit = new PBRMaterial("unlit tile", target);
@@ -292,7 +330,7 @@ describe("terrain light", () => {
     const target = scene();
     const plugin = new TerrainLightMaterialPlugin(new StandardMaterial("terrain", target));
     const dirty = vi.spyOn(plugin, "markAllDefinesAsDirty");
-    const defines = { TERRAIN_LIGHT: false, TERRAIN_LIGHT_PER_POINT: false, TERRAIN_LOCAL_LIGHTS: 0, TERRAIN_NIGHT_LIGHTS: false };
+    const defines = { TERRAIN_LIGHT: false, TERRAIN_LIGHT_PER_POINT: false, TERRAIN_NIGHT_LIGHTS: false };
     setTerrainLighting(target, lighting());
     expect(dirty).toHaveBeenCalledTimes(1);
     const map = nightMap();
@@ -462,7 +500,7 @@ baseColor.rgb = pow(pow(baseColor.rgb, vec3(2.2)) * (terrainLightAt(vPositionW) 
 
     setTerrainLighting(target, { ...shown, ambient: [0, 0, 0] });
     plugin.bindForSubMesh(buffer as unknown as UniformBuffer);
-    expect(buffer.updateFloat4).toHaveBeenLastCalledWith("terrainLightAmbient", 0, 0, 0, 0);
+    expect(buffer.updateFloat4).toHaveBeenLastCalledWith("terrainLightAmbient", 0, 0, 0, 1);
     setTerrainLighting(target, { ...shown, ambient: [-0, 0, 0] });
     plugin.bindForSubMesh(buffer as unknown as UniformBuffer);
     const ambient = buffer.updateFloat4.mock.calls.at(-1)!;
