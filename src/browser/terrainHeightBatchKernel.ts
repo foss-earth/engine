@@ -1,4 +1,4 @@
-import { sampleTerrainGrid, type TerrainGrid } from "../terrain/terrainGrid.js";
+import { MAX_TERRAIN_NEIGHBORS, sampleTerrainGrid, type TerrainGrid } from "../terrain/terrainGrid.js";
 import { sampleTerrainHeightPixels, unpackTerrainHeightPixels, type TerrainHeightPixels } from "./terrainHeightPixels.js";
 import type { HeightBatchWorkerScope, WasmHeightCore, WasmHeightSampler } from "./terrainHeightBatchProtocol.js";
 
@@ -100,7 +100,7 @@ export function installTerrainHeightBatchKernel(options: {
         if (samples > MAX_BATCH) throw new Error("Height batch exceeds 8192 samples");
         if (batch.sparse) {
           const source = batch.grid as TerrainHeightPixels | undefined;
-          if (!source || !Array.isArray(source.neighbors ?? []) || (source.neighbors?.length ?? 0) > 32) throw new Error("Sparse height snapshot missing");
+          if (!source || !Array.isArray(source.neighbors ?? []) || (source.neighbors?.length ?? 0) > MAX_TERRAIN_NEIGHBORS) throw new Error("Sparse height snapshot missing");
           for (const grid of [source, ...(source.neighbors ?? [])]) {
             if (!Number.isInteger(grid.z) || grid.z < 0 || grid.z > 30 || !Number.isInteger(grid.x) || !Number.isInteger(grid.y)
               || grid.x < 0 || grid.y < 0 || grid.x >= 2 ** grid.z || grid.y >= 2 ** grid.z
@@ -137,7 +137,7 @@ export function installTerrainHeightBatchKernel(options: {
           let source = batch.grid;
           let sourceIds: number[];
           if (batch.sources) {
-            if (!Array.isArray(batch.sources) || !batch.sources.length || batch.sources.length > 33
+            if (!Array.isArray(batch.sources) || !batch.sources.length || batch.sources.length > MAX_TERRAIN_NEIGHBORS + 1
               || (batch.sources.length > 1 && !batch.neighborsPresent)) throw new Error("Invalid height source descriptors");
             const grids = batch.sources.map(value => {
               if (!Number.isSafeInteger(value.sourceId) || value.sourceId < 1) throw new Error("Invalid height source id");
@@ -155,7 +155,7 @@ export function installTerrainHeightBatchKernel(options: {
               return id;
             });
           }
-          if (!source || !Array.isArray(source.neighbors ?? []) || (source.neighbors?.length ?? 0) > 32) throw new Error("Height snapshot missing or invalid");
+          if (!source || !Array.isArray(source.neighbors ?? []) || (source.neighbors?.length ?? 0) > MAX_TERRAIN_NEIGHBORS) throw new Error("Height snapshot missing or invalid");
           const own = (grid: TerrainGrid): TerrainGrid => {
             if (!grid || !Number.isInteger(grid.z) || grid.z < 0 || grid.z > 30 || !Number.isInteger(grid.x) || !Number.isInteger(grid.y)
               || grid.x < 0 || grid.y < 0 || grid.x >= 2 ** grid.z || grid.y >= 2 ** grid.z

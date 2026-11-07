@@ -1,4 +1,4 @@
-import type { TerrainGrid } from "../terrain/terrainGrid.js";
+import { MAX_TERRAIN_NEIGHBORS, type TerrainGrid } from "../terrain/terrainGrid.js";
 import type { HeightBatch, PackedHeightBatches } from "./terrainHeightBatchProtocol.js";
 
 /** Original pixel indices and values, with the original grid dimensions. Empty
@@ -71,7 +71,7 @@ export function collectTerrainHeightPixels(grid: TerrainGrid, coordinates: Float
 
 // A pixel's key is its slot times a unit plus its index, so one numeric sort
 // orders pixels by slot, then index. Supported grids have at most 4096²
-// pixels and 33 slots, so their keys fit 32 bits with a unit of 2^24 and sort
+// pixels and MAX_TERRAIN_NEIGHBORS + 1 slots (under 256), so their keys fit 32 bits with a unit of 2^24 and sort
 // as integers. A batch with any other pixel uses a unit of 2^32, whose keys
 // stay exact doubles for every index below 2^32 and every slot up to 2^20.
 const NARROW = 2 ** 24, WIDE = 2 ** 32;
@@ -153,7 +153,7 @@ export function unpackTerrainHeightPixels(packed: PackedHeightBatches): HeightBa
     const gridId = table[at], pairs = table[at + 1], count = table[at + 2], present = table[at + 3];
     at += 4;
     if (at > table.length || !Number.isSafeInteger(pairs) || pairs < 1 || xy + pairs * 2 > coordinates.length
-      || !Number.isSafeInteger(count) || count < 1 || count > 33 || (present !== 0 && present !== 1) || (count > 1 && !present)
+      || !Number.isSafeInteger(count) || count < 1 || count > MAX_TERRAIN_NEIGHBORS + 1 || (present !== 0 && present !== 1) || (count > 1 && !present)
       || at + count * 5 > table.length) throw new Error("Invalid packed height batch");
     const sources: TerrainHeightPixels[] = [];
     for (let i = 0; i < count; i++, at += 5) {

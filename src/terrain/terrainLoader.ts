@@ -1,7 +1,32 @@
 import { MAPTERHORN, type TerrainSource, type TerrainTile, type TerrainGrid } from "./terrainGrid.js";
 import type { NavigationAbortController, NavigationAbortSignal } from "../navigation/navigationLease.js";
 
-export interface TerrainLoaderLimits { maxConcurrent: number; cacheEntries: number; timeoutMs: number }
+export interface TerrainLoaderLimits {
+  maxConcurrent: number;
+  cacheEntries: number;
+  timeoutMs: number;
+  /**
+   * A patch keeps of each neighbour at its own zoom only the band along the
+   * shared edge, 1/2^levels of it wide, as sub-tiles (audit L6): 2 keeps a
+   * quarter, 20 grids a patch; 4 a sixteenth, 68 grids, the most every
+   * reader takes (MAX_TERRAIN_NEIGHBORS), TypeScript and WebAssembly. 0 or
+   * absent keeps whole neighbours. Heights read are the same either way.
+   */
+  neighborBandLevels?: number;
+  /**
+   * The most bytes of heights the cache keeps of tiles it has loaded, oldest
+   * used going first, as with `cacheEntries` (audit L6). Tiles still loading
+   * and a tile under a missing one, which shares its ancestor's heights, are
+   * not counted. Absent: no bound but the count.
+   */
+  cacheBytes?: number;
+  /**
+   * The most bytes of downloaded tiles, as the source sent them, kept to be
+   * decoded again without asking the transport, most recently decoded kept
+   * longest (audit L6). Absent or 0: none are kept.
+   */
+  encodedBytes?: number;
+}
 /** Preserved source defaults; hosts may map their named settings to the required limits port. */
 export const DEFAULT_TERRAIN_LOADER_LIMITS: Readonly<TerrainLoaderLimits> = Object.freeze({ maxConcurrent: 16, cacheEntries: 256, timeoutMs: 20000 });
 /**
@@ -61,6 +86,54 @@ export interface TerrainTileLoaderOptions<TBlob, TSignal extends NavigationAbort
   trackMemory?: boolean;
 }
 
+/** The most levels a band is split: 2^4 sub-tiles an edge, 68 grids a patch. */
+const MAX_BAND_LEVELS = 4;
+/** A corner keeps a sub-tile this many pixels wide. */
+const CORNER_SIZE = 2;
+const bands = new WeakMap<TerrainGrid, Map<string, readonly TerrainGrid[]>>();
+
+/**
+ * The part of a neighbour at the patch's own zoom that the patch reads, as
+ * sub-tiles of the same pixels: for an edge neighbour, the band of its pixels
+ * along the shared edge, 1/2^levels of it wide, as 2^levels sub-tiles; for
+ * a corner, the 2 × 2 pixels at the shared corner. A height past the patch's edge reads the neighbour's nearest
+ * pixel row or column and, with weight 0, the next one, so both are kept with
+ * the rest of the band; each pixel keeps its place in the quadtree, so every
+ * reader finds and interpolates it as before. Null when the neighbour is not
+ * a square of 2^(levels + 1) or more pixels, a power of two, so a band
+ * keeps at least 2 pixels, or for levels below 1. A patch bands only
+ * neighbours of its own size: a read reaches half its own pixel past its edge.
+ * Bands are made once for each neighbour grid and side, and live as long as it.
+ */
+export function neighborBand(neighbor: TerrainGrid, dx: number, dy: number, bandLevels: number): readonly TerrainGrid[] | null {
+  const { size, heights } = neighbor;
+  if (!(bandLevels >= 1 && bandLevels <= MAX_BAND_LEVELS && Number.isInteger(bandLevels))) return null;
+  if (!(size >= 2 ** (bandLevels + 1) && (size & (size - 1)) === 0 && heights.length === size * size) || (!dx && !dy)) return null;
+  const side = `${dx},${dy},${bandLevels}`;
+  let made = bands.get(neighbor);
+  const found = made?.get(side);
+  if (found) return found;
+  const corner = dx !== 0 && dy !== 0;
+  const levels = corner ? Math.log2(size / CORNER_SIZE) : bandLevels, split = 2 ** levels, sub = size / split;
+  // The sub-tile columns and rows nearest the patch: its first ones for a neighbour past the patch's right or bottom.
+  const columns = dx > 0 ? [0] : dx < 0 ? [split - 1] : Array.from({ length: split }, (_, i) => i);
+  const rows = dy > 0 ? [0] : dy < 0 ? [split - 1] : Array.from({ length: split }, (_, i) => i);
+  // Shared heights stay shared, so posting a patch to a worker still copies none of them.
+  const shared = typeof SharedArrayBuffer === "function" && heights.buffer instanceof SharedArrayBuffer;
+  const result: TerrainGrid[] = [];
+  for (const row of rows) for (const column of columns) {
+    const part = shared ? new Float32Array(new SharedArrayBuffer(sub * sub * 4)) : new Float32Array(sub * sub);
+    for (let line = 0; line < sub; line++) {
+      const from = (row * sub + line) * size + column * sub;
+      part.set(heights.subarray(from, from + sub), line * sub);
+    }
+    result.push({ z: neighbor.z + levels, x: neighbor.x * split + column, y: neighbor.y * split + row, size: sub, heights: part });
+  }
+  if (!made) bands.set(neighbor, made = new Map());
+  made.set(side, result);
+  return result;
+}
+
 /** A tile's place in the quadtree, unique below zoom 26: the tiles of the zooms above it, then its row and column. */
 function tileIndex(tile: TerrainTile): number {
   return (4 ** tile.z - 1) / 3 + tile.y * 2 ** tile.z + tile.x;
@@ -71,6 +144,31 @@ export function createTerrainTileLoader<TBlob, TSignal extends NavigationAbortSi
   const controller = ports.createAbortController();
   const cache = new Map<string, Promise<TerrainGrid>>();
   const settled = new Set<string>();
+  // The bytes of heights of each settled tile that has its own, and their sum.
+  const settledBytes = new Map<string, number>();
+  let cachedBytes = 0;
+  // Downloaded tiles kept as they came, by tile, oldest decoded first, and their bytes.
+  const encoded = new Map<string, { blob: TBlob; bytes: number }>();
+  let encodedBytes = 0;
+  /** Keeps a decoded tile's download, letting the oldest go past the bound. */
+  function dropEncoded(key: string): void {
+    const previous = encoded.get(key);
+    if (previous) { encoded.delete(key); encodedBytes -= previous.bytes; }
+  }
+  function keepEncoded(key: string, blob: TBlob): void {
+    const limit = options.limits().encodedBytes ?? 0, bytes = ports.byteLength(blob);
+    dropEncoded(key);
+    if (!(bytes <= limit)) return;
+    encoded.set(key, { blob, bytes }); encodedBytes += bytes;
+    for (const [oldest, entry] of encoded) {
+      if (encodedBytes <= limit) break;
+      encoded.delete(oldest); encodedBytes -= entry.bytes;
+    }
+  }
+  const forget = (key: string): void => {
+    settled.delete(key); decodedArrays?.delete(key);
+    cachedBytes -= settledBytes.get(key) ?? 0; settledBytes.delete(key);
+  };
   const decodedArrays = trackMemory ? new Map<string, Float32Array>() : null;
   // Tiles downloading, and tiles downloaded but not yet decoded.
   let downloading = 0, decoding = 0;
@@ -100,27 +198,37 @@ export function createTerrainTileLoader<TBlob, TSignal extends NavigationAbortSi
       (prioritize ? ahead : queue).push(entry);
       pump();
     });
+    const key = `${tile.z}/${tile.x}/${tile.y}`;
     let blob: TBlob;
     try {
       requireCurrent();
       // An ancestor may have answered 404 while this tile waited.
       const absent = knownMissing(tile);
       if (absent) return awaitFallback(absent);
-      const url = source.urlTemplate.replace("{z}", String(tile.z)).replace("{x}", String(tile.x)).replace("{y}", String(tile.y));
-      const response = await ports.fetchTile(url, ports.requestSignal(controller.signal, options.limits().timeoutMs));
-      if (!response.ok) {
-        if (response.status === 404 && tile.z > 0) { missing.add(tileIndex(tile)); return awaitFallback(tile); }
-        throw new Error(`Terrain request failed (${response.status}): ${url}`);
+      const kept = encoded.get(key);
+      if (kept) blob = kept.blob;
+      else {
+        const url = source.urlTemplate.replace("{z}", String(tile.z)).replace("{x}", String(tile.x)).replace("{y}", String(tile.y));
+        const response = await ports.fetchTile(url, ports.requestSignal(controller.signal, options.limits().timeoutMs));
+        if (!response.ok) {
+          if (response.status === 404 && tile.z > 0) { missing.add(tileIndex(tile)); return awaitFallback(tile); }
+          throw new Error(`Terrain request failed (${response.status}): ${url}`);
+        }
+        blob = await response.blob();
+        requireCurrent();
+        onBytes?.(ports.byteLength(blob));
       }
-      blob = await response.blob();
-      requireCurrent();
-      onBytes?.(ports.byteLength(blob));
       decoding++;
     } finally { downloading--; pump(); }
     try {
       const decoded = await decodeTile(blob, { prioritize, signal: controller.signal });
       requireCurrent();
+      keepEncoded(key, blob);
       return { ...tile, ...decoded };
+    } catch (error) {
+      // A download that would not decode is asked for again next time.
+      dropEncoded(key);
+      throw error;
     } finally { decoding--; pump(); }
   }
   // Release the download slot before awaiting a parent (avoid queue deadlock).
@@ -188,7 +296,7 @@ export function createTerrainTileLoader<TBlob, TSignal extends NavigationAbortSi
     const absent = knownMissing(tile);
     const pending: Promise<TerrainGrid> = (absent ? awaitFallback(absent) : download(tile, prioritize)).catch(error => {
       // A withdrawn tile has already left the cache, and the same tile asked for again since is another request.
-      if (cache.get(key) === pending) { cache.delete(key); claims.delete(key); settled.delete(key); decodedArrays?.delete(key); }
+      if (cache.get(key) === pending) { cache.delete(key); claims.delete(key); forget(key); }
       throw error;
     });
     cache.set(key, pending);
@@ -201,12 +309,14 @@ export function createTerrainTileLoader<TBlob, TSignal extends NavigationAbortSi
       claims.delete(key);
       settled.add(key);
       decodedArrays?.set(key, grid.heights);
+      if (grid.z === tile.z) { settledBytes.set(key, grid.heights.byteLength); cachedBytes += grid.heights.byteLength; }
       const waiting = arrivals.get(key);
       arrivals.delete(key);
       for (const arrived of waiting ?? []) arrived();
+      const { cacheEntries, cacheBytes = Infinity } = options.limits();
       for (const candidate of cache.keys()) {
-        if (cache.size <= options.limits().cacheEntries) break;
-        if (settled.has(candidate)) { cache.delete(candidate); settled.delete(candidate); decodedArrays?.delete(candidate); }
+        if (cache.size <= cacheEntries && cachedBytes <= cacheBytes) break;
+        if (settled.has(candidate)) { cache.delete(candidate); forget(candidate); }
       }
     }, () => {});
     return pending;
@@ -254,6 +364,7 @@ export function createTerrainTileLoader<TBlob, TSignal extends NavigationAbortSi
     const grid = await load(tile, prioritize, interest);
     const released = interest?.released ?? false;
     const neighbors: Array<Promise<TerrainGrid>> = [];
+    const sides: Array<[number, number]> = [];
     const n = 2 ** grid.z;
     for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
       if ((!dx && !dy) || grid.y + dy < 0 || grid.y + dy >= n) continue;
@@ -263,13 +374,21 @@ export function createTerrainTileLoader<TBlob, TSignal extends NavigationAbortSi
       const neighbor = { z: grid.z, x: (grid.x + dx + n) % n, y: grid.y + dy };
       // Without a claim of its own, a neighbour is asked for one holding it in another patch.
       const asking = released ? wants.get(`${neighbor.z}/${neighbor.x}/${neighbor.y}`)?.values().next().value : interest;
-      if (!released || asking) neighbors.push(load(neighbor, true, asking));
+      if (!released || asking) { neighbors.push(load(neighbor, true, asking)); sides.push([dx, dy]); }
     }
     if (released) {
       for (const neighbor of neighbors) neighbor.catch(() => {});
       throw withdrawnError();
     }
-    return { ...grid, neighbors: await Promise.all(neighbors) };
+    const whole = await Promise.all(neighbors);
+    const bandLevels = options.limits().neighborBandLevels ?? 0;
+    if (!bandLevels) return { ...grid, neighbors: whole };
+    // In each neighbour's place, in order: where a coarser neighbour and a
+    // band could both cover a pixel, the first still decides it.
+    return { ...grid, neighbors: whole.flatMap((neighbor, index) => {
+      const [dx, dy] = sides[index]!;
+      return (neighbor.z === grid.z && neighbor.size === grid.size && neighborBand(neighbor, dx, dy, bandLevels)) || [neighbor];
+    }) };
   }
   return { load, loadPatch, holdPatch, whenLoaded,
     /**
@@ -278,13 +397,14 @@ export function createTerrainTileLoader<TBlob, TSignal extends NavigationAbortSi
      * shared by every tile record that asked.
      */
     setPaused(next: boolean) { paused = next; pump(); },
-    /** `active`: tiles downloading or decoding. */
-    getMetrics() { return { active: downloading + decoding, decoding, queued: waiting.size,
+    /** `active`: tiles downloading or decoding. `cachedBytes` and `encodedBytes`: what the cache's two bounds count. */
+    getMetrics(): { active: number; decoding: number; queued: number; decodedBytes: number | null; cachedBytes?: number; encodedBytes?: number } { return { active: downloading + decoding, decoding, queued: waiting.size, cachedBytes, encodedBytes,
       decodedBytes: decodedArrays ? [...new Set(decodedArrays.values())].reduce((sum, array) => sum + array.byteLength, 0) : null }; },
     dispose() {
       if (controller.signal.aborted) return;
       controller.abort(new Error("Terrain loader disposed"));
       for (const entry of [...ahead.splice(0), ...queue.splice(0)]) entry.reject(disposedError());
       waiting.clear(); claims.clear(); wants.clear(); arrivals.clear(); cache.clear(); settled.clear(); decodedArrays?.clear(); missing.clear();
+      settledBytes.clear(); cachedBytes = 0; encoded.clear(); encodedBytes = 0;
     } };
 }

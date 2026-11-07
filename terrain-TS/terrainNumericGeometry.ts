@@ -1,6 +1,6 @@
 /** Opt-in renderer-free terrain preparation. Legacy rendering remains unchanged. */
 import { DEG_TO_RAD, ecefOnParallel, geodeticParallel, geodeticToEcef, type EcefCoord } from "../src/camera/cameraMath.js";
-import { sampleTerrainGridRow, terrainGridColumns, type TerrainGrid, type TerrainTile } from "../src/terrain/terrainGrid.js";
+import { MAX_TERRAIN_NEIGHBORS, sampleTerrainGridRow, terrainGridColumns, type TerrainGrid, type TerrainTile } from "../src/terrain/terrainGrid.js";
 
 export interface TerrainNumericRequest {
   tile: TerrainTile;
@@ -35,7 +35,7 @@ export function validateTerrainNumericRequest(request: TerrainNumericRequest): n
   if (request.grid != null && (typeof request.grid !== "object" || Array.isArray(request.grid))) throw new TypeError("Terrain numeric grid must be an object.");
   if (request.grid) {
     const neighbors = request.grid.neighbors ?? [];
-    if (!Array.isArray(neighbors) || neighbors.length > 32) throw new RangeError("Terrain numeric jobs support at most 32 ordered neighbors.");
+    if (!Array.isArray(neighbors) || neighbors.length > MAX_TERRAIN_NEIGHBORS) throw new RangeError(`Terrain numeric jobs support at most ${MAX_TERRAIN_NEIGHBORS} ordered neighbors.`);
     let bytes = (7 + (neighbors.length + 1) * 6) * 8 + 56;
     for (const grid of [request.grid, ...neighbors]) {
       tile(grid);

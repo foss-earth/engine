@@ -13,9 +13,12 @@ use std::cell::RefCell;
 const ABI: u32 = 1;
 const MAX_BYTES: usize = 128 * 1024 * 1024;
 const MAX_BUFFER_BYTES: usize = 64 * 1024 * 1024;
-const MAX_BUFFERS: usize = 64;
+// A mesh job takes one height buffer a grid: up to 69 grids (a patch of
+// narrow neighbour bands, audit L6), its descriptor and its results.
+const MAX_BUFFERS: usize = 160;
 const MAX_SEGMENTS: usize = 512;
-const MAX_GRIDS: usize = 33;
+/// A grid and up to 68 neighbours: 8 whole, or narrow bands (the engine's MAX_TERRAIN_NEIGHBORS).
+const MAX_GRIDS: usize = 69;
 const MAX_GRID_SIDE: usize = 4096;
 type ResultCode<T> = Result<T, u32>;
 // 1 descriptor/dimensions, 2 allocation/ownership, 3 budget/allocation failure,
@@ -452,7 +455,44 @@ mod kernel {
         let scale = js_pow(2.0, candidate.tile.z - z);
         js_floor(tx * scale) == candidate.tile.x && js_floor(ty * scale) == candidate.tile.y
     }
-    fn pixel(grid: &Grid<'_>, neighbors: &[Grid<'_>], col: f64, row: f64) -> f64 {
+    /// The neighbours that covered the last pixels, latest first, tried
+    /// before the ordered scan when no two neighbours share any place: then
+    /// the first that covers a pixel is the only one. A patch of bands has up
+    /// to 68 grids, and a mesh's edges read a few of them in turn (audit L6;
+    /// sampleTerrainGrid's lookup in TypeScript).
+    struct Lookup {
+        disjoint: bool,
+        recent: [usize; RECENT_NEIGHBORS],
+        len: usize,
+    }
+    const RECENT_NEIGHBORS: usize = 4;
+    /// Whether one tile is the other or within it. Tile coordinates are
+    /// integers below 2^30, so the shift is exact.
+    fn overlaps(a: &Tile, b: &Tile) -> bool {
+        let (outer, inner) = if a.z <= b.z { (a, b) } else { (b, a) };
+        let shift = (inner.z - outer.z) as u32;
+        ((inner.x as u64) >> shift) == outer.x as u64
+            && ((inner.y as u64) >> shift) == outer.y as u64
+    }
+    fn lookup(neighbors: &[Grid<'_>]) -> Lookup {
+        let mut disjoint = true;
+        'pairs: for (i, a) in neighbors.iter().enumerate() {
+            for b in &neighbors[i + 1..] {
+                if overlaps(&a.tile, &b.tile) {
+                    disjoint = false;
+                    break 'pairs;
+                }
+            }
+        }
+        Lookup { disjoint, recent: [0; RECENT_NEIGHBORS], len: 0 }
+    }
+    fn pixel(
+        grid: &Grid<'_>,
+        neighbors: &[Grid<'_>],
+        lookup: &mut Lookup,
+        col: f64,
+        row: f64,
+    ) -> f64 {
         let n = js_pow(2.0, grid.tile.z);
         let tx = ((grid.tile.x + (col + 0.5) / grid.size as f64) % n + n) % n;
         let ty = js_max(
@@ -461,11 +501,33 @@ mod kernel {
         );
         let mut source = grid;
         if !covers(grid, grid.tile.z, tx, ty) {
-            for neighbor in neighbors {
-                if covers(neighbor, grid.tile.z, tx, ty) {
-                    source = neighbor;
-                    break;
+            let mut found = None;
+            if lookup.disjoint {
+                for &index in &lookup.recent[..lookup.len] {
+                    if covers(&neighbors[index], grid.tile.z, tx, ty) {
+                        found = Some(index);
+                        break;
+                    }
                 }
+            }
+            if found.is_none() {
+                for (index, neighbor) in neighbors.iter().enumerate() {
+                    if covers(neighbor, grid.tile.z, tx, ty) {
+                        found = Some(index);
+                        break;
+                    }
+                }
+                if let (Some(index), true) = (found, lookup.disjoint) {
+                    let len = (lookup.len + 1).min(RECENT_NEIGHBORS);
+                    for k in (1..len).rev() {
+                        lookup.recent[k] = lookup.recent[k - 1];
+                    }
+                    lookup.recent[0] = index;
+                    lookup.len = len;
+                }
+            }
+            if let Some(index) = found {
+                source = &neighbors[index];
             }
         }
         let scale = js_pow(2.0, source.tile.z - grid.tile.z);
@@ -474,6 +536,7 @@ mod kernel {
     fn height(
         grid: &Grid<'_>,
         neighbors: &[Grid<'_>],
+        lookup: &mut Lookup,
         neighbors_present: bool,
         x: f64,
         y: f64,
@@ -491,11 +554,11 @@ mod kernel {
             let iy = js_floor(py);
             let u = px - ix;
             let v = py - iy;
-            return (pixel(grid, neighbors, ix, iy) * (1.0 - u)
-                + pixel(grid, neighbors, ix + 1.0, iy) * u)
+            return (pixel(grid, neighbors, lookup, ix, iy) * (1.0 - u)
+                + pixel(grid, neighbors, lookup, ix + 1.0, iy) * u)
                 * (1.0 - v)
-                + (pixel(grid, neighbors, ix, iy + 1.0) * (1.0 - u)
-                    + pixel(grid, neighbors, ix + 1.0, iy + 1.0) * u)
+                + (pixel(grid, neighbors, lookup, ix, iy + 1.0) * (1.0 - u)
+                    + pixel(grid, neighbors, lookup, ix + 1.0, iy + 1.0) * u)
                     * v;
         }
         own(grid, x, y)
@@ -544,8 +607,9 @@ mod kernel {
         // Keep ownership checks in the registry and never form caller slices.
         if !registry.budget(output_len as usize * 8, 0) { return Err(3); }
         let mut result = zeroed::<f64>(output_len as usize)?;
+        let mut neighbor_lookup = lookup(&grids[1..]);
         for (at, value) in result.iter_mut().enumerate() {
-            *value = height(&grids[0], &grids[1..], neighbors_present, xy[at * 2], xy[at * 2 + 1]);
+            *value = height(&grids[0], &grids[1..], &mut neighbor_lookup, neighbors_present, xy[at * 2], xy[at * 2 + 1]);
         }
         if grids.iter().any(|grid| grid.missing.get()) { return Err(4); }
         registry.f64s[output_index].copy_from_slice(&result);
@@ -641,6 +705,7 @@ mod kernel {
             .map_or(1.0, |grid| js_pow(2.0, grid.tile.z - target.z));
         let mut min_height = f64::INFINITY;
         let mut max_height = f64::NEG_INFINITY;
+        let mut neighbor_lookup = lookup(grids.get(1..).unwrap_or(&[]));
         for row in 0..stride {
             let v = row as f64 / segments as f64;
             let mercator_y = target.y + v;
@@ -652,6 +717,7 @@ mod kernel {
                     Some(grid) => height(
                         grid,
                         &grids[1..],
+                        &mut neighbor_lookup,
                         neighbors_present,
                         (target.x + u) * scale,
                         mercator_y * scale,

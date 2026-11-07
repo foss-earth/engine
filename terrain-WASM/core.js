@@ -1,6 +1,7 @@
 import { createTerrainHeightSampler } from "./heightSampler.js";
 
-const MAX_SEGMENTS = 512, MAX_GRID_SIDE = 4096, MAX_GRIDS = 33;
+// A grid and up to 68 neighbours (the engine's MAX_TERRAIN_NEIGHBORS).
+const MAX_SEGMENTS = 512, MAX_GRID_SIDE = 4096, MAX_GRIDS = 69;
 const MAX_LIVE_BYTES = 128 * 1024 ** 2, MAX_MEMORY_BYTES = 256 * 1024 ** 2;
 const LITTLE_ENDIAN = new Uint8Array(new Uint32Array([0x01020304]).buffer)[0] === 4;
 const REQUIRED = ["terrain_abi_version", "terrain_last_error", "terrain_alloc", "terrain_free", "terrain_build",
@@ -43,7 +44,7 @@ function requestData(request) {
   const neighborsPresent = !!grid?.neighbors;
   if (neighborsPresent && !Array.isArray(grid.neighbors)) throw new TypeError("Terrain neighbors must be an ordered array");
   const sources = grid ? [grid, ...(grid.neighbors ?? [])] : [];
-  if (sources.length > MAX_GRIDS) throw new RangeError("WASM terrain supports at most 32 direct neighbors");
+  if (sources.length > MAX_GRIDS) throw new RangeError("WASM terrain supports at most 68 direct neighbors");
   let inputBytes = (7 + sources.length * 6) * 8;
   const grids = sources.map((source, index) => {
     const coordinate = tile(source, `grid${index}`), size = source.size, heights = source.heights;

@@ -8,7 +8,7 @@ export function createTerrainHeightSampler(wasm, grid, assertActive, onDispose) 
   assertActive();
   if (typeof wasm.terrain_sample_batch !== "function") throw new Error("WASM terrain height-batch ABI is unavailable");
   const sources = [grid, ...(grid?.neighbors ?? [])];
-  if (!grid || sources.length > 33) throw new RangeError("Height batches need a grid and at most 32 direct neighbours");
+  if (!grid || sources.length > 69) throw new RangeError("Height batches need a grid and at most 68 direct neighbours");
   const sparse = grid.indices !== undefined;
   let elements = 0;
   for (const source of sources) {

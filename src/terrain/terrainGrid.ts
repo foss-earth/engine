@@ -1,6 +1,13 @@
 /** Streamed elevation data. Values retain the provider's vertical reference. */
 export interface TerrainTile { z: number; x: number; y: number }
 export interface TerrainGrid extends TerrainTile { size: number; heights: Float32Array; neighbors?: TerrainGrid[] }
+/**
+ * The most neighbours a grid may bring to the TypeScript mesh and height
+ * readers: 8 whole, or a patch of narrow bands (terrainLoader's
+ * neighborBandLevels 4: 16 sub-tiles an edge and 4 corners). The
+ * WebAssembly cores take 32.
+ */
+export const MAX_TERRAIN_NEIGHBORS = 68;
 export interface TerrainSource {
   /** Stable selection key used by settings and cache boundaries. */
   id: string;
@@ -100,6 +107,38 @@ export function sampleTerrainGridRow(grid: TerrainGrid, columns: TerrainGridColu
   }
 }
 
+/**
+ * For each neighbour list: whether no two of its grids cover the same place,
+ * and the grids that covered the last pixels looked up, latest first. Where
+ * none overlap, the first grid that covers a pixel is the only one, so those
+ * are tried first: a mesh's edges read a few bands' pixels in turn (the west
+ * and east band on each row), and a patch of bands has up to
+ * MAX_TERRAIN_NEIGHBORS grids (audit L6).
+ */
+interface NeighborLookup { disjoint: boolean; recent: TerrainGrid[] }
+const RECENT_NEIGHBORS = 4;
+const neighborLookups = new WeakMap<readonly TerrainGrid[], NeighborLookup>();
+
+function neighborLookup(neighbors: readonly TerrainGrid[]): NeighborLookup {
+  let lookup = neighborLookups.get(neighbors);
+  if (!lookup) {
+    let disjoint = true;
+    for (let i = 0; disjoint && i < neighbors.length; i++) for (let j = i + 1; j < neighbors.length; j++) {
+      if (overlaps(neighbors[i]!, neighbors[j]!)) { disjoint = false; break; }
+    }
+    lookup = { disjoint, recent: [] };
+    neighborLookups.set(neighbors, lookup);
+  }
+  return lookup;
+}
+
+/** Whether two tiles share any place: one is the other or within it. */
+function overlaps(a: TerrainTile, b: TerrainTile): boolean {
+  const [outer, inner] = a.z <= b.z ? [a, b] : [b, a];
+  const scale = 2 ** (inner.z - outer.z);
+  return Math.floor(inner.x / scale) === outer.x && Math.floor(inner.y / scale) === outer.y;
+}
+
 /** A pixel of the grid's tile or, past its edge, of the first neighbour that covers it; the grid's own when none does. */
 function samplePixel(grid: TerrainGrid, neighbors: readonly TerrainGrid[], col: number, row: number): number {
   const n = 2 ** grid.z;
@@ -107,7 +146,14 @@ function samplePixel(grid: TerrainGrid, neighbors: readonly TerrainGrid[], col: 
   const ty = Math.max(0, Math.min(n - 1e-9, grid.y + (row + 0.5) / grid.size));
   let source = grid;
   if (!covers(grid, grid.z, tx, ty)) {
-    for (const neighbor of neighbors) if (covers(neighbor, grid.z, tx, ty)) { source = neighbor; break; }
+    const lookup = neighborLookup(neighbors), recent = lookup.recent;
+    let found: TerrainGrid | undefined;
+    if (lookup.disjoint) for (const candidate of recent) if (covers(candidate, grid.z, tx, ty)) { found = candidate; break; }
+    if (!found) {
+      for (const neighbor of neighbors) if (covers(neighbor, grid.z, tx, ty)) { found = neighbor; break; }
+      if (found && lookup.disjoint) { recent.unshift(found); if (recent.length > RECENT_NEIGHBORS) recent.pop(); }
+    }
+    if (found) source = found;
   }
   const scale = 2 ** (source.z - grid.z);
   // The source's own pixels: the patch is not followed again on its centre grid.
