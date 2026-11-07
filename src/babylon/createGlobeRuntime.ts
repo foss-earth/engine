@@ -141,6 +141,13 @@ interface MapDebugEvent {
 
 export interface GlobeRuntime {
   prepareFrame(nowMs: number): void;
+  /**
+   * The host's work pass, on every frame its scheduler runs, before any
+   * drawing (`workPasses`). While maps load, their updates run here and a
+   * frame is asked for only when what is drawn changed. `presenting` says the
+   * same frame draws, whose preparation updates the maps instead.
+   */
+  prepareWork(nowMs: number, frame?: { readonly presenting: boolean }): void;
   afterFrame(nowMs: number, rendered?: boolean): void;
   shouldKeepRendering(): boolean;
   isPreparingFrame(): boolean;
@@ -439,6 +446,10 @@ function createFallbackExperience(scene: Scene, worldRoot: TransformNode | null,
 /** How far toward a marked point the map surface is looked for: short of the point, which is on the surface it was picked from. */
 const ANCHOR_OCCLUSION_REACH = 0.995;
 
+/** A load's hold on the scheduler: frames drawn, or work passes that draw only what changed. */
+type MapHold = "frames" | "work";
+const DRAW_ONLY_CHANGES_ID = "map.loading.drawOnlyChanges";
+
 export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRuntimeOptions): SettledGlobeRuntime {
   const { renderer, scene, settings, clock, platform } = options;
   if (scene.getEngine() !== renderer.engine) throw new Error("Globe scene and renderer must borrow the same host device.");
@@ -592,7 +603,10 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
     mapDrains.add(drain);
     void drain.then(() => mapDrains.delete(drain), error => { mapDrains.delete(drain); retirementErrors.push(error); });
   };
+  /** Changes when a map runtime starts or retires: what is drawn changes with it. */
+  let mapGeneration = 0;
   const startMap = <T>(create: () => T): T => {
+    mapGeneration += 1;
     try { return create(); }
     catch (error) {
       // A hot source/key switch can recover into another map before this
@@ -603,6 +617,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
   };
   const retireMap = (owner: { dispose(): void; whenSettled(): Promise<void> } | null): void => {
     if (!owner) return;
+    mapGeneration += 1;
     let cleanupError: unknown;
     try { owner.dispose(); } catch (error) { cleanupError = error; retirementErrors.push(error); }
     rememberMapDrain(owner.whenSettled());
@@ -706,15 +721,53 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
   authority.own(scheduler.onActiveChange(active => { if (active) framesRendering = 0; }));
   const worldRoot = options.external?.worldRoot ?? null;
 
+  const minFrameIntervalMs = (): number => { const cap = settings.get("renderer.frameRateCap"); return typeof cap === "number" && cap > 0 ? 1000 / cap : 0; };
+  /**
+   * Maps update in the host's work passes, drawing only what changed, where
+   * the host runs them and the setting is on. A terrain performance capture
+   * measures drawn frames, so it keeps maps updating in them.
+   */
+  const mapsUpdateInWork = (): boolean => options.workPasses === true && typeof scheduler.requestWork === "function" && !terrainCapture
+    && (!settings.has(DRAW_ONLY_CHANGES_ID) || settings.get(DRAW_ONLY_CHANGES_ID) !== false);
+  let mapWorkHolds = 0;
+  let mapWorkRequested = false;
+  /** The maps have work for their next update; a frame is drawn for it only if what is drawn changes. */
+  const requestMapWork = (): void => {
+    if (disposed) return;
+    if (!mapsUpdateInWork()) { scheduler.requestRender(); return; }
+    mapWorkRequested = true;
+    scheduler.requestWork!();
+  };
+  const holdMaps = (): MapHold => {
+    if (!mapsUpdateInWork()) { scheduler.beginContinuous(); return "frames"; }
+    mapWorkHolds += 1;
+    requestMapWork();
+    return "work";
+  };
+  const releaseMaps = (hold: MapHold | null): void => {
+    if (hold === "frames") scheduler.endContinuous();
+    else if (hold === "work") mapWorkHolds = Math.max(0, mapWorkHolds - 1);
+  };
+
   // Held while Google tiles are initializing so the scheduler pumps
   // tiles.update() every frame even when the user hasn't moved the camera.
   // Without this the render-on-demand scheduler idles after the very first
   // frame and the tile-load loop stalls until a camera gesture wakes it.
   let startupHeld = false;
+  // How the startup and streaming holds keep the maps updating: drawing every
+  // frame, or, where the host runs work passes and `map.loading.drawOnlyChanges`
+  // is on, updating in work passes and drawing only what changed (P-112).
+  let startupHold: MapHold | null = null;
   const releaseStartupHold = (): void => {
     if (!startupHeld) return;
     startupHeld = false;
-    scheduler.endContinuous();
+    const hold = startupHold;
+    startupHold = null;
+    releaseMaps(hold);
+  };
+  const holdStartup = (): void => {
+    startupHeld = true;
+    startupHold = holdMaps();
   };
 
   // Streaming signal: shared between the tiles event wiring (which sets it via
@@ -736,6 +789,49 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
     terrainSource: activeTerrainSource,
     lastError: null,
   };
+  /** Both maps' updates, once per host frame: in its work pass or in its drawn frame's preparation. */
+  let pumpedAt = Number.NEGATIVE_INFINITY;
+  const pumpMaps = (now: number): void => {
+    pumpedAt = now;
+    mapWorkRequested = false;
+    let started = profiler.clock();
+    tilesRuntime?.update();
+    adoptGoogleCoverage();
+    profiler.add("map/google tiles", started);
+    started = profiler.clock();
+    // Opaque presentations suspend map work; see-through presentations still draw map frames.
+    rasterTilesRuntime?.reportFrame(now, now - lastRasterFrameAt, platform.isHidden() || mapsSuspended);
+    lastRasterFrameAt = now;
+    rasterTilesRuntime?.update();
+    profiler.add("map/raster tiles", started);
+  };
+  /** What the last drawn frame showed of the maps; a work pass that changes it asks for a frame. */
+  let drawnState = "";
+  const drawState = (): string => `${mapGeneration}:${fallbackExperience?.globeMesh.isEnabled() === true}:${surfaceRevision() ?? "-"}`
+    + `:${rasterTilesRuntime?.getDrawRevision() ?? "-"}:${tilesRuntime?.getRevision() ?? "-"}`;
+  const prepareWork = (workNow: number, frame?: { readonly presenting: boolean }): void => {
+    if (disposed || inFrame || (mapWorkHolds === 0 && !mapWorkRequested)) return;
+    // A held load keeps the host's work passes coming while nothing is drawn.
+    if (mapWorkHolds > 0) scheduler.requestWork?.();
+    // The frame drawn now updates the maps itself, after the camera has moved.
+    if (frame?.presenting) return;
+    const interval = minFrameIntervalMs();
+    // At most as often as frames would be drawn.
+    if (interval > 0 && workNow - pumpedAt < interval - 1) { scheduler.requestWork?.(); return; }
+    // A frame boundary for the maps' focus position; meshes added now are not
+    // this frame's to draw, so they still ask for a frame of their own.
+    inFrame = true; focusCache = null;
+    try {
+      worldViewport.apply();
+      const started = profiler.clock();
+      updateTerrainPreparationCamera();
+      profiler.add("map/camera", started);
+      pumpMaps(workNow);
+      adoptRasterCoverage();
+      refreshCurrentSurface();
+    } finally { inFrame = false; focusCache = null; }
+    if (!disposed && drawState() !== drawnState) scheduler.requestRender();
+  };
   /** Everything a frame does before its render, the host's simulation last. */
   const prepareFrame = (frameNow: number): void => {
     // The frame boundary: everything below, the host's simulation included, is this frame's.
@@ -756,16 +852,9 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
     }
     updateTerrainPreparationCamera();
     profiler.add("map/camera", started);
-    started = profiler.clock();
-    tilesRuntime?.update();
-    adoptGoogleCoverage();
-    profiler.add("map/google tiles", started);
-    started = profiler.clock();
-    // Opaque presentations suspend map work; see-through presentations still draw map frames.
-    rasterTilesRuntime?.reportFrame(frameNow, frameNow - lastRasterFrameAt, platform.isHidden() || mapsSuspended);
-    lastRasterFrameAt = frameNow;
-    rasterTilesRuntime?.update();
-    profiler.add("map/raster tiles", started);
+    // This host frame's work pass updated the maps already when it asked for this frame.
+    if (pumpedAt !== frameNow) pumpMaps(frameNow);
+    else adoptGoogleCoverage();
     adoptRasterCoverage();
     refreshCurrentSurface();
     // A view set before the ground under it was known goes onto it now it is; the next frame picks tiles for it there.
@@ -788,6 +877,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
     showCompassSphere();
     // After the host has placed the world: the red tint is set in the scene's coordinates.
     showTerrainRegions();
+    drawnState = drawState();
     } catch (error) {
       // A failed map operation can have partially changed actual triangles.
       // Publish that owner's new evidence before retiring this frame boundary.
@@ -881,6 +971,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
   }
 
   let streamingHeld = false;
+  let streamingHold: MapHold | null = null;
   // An opaque presentation pauses map loading and its continuous-render holds.
   let mapsSuspended = false;
   let navigationHeld = false;
@@ -888,14 +979,16 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
     if (streamingHeld || mapsSuspended) return;
     streamingHeld = true;
     streamingActiveRef.value = true;
-    scheduler.beginContinuous();
+    streamingHold = holdMaps();
     for (const listener of streamingListenersRef) listener(true);
   };
   const endStreaming = (): void => {
     if (!streamingHeld) return;
     streamingHeld = false;
     streamingActiveRef.value = false;
-    scheduler.endContinuous();
+    const hold = streamingHold;
+    streamingHold = null;
+    releaseMaps(hold);
     for (const listener of streamingListenersRef) listener(false);
   };
 
@@ -1377,6 +1470,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
         onSurfaceChange: currentSurfaceChanged,
         performanceCapture: terrainCapture,
         requestRender: () => scheduler.requestRender(),
+        requestWork: requestMapWork,
         onDebugEvent: recordMapDebugEvent,
         onLoadStart: () => {
           recordMapDebugEvent("raster-load-start");
@@ -1479,8 +1573,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
       // Hold a continuous-render reference from startup until the first tiles
       // become visible. This ensures tiles.update() is called every frame so
       // the tile-load loop progresses without requiring a camera gesture.
-      startupHeld = true;
-      scheduler.beginContinuous();
+      holdStartup();
 
       tilesRuntime = startMap(() => createGoogleTilesRuntime({
         ...options.mapPorts.google,
@@ -1627,10 +1720,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
       const googlePending = google ? google.queued + google.downloading + google.parsing + google.waitingToParse > 0 : false;
       const rasterPending = rasterTilesRuntime?.hasPendingTiles?.() ?? (rasterTilesRuntime?.getLoadingDiagnostics?.().pendingTiles ?? 0) > 0;
       if (streamingBeforeSuspension && (googlePending || rasterPending)) beginStreaming();
-      if (startupHoldBeforeSuspension && tilesRuntime && tilesRuntime.tiles.visibleTiles.size === 0 && !startupHeld) {
-        startupHeld = true;
-        scheduler.beginContinuous();
-      }
+      if (startupHoldBeforeSuspension && tilesRuntime && tilesRuntime.tiles.visibleTiles.size === 0 && !startupHeld) holdStartup();
       streamingBeforeSuspension = false;
       startupHoldBeforeSuspension = false;
     }
@@ -1765,6 +1855,12 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
       }
     }),
     watch("map.source.elevation", value => applyTerrainSource(resolveTerrainSource(String(value)))),
+    ...(settings.has(DRAW_ONLY_CHANGES_ID) ? [watch(DRAW_ONLY_CHANGES_ID, () => {
+      // A load under way moves to the other hold; the new one is taken first so it never lapses.
+      if (startupHold) { const old = startupHold; startupHold = holdMaps(); releaseMaps(old); }
+      if (streamingHold) { const old = streamingHold; streamingHold = holdMaps(); releaseMaps(old); }
+      scheduler.requestRender();
+    })] : []),
     watch("map.focus.refineFrom", value => {
       googleTerrainDetailAnchor = anchorForRefinement(value);
       scheduler.requestRender();
@@ -2241,7 +2337,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
   };
   const setExternalFrameCallback = (callback: ((deltaSeconds: number) => void) | null): void => { if (!disposed) simTick = callback; };
   return {
-    prepareFrame, afterFrame, isPreparingFrame: () => preparingFrame,
+    prepareFrame, prepareWork, afterFrame, isPreparingFrame: () => preparingFrame,
     shouldKeepRendering: () => !disposed && (simRunning || (inertialCameraController?.isActive() ?? false) || navigationCamera.isFovReturning()),
     setExternalViewState, setExternalRunning, setExternalFrameCallback,
     surface,
@@ -2383,7 +2479,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
     requestRender(): void {
       scheduler.requestRender();
     },
-    minFrameIntervalMs(): number { const cap = settings.get("renderer.frameRateCap"); return typeof cap === "number" && cap > 0 ? 1000 / cap : 0; },
+    minFrameIntervalMs,
     beginContinuous(): void {
       scheduler.beginContinuous();
     },

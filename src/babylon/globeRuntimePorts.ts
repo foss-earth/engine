@@ -85,6 +85,13 @@ export interface GlobeRuntimeOptions {
    * Ordinary globe hosts need no external/simulation mode. Method invocation
    * preserves the supplied contribution object's receiver. */
   framePreparation?: { prepare(frame: GlobeFramePreparation): void };
+  /**
+   * The host calls `prepareWork` from its scheduler's work on every frame the
+   * scheduler runs, and its scheduler has `requestWork`. Maps then load in
+   * those passes and ask for a frame only when what is drawn changes
+   * (`map.loading.drawOnlyChanges`). Without it, loading draws every frame.
+   */
+  workPasses?: boolean;
   /** Borrowed optional index/query service; the host owns its worker lifetime. */
   groundAcceleration?: import("./groundAcceleration.js").GroundAcceleration;
   /** Explicit acceptance/placement policy, never a hidden aircraft default. */

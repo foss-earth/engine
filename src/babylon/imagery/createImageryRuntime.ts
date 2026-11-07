@@ -201,6 +201,8 @@ export interface ImageryRuntime {
   update(): void;
   getFeedback(): ImageryFeedback;
   getDiagnostics(): ImageryDiagnostics;
+  /** Changes whenever what the patches draw may have changed: a publication or an upload. */
+  getDrawRevision(): number;
   dispose(): void;
 }
 
@@ -1408,6 +1410,7 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
       scheduleWake(residency.nextWakeAt());
     },
     getFeedback: () => feedback,
+    getDrawRevision: () => counters.publishes + counters.uploads,
     getDiagnostics() {
       const levels: Record<number, number> = {};
       const footprints: [number, number, number, number, number] = [0, 0, 0, 0, 0];

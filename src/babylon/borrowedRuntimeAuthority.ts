@@ -1,6 +1,9 @@
 import type { RenderScheduler } from "@foss-earth/renderer";
 
-export type BorrowedGlobeScheduler = Pick<RenderScheduler, "requestRender" | "beginContinuous" | "endContinuous" | "setPaused" | "isActive" | "onActiveChange">;
+export type BorrowedGlobeScheduler = Pick<RenderScheduler, "requestRender" | "beginContinuous" | "endContinuous" | "setPaused" | "isActive" | "onActiveChange"> & {
+  /** Hidden work on the next frame, without drawing it; a host that calls `prepareWork` from its work supplies this. */
+  requestWork?(): void;
+};
 /** Own feature holds/cleanup only; never stop or dispose borrowed authorities. */
 export function createBorrowedRuntimeAuthority(host: BorrowedGlobeScheduler) {
   let disposed = false, holds = 0;
@@ -12,6 +15,7 @@ export function createBorrowedRuntimeAuthority(host: BorrowedGlobeScheduler) {
     setPaused(paused) { if (!disposed) host.setPaused(paused); },
     isActive: () => !disposed && host.isActive(),
     onActiveChange(listener) { if (disposed) return () => undefined; const stop = host.onActiveChange(listener); let live = true; const once = () => { if (!live) return; live = false; stop(); }; stops.push(once); return once; },
+    ...(host.requestWork ? { requestWork() { if (!disposed) host.requestWork!(); } } : {}),
   };
   return {
     scheduler,

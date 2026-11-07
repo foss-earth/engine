@@ -85,6 +85,18 @@ const STARTING_VALUE = "The starting calibration of the projected-imagery work; 
 
 export const MAP_LOADING_PARAMETERS: readonly ParameterSpec[] = [
   {
+    id: "map.loading.drawOnlyChanges",
+    label: "Draw only what changed while maps load",
+    description: "While 2D map or Google tiles load and nothing moves, the maps' updates run without drawing, and a frame is drawn only when a tile, an image or a mesh changes what is shown. Off, every display frame is drawn for as long as anything loads. Applies where the host runs map work outside frames, as the FOSS Earth app does.",
+    kind: "boolean",
+    unit: "none",
+    default: true,
+    defaultReason: "The same pictures with a quarter of the frames: a cold load of the app with the camera still drew 3,385–3,398 frames, now 864–874, its render CPU fell by two thirds and its GPU time by three quarters (performance ledger P-112).",
+    home: { tab: MAP_TAB, section: "loading", level: "all" },
+    appliesLive: true,
+    source: "src/babylon/createGlobeRuntime.ts",
+  },
+  {
     id: "map.terrain.proximityAnchor",
     label: "Proximity anchor",
     description: "Prepare nearby ground around the camera eye, the selected focus point, or both.",

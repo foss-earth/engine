@@ -150,7 +150,13 @@ export interface RasterTilesRuntimeOptions {
   anisotropy?: () => number;
   /** How failed terrain and imagery downloads back off, ms: `map.retryDelay`; read at each failure. */
   retryDelay?: () => RetryDelay;
+  /** Something drawn changed outside an update: draw a frame. */
   requestRender: () => void;
+  /**
+   * Run `update` again soon, without drawing for it: the host draws when
+   * `getDrawRevision` changes. Defaults to `requestRender`.
+   */
+  requestWork?: () => void;
   onLoadStart?: () => void;
   onDownloadBytes?: (bytes: number) => void;
   onLoadEnd?: (visibleTiles: number, activeTiles: number) => void;
@@ -202,6 +208,11 @@ export interface RasterTilesRuntime {
    */
   getRegionCoverage(demand: TerrainRegionDemand, tier: "minimum" | "final", outline?: TerrainRegionOutlineSink): TerrainRegionCoverage;
   getRevision(): number;
+  /**
+   * Changes whenever what this map draws may have changed: a tile shown,
+   * hidden or disposed while shown, its geometry, the surface, or its imagery.
+   */
+  getDrawRevision(): number;
   sample(latDeg: number, lonDeg: number): SurfaceHit | null;
   /** Height-only contact query; avoids building point/normal objects for decoded grids. */
   sampleHeight?(latDeg: number, lonDeg: number): { heightMeters: number; quality: number } | null;
@@ -862,6 +873,19 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
   let loadCycleActive = false;
   let disposed = false;
   let revision = 0;
+  /** Shown tiles enabled, disabled or disposed; with `revision` and the imagery's, what the map draws. */
+  let drawChanges = 0;
+  /** Surface and imagery changes counted only while a tile is shown: hidden tiles draw nothing. */
+  let shownChanges = 0, lastContentRevision = 0;
+  const drawRevision = (): number => {
+    const content = revision + (imageryRuntime?.getDrawRevision() ?? 0);
+    if (content !== lastContentRevision) {
+      lastContentRevision = content;
+      if (visibleRecords.some(record => !record.mesh.isDisposed() && record.mesh.isEnabled())) shownChanges += 1;
+    }
+    return drawChanges + shownChanges;
+  };
+  const requestWork = (): void => (options.requestWork ?? options.requestRender)();
   // Imagery reads adopted grids/bounds and coverage, rather than the finer
   // decoded contact index. Unrelated decode arrivals must not invalidate all
   // cached imagery tile hulls and height batches.
@@ -1082,14 +1106,14 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
       getRefinePoint: options.getRefinePoint,
       surface: imagerySurface,
       loader: options.imageryLoader ?? options.imageryPorts.loader,
-      requestRender: () => options.requestRender?.(),
+      requestRender: requestWork,
       onDownloadBytes: options.onDownloadBytes,
       onError: (error, url) => options.onLoadError?.(error, url),
       onFeedback: () => options.onDetailFeedback?.(),
       onCoverageChange: () => {
         for (const record of cache.values()) record.refreshImagery();
         visibilityDirty = true;
-        options.requestRender?.();
+        requestWork();
         // The displayed source may have changed: its credit follows.
         options.onDetailFeedback?.();
       },
@@ -1120,7 +1144,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
       appliedOffset = offset;
       imageryRuntime?.setOffset(offset);
     }
-    options.requestRender?.();
+    requestWork();
   }
   applyDetail();
 
@@ -1179,6 +1203,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
   // provider's cap and tile size: `map.terrain.maxLevel` bounds them.
   const zoomLimits = (): ZoomLimits => (imageryRuntime ? { minZoom: 0, maxZoom: Math.round(setting("map.terrain.maxLevel")) } : imagerySource);
   const disposeRecord = (record: RasterTileRecord): void => {
+    if (!record.mesh.isDisposed() && record.mesh.isEnabled()) drawChanges += 1;
     decodedGridsChanged(surfaceSampler.setDecodedGrid(record.key, null));
     finishOwnedCleanup([() => imageryRuntime?.detachPatch(record.key), () => disposeTile(record)], "Raster patch cleanup failed.");
   };
@@ -1215,7 +1240,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
     if (disposed || at >= nextRetryAt) return;
     nextRetryAt = at;
     retryTimer?.();
-    retryTimer = options.after(() => { retryTimer = undefined; options.requestRender?.(); }, Math.max(0, at - options.nowMs()));
+    retryTimer = options.after(() => { retryTimer = undefined; requestWork(); }, Math.max(0, at - options.nowMs()));
   }
 
   function finishLoad(record: RasterTileRecord): void {
@@ -1245,7 +1270,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
     }
     // Adopt loaded coverage at the next update, before simulation and rendering.
     visibilityDirty = true;
-    options.requestRender?.();
+    requestWork();
     emitLoadEndIfIdle();
     options.onSurfaceChange?.("loading");
   }
@@ -1287,7 +1312,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
       dirtyGeometryKeys.add(changed.key);
       visibilityDirty = true;
       heightsArrived = true;
-      options.requestRender?.();
+      requestWork();
       options.onSurfaceChange?.("loading");
     }, scheduleRetry, imageryRuntime, work, meshWorkers, checkPageParity, { elevationOnly, inCore, priority }, decodedGridArrived, terrainGeneration);
     cache.set(key, record);
@@ -1457,6 +1482,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
       }
       if (visible) options.onDebugEvent?.("tile-visible", { key });
       record.mesh.setEnabled(visible);
+      drawChanges += 1;
       imageryRuntime?.setPatchVisible(key, visible);
       if (visible) lastUsedTick.set(key, tick);
     }
@@ -1678,7 +1704,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
     for (const key of dirtyGeometryKeys) {
       const record = cache.get(key);
       if ((!visibleTileKeys.has(key) || record?.elevationOnly) && record?.loaded && !record.failed) {
-        options.requestRender?.();
+        requestWork();
         break;
       }
     }
@@ -1723,7 +1749,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
     if (rebuilt) {
       surfaceSampler.setCoverage([...visibleTileKeys].map(key => cache.get(key)!).filter(Boolean));
     }
-    if (meshRebuildQueue.size > 0) options.requestRender?.();
+    if (meshRebuildQueue.size > 0) requestWork();
   }
 
   function selectTiles(view: ImageryView | null, focus: TerrainFocus | null, refine: TerrainRefinePoint | null, proximity: TerrainProximityConfig | undefined): void {
@@ -1917,7 +1943,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
         // interval; the view it stops at, and the last heights, are always
         // selected for.
         if (now - selectedAt >= setting("map.terrain.reselectWhileMoving")) selectTiles(view, focus, refine, proximity);
-        else options.requestRender?.();
+        else requestWork();
       }
       prepareHiddenTerrain();
       if (visibilityDirty) recomputeVisibility();
@@ -1990,6 +2016,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
     },
     getMetrics,
     getRevision: () => revision,
+    getDrawRevision: drawRevision,
     setDetailTarget(offset): void {
       if (!Number.isFinite(offset) || offset === requestedOffset) return;
       requestedOffset = offset;
