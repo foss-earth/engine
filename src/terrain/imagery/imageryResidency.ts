@@ -248,6 +248,8 @@ export function createImageryResidency<TSignal extends NavigationAbortSignal>(op
     entry: Entry<TSignal>; request: ImageryRequest; image: RetainedPreparedImage; job: OwnedImageryUploadJob;
     outcome: TextureTransferOutcome | null; retirement: TextureTransferRetirement | null;
     failed: boolean; ownerClosed: boolean;
+    /** The reason `drop` cancelled the job with: the residency retired it, so it is no failure to report. */
+    retiring: Error | null;
   };
   const pendingUploads = new Set<PendingUpload>();
   const counters = { uploads: 0, uploadBytes: 0, evictions: 0, aborted: 0, compressedBytes: 0 };
@@ -328,7 +330,11 @@ export function createImageryResidency<TSignal extends NavigationAbortSignal>(op
     invalidateStats();
     const failures: unknown[] = [];
     if (abort) { try { abort.abort(); } catch (error) { failures.push(error); } }
-    try { owned?.cancel(new Error("Atlas imagery entry retired.")); } catch (error) { failures.push(error); }
+    if (owned) {
+      const retiring = new Error("Atlas imagery entry retired.");
+      for (const upload of pendingUploads) if (upload.job === owned) upload.retiring = retiring;
+      try { owned.cancel(retiring); } catch (error) { failures.push(error); }
+    }
     try { prepared?.close?.(); } catch (error) { failures.push(error); }
     try { freeSlots(entry); } catch (error) { failures.push(error); }
     if (failures.length === 1) throw failures[0];
@@ -462,6 +468,7 @@ export function createImageryResidency<TSignal extends NavigationAbortSignal>(op
     && pending.entry.owned === pending.job && pending.entry.request.sourceKey === pending.request.sourceKey;
   const failOwned = (pending: PendingUpload, error: unknown): void => {
     if (pending.failed) { reportOwned(error, pending.request.url); return; }
+    const retired = error !== null && error === pending.retiring;
     pending.failed = true;
     const errors: unknown[] = [error];
     if (ownsEntry(pending)) {
@@ -472,7 +479,8 @@ export function createImageryResidency<TSignal extends NavigationAbortSignal>(op
     closeOwnedInput(pending, errors);
     try { pending.job.cancel(error); } catch (cleanup) { errors.push(cleanup); }
     try { pending.job.release(); } catch (cleanup) { errors.push(cleanup); }
-    reportOwned(cleanupFailure(errors), pending.request.url); wakeOwned();
+    if (!retired || errors.length > 1) reportOwned(cleanupFailure(errors), pending.request.url);
+    wakeOwned();
   };
   const finishOwned = (pending: PendingUpload): void => {
     if (!pending.outcome || !pending.retirement) return;
@@ -500,7 +508,7 @@ export function createImageryResidency<TSignal extends NavigationAbortSignal>(op
     wakeOwned();
   };
   const beginOwned = (entry: Entry<TSignal>, image: RetainedPreparedImage, job: OwnedImageryUploadJob): void => {
-    const pending: PendingUpload = { entry, request: { ...entry.request }, image, job, outcome: null, retirement: null, failed: false, ownerClosed: false };
+    const pending: PendingUpload = { entry, request: { ...entry.request }, image, job, outcome: null, retirement: null, failed: false, ownerClosed: false, retiring: null };
     entry.owned = job; entry.state = "uploading"; pendingUploads.add(pending);
     invalidateStats();
     // Both observers and ownership are registered before any native callback.

@@ -51,6 +51,46 @@ describe("actual Renderer whole-batch Atlas ownership", () => {
       if (end !== "dispose") expect(h.atlas.freeSlots()).toBe(h.layout.capacity);
     } finally { residency.dispose(); h.dispose(); }
   });
+  for (const end of ["source", "reset", "dispose"] as const) it(`reports no error when ${end} retires an entry whose native upload is in flight`, async () => {
+    const h = ownedAtlasHost(), image = h.image(), onError = vi.fn();
+    const residency = createImageryResidency({ loader: { load: async () => image }, store: h.atlas, limits, now: () => 0, createAbortController: () => new AbortController(), onError });
+    try {
+      residency.setDemand([request]); residency.pump(); await flushOwnedAtlas(); residency.upload(Infinity);
+      expect(residency.stats().uploading).toBe(1);
+      if (end === "source") residency.setDemand([{ ...request, imageKey: "new", sourceKey: "source@2" }]); else if (end === "reset") residency.reset(); else residency.dispose();
+      await flushOwnedAtlas(); h.native[0].resolve(); await flushOwnedAtlas();
+      expect(onError).not.toHaveBeenCalled(); expect(h.broker.pools.stats().decoded.reserved).toBe(0);
+    } finally { residency.dispose(); h.dispose(); }
+  });
+  it("still reports a cleanup that throws while an entry is retired", async () => {
+    const h = ownedAtlasHost(), image = h.image(), onError = vi.fn(), prepare = h.atlas.prepareOwnedUpload!;
+    // The residency's own drop releases the job first; the second release, in the failure path, throws.
+    h.atlas.prepareOwnedUpload = prepared => {
+      const job = prepare(prepared); if (!job) return job;
+      const release = job.release; let calls = 0;
+      job.release = () => { release.call(job); if (++calls === 2) throw new Error("release cleanup"); };
+      return job;
+    };
+    const residency = createImageryResidency({ loader: { load: async () => image }, store: h.atlas, limits, now: () => 0, createAbortController: () => new AbortController(), onError });
+    try {
+      residency.setDemand([request]); residency.pump(); await flushOwnedAtlas(); residency.upload(Infinity);
+      residency.setDemand([{ ...request, imageKey: "new", sourceKey: "source@2" }]); await flushOwnedAtlas(); h.native[0].resolve(); await flushOwnedAtlas();
+      expect(onError).toHaveBeenCalledOnce(); expect((onError.mock.calls[0][0] as AggregateError).errors.map(String)).toEqual(["Error: Atlas imagery entry retired.", "Error: release cleanup"]);
+    } finally { residency.dispose(); h.dispose(); }
+  });
+  it("still reports a native upload that fails, and one that fails after its entry was retired", async () => {
+    for (const retireFirst of [false, true]) {
+      const h = ownedAtlasHost(), image = h.image(), onError = vi.fn(), reason = new Error("completion unknown");
+      const residency = createImageryResidency({ loader: { load: async () => image }, store: h.atlas, limits, now: () => 0, createAbortController: () => new AbortController(), onError });
+      try {
+        residency.setDemand([request]); residency.pump(); await flushOwnedAtlas(); residency.upload(Infinity);
+        if (retireFirst) { residency.setDemand([{ ...request, imageKey: "new", sourceKey: "source@2" }]); await flushOwnedAtlas(); expect(onError).not.toHaveBeenCalled(); }
+        h.native[0].reject(reason); await flushOwnedAtlas();
+        if (!retireFirst) expect(onError).toHaveBeenCalled();
+        h.tracker.deviceLost(); await flushOwnedAtlas();
+      } finally { residency.dispose(); h.dispose(); }
+    }
+  });
   it("keeps slots, input and GPU quarantined after rejected completion until observed device loss", async () => {
     const h = ownedAtlasHost(), image = h.image(), job = h.atlas.prepareOwnedUpload!(image)!; job.submit(); image.close(); job.release();
     const reason = new Error("completion unknown"); h.native[0].reject(reason); expect(await job.settled).toEqual({ status: "failed", error: reason });
