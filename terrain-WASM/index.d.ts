@@ -46,7 +46,7 @@ export interface TerrainCoreOptions {
   wasmUrl?: URL | string;
   fetch?: typeof fetch;
   /** Trusted non-throwing builtins from this worker's executing Math realm. */
-  math?: Pick<Math, "sin" | "cos" | "atan" | "sinh" | "sqrt" | "pow" | "floor" | "round" | "min" | "max">;
+  math?: Pick<Math, "sin" | "cos" | "atan" | "sinh" | "pow">;
 }
 export function loadTerrainCore(options?: TerrainCoreOptions): Promise<TerrainCore>;
 export function instantiateTerrainCore(source: BufferSource | WebAssembly.Module, options?: TerrainCoreOptions): Promise<TerrainCore>;

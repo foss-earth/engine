@@ -1,7 +1,8 @@
 import { createTerrainCore, assertTerrainWorker } from "./core.js";
 export { createTerrainCore, assertTerrainWorker } from "./core.js";
 
-const MATH_NAMES = ["sin", "cos", "atan", "sinh", "sqrt", "pow", "floor", "round", "min", "max"];
+// sqrt, floor, round, min and max are computed in WebAssembly, bit for bit as Math does.
+const MATH_NAMES = ["sin", "cos", "atan", "sinh", "pow"];
 
 /** Load only when an owning worker explicitly requests this core. No JS fallback. */
 export async function loadTerrainCore(options = {}) {

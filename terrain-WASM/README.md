@@ -41,9 +41,12 @@ loaded, and performs no rendering. It does not create Babylon meshes or change
 terrain settings. The host owns worker startup, cancellation, stale-result
 rejection, publication, resource budgets across cores, and any explicit fallback.
 
-All transcendental and rounding functions are imported from this worker's
-`Math`: `sin`, `cos`, `atan`, `sinh`, `sqrt`, `pow`, `floor`, `round`, `min` and
-`max`. There is no Rust libm substitution or fast-math. Bilinear sums and WGS84
+The transcendental functions are imported from this worker's `Math`: `sin`,
+`cos`, `atan`, `sinh` and `pow`. `sqrt`, `floor`, `round`, `min` and `max` are
+computed in WebAssembly, bit for bit as `Math` computes them: `sqrt` and
+`floor` are IEEE 754 operations in both, and `round`, `min` and `max` are
+written out with Math's halves, signed zeros and NaN, not as Rust's `f64`
+methods. There is no Rust libm substitution or fast-math. Bilinear sums and WGS84
 expressions retain reference operation order. Scoped differential checks cover
 the executing test realm; hosts compare their first WASM output before
 admission. They do not establish every browser's Math or NaN payload bits. Imported

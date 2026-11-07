@@ -15,4 +15,10 @@ describe("The terrain core's Math imports", () => {
       for (const [name, value] of Object.entries(imports)) expect(value, name).toBe(Math[name as keyof Math]);
     } finally { instantiate.mockRestore(); }
   });
+
+  // P-132. sqrt, floor, round, min and max are computed in WebAssembly, bit for bit as Math does, without a call out.
+  it("are only the transcendental functions", () => {
+    const module = new WebAssembly.Module(readFileSync(new URL("../terrain-WASM/single/terrain.wasm", import.meta.url)));
+    expect(WebAssembly.Module.imports(module).map(entry => `${entry.module}.${entry.name}`).sort()).toEqual(["Math.atan", "Math.cos", "Math.pow", "Math.sin", "Math.sinh"]);
+  });
 });

@@ -303,12 +303,7 @@ mod kernel {
         fn cos(value: f64) -> f64;
         fn atan(value: f64) -> f64;
         fn sinh(value: f64) -> f64;
-        fn sqrt(value: f64) -> f64;
         fn pow(base: f64, exponent: f64) -> f64;
-        fn floor(value: f64) -> f64;
-        fn round(value: f64) -> f64;
-        fn min(left: f64, right: f64) -> f64;
-        fn max(left: f64, right: f64) -> f64;
     }
     // These imports must be trusted, non-throwing executing-realm Math builtins.
     fn js_sin(x: f64) -> f64 {
@@ -323,23 +318,31 @@ mod kernel {
     fn js_sinh(x: f64) -> f64 {
         unsafe { sinh(x) }
     }
-    fn js_sqrt(x: f64) -> f64 {
-        unsafe { sqrt(x) }
-    }
     fn js_pow(x: f64, y: f64) -> f64 {
         unsafe { pow(x, y) }
     }
+    // These give Math's results bit for bit without calling out of WebAssembly, as calls to
+    // JavaScript cost more than the work. sqrt and floor are IEEE 754's operations in both.
+    fn js_sqrt(x: f64) -> f64 {
+        x.sqrt()
+    }
     fn js_floor(x: f64) -> f64 {
-        unsafe { floor(x) }
+        x.floor()
     }
+    /// Math.round: halves toward +inf, -0 from -0.5 to -0, large and non-finite values unchanged.
+    /// Not f64::round, which takes halves away from zero.
     fn js_round(x: f64) -> f64 {
-        unsafe { round(x) }
+        let c = x.ceil();
+        if c - 0.5 > x { c - 1.0 } else { c }
     }
+    /// Math.min of two: NaN if either is, and -0 below +0. Not f64::min, which returns the
+    /// other argument for NaN and either zero.
     fn js_min(x: f64, y: f64) -> f64 {
-        unsafe { min(x, y) }
+        if x < y { x } else if y < x { y } else if x == y { f64::from_bits(x.to_bits() | y.to_bits()) } else { f64::NAN }
     }
+    /// Math.max of two: NaN if either is, and +0 above -0.
     fn js_max(x: f64, y: f64) -> f64 {
-        unsafe { max(x, y) }
+        if x > y { x } else if y > x { y } else if x == y { f64::from_bits(x.to_bits() & y.to_bits()) } else { f64::NAN }
     }
     const PI: f64 = std::f64::consts::PI;
     const DEG_TO_RAD: f64 = PI / 180.0;
