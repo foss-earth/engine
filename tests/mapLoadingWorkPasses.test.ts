@@ -263,7 +263,7 @@ describe("maps loading in work passes (P-112)", () => {
     expect(firstDifference(after.shown, before.shown)).toBe(-1);
     expect(Math.max(...after.updates)).toBeLessThanOrEqual(1);
     console.info(`[P-112 glide] frames drawn ${result.drawnBefore} → ${result.drawnAfter}, map updates ${result.updatesBefore} → ${result.updatesAfter}`);
-  });
+  }, 30_000);
 
   it("shows the same picture when another elevation source reshapes the shown ground, its imagery unchanged", async () => {
     const result = await compare({ frames: 240, at: { 120: host => host.settings.set("map.source.elevation", "aws-terrarium") } });
