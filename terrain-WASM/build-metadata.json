@@ -36,7 +36,7 @@
     "crates/earth-terrain/src/lib.rs": "9746ca775ee3209e7e5d84fd77ed6bd0f8d86f956ed1a3927f40ca5637f899bb",
     "heightSampler.js": "546571f7042884963054a53c762acb4616224eac59c76b95760df3ec8cc08098",
     "index.d.ts": "63749a736e4b787f710997e8ec3e0bda58c9a03a23ed58514c4af8d884d2705c",
-    "index.js": "7be301191f1f5fa922ae69fe05bddb9d54b0f9b4dedb2cdef0e1952bab09fe50",
+    "index.js": "add9cbd315c6618e1942bb91114ddf48baff23c69777c41e662c54aa6db25272",
     "rust-toolchain.toml": "ef4d1f56bd8d2d2644df4c2c5786dc149046cd43048f4550420d77a8829f9e53",
     "scripts/build.mjs": "c97daf56cc8b54e4d5c3cd6b4b662b340ff8e941f31702a037f37ac3508929e1",
     "toolchain.lock.json": "18566c8bd8fc553c8f301f345c526621a751123e8946cae9acbcc1c5e65e2445"
