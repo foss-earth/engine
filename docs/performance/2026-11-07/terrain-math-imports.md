@@ -46,6 +46,10 @@ is a function of the worker's own `Math` is unchanged.
   (`expected [Function bound sin] to be [Function sin]`).
 - `npm run typecheck`, and `eslint` on both files, pass. The test passes
   with `tests/terrainLoaderMemory.test.ts`, which reads both kernels.
+- `c1873a1` left the build receipt with the wrapper's old hash, so
+  `npm run check:wasm` failed on it. `809de39` records the new hash. The
+  binary, rebuilt with the pinned toolchain and Node 26.9.0, is
+  byte-identical.
 
 ## Measured
 
@@ -69,10 +73,23 @@ with their ranges:
 An earlier run of 9 rounds of the first two gave 601.7 → 286.8 µs a mesh
 and 1,602.9 → 735.6 µs a batch.
 
-- The mesh takes half as long, and so does a batch of heights.
+The same bench in Node 26.9.0, the version `toolchain.lock.json` pins, 5
+interleaved rounds. Both arms here have P-131's copies, so the heights are
+not comparable with the table above:
+
+| µs a call, Node 26 | HEAD, bound | The change | TypeScript reference |
+| --- | ---: | ---: | ---: |
+| Mesh | 507.2 (506.2–521.2) | 433.4 (420.5–436.5) | 102.7 (101.1–105.2) |
+| 16,384 heights | 1,163.5 (1,159.5–1,305.8) | 1,022.8 (982.5–1,029.6) | 419.2 (411.2–424.2) |
+
+- In Node 22 the mesh takes half as long, and so does a batch of heights.
+  In Node 26 the gain is 15 % and 12 %.
+- In Node 26 the core is slower than in Node 22 and the TypeScript
+  reference faster. Why was not looked into.
 - The WebAssembly core is still slower than the TypeScript reference: 2.2
-  times for a mesh and 1.4 times for heights. Paired runs in the app had
-  found it slower before (`docs/docs/webassembly-cores.md` in docs).
+  and 1.4 times in Node 22, 4.2 and 2.4 times in Node 26. Paired runs in
+  the app had found it slower before (`docs/docs/webassembly-cores.md` in
+  docs).
 - This work runs in the workers, so it does not change a frame's time on the
   page directly. It changes how soon a mesh or a batch of heights is ready.
 - These are Node timings, not a frame rate. The app's paired
@@ -85,6 +102,7 @@ and 1,602.9 → 735.6 µs a batch.
   `min` and `max` stay imported: Rust's `f64::min` returns the other argument
   for NaN, where `Math.min` returns NaN.
 - A CPU profile of the change's bench puts about a quarter of its samples in
-  `heightSampler.js`'s JavaScript: the batch's coordinates and heights are
+  `heightSampler.js`'s JavaScript: the batch's coordinates and heights were
   copied one number at a time through a `DataView`, where `core.js` copies
-  a mesh's arrays whole.
+  a mesh's arrays whole. P-131 copies them whole
+  ([height batch copies](height-batch-copies.md)).
