@@ -68,6 +68,12 @@ export interface ImageryTuning {
   hysteresis: ImageryHysteresis;
   /** Once the view rests, an existing leaf refines past this many times its target. 1 settles on what a fresh view selects. */
   refineAtRestAbove: number;
+  /**
+   * Re-measure the loaded-detail readout on every publication. Otherwise a
+   * publication alone re-measures it at most every `reselectWhileMovingMs`,
+   * and the last one is always measured. Default false.
+   */
+  loadedDetailEveryPublish?: boolean;
 }
 
 export interface ImageryFeedback {
@@ -358,6 +364,8 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
   let measuredSurfaceRevision = -1;
   let measuredAt = -Infinity;
   let measuredPublish = -1;
+  /** When the readout last measured what is loaded. */
+  let readoutAt = -Infinity;
   let loadedRegions: LoadedImageryRegion[] = [];
   /** The plan's regions and the loaded pages are mostly the same tiles, measured at the same view. */
   const viewMeasurements = createImageryMeasurementCache();
@@ -1078,7 +1086,13 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
     const bindingsChanged = measuredPublish !== counters.publishes;
     if (!moved && !planChanged && !bindingsChanged) return;
     const measureNow = planChanged || now() - measuredAt >= tuning.reselectWhileMovingMs;
-    if ((moved || planChanged) && measureNow) {
+    const regionsDue = (moved || planChanged) && measureNow;
+    // A publication alone, while tiles stream in, waits for the selector's cadence; the last one is measured at its wake.
+    if (!regionsDue && !tuning.loadedDetailEveryPublish && now() - readoutAt < tuning.reselectWhileMovingMs) {
+      scheduleWake(Math.min(readoutAt, moved ? measuredAt : Infinity) + tuning.reselectWhileMovingMs);
+      return;
+    }
+    if (regionsDue) {
       const current = shownPlan.plan;
       const source = shownPlan.source.capabilities;
       // Ordinary view selection already measured these regions. Footprints
@@ -1105,6 +1119,7 @@ export function createImageryRuntime(options: ImageryRuntimeOptions): ImageryRun
     for (const patch of patches.values()) if (patch.visible && patch.bound) bindings.push(patch.bound);
     loadedTarget = measureLoadedImagery(loadedRegions, bindings, shownPlan.plan.physicalTarget * 2 ** shownPlan.plan.offset);
     measuredPublish = counters.publishes;
+    readoutAt = now();
     syncDistribution();
   }
 

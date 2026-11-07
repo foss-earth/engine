@@ -235,6 +235,18 @@ export const MAP_LOADING_PARAMETERS: readonly ParameterSpec[] = [
     description: "The shortest time between two choices of imagery while the view moves. The last view is always chosen for.",
     reason: STARTING_VALUE, source: IMAGERY_RUNTIME,
   }),
+  {
+    id: "map.imagery.loadedDetailEveryPublish",
+    label: "2D imagery loaded detail on every update",
+    description: "Measures the detail rail's loaded imagery each time new imagery is shown. Off, it measures at most once per 2D imagery reselection interval while tiles arrive, and always once they stop, so the rail can trail the map by that interval.",
+    kind: "boolean",
+    unit: "none",
+    default: false,
+    defaultReason: "The rail shows the same detail once tiles stop arriving, for less main-thread work while they arrive: the readout fell from about 60 to 50 ms/s in the app's phone drag at a 4× CPU slowdown (performance ledger P-074).",
+    home: { tab: MAP_TAB, section: "loading", level: "all" },
+    appliesLive: true,
+    source: IMAGERY_RUNTIME,
+  },
   quantity({
     id: "map.imagery.anisotropy", label: "2D imagery anisotropic filtering", unit: "samples", min: 1, max: 16, fallback: 4, scale: "log2", step: 1,
     description: "Texture samples along a steep view of the ground: sharper imagery near the horizon, more GPU work per pixel.",

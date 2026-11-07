@@ -29,6 +29,7 @@ export const IMAGERY_TUNING_IDS = [
   "map.imagery.coarsenBelow",
   "map.imagery.coarsenAfter",
   "map.imagery.pinFor",
+  "map.imagery.loadedDetailEveryPublish",
 ] as const;
 
 function number(settings: SettingsRegistry, id: string): number {
@@ -72,5 +73,7 @@ export function imageryTuningFrom(settings: SettingsRegistry): ImageryTuning {
       pinMs: number(settings, "map.imagery.pinFor"),
     },
     refineAtRestAbove: number(settings, "map.imagery.refineAtRest"),
+    // A host that does not register it gets the cadence.
+    loadedDetailEveryPublish: settings.has("map.imagery.loadedDetailEveryPublish") && settings.get("map.imagery.loadedDetailEveryPublish") === true,
   };
 }
