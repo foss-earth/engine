@@ -129,7 +129,19 @@ Node 22: 9 interleaved rounds; Node 26.9.0: 5.
 
 - A batch from a kept sampler takes 21 % less time in Node 22 and 11 % less
   in Node 26. The kernel's own check, not in these numbers, saves about
-  another 60 µs a batch.
+  another 60 µs a batch once the loop is compiled.
+- The loop is slower on its first calls in a process
+  (`build/native-math/cold.mjs`, 16,384 numbers, 3 fresh processes per
+  Node):
+  - In Node 22 its first two calls take 332–406 and 199–227 µs, against 78–88
+    and 187–198 µs for `every`. From the third it takes 6–11 µs against
+    57–74 µs. It has caught up by about the sixth call.
+  - In Node 26 the loop takes 235–250, 83–95 and 171–211 µs for its first three
+    calls, against 86–99, 81–89 and 167–205 µs for `every`. It is at 6–7 µs
+    by the tenth call against 65–107 µs, and has caught up by then.
+
+  A worker that checks only a few batches pays more for the check than
+  before. The kernel and then the sampler each check every batch.
 - Making a dense grid's sampler costs about 0.02 ms rather than 2.6 in Node
   22, and 0.05 ms rather than 2.5 in Node 26 (each row less the kept
   sampler's batch).
@@ -141,7 +153,8 @@ Node 22: 9 interleaved rounds; Node 26.9.0: 5.
 ## Left
 
 - F2's second step: `sqrt`, `floor`, `round`, `min` and `max` computed in
-  WebAssembly. Each point inside a grid makes 8 of these calls.
+  WebAssembly. Each point inside a grid makes 8 of these calls. Done as P-132
+  ([the terrain core's native math](terrain-native-math.md)).
 - The kernel's TypeScript reference for sparse grids builds its heights with
   `Float64Array.from` and a callback. It runs on the `typescript-worker`
   tier, for the first sparse batch's parity check, and after a fallback.
