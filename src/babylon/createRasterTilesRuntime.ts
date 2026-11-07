@@ -338,6 +338,10 @@ function createTileRecord(
   const key = tileKey(tile);
   const mesh = createTerrainMesh(options, tile, options.getSurfaceHeightMeters ? undefined : GLOBAL_TERRAIN);
   const material = new StandardMaterial(`raster-basemap-material-${source.id}-${key}`, scene);
+  // No mesh draws with this material until the mesh takes it at the end of
+  // this function. Until then each dirty mark only walks every mesh in the
+  // scene to find none using it, so they are blocked.
+  material.blockDirtyMechanism = true;
   // Shows the tile's imagery under the scene's terrain light, when a sky model sets one.
   options.attachTerrainLighting(material);
   // Its surface inside a shown aircraft region is tinted red.
@@ -666,9 +670,21 @@ function createTileRecord(
   material.emissiveColor = Color3.White();
   material.disableLighting = true;
   material.backFaceCulling = false;
+  unblockUnusedMaterial(material);
   mesh.material = material;
 
   return record;
+}
+
+/**
+ * Lets a material's dirty marks through again, for a material no mesh uses
+ * yet. Babylon's public setter would then mark every submesh using it, a walk
+ * of every mesh in the scene that finds none, so its flag is cleared directly.
+ */
+function unblockUnusedMaterial(material: StandardMaterial): void {
+  const internal = material as unknown as { _blockDirtyMechanism?: boolean };
+  if (typeof internal._blockDirtyMechanism === "boolean") internal._blockDirtyMechanism = false;
+  else material.blockDirtyMechanism = false;
 }
 
 function disposeTile(record: RasterTileRecord): void {
@@ -1205,6 +1221,9 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
   const disposeRecord = (record: RasterTileRecord): void => {
     if (!record.mesh.isDisposed() && record.mesh.isEnabled()) drawChanges += 1;
     decodedGridsChanged(surfaceSampler.setDecodedGrid(record.key, null));
+    // The material and mesh are disposed with the tile, so the detached
+    // patch's dirty mark would walk every mesh in the scene for nothing.
+    record.material.blockDirtyMechanism = true;
     finishOwnedCleanup([() => imageryRuntime?.detachPatch(record.key), () => disposeTile(record)], "Raster patch cleanup failed.");
   };
 
