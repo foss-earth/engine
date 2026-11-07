@@ -480,4 +480,85 @@ describe("streamed terrain", () => {
       expect(loader.getMetrics()).toMatchObject({ active: 0, decoding: 0, queued: 0 });
     });
   });
+  describe("elevation that does not exist", () => {
+    // The 13/4551/4096 tile (central Africa) answered 404 when probed, as did its children and grandchildren; its
+    // parent answered 200. Here everything else exists, and a 500 at 13/5000/5000 is an outage, not a missing tile.
+    function source(missing: ReadonlyArray<readonly [number, number, number]> = [[13, 4551, 4096]], maxConcurrent = DEFAULT_TERRAIN_LOADER_LIMITS.maxConcurrent) {
+      const asked: string[] = [], notFound: string[] = [];
+      const absent = (z: number, x: number, y: number) => missing.some(([mz, mx, my]) =>
+        z >= mz && Math.floor(x / 2 ** (z - mz)) === mx && Math.floor(y / 2 ** (z - mz)) === my);
+      const ports = { createAbortController: () => new AbortController(), requestSignal: (signal: AbortSignal) => signal, byteLength: (blob: string) => blob.length,
+        fetchTile: async (url: string) => {
+          asked.push(url.slice(url.indexOf(".com/") + 5, -5));
+          const [z, x, y] = url.slice(url.indexOf(".com/") + 5, -5).split("/").map(Number);
+          const status = z === 13 && x === 5000 && y === 5000 ? 500 : absent(z, x, y) ? 404 : 200;
+          if (status === 404) notFound.push(`${z}/${x}/${y}`);
+          return { ok: status === 200, status, blob: async () => `${z}/${x}/${y}` };
+        } };
+      const decode = async (blob: string) => ({ size: 1, heights: Float32Array.of(blob.length) });
+      return { asked, notFound, loader: createTerrainTileLoader({ ports, decode, limits: () => ({ ...DEFAULT_TERRAIN_LOADER_LIMITS, cacheEntries: 4, maxConcurrent }) }) };
+    }
+    const at = (grid: TerrainGrid) => `${grid.z}/${grid.x}/${grid.y}`;
+
+    it("asks for no tile under one that answered 404, and gives it the nearest existing ancestor", async () => {
+      const { asked, loader } = source();
+      expect(at(await loader.load({ z: 15, x: 18204, y: 16384 }))).toBe("12/2275/2048");
+      expect(asked).toEqual(["15/18204/16384", "14/9102/8192", "13/4551/4096", "12/2275/2048"]);
+      asked.length = 0;
+      // A sibling, a cousin under the same missing tile, and the missing tile's other child: no request.
+      for (const tile of [{ z: 15, x: 18205, y: 16385 }, { z: 15, x: 18207, y: 16386 }, { z: 14, x: 9103, y: 8193 }]) {
+        expect(at(await loader.load(tile))).toBe("12/2275/2048");
+      }
+      expect(asked).toEqual([]);
+      // Beside the missing tile, tiles are still asked for.
+      expect(at(await loader.load({ z: 14, x: 9104, y: 8192 }))).toBe("14/9104/8192");
+      // So is one at another zoom with the missing tile's row × width + column (4096 × 8192 + 4551).
+      expect(at(await loader.load({ z: 14, x: 4551, y: 2048 }))).toBe("14/4551/2048");
+      expect(asked).toEqual(["14/9104/8192", "14/4551/2048"]);
+    });
+
+    it("does not ask for a waiting tile once an ancestor answered 404 while it waited", async () => {
+      const { asked, loader } = source(undefined, 1);
+      const [first, second] = await Promise.all([loader.load({ z: 15, x: 18204, y: 16384 }), loader.load({ z: 15, x: 18206, y: 16386 })]);
+      expect([at(first), at(second)]).toEqual(["12/2275/2048", "12/2275/2048"]);
+      expect(asked).toEqual(["15/18204/16384", "14/9102/8192", "13/4551/4096", "12/2275/2048"]);
+    });
+
+    it("does not ask again for a missing tile its cache has let go, and its ancestor comes back", async () => {
+      const { asked, loader } = source();
+      expect(at(await loader.load({ z: 13, x: 4551, y: 4096 }))).toBe("12/2275/2048");
+      for (let x = 0; x < 6; x++) await loader.load({ z: 10, x, y: 0 });
+      asked.length = 0;
+      expect(at(await loader.load({ z: 13, x: 4551, y: 4096 }))).toBe("12/2275/2048");
+      expect(asked).toEqual(["12/2275/2048"]);
+    });
+
+    it("walks up through missing ancestors, and remembers only 404s", async () => {
+      const { asked, notFound, loader } = source([[13, 4551, 4096], [12, 2275, 2048], [1, 0, 0]]);
+      expect(at(await loader.load({ z: 14, x: 9102, y: 8192 }))).toBe("11/1137/1024");
+      expect(at(await loader.load({ z: 2, x: 1, y: 1 }))).toBe("0/0/0");
+      asked.length = 0; notFound.length = 0;
+      expect(at(await loader.load({ z: 15, x: 18200, y: 16390 }))).toBe("11/1137/1024");
+      expect(at(await loader.load({ z: 3, x: 2, y: 3 }))).toBe("0/0/0");
+      // Only its zoom-1 ancestor has answered 404. The small cache may have let 0/0/0 go, which is asked again.
+      expect(at(await loader.load({ z: 2, x: 0, y: 1 }))).toBe("0/0/0");
+      expect(notFound).toEqual([]);
+      asked.length = 0;
+      await expect(loader.load({ z: 13, x: 5000, y: 5000 })).rejects.toThrow("500");
+      await expect(loader.load({ z: 13, x: 5000, y: 5000 })).rejects.toThrow("500");
+      expect(asked).toEqual(["13/5000/5000", "13/5000/5000"]);
+    });
+
+    it("counts a tile under a missing one as loaded, and builds its patch from the ancestor", async () => {
+      const { asked, loader } = source();
+      await loader.load({ z: 14, x: 9102, y: 8192 });
+      const interest = createTerrainInterest();
+      const arrived = loader.whenLoaded({ z: 15, x: 18206, y: 16386 }, interest);
+      const patch = await loader.loadPatch({ z: 15, x: 18206, y: 16386 }, interest);
+      await arrived;
+      expect(at(patch)).toBe("12/2275/2048");
+      expect(patch.neighbors?.map(at)).toEqual(["12/2274/2047", "12/2275/2047", "12/2276/2047", "12/2274/2048", "12/2276/2048", "12/2274/2049", "12/2275/2049", "12/2276/2049"]);
+      expect(asked.filter(tile => tile.startsWith("15/"))).toEqual([]);
+    });
+  });
 });

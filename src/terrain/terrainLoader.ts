@@ -61,6 +61,11 @@ export interface TerrainTileLoaderOptions<TBlob, TSignal extends NavigationAbort
   trackMemory?: boolean;
 }
 
+/** A tile's place in the quadtree, unique below zoom 26: the tiles of the zooms above it, then its row and column. */
+function tileIndex(tile: TerrainTile): number {
+  return (4 ** tile.z - 1) / 3 + tile.y * 2 ** tile.z + tile.x;
+}
+
 export function createTerrainTileLoader<TBlob, TSignal extends NavigationAbortSignal>(options: TerrainTileLoaderOptions<TBlob, TSignal>) {
   const { source = MAPTERHORN, decode: decodeTile, onBytes, trackMemory = false, ports } = options;
   const controller = ports.createAbortController();
@@ -82,6 +87,10 @@ export function createTerrainTileLoader<TBlob, TSignal extends NavigationAbortSi
   const wants = new Map<string, Set<TerrainInterest>>();
   // Those waiting for a tile to arrive, however it was asked for, by tile.
   const arrivals = new Map<string, Set<() => void>>();
+  // Tiles the source answered 404 for, by quadtree index. The archives keep no tile without its parent (Mapterhorn
+  // makes each zoom from the one below), so a tile under a missing one is missing too, and takes its nearest
+  // existing ancestor's grid without a request (docs/performance/2026-11-06/missing-elevation.md).
+  const missing = new Set<number>();
   const disposedError = (): unknown => controller.signal.reason ?? new Error("Terrain loader disposed");
   const requireCurrent = (): void => { if (controller.signal.aborted) throw disposedError(); };
   async function download(tile: TerrainTile, prioritize: boolean): Promise<TerrainGrid> {
@@ -94,10 +103,13 @@ export function createTerrainTileLoader<TBlob, TSignal extends NavigationAbortSi
     let blob: TBlob;
     try {
       requireCurrent();
+      // An ancestor may have answered 404 while this tile waited.
+      const absent = knownMissing(tile);
+      if (absent) return awaitFallback(absent);
       const url = source.urlTemplate.replace("{z}", String(tile.z)).replace("{x}", String(tile.x)).replace("{y}", String(tile.y));
       const response = await ports.fetchTile(url, ports.requestSignal(controller.signal, options.limits().timeoutMs));
       if (!response.ok) {
-        if (response.status === 404 && tile.z > 0) return awaitFallback(tile);
+        if (response.status === 404 && tile.z > 0) { missing.add(tileIndex(tile)); return awaitFallback(tile); }
         throw new Error(`Terrain request failed (${response.status}): ${url}`);
       }
       blob = await response.blob();
@@ -114,6 +126,14 @@ export function createTerrainTileLoader<TBlob, TSignal extends NavigationAbortSi
   // Release the download slot before awaiting a parent (avoid queue deadlock).
   function awaitFallback(tile: TerrainTile): Promise<TerrainGrid> {
     return load({ z: tile.z - 1, x: Math.floor(tile.x / 2), y: Math.floor(tile.y / 2) }, true);
+  }
+  /** The deepest of a tile and its ancestors known to be missing; null when none is known (always, inside coverage). */
+  function knownMissing(tile: TerrainTile): TerrainTile | null {
+    if (missing.size === 0) return null;
+    for (let { z, x, y } = tile; z > 0; z--, x = Math.floor(x / 2), y = Math.floor(y / 2)) {
+      if (missing.has(tileIndex({ z, x, y }))) return { z, x, y };
+    }
+    return null;
   }
   function pump() {
     const { maxConcurrent } = options.limits(), slots = Math.max(0, options.decodeSlots?.() || 0);
@@ -165,7 +185,8 @@ export function createTerrainTileLoader<TBlob, TSignal extends NavigationAbortSi
       claim(key, interest);
       cache.delete(key); cache.set(key, found); return found;
     }
-    const pending: Promise<TerrainGrid> = download(tile, prioritize).catch(error => {
+    const absent = knownMissing(tile);
+    const pending: Promise<TerrainGrid> = (absent ? awaitFallback(absent) : download(tile, prioritize)).catch(error => {
       // A withdrawn tile has already left the cache, and the same tile asked for again since is another request.
       if (cache.get(key) === pending) { cache.delete(key); claims.delete(key); settled.delete(key); decodedArrays?.delete(key); }
       throw error;
@@ -264,6 +285,6 @@ export function createTerrainTileLoader<TBlob, TSignal extends NavigationAbortSi
       if (controller.signal.aborted) return;
       controller.abort(new Error("Terrain loader disposed"));
       for (const entry of [...ahead.splice(0), ...queue.splice(0)]) entry.reject(disposedError());
-      waiting.clear(); claims.clear(); wants.clear(); arrivals.clear(); cache.clear(); settled.clear(); decodedArrays?.clear();
+      waiting.clear(); claims.clear(); wants.clear(); arrivals.clear(); cache.clear(); settled.clear(); decodedArrays?.clear(); missing.clear();
     } };
 }
