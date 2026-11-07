@@ -319,7 +319,7 @@ describe("raster imagery and terrain lifecycle", () => {
       runtime.setTerrainSource({ id: "new-source", label: "New source", provider: "test", urlTemplate: "https://terrain.test/{z}/{x}/{y}.png", maxZoom: 15, attribution: "test" });
       expect(surface.getRevision!()).toBe(adoptedRevision);
       // A tile created after a source-generation change starts directly in
-      // that generation and exposes decoded contacts before worker adoption.
+      // that generation and exposes decoded camera heights before worker adoption.
       leaves[0] = { ...leaves[0], tile: { z: 2, x: 3, y: 1 }, key: "2/3/1" };
       settings.set("map.terrain.proximityWeight", 2);
       runtime.update();
@@ -350,7 +350,8 @@ describe("raster imagery and terrain lifecycle", () => {
       for (const request of pending.terrain.splice(0)) request.resolve({ ...request.tile, size: 2, heights: new Float32Array([250, 250, 250, 250]) });
       await flush();
       expect(runtime.getRevision()).toBeGreaterThan(revision);
-      expect(runtime.sample(1, 1)).toMatchObject({ quality: 2, heightMeters: 250 });
+      expect(runtime.sampleHeight!(1, 1)).toMatchObject({ quality: 2, heightMeters: 250 });
+      expect(runtime.sample(1, 1)).toBeNull();
       const decodedRevision = runtime.getRevision();
       settings.set("map.terrain.robustOrbitLOD", false);
       expect(runtime.getRevision()).toBeGreaterThan(decodedRevision);
@@ -358,7 +359,8 @@ describe("raster imagery and terrain lifecycle", () => {
       const disabledRevision = runtime.getRevision();
       settings.set("map.terrain.robustOrbitLOD", true);
       expect(runtime.getRevision()).toBeGreaterThan(disabledRevision);
-      expect(runtime.sample(1, 1)).toMatchObject({ quality: 2, heightMeters: 250 });
+      expect(runtime.sampleHeight!(1, 1)).toMatchObject({ quality: 2, heightMeters: 250 });
+      expect(runtime.sample(1, 1)).toBeNull();
       pending.imagery.splice(0).forEach(loaded => loaded());
       runtime.update();
       expect(runtime.getLoadingDiagnostics!().pendingTiles).toBe(0);
@@ -400,7 +402,8 @@ describe("raster imagery and terrain lifecycle", () => {
       const call = prepare.mock.calls.find(([input]) => input.tile.z === 4)!;
       expect(call[1]).toMatchObject({ priority: 1_000_043 });
       expect(call[1]!.signal!.aborted).toBe(false);
-      expect(runtime.sample(1, 1)).toMatchObject({ quality: 4, heightMeters: 275 });
+      expect(runtime.sampleHeight!(1, 1)).toMatchObject({ quality: 4, heightMeters: 275 });
+      expect(runtime.sample(1, 1)).toBeNull();
       pending.terrain.find(request => request.tile.z === 0)!.resolve({ z: 0, x: 0, y: 0, size: 2, heights: new Float32Array([500, 500, 500, 500]) });
       await flush();
       // A slower coarse arrival cannot cancel or replace the already queued
@@ -1351,7 +1354,7 @@ describe("raster imagery and terrain lifecycle", () => {
         getViewState: () => controller.syncFromCamera(),
       });
       controller.configureOrbitTargetHeight({
-        resolveSurfaceHeightMeters: (latDeg, lonDeg) => runtime.sample(latDeg, lonDeg)?.heightMeters ?? null,
+        resolveSurfaceHeightMeters: (latDeg, lonDeg) => runtime.sampleHeight!(latDeg, lonDeg)?.heightMeters ?? null,
       });
       controller.setEyeContact({
         enabled: true,
@@ -1402,7 +1405,7 @@ describe("raster imagery and terrain lifecycle", () => {
         const eyeGeodetic = ecefToGeodetic(camera.position.x, camera.position.y, camera.position.z);
         const eyeLatDeg = (eyeGeodetic.latRad * 180) / Math.PI;
         const eyeLonDeg = (eyeGeodetic.lonRad * 180) / Math.PI;
-        const sampledUnderEye = runtime.sample(eyeLatDeg, eyeLonDeg);
+        const sampledUnderEye = runtime.sampleHeight!(eyeLatDeg, eyeLonDeg);
         expect(sampledUnderEye).not.toBeNull();
 
         // Stepping safe space while hovering over the valley should NOT jolt the camera upward!

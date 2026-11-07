@@ -126,30 +126,6 @@ export function createRasterSurfaceSampler(getRevision: () => number, counters?:
     }
   }
 
-  function sampleGrid(grid: TerrainGrid, u: number, v: number, lat: number, lon: number): SurfaceHit | null {
-    const n = 2 ** grid.z;
-    const heightMeters = sampleTerrainGrid(grid, u * n, v * n);
-    if (!Number.isFinite(heightMeters)) return null;
-    const point = geodeticToEcef(lat, lon, heightMeters);
-    // Estimate the local slope from adjacent decoded pixels, including shared neighbours.
-    const delta = 1 / (grid.size * n);
-    const u0 = Math.max(grid.x / n, u - delta), u1 = Math.min((grid.x + 1) / n, u + delta);
-    const v0 = Math.max(grid.y / n, v - delta), v1 = Math.min((grid.y + 1) / n, v + delta);
-    const west = geodeticToEcef(lat, (u0 * 360 - 180) * DEG_TO_RAD, sampleTerrainGrid(grid, u0 * n, v * n));
-    const east = geodeticToEcef(lat, (u1 * 360 - 180) * DEG_TO_RAD, sampleTerrainGrid(grid, u1 * n, v * n));
-    const north = geodeticToEcef(Math.atan(Math.sinh(Math.PI * (1 - 2 * v0))), lon, sampleTerrainGrid(grid, u * n, v0 * n));
-    const south = geodeticToEcef(Math.atan(Math.sinh(Math.PI * (1 - 2 * v1))), lon, sampleTerrainGrid(grid, u * n, v1 * n));
-    edge1.set(east.x - west.x, east.y - west.y, east.z - west.z);
-    edge2.set(north.x - south.x, north.y - south.y, north.z - south.z);
-    Vector3.CrossToRef(edge1, edge2, normal);
-    if (normal.lengthSquared() === 0) normal.set(Math.cos(lat) * Math.cos(lon), Math.cos(lat) * Math.sin(lon), Math.sin(lat));
-    else normal.normalize();
-    if (!Number.isFinite(normal.x) || !Number.isFinite(normal.y) || !Number.isFinite(normal.z)) return null;
-    return { point, normal: { x: normal.x, y: normal.y, z: normal.z }, heightMeters,
-      distanceMeters: 20000 - heightMeters, meshId: `terrain-grid:${key(grid.z, grid.x, grid.y)}`,
-      revision: getRevision(), quality: grid.z };
-  }
-
   function find(u: number, v: number): TerrainPatch | undefined {
     if (v < -EDGE_EPSILON || v > 1 + EDGE_EPSILON) return;
     const wrappedU = wrap(u);
@@ -202,6 +178,8 @@ export function createRasterSurfaceSampler(getRevision: () => number, counters?:
     }
   }
 
+  /** Contact queries use only the adopted mesh's current triangles, including
+   * active morphs and stitched seams. Decoded residency cannot replace them. */
   function sample(latDeg: number, lonDeg: number): SurfaceHit | null {
     if (counters) counters.samples++;
     if (!Number.isFinite(latDeg) || !Number.isFinite(lonDeg) || Math.abs(latDeg) > MAX_LAT) return null;
@@ -209,11 +187,6 @@ export function createRasterSurfaceSampler(getRevision: () => number, counters?:
     const lat = latDeg * DEG_TO_RAD, lon = (u * 360 - 180) * DEG_TO_RAD;
     const v = Math.max(0, Math.min(1, (1 - Math.asinh(Math.tan(lat)) / Math.PI) / 2));
     const primary = find(u, v);
-    const grid = findGrid(u, v);
-    if (grid && grid.z > (primary?.mesh.metadata.terrainZoom ?? -1)) {
-      const hit = sampleGrid(grid, u, v, lat, lon);
-      if (hit) return hit;
-    }
     const start = geodeticToEcef(lat, lon, 20000);
     origin.set(start.x, start.y, start.z);
     ray.direction.set(-Math.cos(lat) * Math.cos(lon), -Math.cos(lat) * Math.sin(lon), -Math.sin(lat));
@@ -243,9 +216,8 @@ export function createRasterSurfaceSampler(getRevision: () => number, counters?:
     }
     const patch = bestPatch as TerrainPatch | null;
     if (!patch) {
-      const hit = grid ? sampleGrid(grid, u, v, lat, lon) : null;
-      if (!hit && counters) counters.misses++;
-      return hit;
+      if (counters) counters.misses++;
+      return null;
     }
     const point = { x: origin.x + ray.direction.x * bestDistance, y: origin.y + ray.direction.y * bestDistance,
       z: origin.z + ray.direction.z * bestDistance };
@@ -255,7 +227,8 @@ export function createRasterSurfaceSampler(getRevision: () => number, counters?:
       heightMeters, meshId: patch.mesh.id, revision: getRevision(), quality: patch.mesh.metadata.terrainZoom ?? -1 };
   }
 
-  /** Eye contact needs a height and quality, without ECEF positions or terrain normals. */
+  /** Camera eye contact may use finer resident decoded heights before mesh
+   * adoption. It needs height/quality, not the displayed contact triangles. */
   function sampleHeight(latDeg: number, lonDeg: number): Pick<SurfaceHit, "heightMeters" | "quality"> | null {
     if (decodedLevels.length && Number.isFinite(latDeg) && Number.isFinite(lonDeg) && Math.abs(latDeg) <= MAX_LAT) {
       const u = wrap((lonDeg + 180) / 360);

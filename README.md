@@ -31,6 +31,19 @@ Other optional peers: `@foss-earth/renderer`, `@foss-earth/ui`, `@foss-earth/sky
 
 A displayed geometry coordinate height does not establish a physical terrain datum conversion.
 
+## Surface queries
+
+Collision samples use the adopted terrain mesh's current triangles, including
+stitched seams and active morphs. A finer decoded elevation tile cannot override
+the mesh being drawn or create support before mesh adoption. The raster sampler
+uses its existing tile/cell index; it does not add another terrain mesh or change
+mesh density. An adopted patch remains queryable outside the camera frustum.
+
+The camera's height-only query may still read shared decoded elevation grids to
+prepare its orbit and clearance before adoption. Those grids and spatial query
+indices are distinct from a second physical world; they are not duplicated
+render meshes. Consumers that need physical contact use the full surface query.
+
 ## Documents
 
 - [Keyboard motion curves and additive forces](docs/keyboard-motion-curves.md): tuning, blending and possible future uses.

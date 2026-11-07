@@ -4,7 +4,7 @@ export interface SurfaceHit {
   point: EcefCoord;
   normal: EcefCoord;
   distanceMeters: number;
-  /** WGS84 ellipsoid-coordinate height; raster samples can use finer resident decoded heights. */
+  /** WGS84 ellipsoid-coordinate height of the current displayed geometry. */
   heightMeters: number;
   meshId: string;
   /** Changes when queryable map geometry or decoded elevation residency changes. */

@@ -1,4 +1,4 @@
-import { MeshBuilder, NullEngine, NullEngineOptions, Scene, TransformNode, VertexBuffer } from "@babylonjs/core";
+import { FreeCamera, Frustum, Vector3, MeshBuilder, NullEngine, NullEngineOptions, Scene, TransformNode, VertexBuffer } from "@babylonjs/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEG_TO_RAD, geodeticToEcef } from "../src/camera/cameraMath.js";
 import { createTerrainMesh } from "../src/babylon/terrainMesh.js";
@@ -66,18 +66,40 @@ describe("indexed adopted raster triangles", () => {
     expect(s.sampler.sampleHeight(...location)).toBeNull();
   });
 
-  it("returns the same height and quality as full queries for decoded and adopted surfaces", () => {
+  it("keeps adopted terrain queryable when the camera looks away", () => {
+    const s = setup(), tile = { z: 15, x: 7898, y: 11805 };
+    const patch = s.patch(tile);
+    s.sampler.setCoverage([patch]);
+    const location = coord(tile, 0.41, 0.63);
+    const before = s.sampler.sample(...location)!;
+    const ground = new Vector3(before.point.x, before.point.y, before.point.z);
+    const up = ground.normalizeToNew();
+    const camera = new FreeCamera("away", ground.add(up.scale(10000)), s.scene);
+    camera.minZ = 0.1; camera.maxZ = 10000;
+    camera.setTarget(camera.position.add(up.scale(100)));
+    camera.getViewMatrix(true); camera.getProjectionMatrix(true);
+    const planes = Frustum.GetPlanes(camera.getTransformationMatrix());
+    expect(patch.mesh.isInFrustum(planes)).toBe(false);
+    expect(patch.mesh.isEnabled()).toBe(true);
+    expect(s.sampler.sample(...location)).toEqual(before);
+  });
+
+  it("keeps camera decoded-height queries separate from displayed contact triangles", () => {
     const s = setup(), tile = { z: 15, x: 7898, y: 11805 };
     const patch = s.patch(tile);
     s.sampler.setCoverage([patch]);
     const location = coord(tile, 0.41, 0.63);
     const meshHit = s.sampler.sample(...location)!;
     expect(s.sampler.sampleHeight(...location)).toEqual({ heightMeters: meshHit.heightMeters, quality: meshHit.quality });
-    s.sampler.setDecodedGrid("fine", { z: 16, x: tile.x * 2, y: tile.y * 2 + 1, size: 2,
-      heights: new Float32Array([100, 200, 300, 400]) });
-    const gridHit = s.sampler.sample(...location)!;
+    const grid = { z: 16, x: tile.x * 2, y: tile.y * 2 + 1, size: 2,
+      heights: new Float32Array([100, 200, 300, 400]) };
+    s.sampler.setDecodedGrid("fine", grid);
+    const contactHit = s.sampler.sample(...location)!;
+    expect(contactHit.meshId).toBe(patch.mesh.id);
+    expect(contactHit.heightMeters).toBe(meshHit.heightMeters);
     const triangles = s.counters.triangles;
-    expect(s.sampler.sampleHeight(...location)).toEqual({ heightMeters: gridHit.heightMeters, quality: 16 });
+    expect(s.sampler.sampleHeight(...location)).toEqual({
+      heightMeters: sampleTerrainGrid(grid, tile.x * 2 + 0.82, tile.y * 2 + 1.26), quality: 16 });
     expect(s.counters.triangles).toBe(triangles);
     expect(s.sampler.setDecodedGrid("fine", null)).toBe(true);
     expect(s.sampler.sampleHeight(...location)).toEqual({ heightMeters: meshHit.heightMeters, quality: meshHit.quality });
@@ -95,7 +117,7 @@ describe("indexed adopted raster triangles", () => {
     expect(s.sampler.clearDecodedGrids()).toBe(false);
   });
 
-  it.each([false, true])("samples finer resident decoded heights before mesh adoption (shared=%s)", shared => {
+  it.each([false, true])("uses displayed triangles despite conflicting finer decoded heights (shared=%s)", shared => {
     const s = setup();
     const coarse = s.patch({ z: 14, x: 3949, y: 5902 }, 1000);
     const tile = { z: 15, x: 7898, y: 11805 };
@@ -106,18 +128,19 @@ describe("indexed adopted raster triangles", () => {
     s.sampler.setCoverage([coarse]);
     expect(s.sampler.setDecodedGrids([grid])).toBe(true);
     expect(s.sampler.setDecodedGrids([grid])).toBe(false);
-    const hit = s.sampler.sample(...location)!;
-    expect(hit.heightMeters).toBeCloseTo(sampleTerrainGrid(grid, tile.x + 0.41, tile.y + 0.63), 7);
-    expect(hit.quality).toBe(15);
-    expect(hit.meshId).toBe(`terrain-grid:15/7898/11805`);
-    expect(hit.revision).toBe(27);
-    expect(Math.hypot(hit.normal.x, hit.normal.y, hit.normal.z)).toBeCloseTo(1, 8);
-    expect(s.counters.triangles).toBe(0);
-    // A decoded grid can serve a proximity tile without a displayed mesh.
+    const hit = s.compare(...location);
+    expect(hit.meshId).toBe(coarse.mesh.id);
+    expect(hit.quality).toBe(14);
+    const cameraHit = s.sampler.sampleHeight(...location)!;
+    expect(cameraHit.quality).toBe(15);
+    expect(cameraHit.heightMeters).toBeCloseTo(sampleTerrainGrid(grid, tile.x + 0.41, tile.y + 0.63), 7);
+    // Decoded data still serves the camera while no triangle is displayed,
+    // but cannot create invisible physical support or satisfy collision readiness.
     s.sampler.setCoverage([]);
-    expect(s.sampler.sample(...location)?.heightMeters).toBeCloseTo(hit.heightMeters, 8);
-    expect(s.sampler.setDecodedGrids([])).toBe(true);
     expect(s.sampler.sample(...location)).toBeNull();
+    expect(s.sampler.sampleHeight(...location)?.heightMeters).toBe(cameraHit.heightMeters);
+    expect(s.sampler.setDecodedGrids([])).toBe(true);
+    expect(s.sampler.sampleHeight(...location)).toBeNull();
   });
 
   it("keeps adopted geometry when decoded data has no finer quality", () => {
