@@ -115,6 +115,12 @@ export function createTerrainRegions(ports: RegionPorts) {
           validateTerrainRegion({ ...options, region });
           if (JSON.stringify(region) === JSON.stringify(entry.demand.region)) return;
           entry.demand = createTerrainRegionDemand(structuredClone(region), { ...options.minimum }, { ...options.final });
+          // The moved region needs the support column only where its center's
+          // ground is unknown, as the next check decides. Required until then,
+          // the maps selected the column at the next update and dropped it
+          // after the check, before its tiles could load, each time the host
+          // moved the region.
+          entry.demand.supportRequired = ports.groundHeight(region.center.latDeg, region.center.lonDeg) === null;
           // The shown region moves now; its outlines are measured at the next check.
           if (entry.display) entry.display = { demand: entry.demand, outlines: [], revision: entry.display.revision + 1 };
           lastCheck = -Infinity; rate = 0; previousReady = previousPending = 0; previousAt = ports.nowMs();

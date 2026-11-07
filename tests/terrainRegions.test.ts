@@ -177,3 +177,24 @@ it("keeps center-height discovery active after an empty airborne volume is ready
   expect(lease.read().groundHeightMeters).toBe(250); expect(end).toHaveBeenCalledOnce();
   expect(owner.demands()[0].supportRequired).toBe(false); owner.dispose();
 });
+
+it("asks a moved region for the support column only where its center's ground is unknown", () => {
+  const ground = new Map<number, number>([[0, 250]]);
+  const owner = createTerrainRegions({ nowMs: () => 0, sourceGeneration: () => 1,
+    coverage: () => coverage(0, 0), groundHeight: (_lat, lon) => ground.get(lon) ?? null, unavailableReason: () => null,
+    beginContinuous: vi.fn(), endContinuous: vi.fn(), requestRender: vi.fn() });
+  const lease = owner.prepare(options());
+  expect(owner.demands()[0].supportRequired).toBe(true);
+  owner.tick(200); expect(owner.demands()[0].supportRequired).toBe(false);
+  // Moved over known ground: no column before the next check, and the check agrees.
+  ground.set(0.001, 260);
+  lease.update({ ...options().region, center: { latDeg: 0, lonDeg: 0.001, altitudeMeters: 1 } });
+  expect(owner.demands()[0].supportRequired).toBe(false);
+  owner.tick(400); expect(owner.demands()[0].supportRequired).toBe(false);
+  // Moved where the ground is not known yet: the column at once, until the ground is found.
+  lease.update({ ...options().region, center: { latDeg: 0, lonDeg: 1, altitudeMeters: 1 } });
+  expect(owner.demands()[0].supportRequired).toBe(true);
+  owner.tick(600); expect(owner.demands()[0].supportRequired).toBe(true);
+  ground.set(1, 300); owner.tick(800); expect(owner.demands()[0].supportRequired).toBe(false);
+  owner.dispose();
+});
