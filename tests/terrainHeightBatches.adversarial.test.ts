@@ -223,4 +223,22 @@ describe("height snapshot lifecycle and bounded admission", () => {
       expect(thrown.map(callback => { try { callback(); } catch (error) { return (error as Error).message; } })).toEqual(["Invalid sparse height snapshot", "Invalid packed height batch", "Invalid height batch request"]);
     } finally { vi.unstubAllGlobals(); installed.dispose(); }
   });
+
+  it("refuses a batch with a coordinate that is not finite, wherever it is", async () => {
+    const replies: HeightBatchReply[] = [], thrown: Array<() => void> = [];
+    const scope: HeightBatchWorkerScope = { onmessage: null, postMessage(value) { replies.push(value); } };
+    const request = (coordinates: Float64Array) => ({ data: { kind: "terrain-heights", version: 1, id: 1, batches: [{ gridId: 1, grid: grid(2, 7), coordinates }] } } as MessageEvent<HeightBatchRequest>);
+    const finite = Float64Array.from({ length: 64 }, (_, i) => (i % 7) / 7);
+    const bad: Float64Array[] = [];
+    for (const value of [NaN, Infinity, -Infinity]) for (const at of [0, 1, 31, 62, 63]) { const coordinates = finite.slice(); coordinates[at] = value; bad.push(coordinates); }
+    vi.stubGlobal("setTimeout", (callback: () => void) => { thrown.push(callback); return 0; });
+    try {
+      for (const coordinates of [finite, ...bad]) {
+        const kernel = installTerrainHeightBatchKernel({ scope, kernel: "typescript", now: () => 0 });
+        try { scope.onmessage?.(request(coordinates)); await turn(); } finally { kernel.dispose(); }
+      }
+    } finally { vi.unstubAllGlobals(); }
+    expect(replies.map(reply => [...reply.batches[0].heights])).toEqual([Array.from({ length: 32 }, () => 7)]);
+    expect(thrown.map(callback => { try { callback(); } catch (error) { return (error as Error).message; } })).toEqual(bad.map(() => "Invalid height coordinates"));
+  });
 });

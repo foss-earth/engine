@@ -5,6 +5,11 @@ import type { HeightBatchWorkerScope, WasmHeightCore, WasmHeightSampler } from "
 const MAX_SNAPSHOTS = 24 * 1024 ** 2;
 const MAX_BATCH = 8192;
 function gridBytes(grid: TerrainGrid): number { return [grid, ...(grid.neighbors ?? [])].reduce((sum, source) => sum + source.heights.byteLength, 0); }
+/** `values.every(Number.isFinite)`, without a call for each value. */
+function allFinite(values: Float64Array): boolean {
+  for (let i = 0; i < values.length; i++) if (!Number.isFinite(values[i])) return false;
+  return true;
+}
 function reference(grid: TerrainGrid, coordinates: Float64Array): Float64Array {
   const out = new Float64Array(coordinates.length / 2);
   for (let i = 0; i < out.length; i++) out[i] = sampleTerrainGrid(grid, coordinates[i * 2], coordinates[i * 2 + 1]);
@@ -95,7 +100,7 @@ export function installTerrainHeightBatchKernel(options: {
       }
       for (const batch of requested) {
         if (!Number.isSafeInteger(batch.gridId) || batch.gridId < 1 || !(batch.coordinates instanceof Float64Array)
-          || batch.coordinates.length % 2 || !batch.coordinates.length || !batch.coordinates.every(Number.isFinite)) throw new Error("Invalid height coordinates");
+          || batch.coordinates.length % 2 || !batch.coordinates.length || !allFinite(batch.coordinates)) throw new Error("Invalid height coordinates");
         samples += batch.coordinates.length / 2;
         if (samples > MAX_BATCH) throw new Error("Height batch exceeds 8192 samples");
         if (batch.sparse) {
