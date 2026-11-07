@@ -114,7 +114,7 @@ export function createMapSourceHud(container: HTMLElement, options: MapSourceHud
   const provider = document.createElement("button");
   provider.type = "button";
   provider.className = "map-source-hud__provider";
-  provider.title = "Basemap. Click to show or hide the Map tab.";
+  provider.title = "Basemap. Click to show or hide the Basemap tab.";
   const logo = document.createElement("img");
   logo.className = "map-source-hud__logo";
   logo.alt = "";
@@ -176,7 +176,7 @@ export function createMapSourceHud(container: HTMLElement, options: MapSourceHud
     setMapSourceLabel(provider, shortName);
     warning.hidden = !status.lastError;
     provider.setAttribute("aria-label", `Basemap: ${name}. Show or hide the Basemap tab`);
-    provider.title = `${name}. Click to show or hide the Map tab.`;
+    provider.title = `${name}. Click to show or hide the Basemap tab.`;
     wordmark.hidden = current.wordmark === null;
     if (current.wordmark) {
       wordmarkOnDark.src = current.wordmark.onDark;

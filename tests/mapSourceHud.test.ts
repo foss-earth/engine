@@ -54,6 +54,7 @@ describe("the map source HUD", () => {
     hud.update(status(null));
     expect(warning.hidden).toBe(true);
     expect(provider.getAttribute("aria-label")).toBe("Basemap: USGS Imagery Topo. Show or hide the Basemap tab");
+    expect(provider.title).toBe("USGS Imagery Topo. Click to show or hide the Basemap tab.");
     hud.destroy();
   });
 
