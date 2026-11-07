@@ -557,7 +557,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
   let preparationTick: ((now: number) => void) | null = null;
   let cancelPreparation: ((error: Error) => void) | null = null;
   const terrainRegions = createTerrainRegions({
-    nowMs: clock.nowMs, sourceGeneration: () => readCurrentSurfaceState().sourceGeneration,
+    nowMs: clock.nowMs, sourceGeneration: () => { advanceCurrentSurface(); return sourceGeneration; },
     coverage: (demand, tier, outline) => status.mode === "google-tiles" ? tilesRuntime?.getRegionCoverage(demand, tier, outline) ?? null
       : status.mode === "raster-basemap" ? rasterTilesRuntime?.getRegionCoverage(demand, tier, outline) ?? null : null,
     groundHeight: (lat, lon) => { const hit = surface.sample(lat, lon); return hit && Number.isFinite(hit.heightMeters) ? hit.heightMeters : null; },
@@ -2090,7 +2090,13 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
   let previousGoogleRevision = readGoogleRevision(), previousRasterRevision = readRasterRevision();
   let previousMode = status.mode, previousDisposed = disposed, previousSource = "";
   let previousRasterUrl: string | undefined;
-  const readCurrentSurfaceState = (): CurrentSurfaceOwnerState => {
+  /**
+   * Moves the displayed revision and the source generation on when the maps
+   * have changed, and returns the selected source. Every read of either
+   * counter goes through this; the rest of the state only reads the maps'
+   * diagnostics, so a caller that wants a counter skips it.
+   */
+  const advanceCurrentSurface = (): string => {
     const googleRevision = readGoogleRevision(), rasterRevision = readRasterRevision();
     if (previousGoogle !== tilesRuntime || previousRaster !== rasterTilesRuntime
       || previousGoogleRevision !== googleRevision || previousRasterRevision !== rasterRevision
@@ -2108,6 +2114,10 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
       previousRasterUrl = rasterUrl;
       const stop = afterSurfaceSettlement; afterSurfaceSettlement = null; stop?.();
     }
+    return selectedSource;
+  };
+  const readCurrentSurfaceState = (): CurrentSurfaceOwnerState => {
+    const selectedSource = advanceCurrentSurface();
     const displayedSources = [
       ...((tilesRuntime?.tiles.visibleTiles.size ?? 0) > 0 ? ["google"] : []),
       ...((rasterTilesRuntime?.getMetrics().visibleTiles ?? 0) > 0 ? ["raster"] : []),
@@ -2125,19 +2135,20 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
       suspended: mapsSuspended,
       error: status.lastError?.replace(/(?:[a-z][a-z\d+.-]*:)?\/\/[^\s)"'<>]+/gi, "[provider URL]") ?? null };
   };
+  const readCurrentSurfaceRevision = (): number => { advanceCurrentSurface(); return displayedRevision; };
   const surface = createSurfaceQuery(scene, () => worldRoot, isMapSurface,
-    () => readCurrentSurfaceState().revision,
+    readCurrentSurfaceRevision,
     (lat, lon) => {
       if (status.mode !== "raster-basemap" || !rasterTilesRuntime) return undefined;
       const hit = rasterTilesRuntime.sample(lat, lon);
-      if (hit) return { ...hit, revision: hit.revision === rasterTilesRuntime.getRevision() ? readCurrentSurfaceState().revision : -1 };
+      if (hit) return { ...hit, revision: hit.revision === rasterTilesRuntime.getRevision() ? readCurrentSurfaceRevision() : -1 };
       // A source transition can still display outgoing Google triangles. Query
       // those real triangles until the ordinary adoption path retires them.
       return (tilesRuntime?.tiles.visibleTiles.size ?? 0) > 0 ? undefined : null;
     }, options.groundAcceleration);
   const displayedSurface = createCurrentDisplayedSurface(surface, readCurrentSurfaceState);
   // A tile failure that has ended is gone from the state the surface reports.
-  refreshCurrentSurface = () => { clearSettledRasterError(); readCurrentSurfaceState(); displayedSurface.refresh(); };
+  refreshCurrentSurface = () => { clearSettledRasterError(); advanceCurrentSurface(); displayedSurface.refresh(); };
   // Current once refreshCurrentSurface has read the state this frame.
   surfaceRevision = () => displayedRevision;
   authority.own(() => { refreshCurrentSurface = () => {}; surfaceRevision = () => undefined; displayedSurface.dispose(); });
