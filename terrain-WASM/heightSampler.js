@@ -2,6 +2,7 @@ const MAX_BYTES = 128 * 1024 ** 2;
 const MAX_MEMORY = 256 * 1024 ** 2;
 // WebAssembly memory is little-endian. On a little-endian host, typed arrays over it copy whole arrays at once.
 const LITTLE_ENDIAN = new Uint8Array(new Uint32Array([0x01020304]).buffer)[0] === 4;
+const BATCH_ERROR = "Height batches need 1–65536 finite x/y pairs";
 
 /** `values.every(Number.isFinite)`, without a call for each value. */
 function allFinite(values) {
@@ -87,8 +88,9 @@ export function createTerrainHeightSampler(wasm, grid, assertActive, onDispose) 
     sample(coordinates) {
       assertActive();
       if (closed) throw new Error("Height snapshot is disposed");
-      if (!(coordinates instanceof Float64Array) || !coordinates.length || coordinates.length % 2 || coordinates.length > 131072
-        || !allFinite(coordinates)) throw new RangeError("Height batches need 1–65536 finite x/y pairs");
+      if (!(coordinates instanceof Float64Array) || !coordinates.length || coordinates.length % 2 || coordinates.length > 131072) throw new RangeError(BATCH_ERROR);
+      // The core refuses a batch with a point that is not finite, so the points are looked at here only when a batch
+      // fails, and such a batch is refused with the same error as when they were checked first.
       const temporary = [];
       let failure;
       try {
@@ -108,7 +110,7 @@ export function createTerrainHeightSampler(wasm, grid, assertActive, onDispose) 
           for (let i = 0; i < count; i++) result[i] = resultView.getFloat64(i * 8, true);
         }
         return result;
-      } catch (error) { failure = error; throw error; }
+      } catch (error) { failure = allFinite(coordinates) ? error : new RangeError(BATCH_ERROR); throw failure; }
       finally {
         try { release(temporary); } catch (error) { throw new AggregateError(failure ? [failure, error] : [error], "Height batch cleanup failed"); }
       }

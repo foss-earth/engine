@@ -34,7 +34,7 @@
     "core.js": "c92471323ea61fa98364dd14174165cf92540d03fb100657f9e3889698458f9e",
     "crates/earth-terrain/Cargo.toml": "be4863bc75bc39df721cf4bc8ee68aa1b7ff91970a616c376382aa2a4b2ee760",
     "crates/earth-terrain/src/lib.rs": "1b4a4217bec18188302c43b57945ae7c372149849e18f375d81108867284748b",
-    "heightSampler.js": "113cc25cd577fbcdee593f6ddf7b48faf95966928055b97e25b512f4ad72f872",
+    "heightSampler.js": "ae91d251256580db20c75f474b4158bb2798396686d8e5f754cdcdac3c00fb07",
     "index.d.ts": "bd0d93166a4f3e90fd2844bbe7f650b00a001c590399e136bcbfb48f6f7ccdef",
     "index.js": "b0cd0c313e0bdabd1330a88539d170c741f2822654a9244ddaf2cd2d89fe061b",
     "rust-toolchain.toml": "ef4d1f56bd8d2d2644df4c2c5786dc149046cd43048f4550420d77a8829f9e53",
