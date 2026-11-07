@@ -51,6 +51,7 @@
     "./map.css": "./styles/map.css",
     "./overview-map.css": "./styles/overview-map.css",
     "./location.css": "./styles/location.css",
+    "./earth-area.css": "./styles/earth-area.css",
     "./react": {
       "source": "./src/react.ts",
       "types": "./dist/src/react.d.ts",

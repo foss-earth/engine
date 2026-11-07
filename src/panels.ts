@@ -1,3 +1,6 @@
+export * from "./area/earthArea.js";
+export * from "./area/earthAreaStore.js";
+export * from "./area/earthAreaPanel.js";
 export * from "./map/mapDetailPanel.js";
 export * from "./map/mapDetailSlider.js";
 export * from "./map/mapCacheSection.js";

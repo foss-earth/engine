@@ -1,6 +1,6 @@
 # @foss-earth/engine
 
-Globe engine for FOSS Earth: geographic coordinates, camera and input, navigation, terrain and maps, layers, points of interest, sprites, the orbit compass, and the Map, Location and Controls panels.
+Globe engine for FOSS Earth: geographic coordinates, camera and input, navigation, terrain and maps, layers, points of interest, sprites, the orbit compass, and the Map, Location, Select area and Controls panels.
 
 The host supplies the renderer, scene, scheduler, settings, clock and feature contributions. `createGlobeRuntime` borrows the renderer, lifecycle, scheduler, profiler and sky from the host and needs an explicit host terrain policy. See [globe runtime](docs/globe-runtime.md).
 
@@ -16,7 +16,7 @@ Root, `/core` and `/imagery` are pure. Everything else is an explicit optional e
 | `/settings` | Engine settings and migrations. |
 | `/gamepad` | Gamepad host adapter (optional peer `@felipegalind0/gamepad-tools`). |
 | `/imagery` | Legacy and atlas imagery selection, residency and material binding. |
-| `/panels` | Map, Location and Controls panels, built through the UI package's factories. |
+| `/panels` | Map, Location, Select area and Controls panels, built through the UI package's factories. |
 | `/react` | React components, including the map cache panel (optional peer `react`). |
 | `/layers`, `/sprites`, `/compass` | Layer, sprite and orbit compass host adapters. Need host ports. |
 | `/visualization` | Pure source defaults, point math, migrations and horizon culling. |

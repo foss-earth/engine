@@ -21,7 +21,9 @@ import type { ImageryConstraint, ImageryConstraintCause } from "../terrain/image
 import { DEFAULT_RASTER_IMAGERY } from "../settings/mapRuntimeConfig.js";
 import { isKnownRasterBaseMapId, resolveRasterBaseMapSource, withSourceKey, type RasterBaseMapSource } from "../map/rasterBaseMaps.js";
 import type { AutoDetailDecision } from "../terrain/autoDetail.js";
-import { geodeticToEcef, DEG_TO_RAD } from "../camera/cameraMath.js";
+import { ecefToGeodetic, geodeticToEcef, DEG_TO_RAD, RAD_TO_DEG } from "../camera/cameraMath.js";
+import type { MapClickPicker } from "../input/mapClick.js";
+import type { EarthAreaDrawing } from "../area/earthArea.js";
 import { CameraController, type OrbitTargetHeightOptions } from "./cameraState.js";
 import { createInputController, type InputController } from "../browser/createInputController.js";
 import { passUnusedInputToWorld } from "../browser/passToWorld.js";
@@ -335,6 +337,18 @@ export interface GlobeRuntime {
    */
   readonly navigationAnchors: GlobeNavigationAnchors;
   /**
+   * While this picker is armed, a click or tap on the map is given to it
+   * instead of Pick point. A drag still moves the camera. Escape cancels it.
+   */
+  setMapClickPicker(picker: MapClickPicker | null): void;
+  /** The ground under a client position: latitude and longitude, or null for empty sky. */
+  groundAtClient(client: { readonly x: number; readonly y: number }): { latDeg: number; lonDeg: number } | null;
+  /**
+   * Draws these areas of the earth. An area with a height extends that far
+   * above the ground under its corners. An empty list clears the drawing.
+   */
+  showEarthAreas(drawings: readonly EarthAreaDrawing[]): void;
+  /**
    * Where controller intents go in a context other than "globe": the lease
    * holder's handler. Returns a function that removes it.
    */
@@ -515,6 +529,11 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
   // Shown aircraft regions (`TerrainRegionLease.setVisible`), drawn once one is shown.
   let regionOverlay: TerrainRegionOverlay | null = null;
   let regionOverlayLoading = false, regionOverlayFailed = false;
+  // Areas of the earth (Select area). A click picker, while armed, takes the click Pick point would.
+  let mapClickPicker: MapClickPicker | null = null;
+  let areaOverlay: { show(drawings: readonly EarthAreaDrawing[]): void; dispose(): void } | null = null;
+  let areaOverlayLoading = false, areaOverlayFailed = false;
+  let pendingAreas: readonly EarthAreaDrawing[] = [];
   const anchorListeners = new Set<() => void>();
   let simRunning = simMode && options.external?.running !== false;
   let simTick: ((deltaSeconds: number) => void) | null = options.external?.onFrame ?? null;
@@ -595,6 +614,7 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
   authority.own(() => { inertialCameraController?.cancel(); inertialCameraController = null; });
   authority.own(() => { const owned = compassSphere; compassSphere = null; owned?.dispose(); });
   authority.own(() => { const owned = regionOverlay; regionOverlay = null; owned?.dispose(); });
+  authority.own(() => { const owned = areaOverlay; areaOverlay = null; owned?.dispose(); });
   authority.own(() => {
     // The pin, Pick point, gestures' anchors and markers go with the runtime; Controls says nothing of them after.
     const owned = navigationAnchors, markers = anchorMarkers;
@@ -945,7 +965,18 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
       }) });
     inputController = simMode
       ? null
-      : createInputController(canvas, inertialCameraController, { ...platform.input, isOrbitMode: () => orbitModeActive, pointSelection: anchors.selection });
+      : createInputController(canvas, inertialCameraController, { ...platform.input, isOrbitMode: () => orbitModeActive, pointSelection: {
+        armed: () => (mapClickPicker?.armed() ?? false) || anchors.selection.armed(),
+        pickAt: client => {
+          const picker = mapClickPicker;
+          return picker?.armed() ? picker.pickAt(client) : anchors.selection.pickAt(client);
+        },
+        cancel: () => {
+          const picker = mapClickPicker;
+          if (picker?.armed()) picker.cancel();
+          else anchors.selection.cancel();
+        },
+      } });
     inputController?.setRates(inputRates());
     inputController?.setTouchTwist(touchTwist());
 
@@ -1038,6 +1069,24 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
       owned.dispose();
       scheduler.requestRender();
     }
+  }
+
+  /** Draws selected areas once one has a corner (`earthAreaOverlay.ts`). A page that selects none never downloads it. */
+  function showEarthAreas(drawings: readonly EarthAreaDrawing[]): void {
+    if (disposed) return;
+    pendingAreas = drawings;
+    if (areaOverlay) { areaOverlay.show(drawings); return; }
+    if (!drawings.some(drawing => drawing.area.points.length > 0) || areaOverlayLoading || areaOverlayFailed) return;
+    areaOverlayLoading = true;
+    void import("./earthAreaOverlay.js").then(({ createEarthAreaOverlay }) => {
+      areaOverlayLoading = false;
+      if (disposed || areaOverlay) return;
+      areaOverlay = createEarthAreaOverlay(scene, { parent: worldRoot, requestRender: () => scheduler.requestRender() });
+      areaOverlay.show(pendingAreas);
+    }, (error: unknown) => {
+      areaOverlayLoading = false; areaOverlayFailed = true;
+      console.warn("The selected area could not be drawn.", error);
+    });
   }
 
   /**
@@ -2403,6 +2452,21 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
       return placeNavigationCamera(lease, view, { render: false });
     },
     navigationAnchors: globeNavigationAnchors,
+    setMapClickPicker(picker) {
+      if (disposed || mapClickPicker === picker) return;
+      const previous = mapClickPicker;
+      mapClickPicker = picker;
+      if (previous?.armed()) previous.cancel();
+    },
+    groundAtClient(client) {
+      if (disposed) return null;
+      const found = navigationAnchors?.groundAt(client);
+      if (!found) return null;
+      const place = ecefToGeodetic(found.point.x, found.point.y, found.point.z);
+      if (!Number.isFinite(place.latRad) || !Number.isFinite(place.lonRad)) return null;
+      return { latDeg: place.latRad * RAD_TO_DEG, lonDeg: place.lonRad * RAD_TO_DEG };
+    },
+    showEarthAreas,
     setNavigationIntentHandler(lease, handler) {
       if (navigation.current() !== lease || lease.released) return () => {};
       const entry = { lease, handler };
@@ -2425,6 +2489,8 @@ export function createGlobeRuntime(canvas: HTMLCanvasElement, options: GlobeRunt
     getTerrainHeightStats: () => rasterTilesRuntime?.getTerrainHeightStats?.() ?? null,
     destroy() {
       if (disposed) return; disposed = true;
+      try { mapClickPicker?.cancel(); } catch (error) { retirementErrors.push(error); }
+      mapClickPicker = null;
       try { authority.dispose(); } catch (error) { retirementErrors.push(error); throw error; }
     },
     async whenSettled() {

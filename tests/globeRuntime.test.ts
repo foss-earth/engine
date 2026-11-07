@@ -648,6 +648,35 @@ describe("runtime navigation anchors", () => {
     } finally { host.disposeHost(); }
   });
 
+  it("gives a map click to Select area while that picker is armed, and draws the area", async () => {
+    const host = createAnchorHost();
+    try {
+      let armed = true;
+      const picker = { armed: () => armed, pickAt: vi.fn(() => true), cancel: vi.fn(() => { armed = false; }) };
+      host.runtime.setMapClickPicker(picker);
+      Object.assign(host.canvas, { setPointerCapture() {}, releasePointerCapture() {}, hasPointerCapture: () => false });
+      host.anchors.armPick();
+      const down = new PointerEvent("pointerdown", { pointerId: 1, pointerType: "mouse", isPrimary: true, button: 0, clientX: 20, clientY: 30, bubbles: true, cancelable: true });
+      const up = new PointerEvent("pointerup", { pointerId: 1, pointerType: "mouse", isPrimary: true, button: 0, clientX: 20, clientY: 30, bubbles: true, cancelable: true });
+      host.canvas.dispatchEvent(down);
+      host.canvas.dispatchEvent(up);
+      expect(picker.pickAt).toHaveBeenCalledWith({ x: 20, y: 30 });
+      expect(host.anchors.status().pin).toBeNull();
+      expect(host.anchors.status().selection).toBe("armed");
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+      expect(picker.cancel).toHaveBeenCalledOnce();
+      expect(host.anchors.status().selection).toBe("armed");
+
+      host.runtime.showEarthAreas([{
+        area: { points: [{ latDeg: 0, lonDeg: 0 }, { latDeg: 0, lonDeg: 0.02 }, { latDeg: 0.02, lonDeg: 0 }], heightMeters: 40 },
+        groundMeters: [0, 0, 0], active: true,
+      }]);
+      await vi.waitFor(() => expect(host.scene.getMeshByName("earth-area-lines-0")).not.toBeNull());
+      expect(host.scene.getMeshByName("earth-area-lines-0")!.isPickable).toBe(false);
+      expect(host.scene.getMeshByName("earth-area-walls-0")?.isPickable).toBe(false);
+    } finally { host.disposeHost(); }
+  });
+
   it("explains that a simulation owning the camera blocks picking and pinning", () => {
     const host = createGlobeHostFixture(document);
     try {
