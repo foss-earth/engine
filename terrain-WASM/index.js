@@ -19,7 +19,9 @@ export async function instantiateTerrainCore(source, options = {}) {
   const math = options.math ?? globalThis.Math, imports = {};
   for (const name of MATH_NAMES) {
     if (typeof math?.[name] !== "function") throw new Error(`WASM terrain Math.${name} import is missing`);
-    imports[name] = math[name].bind(math);
+    // The function itself, not a bound copy: Math's functions ignore their receiver, and V8 calls an imported
+    // Math function from WebAssembly faster than a bound copy of it.
+    imports[name] = math[name];
   }
   let module;
   if (source instanceof WebAssembly.Module) module = source;
