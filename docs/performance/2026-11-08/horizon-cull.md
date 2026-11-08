@@ -9,17 +9,17 @@ Commits:
   together with the move to tsrs): the setting and the code, with no test or
   note at the time.
 - engine `0e36862`: the tests.
+- engine `055272f`: on by default, at the user's request.
 
 **Status:**
 
 - A setting, **Map → Terrain selection → Skip Google tiles below the
-  horizon** (`map.terrain.horizonCull`, listed when all settings are shown),
-  default off. Off, nothing changes;
-  the tests below prove it.
+  horizon** (`map.terrain.horizonCull`, listed when all settings are shown).
+  Off gives the selection from before; the tests below prove it.
 - On, it is exact in what the view shows in every Chrome comparison below,
   and it draws 39 fewer tiles in a low view of the horizon.
-- The default stays off, as the user asked. The evidence would support
-  turning it on after the timing phase and a check on the phone.
+- On by default since `055272f`, at the user's request: the picture is the
+  same with fewer tiles. The full engine suite (1,537 tests) passes with it.
 
 ## Why
 
@@ -150,8 +150,6 @@ before the new view's tiles began to load. It is not proven.
 
 - The timing phase (below): frame time and tile requests, off against on.
 - The phone, at Minneapolis and on an approach.
-- The decision whether to make it the default. It moves no pixel in these
-  views, so it is the user's call after the timing.
 
 ## Measurement plan
 
