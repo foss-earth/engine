@@ -980,8 +980,12 @@ describe("Google horizon culling (map.terrain.horizonCull)", () => {
   const NONE_CULLED = { below: true, near: true, quarter: true, farSide: true, farButHuge: true, outOfFrustum: false };
   const CULLED = { ...NONE_CULLED, quarter: false, farSide: false };
 
-  it("is off by default, and off leaves every tile's measure as the renderer's", () => {
-    expect(settings.get("map.terrain.horizonCull")).toBe(false);
+  it("is on by default", () => {
+    expect(settings.get("map.terrain.horizonCull")).toBe(true);
+  });
+
+  it("off leaves every tile's measure as the renderer's", () => {
+    settings.set("map.terrain.horizonCull", false);
     const { runtime, measure, inView } = setup();
     runtime.update();
     expect(inView()).toEqual(NONE_CULLED);
@@ -1032,6 +1036,7 @@ describe("Google horizon culling (map.terrain.horizonCull)", () => {
   });
 
   it("applies live, at the next update", () => {
+    settings.set("map.terrain.horizonCull", false);
     const { runtime, inView } = setup();
     runtime.update();
     expect(inView()).toEqual(NONE_CULLED);
