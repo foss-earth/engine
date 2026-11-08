@@ -469,10 +469,9 @@ describe("raster runtime with atlas imagery", () => {
     engine.dispose();
   });
 
-  it("keeps USGS detail at its request during slow frames when automatic adjustment has not been enabled", async () => {
+  it("keeps USGS detail at its request during slow frames when automatic adjustment is turned off", async () => {
     const settings = getAppSettings();
-    expect(settings.get("map.auto.terrainDetail")).toBe(false);
-    expect(settings.get("map.auto.imageryDetail")).toBe(false);
+    settings.setMany({ "map.auto.terrainDetail": false, "map.auto.imageryDetail": false });
     const onDetailAdjusted = vi.fn();
     const sourceIndex = RASTER_BASE_MAP_SOURCES.findIndex(source => source.id === "usgs-topo");
     expect(sourceIndex).toBeGreaterThanOrEqual(0);

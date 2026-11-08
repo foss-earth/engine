@@ -11,6 +11,8 @@ function createMapDetailController(options: Partial<MapDetailControllerOptions> 
   const registry = options.settings ?? createSettingsRegistry({ storage: options.storage });
   if (!options.settings) {
     registry.register(MAP_DETAIL_PARAMETERS.filter(spec => spec.id.startsWith("map.detail.") && spec.kind !== "choice"));
+    // The shipped default is 32 px; these exercise the recommended default, which resolves later.
+    registry.setHostDefault("map.detail.google.default", "renderer-default", "the recommendation the tests resolve");
     registry.migrateLegacy(createEngineMigrations(options.storage ?? null).filter(migration => migration.key === MAP_DETAIL_STORAGE_KEY));
   }
   return createMapDetailControllerCore({ ...options, settings: registry, deviceHints: options.deviceHints ?? (() => ({})) });
@@ -33,6 +35,16 @@ function readyGoogle(controller: ReturnType<typeof createMapDetailController>): 
 }
 
 describe("map detail controller", () => {
+  it("starts Google 3D Tiles at 32 px by default, with nothing to wait for", () => {
+    const settings = createSettingsRegistry({ storage: memoryStorage() });
+    settings.register(MAP_DETAIL_PARAMETERS.filter(spec => spec.id.startsWith("map.detail.") && spec.kind !== "choice"));
+    expect(settings.get("map.detail.google.default")).toBe(32);
+    const controller = createMapDetailController({ settings });
+    controller.setActiveSource({ key: "google", availability: "ready" });
+    expect(controller.getState()).toMatchObject({ key: "google", availability: "ready", resolvedDefault: 32, requestedTarget: 32 });
+    expect(controller.getRuntimeTarget()).toEqual({ kind: "google", value: 32 });
+  });
+
   it("starts from registered defaults and treats both endpoints as ordinary values", () => {
     const controller = createMapDetailController({ storage: memoryStorage() });
     readyGoogle(controller);

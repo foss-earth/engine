@@ -21,6 +21,11 @@ function run(controller: ReturnType<typeof createAutoDetailController>, from: nu
 }
 
 describe("automatic detail adjustment", () => {
+  it("lets terrain and 2D imagery coarsen by default", () => {
+    const shipped = (id: string) => MAP_AUTO_PARAMETERS.find(spec => spec.id === id)!.default;
+    expect([shipped("map.auto.terrainDetail"), shipped("map.auto.imageryDetail")]).toEqual([true, true]);
+  });
+
   it("does not let a single short scheduling interval poison the display goal", () => {
     const controller = createAutoDetailController(TUNING);
     controller.setRoom(3);

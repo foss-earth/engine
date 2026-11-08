@@ -9,6 +9,8 @@ export function createMapDetailController(options: Partial<MapDetailControllerOp
   const settings = options.settings ?? createSettingsRegistry({ storage: options.storage });
   if (!options.settings) {
     settings.register(MAP_DETAIL_PARAMETERS.filter(spec => spec.id.startsWith("map.detail.") && spec.kind !== "choice"));
+    // The shipped default is 32 px; these exercise the recommended default, which resolves later.
+    settings.setHostDefault("map.detail.google.default", "renderer-default", "the recommendation the tests resolve");
     settings.migrateLegacy(createEngineMigrations(options.storage ?? null).filter(migration => migration.key === MAP_DETAIL_STORAGE_KEY));
   }
   return createCore({ ...options, settings, deviceHints: options.deviceHints ?? (() => ({})) });

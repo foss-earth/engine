@@ -79,9 +79,9 @@ function harness(setup: Setup = {}) {
   const controller = new CameraController(camera, () => time);
   controller.applyViewState(VIEW);
   const settings = createEngineSettings();
+  // Continuity is about loading, not frame time: nothing coarsens automatically.
+  settings.setMany({ "map.auto.imageryDetail": false, "map.auto.terrainDetail": false });
   const tuning = imageryTuningFrom(settings);
-  expect(settings.get("map.auto.imageryDetail")).toBe(false);
-  expect(settings.get("map.auto.terrainDetail")).toBe(false);
   let frameRequested = true;
   let feedbackChanges = 0;
   let holds: (tile: TileId) => boolean = () => false;

@@ -12,8 +12,8 @@ function auto(spec: Omit<ParameterSpec, "home" | "appliesLive" | "source"> & { l
 /**
  * Map → Automatic adjustment: what may coarsen when frames take too long, and
  * how quickly. It moves detail only from the requested value toward the
- * coarse end of that detail's range, and back. Nothing may coarsen until a
- * switch here, or a preset, turns it on.
+ * coarse end of that detail's range, and back. Terrain and 2D imagery may
+ * coarsen by default; a switch here, or a preset, turns either off.
  */
 export const MAP_AUTO_PARAMETERS: readonly ParameterSpec[] = [
   auto({
@@ -22,8 +22,8 @@ export const MAP_AUTO_PARAMETERS: readonly ParameterSpec[] = [
     description: "When frames take too long, the terrain mesh's error may grow toward the coarse end of its range, and shrink back once they are fast again.",
     unit: "none",
     kind: "boolean",
-    default: false,
-    defaultReason: "Detail stays at the requested target unless you explicitly allow frame-time adjustment.",
+    default: true,
+    defaultReason: "Coarser terrain only while frames are too slow, back to the target once they are fast again. Tried on the flight on 8 November 2026 and kept for speed.",
     level: "main",
   }),
   auto({
@@ -32,8 +32,8 @@ export const MAP_AUTO_PARAMETERS: readonly ParameterSpec[] = [
     description: "When frames take too long, 2D imagery may drop toward the coarse end of its range, and return once they are fast again.",
     unit: "none",
     kind: "boolean",
-    default: false,
-    defaultReason: "Imagery stays at the requested target unless you explicitly allow frame-time adjustment.",
+    default: true,
+    defaultReason: "Coarser imagery only while frames are too slow, back to the target once they are fast again. Tried on the flight on 8 November 2026 and kept for speed.",
     level: "main",
   }),
   auto({
