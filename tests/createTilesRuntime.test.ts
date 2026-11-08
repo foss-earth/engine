@@ -937,3 +937,138 @@ it("loads center-height support at minimum detail when the spawn sphere is far a
     renderer.calculateTileViewError(tile, target); expect(target.inView).toBe(false);
   } finally { runtime.dispose(); }
 });
+
+describe("Google horizon culling (map.terrain.horizonCull)", () => {
+  const EARTH = 6_378_137;
+  type Target = { inView: boolean; error: number; distanceFromCamera: number };
+  // A tile the renderer's frustum test puts in view, as a sphere in tileset space (ECEF).
+  const tile = (center: Vector3, radius: number, nativeInView = true) => ({
+    geometricError: 20, nativeInView, nativeError: 3,
+    engineData: { boundingVolume: { distanceToPoint: (point: Vector3) => Math.max(0, Vector3.Distance(center, point) - radius), sphere: { centerWorld: center, radiusWorld: radius } } },
+  });
+  const around = (km: number, radius = 10) => tile(new Vector3(EARTH * Math.cos(km * 1000 / EARTH), EARTH * Math.sin(km * 1000 / EARTH), 0), radius);
+  const TILES = {
+    below: tile(new Vector3(EARTH, 500, 0), 10),
+    near: around(300),
+    quarter: tile(new Vector3(0, EARTH, 0), 1000),
+    farSide: tile(new Vector3(-EARTH, 0, 0), 1000),
+    // Centred on the far side, but so big that its near edge is nearer than the horizon.
+    farButHuge: tile(new Vector3(-EARTH, 0, 0), 12_500_000),
+    outOfFrustum: tile(new Vector3(-EARTH, 0, 0), 1000, false),
+  };
+  const setup = (options: { at?: Vector3; group?: Matrix; orthographic?: boolean; focus?: GoogleTilesRuntimeOptions["getFocus"]; regions?: GoogleTilesRuntimeOptions["getTerrainRegions"] } = {}) => {
+    const scene = {
+      activeCamera: {
+        viewport: new Viewport(0, 0, 1, 1),
+        getProjectionMatrix: () => options.orthographic ? Matrix.OrthoLH(1000, 1000, 1, 1e7) : Matrix.PerspectiveFovLH(Math.PI / 2, 1, 1, 1e7),
+        // 1 km above 0° N 0° E unless given.
+        globalPosition: options.at ?? new Vector3(EARTH + 1000, 0, 0),
+      },
+      getEngine: () => ({ getHardwareScalingLevel: () => 1, getRenderWidth: () => 100, getRenderHeight: () => 100 }),
+    } as unknown as Scene;
+    const runtime = createGoogleTilesRuntime({ scene, apiKey: "test", getFocus: options.focus, getTerrainRegions: options.regions });
+    if (options.group) (runtime.tiles as unknown as { group: { getWorldMatrix: () => Matrix } }).group.getWorldMatrix = () => options.group!;
+    const renderer = runtime.tiles as unknown as { calculateTileViewError(value: object, target: Target): void };
+    const measure = (value: object): Target => {
+      const target = { inView: false, error: 0, distanceFromCamera: 0 };
+      renderer.calculateTileViewError(value, target);
+      return target;
+    };
+    const inView = () => Object.fromEntries(Object.entries(TILES).map(([name, value]) => [name, measure(value).inView]));
+    return { runtime, measure, inView };
+  };
+  const NONE_CULLED = { below: true, near: true, quarter: true, farSide: true, farButHuge: true, outOfFrustum: false };
+  const CULLED = { ...NONE_CULLED, quarter: false, farSide: false };
+
+  it("is off by default, and off leaves every tile's measure as the renderer's", () => {
+    expect(settings.get("map.terrain.horizonCull")).toBe(false);
+    const { runtime, measure, inView } = setup();
+    runtime.update();
+    expect(inView()).toEqual(NONE_CULLED);
+    for (const value of Object.values(TILES)) expect(measure(value)).toEqual({ inView: value.nativeInView, error: 3, distanceFromCamera: 999 });
+    runtime.dispose();
+  });
+
+  it("on, leaves out what lies wholly below the horizon, and only changes whether it is in view", () => {
+    settings.set("map.terrain.horizonCull", true);
+    const { runtime, measure, inView } = setup();
+    runtime.update();
+    expect(inView()).toEqual(CULLED);
+    expect(measure(TILES.farSide)).toEqual({ inView: false, error: 3, distanceFromCamera: 999 });
+    expect(measure(TILES.near)).toEqual({ inView: true, error: 3, distanceFromCamera: 999 });
+    runtime.dispose();
+  });
+
+  it("tests from the eye in the tiles' frame, not the scene's", () => {
+    settings.set("map.terrain.horizonCull", true);
+    // The tiles moved so that 0° N 0° E is at the scene's origin; the eye is 1 km above it.
+    const { runtime, inView } = setup({ group: Matrix.Translation(-EARTH, 0, 0), at: new Vector3(1000, 0, 0) });
+    runtime.update();
+    expect(inView()).toEqual(CULLED);
+    runtime.dispose();
+  });
+
+  it("follows the eye: from high above, more of the globe is in sight", () => {
+    settings.set("map.terrain.horizonCull", true);
+    // A point 60° round: below the horizon 1 km up, in sight 20,000 km out (the limb is 76° round). The far side is out from both.
+    const sixty = around(6_678);
+    const low = setup();
+    low.runtime.update();
+    expect(low.measure(sixty).inView).toBe(false);
+    low.runtime.dispose();
+    const { runtime, measure, inView } = setup({ at: new Vector3(EARTH + 20_000_000, 0, 0) });
+    runtime.update();
+    expect(measure(sixty).inView).toBe(true);
+    expect(inView()).toEqual(CULLED);
+    runtime.dispose();
+  });
+
+  it("culls nothing for an orthographic view", () => {
+    settings.set("map.terrain.horizonCull", true);
+    const { runtime, inView } = setup({ orthographic: true });
+    runtime.update();
+    expect(inView()).toEqual(NONE_CULLED);
+    runtime.dispose();
+  });
+
+  it("applies live, at the next update", () => {
+    const { runtime, inView } = setup();
+    runtime.update();
+    expect(inView()).toEqual(NONE_CULLED);
+    settings.set("map.terrain.horizonCull", true);
+    expect(inView()).toEqual(NONE_CULLED);
+    runtime.update();
+    expect(inView()).toEqual(CULLED);
+    settings.set("map.terrain.horizonCull", false);
+    runtime.update();
+    expect(inView()).toEqual(NONE_CULLED);
+    runtime.dispose();
+  });
+
+  it("keeps the far side out with the orbit LOD's proximity and line of sight on", () => {
+    settings.set("map.terrain.horizonCull", true);
+    settings.set("map.terrain.robustOrbitLOD", true);
+    const { runtime, inView } = setup();
+    runtime.update();
+    expect(inView()).toEqual(CULLED);
+    runtime.dispose();
+  });
+
+  it("still loads a focus region's and an aircraft region's tiles that the eye cannot see", async () => {
+    settings.set("map.terrain.horizonCull", true);
+    const hidden = tile(new Vector3(0, EARTH, 500), 0);
+    const focused = setup({ focus: () => ({ mode: "both", position: { x: 0, y: EARTH, z: 0 }, radiusMeters: 10_000, finestErrorPx: null, horizonCull: true }) });
+    focused.runtime.update();
+    expect(focused.measure(hidden).inView).toBe(true);
+    expect(focused.measure(TILES.farSide).inView).toBe(false);
+    focused.runtime.dispose();
+    const { createTerrainRegionDemand } = await import("../src/babylon/terrainRegionBounds.js");
+    const demand = createTerrainRegionDemand({ center: { latDeg: 0, lonDeg: 90, altitudeMeters: 1524 }, radiusMeters: 15 },
+      { googleErrorMeters: 8, rasterZoom: 14 }, { googleErrorMeters: 1, rasterZoom: 16 });
+    const region = setup({ regions: () => [demand] });
+    region.runtime.update();
+    expect(region.measure(tile(new Vector3(0, EARTH, 0), 0)).inView).toBe(true);
+    expect(region.measure(TILES.farSide).inView).toBe(false);
+    region.runtime.dispose();
+  });
+});
