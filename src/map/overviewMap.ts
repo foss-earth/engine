@@ -821,13 +821,13 @@ export function createOverviewMap(options: OverviewMapOptions): OverviewMapHandl
   };
   const onNameClick = (event: MouseEvent): void => {
     event.stopPropagation();
-    const open = picker.hidden;
+    const open = picker.hidden !== false;
     setPickerOpen(open);
     if (open) setMenuOpen(false);
   };
   const onMenuClick = (event: MouseEvent): void => {
     event.stopPropagation();
-    const open = menuPanel.hidden;
+    const open = menuPanel.hidden !== false;
     setMenuOpen(open);
     if (open) setPickerOpen(false);
   };

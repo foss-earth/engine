@@ -166,7 +166,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "typecheck": "tsc -p tsconfig.json --incremental --tsBuildInfoFile node_modules/.tmp/typecheck.tsbuildinfo",
+    "typecheck": "tsrs -p tsconfig.json --incremental --tsBuildInfoFile node_modules/.tmp/typecheck.tsbuildinfo",
     "lint": "eslint . --cache --cache-strategy content --cache-location node_modules/.cache/eslint/",
     "test": "vitest run --maxWorkers=50%",
     "test:consumer": "node fixtures/consumer.mjs && tsc -p fixtures/tsconfig.json",
@@ -216,6 +216,7 @@
     "@types/node": "24.12.4",
     "eslint": "9.39.4",
     "jsdom": "29.1.1",
+    "tsrs": "0.23.0-ts7.1.0-beta",
     "typescript": "5.9.3",
     "typescript-eslint": "8.59.3",
     "vitest": "4.1.6",

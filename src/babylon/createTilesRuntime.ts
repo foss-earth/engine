@@ -292,6 +292,14 @@ function cacheNativeViewMeasurement(tiles: GoogleTilesRenderer, scene: Scene): v
   };
 }
 
+/**
+ * On, the view leaves out a tile whose bounding sphere lies wholly below the
+ * horizon of a sphere 1 km inside the ellipsoid's polar radius, seen from the
+ * eye (`isSphereBelowHorizon`'s occluder). The ground is above that sphere
+ * everywhere, so where it is drawn it hides such a tile.
+ */
+const HORIZON_CULL_ID = "map.terrain.horizonCull";
+
 /** A coarse stand-in is hidden while its geometric error exceeds this many times the eye's height. */
 const STAND_IN_HEIGHT_RATIO = 16;
 /** The least eye height counted: near or below the ellipsoid, the eye's height there is not its height above the ground. */
@@ -477,6 +485,9 @@ function applyViewMeasure(
   let focusMinDistance = 0;
   let focusErrorScale = 1;
   let focusViewer = { x: 0, y: 0, z: 0 };
+  // `map.terrain.horizonCull`: the eye, in the tiles' frame, that the view's tiles are tested against.
+  let horizonCull = false;
+  const horizonEye = Vector3.Zero();
   let isOrthographic = false;
   let orthographicPixelSize = 0;
   let screenSpaceErrorDenominator = 0;
@@ -577,6 +588,13 @@ function applyViewMeasure(
         const lift = 1 + focusMinDistance / Math.max(1, focusInTiles.length());
         focusViewer = { x: focusInTiles.x * lift, y: focusInTiles.y * lift, z: focusInTiles.z * lift };
       }
+    }
+    // Rays from a perspective eye: an orthographic view's rays are parallel, so no point's horizon applies.
+    horizonCull = false;
+    if (camera && settings.get(HORIZON_CULL_ID) === true && camera.getProjectionMatrix().m[15] !== 1) {
+      tiles.group.getWorldMatrix().invertToRef(worldToTiles);
+      Vector3.TransformCoordinatesToRef(camera.globalPosition, worldToTiles, horizonEye);
+      horizonCull = true;
     }
     if (!proximityEnabled) {
       eyeTrajectory.at = focusTrajectory.at = Number.NaN;
@@ -723,6 +741,11 @@ function applyViewMeasure(
 
   renderer.calculateTileViewError = (tile, target) => {
     nativeCalculateTileViewError(tile, target);
+    // The view's own result only: an anchor, focus region, proximity or aircraft region below adds tiles as before.
+    if (horizonCull && target.inView) {
+      const sphere = tileSphere(tile);
+      if (sphere && isSphereBelowHorizon(horizonEye, sphere.center, sphere.radius)) target.inView = false;
+    }
     if (hasDetailAnchor) {
       const distance = tile.engineData.boundingVolume.distanceToPoint(anchorInTiles);
       target.distanceFromCamera = distance;

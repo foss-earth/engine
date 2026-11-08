@@ -458,4 +458,16 @@ export const MAP_TERRAIN_SELECTION_PARAMETERS: readonly ParameterSpec[] = [
     appliesLive: true,
     source: "src/babylon/createTilesRuntime.ts",
   },
+  {
+    id: "map.terrain.horizonCull",
+    label: "Skip Google tiles below the horizon",
+    description: "On, the view does not load or draw a Google 3D tile that lies wholly below the horizon, with a 1 km margin under the ground: the ground in front hides it. While nearer tiles load, the far side no longer shows through their gaps, and the credits list only tiles in sight. A focus region and an aircraft's region still load their tiles. 2D basemaps always skip such ground.",
+    kind: "boolean",
+    unit: "none",
+    default: false,
+    defaultReason: "Google 3D tiles were selected by the view's frustum alone before this became a setting.",
+    home: { tab: MAP_TAB, section: "terrain-selection", level: "all" },
+    appliesLive: true,
+    source: GOOGLE_RUNTIME,
+  },
 ];
