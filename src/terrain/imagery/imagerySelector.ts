@@ -277,6 +277,8 @@ interface Evaluated {
   visible: boolean;
   /** Worst projected footprint in selection units; Infinity when unmeasurable but visible. */
   footprint: number;
+  /** Hysteresis-weighted heap priority so split subtrees do not trade maxPages back and forth. */
+  priority: number;
   /** Worst projected footprint in physical pixels for the standard image. */
   physicalFootprint: number;
   screenArea: number;
@@ -337,6 +339,7 @@ interface Job {
   leafCount: number;
   nodes: number;
   limits: Set<DetailLimit>;
+  memory: ReadonlyMap<string, NodeMemory>;
   nextMemory: Map<string, NodeMemory>;
   wakeAt: number | null;
   truncated: boolean;
@@ -363,6 +366,7 @@ export function pagesForImage(width: number, height: number): number {
 
 // Heap ordered by footprint, largest first, then by key for determinism.
 function heapBefore(a: Evaluated, b: Evaluated): boolean {
+  if (a.priority !== b.priority) return a.priority > b.priority;
   if (a.footprint !== b.footprint) return a.footprint > b.footprint;
   return a.key < b.key;
 }
@@ -708,22 +712,28 @@ export function estimateFocusPages(focus: Pick<ImageryFocus, "position" | "radiu
 
 function unmeasured(tile: TileId, outside: boolean): Evaluated {
   return {
-    tile, key: tileKey(tile), visible: false, footprint: 0, physicalFootprint: 0, screenArea: 0, outsideCoverage: outside,
+    tile, key: tileKey(tile), visible: false, footprint: 0, priority: 0, physicalFootprint: 0, screenArea: 0, outsideCoverage: outside,
     limit: null, shortfall: null, extraPages: 0, bindingLevel: null, inFocus: false,
     unproven: false, pastMissing: false, presumedMissing: false, reduced: false,
   };
 }
 
+function withPriority(job: Job, evaluated: Evaluated): Evaluated {
+  const split = job.memory.get(evaluated.key)?.split === true;
+  evaluated.priority = split ? evaluated.footprint * Math.max(1, job.input.hysteresis.refineAbove) : evaluated.footprint;
+  return evaluated;
+}
+
 function evaluate(job: Job, tile: TileId): Evaluated {
-  if (!job.focus) return evaluateView(job, tile);
+  if (!job.focus) return withPriority(job, evaluateView(job, tile));
   if (job.focus.mode === "around") {
     // Only the focus region: the view does not decide what loads.
     job.nodes += 1;
     const focus = measureFocus(job, tile);
-    return {
+    return withPriority(job, {
       ...unmeasured(tile, outsideCoverage(job.input.source, tile)), visible: focus.within,
       footprint: focus.within ? focus.footprint : 0, physicalFootprint: focus.within ? focus.physicalFootprint : 0, inFocus: focus.within,
-    };
+    });
   }
   const result = evaluateView(job, tile);
   const focus = measureFocus(job, tile);
@@ -733,7 +743,7 @@ function evaluate(job: Job, tile: TileId): Evaluated {
     result.footprint = Math.max(result.footprint, focus.footprint);
     result.physicalFootprint = Math.max(result.physicalFootprint, focus.physicalFootprint);
   }
-  return result;
+  return withPriority(job, result);
 }
 
 type ViewMeasurementContext = Pick<Job, "cartographic" | "camera" | "screenGround" | "nodes"> & Partial<Pick<Job, "refine">> & {
@@ -1153,7 +1163,7 @@ export function createImagerySelector(clockPort: () => number): ImagerySelector 
       focusViewer: { x: focusPosition.x * (1 + lift), y: focusPosition.y * (1 + lift), z: focusPosition.z * (1 + lift) },
       refine: input.refineFrom ? refineContext(input.refineFrom) : null,
       heap: [], leaves: [], coverage: [], mergeCandidates: [], leafCount: 0, nodes: 0, limits: new Set(),
-      nextMemory: new Map(), wakeAt: null, truncated: false, cpuMs: 0,
+      memory, nextMemory: new Map(), wakeAt: null, truncated: false, cpuMs: 0,
       evidence: null, barred: [], refinedPastMissing: 0,
     };
     {
@@ -1331,6 +1341,7 @@ export function createImagerySelector(clockPort: () => number): ImagerySelector 
             // has nothing on screen to measure or rank.
             split = false;
             node.footprint = 0;
+            node.priority = 0;
             node.physicalFootprint = 0;
             node.screenArea = 0;
           } else if (current.leafCount - 1 + visible > input.maxPages) {

@@ -82,6 +82,65 @@ describe("imagery residency", () => {
     expect(residency.stats().overflow).toBe(0);
   });
 
+  it("keeps queue admission exact after starts, retirement, retries and reset", async () => {
+    const h = harness({ queuedRequests: 1, concurrentRequests: 1 });
+    const { residency: r, pending } = h;
+    r.setDemand([request("a", 3), request("b", 2), request("c", 1)]);
+    expect(r.stats()).toMatchObject({ queued: 1, overflow: 2 });
+    // Retiring an identity that never started makes room for another one.
+    r.setDemand([request("b", 2), request("c", 1)]);
+    expect(r.stats()).toMatchObject({ queued: 1, overflow: 1 });
+    r.pump();
+    expect(pending.map(p => p.url)).toEqual(["https://tiles/b"]);
+    // A started request no longer occupies a queue place.
+    r.pump();
+    expect(r.stats()).toMatchObject({ queued: 1, inFlight: 1, overflow: 0 });
+    pending[0].reject(new Error("retry"));
+    await h.flush();
+    r.pump();
+    expect(pending.map(p => p.url)).toEqual(["https://tiles/b", "https://tiles/c"]);
+    expect(r.stats()).toMatchObject({ queued: 0, inFlight: 1, failed: 1 });
+    h.advance(2000);
+    r.setDemand([request("b", 2), request("c", 1), request("d", 0)]);
+    expect(r.stats()).toMatchObject({ queued: 1, overflow: 1 });
+    // A due retry occupies its place on later fills as well as the first.
+    r.pump();
+    expect(r.stats()).toMatchObject({ queued: 1, inFlight: 1, overflow: 1 });
+    r.reset();
+    expect(pending[1].signal.aborted).toBe(true);
+    r.setDemand([request("new-a", 2), request("new-b", 1)]);
+    expect(r.stats()).toMatchObject({ queued: 1, inFlight: 0, overflow: 1 });
+    r.dispose();
+    expect(r.stats()).toMatchObject({ queued: 0, inFlight: 0 });
+  });
+
+  it("does not retain a retry identity retired by a reentrant clock", async () => {
+    const h = harness({ queuedRequests: 1, concurrentRequests: 1 });
+    let time = 0, reenterAt = Infinity;
+    const r = createImageryResidency({
+      createAbortController: () => new AbortController(), loader: h.loader, store: h.store,
+      maxConcurrentForSource: source => source === "blocked" ? 0 : undefined,
+      limits: { gpuBytes: 1e9, stagingBytes: 1e9, concurrentRequests: 1, queuedRequests: 1,
+        uploadBytesPerUpdate: 1e9, cpuMsPerUpdate: 2, missingRetryMs: 1000, retryDelayMs: { min: 2000, max: 30_000 } },
+      now: () => {
+        if (--reenterAt === 0) r.setDemand([request("replacement", 1, { sourceKey: "blocked" })]);
+        return time;
+      },
+    });
+    try {
+      r.setDemand([request("old")]); r.pump();
+      h.pending[0].reject(new Error("retry")); await h.flush();
+      time = 2000;
+      // expireMissing reads the clock first, the failed-entry retry second.
+      reenterAt = 2;
+      r.pump();
+      expect(r.stats()).toMatchObject({ queued: 1, failed: 0 });
+      r.setDemand([request("next")]); r.pump();
+      expect(h.pending.map(p => p.url)).toEqual(["https://tiles/old", "https://tiles/next"]);
+      expect(r.stats()).toMatchObject({ queued: 0, inFlight: 1, overflow: 0 });
+    } finally { r.dispose(); h.residency.dispose(); }
+  });
+
   it("orders a demand once, not again on every pump", () => {
     const { residency, pending } = harness();
     let reads = 0;
@@ -98,6 +157,131 @@ describe("imagery residency", () => {
     residency.setDemand(["e", "f", "g"].map((key, index) => counted(key, index)));
     residency.pump();
     expect(pending.slice(4).map(item => item.url)).toEqual(["https://tiles/g", "https://tiles/f", "https://tiles/e"]);
+  });
+
+  it("does not revisit complete demand until residency or demand changes", async () => {
+    const h = harness({ concurrentRequests: 16, queuedRequests: 16 }, 16);
+    const r = h.residency;
+    let reads = 0;
+    const requests = Array.from({ length: 16 }, (_, i) => {
+      const key = `complete-${i}`;
+      return Object.defineProperty(request(key), "imageKey", { get: () => { reads++; return key; }, enumerable: true });
+    });
+    try {
+      r.setDemand(requests); r.pump();
+      for (const pending of h.pending) pending.resolve(h.image());
+      await h.flush(); r.upload(Infinity); r.pump();
+      expect(r.stats().resident).toBe(16);
+      reads = 0;
+      for (let i = 0; i < 5; i++) r.pump();
+      expect(reads).toBe(0);
+      r.reset(); r.pump();
+      expect(reads).toBeGreaterThan(0);
+      expect(h.pending).toHaveLength(32);
+      expect(r.stats()).toMatchObject({ queued: 0, inFlight: 16 });
+    } finally { r.dispose(); }
+  });
+
+  it("wakes failed and missing images after a pass that found complete in-flight demand", async () => {
+    for (const missing of [false, true]) {
+      const h = harness({ concurrentRequests: 1, queuedRequests: 1 });
+      const r = h.residency;
+      try {
+        r.setDemand([request("retry")]); r.pump();
+        // No admission remains while this entry loads.
+        r.pump(); r.pump();
+        h.pending[0].reject(missing ? new ImageryMissingError("missing") : new Error("retry"));
+        await h.flush();
+        r.pump(); r.pump();
+        expect(h.pending).toHaveLength(1);
+        h.advance(missing ? 1000 : 2000);
+        r.pump();
+        expect(h.pending).toHaveLength(2);
+        expect(r.stats()).toMatchObject({ inFlight: 1, queued: 0, failed: 0, missing: 0 });
+      } finally { r.dispose(); }
+    }
+  });
+
+  it("does not memoize a failed or deleted entry across cleanup and clock reentry", async () => {
+    for (const missing of [false, true]) {
+      const h = harness();
+      let reenter = false;
+      const r = createImageryResidency({
+        createAbortController: () => new AbortController(), loader: h.loader, store: h.store,
+        limits: { gpuBytes: 1e9, stagingBytes: 1e9, concurrentRequests: 1, queuedRequests: 1,
+          uploadBytesPerUpdate: 1e9, cpuMsPerUpdate: 2, missingRetryMs: 1000, retryDelayMs: { min: 2000, max: 30_000 } },
+        now: () => { if (reenter) { reenter = false; r.pump(); } return 0; },
+      });
+      try {
+        r.setDemand([request("reentered")]); r.pump();
+        h.pending[0].resolve({
+          ...h.image(), retain: () => () => {},
+          isCurrent: () => { if (missing) throw new ImageryMissingError("missing"); return false; },
+          // This refresh sees the old loading entry and can memoize it. The
+          // following failed-state write/deletion must clear that memo before
+          // computing its retry time through the supplied clock.
+          close: () => { r.pump(); reenter = true; },
+        });
+        await h.flush();
+        expect(h.pending).toHaveLength(2);
+        expect(h.pending.map(p => p.url)).toEqual(["https://tiles/reentered", "https://tiles/reentered"]);
+      } finally { r.dispose(); h.residency.dispose(); }
+    }
+  });
+
+  it("revisits overflow when a new queue limit opens room without an entry changing", () => {
+    const h = harness({ queuedRequests: 1, concurrentRequests: 0 });
+    const r = h.residency;
+    try {
+      r.setDemand([request("a", 3), request("b", 2), request("c", 1)]); r.pump();
+      expect(r.stats()).toMatchObject({ queued: 1, overflow: 2 });
+      r.setLimits({ gpuBytes: 1e9, stagingBytes: 1e9, concurrentRequests: 0, queuedRequests: 2,
+        uploadBytesPerUpdate: 1e9, cpuMsPerUpdate: 2, missingRetryMs: 1000, retryDelayMs: { min: 2000, max: 30_000 } });
+      r.pump();
+      expect(r.stats()).toMatchObject({ queued: 2, overflow: 1 });
+    } finally { r.dispose(); }
+  });
+
+  it("allows a missing lookup to expire after the pump's first clock read", async () => {
+    const h = harness();
+    let time = 0;
+    const firstRead: number[] = [];
+    const r = createImageryResidency({
+      createAbortController: () => new AbortController(), loader: h.loader, store: h.store,
+      limits: { gpuBytes: 1e9, stagingBytes: 1e9, concurrentRequests: 1, queuedRequests: 1,
+        uploadBytesPerUpdate: 1e9, cpuMsPerUpdate: 2, missingRetryMs: 1000, retryDelayMs: { min: 2000, max: 30_000 } },
+      now: () => firstRead.shift() ?? time,
+    });
+    try {
+      r.setDemand([request("missing")]); r.pump();
+      h.pending[0].reject(new ImageryMissingError("missing")); await h.flush();
+      r.pump();
+      time = 1000;
+      firstRead.push(999);
+      r.pump();
+      expect(h.pending).toHaveLength(2);
+      expect(r.stats()).toMatchObject({ missing: 0, inFlight: 1 });
+    } finally { r.dispose(); h.residency.dispose(); }
+  });
+
+  it("clears complete demand before an upload failure asks its retry clock", async () => {
+    const h = harness();
+    let current = true, reenter = false;
+    const r = createImageryResidency({
+      createAbortController: () => new AbortController(), loader: h.loader, store: h.store,
+      limits: { gpuBytes: 1e9, stagingBytes: 1e9, concurrentRequests: 1, queuedRequests: 1,
+        uploadBytesPerUpdate: 1e9, cpuMsPerUpdate: 2, missingRetryMs: 1000, retryDelayMs: { min: 2000, max: 30_000 } },
+      now: () => { if (reenter) { reenter = false; r.pump(); } return 0; },
+    });
+    try {
+      r.setDemand([request("upload-retry")]); r.pump();
+      h.pending[0].resolve({ ...h.image(), close() {}, retain: () => () => {}, isCurrent: () => current });
+      await h.flush(); r.pump();
+      current = false; reenter = true;
+      r.upload(Infinity);
+      expect(h.pending).toHaveLength(2);
+      expect(h.pending.map(p => p.url)).toEqual(["https://tiles/upload-retry", "https://tiles/upload-retry"]);
+    } finally { r.dispose(); h.residency.dispose(); }
   });
 
   it("does not start work the staging budget cannot hold", () => {

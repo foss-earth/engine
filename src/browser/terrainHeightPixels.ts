@@ -171,14 +171,20 @@ export function unpackTerrainHeightPixels(packed: PackedHeightBatches): HeightBa
   return batches;
 }
 
-function value(grid: TerrainHeightPixels, index: number): number {
+function pixelPosition(grid: TerrainHeightPixels, index: number): number {
   let low = 0, high = grid.indices.length;
   while (low < high) {
     const middle = (low + high) >>> 1, candidate = grid.indices[middle];
     if (candidate < index) low = middle + 1; else high = middle;
   }
   if (grid.indices[low] !== index) throw new Error("Sparse height snapshot is missing a required pixel");
-  return grid.heights[low];
+  return low;
+}
+function nextValue(grid: TerrainHeightPixels, first: number, next: number, position: number): number {
+  const at = next === first ? position : next === first + 1 ? position + 1 : pixelPosition(grid, next);
+  // Keep the full search for non-adjacent or non-canonical sparse layouts.
+  if (grid.indices[at] !== next) return grid.heights[pixelPosition(grid, next)];
+  return grid.heights[at];
 }
 function own(grid: TerrainHeightPixels, x: number, y: number): number {
   const px = Math.max(0, Math.min(grid.size - 1, (x - grid.x) * grid.size - 0.5));
@@ -186,8 +192,10 @@ function own(grid: TerrainHeightPixels, x: number, y: number): number {
   const ix = Math.floor(px), iy = Math.floor(py);
   const jx = Math.min(ix + 1, grid.size - 1), jy = Math.min(iy + 1, grid.size - 1);
   const u = px - ix, v = py - iy;
-  const a = value(grid, iy * grid.size + ix) * (1 - u) + value(grid, iy * grid.size + jx) * u;
-  const b = value(grid, jy * grid.size + ix) * (1 - u) + value(grid, jy * grid.size + jx) * u;
+  const top = iy * grid.size + ix, topPosition = pixelPosition(grid, top);
+  const a = grid.heights[topPosition] * (1 - u) + nextValue(grid, top, iy * grid.size + jx, topPosition) * u;
+  const bottom = jy * grid.size + ix, bottomPosition = pixelPosition(grid, bottom);
+  const b = grid.heights[bottomPosition] * (1 - u) + nextValue(grid, bottom, jy * grid.size + jx, bottomPosition) * u;
   return a * (1 - v) + b * v;
 }
 /** The complete reference operation order over original sparse pixel values. */

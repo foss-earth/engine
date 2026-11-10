@@ -358,14 +358,18 @@ mod kernel {
     }
     struct Grid<'a> {
         tile: Tile,
+        /// The executing realm's 2^(this zoom - source zoom), constant for a job.
+        source_scale: f64,
         size: usize,
         heights: &'a [f32],
         sparse: bool,
         missing: std::cell::Cell<bool>,
     }
     impl Grid<'_> {
-        fn value(&self, index: usize) -> f32 {
-            if !self.sparse { return self.heights[index]; }
+        // Each bilinear row reads a pixel and its immediate right neighbour,
+        // or the same clamped pixel twice. Sorted sparse keys need one search.
+        fn row_values(&self, index: usize, next: usize) -> [f32; 2] {
+            if !self.sparse { return [self.heights[index], self.heights[next]]; }
             let mut low = 0;
             let mut high = self.heights.len() / 2;
             while low < high {
@@ -373,12 +377,17 @@ mod kernel {
                 if self.heights[middle * 2] < index as f32 { low = middle + 1; }
                 else { high = middle; }
             }
-            if low * 2 < self.heights.len() && self.heights[low * 2] == index as f32 {
-                self.heights[low * 2 + 1]
-            } else {
-                self.missing.set(true);
-                f32::NAN
-            }
+            let found = low * 2 < self.heights.len() && self.heights[low * 2] == index as f32;
+            let a = if found { self.heights[low * 2 + 1] }
+                else { self.missing.set(true); f32::NAN };
+            // If the first is absent, its lower bound is also the only place
+            // the immediately following key could be. Neither read may hide
+            // an absent pixel, even if interpolation gives it zero weight.
+            let at = low + usize::from(found && next != index);
+            let b = if at * 2 < self.heights.len() && self.heights[at * 2] == next as f32 {
+                self.heights[at * 2 + 1]
+            } else { self.missing.set(true); f32::NAN };
+            [a, b]
         }
     }
     struct Parallel {
@@ -448,14 +457,14 @@ mod kernel {
         let jy = js_min(iy + 1.0, size - 1.0);
         let u = px - ix;
         let v = py - iy;
-        let a = f64::from(grid.value(iy as usize * grid.size + ix as usize)) * (1.0 - u)
-            + f64::from(grid.value(iy as usize * grid.size + jx as usize)) * u;
-        let b = f64::from(grid.value(jy as usize * grid.size + ix as usize)) * (1.0 - u)
-            + f64::from(grid.value(jy as usize * grid.size + jx as usize)) * u;
+        let top = grid.row_values(iy as usize * grid.size + ix as usize, iy as usize * grid.size + jx as usize);
+        let bottom = grid.row_values(jy as usize * grid.size + ix as usize, jy as usize * grid.size + jx as usize);
+        let a = f64::from(top[0]) * (1.0 - u) + f64::from(top[1]) * u;
+        let b = f64::from(bottom[0]) * (1.0 - u) + f64::from(bottom[1]) * u;
         a * (1.0 - v) + b * v
     }
-    fn covers(candidate: &Grid<'_>, z: f64, tx: f64, ty: f64) -> bool {
-        let scale = js_pow(2.0, candidate.tile.z - z);
+    fn covers(candidate: &Grid<'_>, tx: f64, ty: f64) -> bool {
+        let scale = candidate.source_scale;
         js_floor(tx * scale) == candidate.tile.x && js_floor(ty * scale) == candidate.tile.y
     }
     /// The neighbours that covered the last pixels, latest first, tried
@@ -467,6 +476,7 @@ mod kernel {
         disjoint: bool,
         recent: [usize; RECENT_NEIGHBORS],
         len: usize,
+        world_size: f64,
     }
     const RECENT_NEIGHBORS: usize = 4;
     /// Whether one tile is the other or within it. Tile coordinates are
@@ -477,7 +487,7 @@ mod kernel {
         ((inner.x as u64) >> shift) == outer.x as u64
             && ((inner.y as u64) >> shift) == outer.y as u64
     }
-    fn lookup(neighbors: &[Grid<'_>]) -> Lookup {
+    fn lookup(grid: Option<&Grid<'_>>, neighbors: &[Grid<'_>]) -> Lookup {
         let mut disjoint = true;
         'pairs: for (i, a) in neighbors.iter().enumerate() {
             for b in &neighbors[i + 1..] {
@@ -487,7 +497,8 @@ mod kernel {
                 }
             }
         }
-        Lookup { disjoint, recent: [0; RECENT_NEIGHBORS], len: 0 }
+        Lookup { disjoint, recent: [0; RECENT_NEIGHBORS], len: 0,
+            world_size: grid.map_or(1.0, |grid| js_pow(2.0, grid.tile.z)) }
     }
     fn pixel(
         grid: &Grid<'_>,
@@ -496,18 +507,18 @@ mod kernel {
         col: f64,
         row: f64,
     ) -> f64 {
-        let n = js_pow(2.0, grid.tile.z);
+        let n = lookup.world_size;
         let tx = ((grid.tile.x + (col + 0.5) / grid.size as f64) % n + n) % n;
         let ty = js_max(
             0.0,
             js_min(n - 1e-9, grid.tile.y + (row + 0.5) / grid.size as f64),
         );
         let mut source = grid;
-        if !covers(grid, grid.tile.z, tx, ty) {
+        if !covers(grid, tx, ty) {
             let mut found = None;
             if lookup.disjoint {
                 for &index in &lookup.recent[..lookup.len] {
-                    if covers(&neighbors[index], grid.tile.z, tx, ty) {
+                    if covers(&neighbors[index], tx, ty) {
                         found = Some(index);
                         break;
                     }
@@ -515,7 +526,7 @@ mod kernel {
             }
             if found.is_none() {
                 for (index, neighbor) in neighbors.iter().enumerate() {
-                    if covers(neighbor, grid.tile.z, tx, ty) {
+                    if covers(neighbor, tx, ty) {
                         found = Some(index);
                         break;
                     }
@@ -533,7 +544,7 @@ mod kernel {
                 source = &neighbors[index];
             }
         }
-        let scale = js_pow(2.0, source.tile.z - grid.tile.z);
+        let scale = source.source_scale;
         own(source, tx * scale, ty * scale)
     }
     fn height(
@@ -605,12 +616,13 @@ mod kernel {
                     previous = Some(index);
                 }
             }
-            grids.push(Grid { tile: grid_tile, size, heights: values, sparse, missing: std::cell::Cell::new(false) });
+            grids.push(Grid { tile: grid_tile, source_scale: js_pow(2.0, grid_tile.z - words[3]),
+                size, heights: values, sparse, missing: std::cell::Cell::new(false) });
         }
         // Keep ownership checks in the registry and never form caller slices.
         if !registry.budget(output_len as usize * 8, 0) { return Err(3); }
         let mut result = zeroed::<f64>(output_len as usize)?;
-        let mut neighbor_lookup = lookup(&grids[1..]);
+        let mut neighbor_lookup = lookup(grids.first(), &grids[1..]);
         for (at, value) in result.iter_mut().enumerate() {
             *value = height(&grids[0], &grids[1..], &mut neighbor_lookup, neighbors_present, xy[at * 2], xy[at * 2 + 1]);
         }
@@ -675,6 +687,7 @@ mod kernel {
                 .ok_or(2_u32)?;
             grids.push(Grid {
                 tile: grid_tile,
+                source_scale: js_pow(2.0, grid_tile.z - input[7]),
                 size,
                 heights,
                 sparse: false,
@@ -708,7 +721,7 @@ mod kernel {
             .map_or(1.0, |grid| js_pow(2.0, grid.tile.z - target.z));
         let mut min_height = f64::INFINITY;
         let mut max_height = f64::NEG_INFINITY;
-        let mut neighbor_lookup = lookup(grids.get(1..).unwrap_or(&[]));
+        let mut neighbor_lookup = lookup(grids.first(), grids.get(1..).unwrap_or(&[]));
         for row in 0..stride {
             let v = row as f64 / segments as f64;
             let mercator_y = target.y + v;

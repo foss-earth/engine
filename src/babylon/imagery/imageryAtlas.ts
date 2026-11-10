@@ -15,7 +15,7 @@ import type { ImageryPageStore, OwnedImageryNativeJob, OwnedImageryUploadJob, Re
 /** Generic device operations are supplied by the host's one renderer backend. */
 export interface ImageryAtlasDevicePorts {
   createRawTexture(options: {
-    scene: Scene; data: Uint8Array | null; width: number; height: number;
+    scene: Scene; data: Uint8Array | null; width: number; height: number; depth?: number;
     format: number; mipmaps: boolean; invertY: boolean; samplingMode: number; type: number;
   }): Texture;
   updateTextureData(texture: InternalTexture, data: ArrayBufferView, x: number, y: number,
@@ -89,7 +89,7 @@ export function createImageryAtlas(scene: Scene, layout: ImageryAtlasLayout, ani
     if (managed.generation() !== allocationGeneration) { gpu.release(); throw new Error("Atlas generation changed during GPU admission."); }
   }
   let texture!: Texture;
-  try { texture = device.createRawTexture({ scene, data: null, width: layout.width, height: layout.height, format: Constants.TEXTUREFORMAT_RGBA, mipmaps: true, invertY: false, samplingMode: Texture.TRILINEAR_SAMPLINGMODE, type: Constants.TEXTURETYPE_UNSIGNED_BYTE }); }
+  try { texture = device.createRawTexture({ scene, data: null, width: layout.width, height: layout.height, ...(layout.layers > 1 ? { depth: layout.layers } : {}), format: Constants.TEXTUREFORMAT_RGBA, mipmaps: true, invertY: false, samplingMode: Texture.TRILINEAR_SAMPLINGMODE, type: Constants.TEXTURETYPE_UNSIGNED_BYTE }); }
   catch (error) {
     // An opaque native factory failure cannot prove that any partial storage
     // was retired. Its complete managed GPU grant remains quarantined.
@@ -215,7 +215,7 @@ export function createImageryAtlas(scene: Scene, layout: ImageryAtlasLayout, ani
       const origin = slotOrigin(layout, slot);
       for (let level = 0; level <= IMAGERY_MAX_SAMPLED_LOD && level < levels.length; level++) {
         const size = IMAGERY_SLOT_SIZE >> level;
-        device.updateTextureData(internal, levels[level], origin.x >> level, origin.y >> level, size, size, 0, level, false);
+        device.updateTextureData(internal, levels[level], origin.x >> level, origin.y >> level, size, size, origin.layer, level, false);
       }
     },
     allocateBlock() { const block = disposed ? undefined : freeBlockList.pop(); if (block === undefined) return null; allocatedBlocks.add(block); return block; },
@@ -254,7 +254,7 @@ export function createImageryAtlas(scene: Scene, layout: ImageryAtlasLayout, ani
             for (let level = 0; level <= IMAGERY_MAX_SAMPLED_LOD; level++) {
               const size = IMAGERY_SLOT_SIZE >> level;
               if (!(levels[level] instanceof Uint8Array) || levels[level].byteLength !== size * size * 4) throw new Error("Atlas page mip bytes do not match their RGBA8 dimensions.");
-              regions.push({ texture: internal, data: levels[level], x: origin.x >> level, y: origin.y >> level, width: size, height: size, faceIndex: 0, lod: level, generateMipMaps: false });
+              regions.push({ texture: internal, data: levels[level], x: origin.x >> level, y: origin.y >> level, width: size, height: size, faceIndex: origin.layer, lod: level, generateMipMaps: false });
             }
           });
           const job = prepare(slots, [], regions, () => image.retain(), "imagery Atlas complete pages");

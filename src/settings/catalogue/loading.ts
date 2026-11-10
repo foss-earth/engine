@@ -7,31 +7,41 @@ const MiB = 1024 * 1024;
 const SLOT_BYTES = 288 * 288 * 4 * (4 / 3);
 /** The smallest atlas the imagery runtime can use: 24 slots and a page table. */
 const MIN_ATLAS_MIB = 32;
+/** Maximum 2D texture array layers guaranteed by WebGL 2 and WebGPU. */
+const MAX_ATLAS_LAYERS = 256;
+/** Maximum page slots addressable by a 16-bit RG page-table entry. */
+const MAX_ATLAS_SLOTS = 65536;
 
 /**
- * The largest atlas a renderer can hold, in MiB: one square texture as large
- * as its texture limit allows (WebGL 1: 4096 px, power of two), with mips,
- * plus a page table. Null until the renderer is known.
+ * The largest single-layer and multi-layer atlas a renderer can hold, in MiB:
+ * on WebGL 1, one power-of-two 2D texture up to 4096 px; on WebGL 2 and WebGPU,
+ * a 2D texture array scaling across layers up to 8192 MiB. Null until the
+ * renderer is known.
  */
-export function atlasLimitMiB(context: Pick<DeviceContext, "rendererMode" | "maxTextureSize">): { mib: number; side: number } | null {
+export function atlasLimitMiB(context: Pick<DeviceContext, "rendererMode" | "maxTextureSize">): { mib: number; side: number; maxMib: number } | null {
   if (!context.maxTextureSize) return null;
   const side = context.rendererMode === "webgl"
     ? 2 ** Math.floor(Math.log2(Math.min(4096, context.maxTextureSize)))
     : context.maxTextureSize;
   const slots = Math.floor(side / 288) ** 2;
-  return { mib: Math.floor((slots * SLOT_BYTES + 1024 * 1024 * 4) / MiB), side };
+  const mib = Math.floor((slots * SLOT_BYTES + 1024 * 1024 * 4) / MiB);
+  const maxSlots = context.rendererMode === "webgl" ? slots : Math.min(MAX_ATLAS_SLOTS, slots * MAX_ATLAS_LAYERS);
+  const maxMib = Math.min(8192, Math.floor((maxSlots * SLOT_BYTES + 1024 * 1024 * 4) / MiB));
+  return { mib, side, maxMib };
 }
 
 function gpuBudgetBounds(context: DeviceContext): ParameterBounds {
   const limit = atlasLimitMiB(context);
   if (!limit) return { min: MIN_ATLAS_MIB, max: 8192, reason: "the renderer's texture limit is not known until it starts" };
-  return { min: MIN_ATLAS_MIB, max: Math.max(MIN_ATLAS_MIB, limit.mib), reason: `the largest atlas a ${limit.side} px texture holds` };
+  return { min: MIN_ATLAS_MIB, max: Math.max(MIN_ATLAS_MIB, limit.maxMib), reason: `the largest atlas a ${limit.side} px texture holds` };
 }
 
 function gpuBudgetDefault(context: DeviceContext): { value: number; derivedFrom: string } {
   const bounds = gpuBudgetBounds(context);
+  const limit = atlasLimitMiB(context);
+  const singleLayerMax = limit ? Math.max(MIN_ATLAS_MIB, limit.mib) : bounds.max;
   const share = context.deviceMemoryGiB ? Math.round((context.deviceMemoryGiB * 1024) / 32) : 128;
-  const value = Math.max(bounds.min, Math.min(bounds.max, share));
+  const value = Math.max(bounds.min, Math.min(singleLayerMax, share));
   const origin = context.deviceMemoryGiB
     ? `1/32 of the ${context.deviceMemoryGiB} GiB the browser reports`
     : "128 MiB, because this browser does not say how much memory the device has";
@@ -168,7 +178,7 @@ export const MAP_LOADING_PARAMETERS: readonly ParameterSpec[] = [
     reason: "Starting proximity LOD tuning; applies while Robust orbit LOD is on.", source: TERRAIN_SELECTOR,
   }),
   quantity({
-    id: "map.terrain.proximityLookaheadSeconds", label: "Motion lookahead", unit: "s", min: 0, max: 5, step: 0.1, fallback: 1.5, section: "terrain-selection",
+    id: "map.terrain.proximityLookaheadSeconds", label: "Motion lookahead", unit: "s", min: 0, max: 5, step: 0.1, fallback: 1.5, scale: "log2", section: "terrain-selection",
     description: "How far ahead along anchor motion to prepare nearby terrain.",
     reason: "Starting proximity LOD tuning; applies while Robust orbit LOD is on.", source: TERRAIN_SELECTOR,
   }),
@@ -194,6 +204,7 @@ export const MAP_LOADING_PARAMETERS: readonly ParameterSpec[] = [
     default: gpuBudgetDefault,
     defaultReason: "A share of the device's memory, bounded by the renderer's texture limit. Includes both physical table versions used for managed transactional publication.",
     home: { tab: MAP_TAB, section: "loading", level: "main" },
+    alsoIn: [{ tab: "renderer", section: "main", level: "main" }],
     appliesLive: true,
     source: IMAGERY_RUNTIME,
   },
@@ -316,6 +327,7 @@ export const MAP_LOADING_PARAMETERS: readonly ParameterSpec[] = [
     default: { min: 307.2, max: 409.6 },
     defaultReason: "The tiles renderer's own defaults, 0.3 and 0.4 GiB.",
     home: { tab: MAP_TAB, section: "loading", level: "main" },
+    alsoIn: [{ tab: "renderer", section: "main", level: "main" }],
     appliesLive: true,
     source: GOOGLE_RUNTIME,
   },

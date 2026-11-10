@@ -75,4 +75,25 @@ describe("Map tab", () => {
     expect(panel.element.querySelector<HTMLElement>(".map-detail-panel__note")!.hidden).toBe(true);
     panel.destroy();
   });
+
+  it("shows a warning alert in the Basemap section when Google 3D Tiles fails or is blocked", () => {
+    const { panel } = mount();
+    const warning = panel.element.querySelector<HTMLElement>(".foss-earth-map-source__warning")!;
+    expect(warning.hidden).toBe(true);
+    panel.update({
+      mode: "raster-basemap",
+      rasterBaseMap: { id: "usgs-imagery", name: "USGS Imagery" } as never,
+      terrainSource: { id: "mapterhorn" } as never,
+      lastError: "Google 3D tiles could not be loaded (Failed to fetch). Check key permissions and API access for tile.googleapis.com.",
+    });
+    expect(warning.hidden).toBe(false);
+    expect(warning.getAttribute("role")).toBe("alert");
+    expect(warning.textContent).toContain("Google 3D tiles could not be loaded");
+    expect(warning.textContent).toContain("VPN, firewall, or content blocker");
+    expect(warning.textContent).toContain("Showing USGS Imagery instead.");
+    panel.update({ mode: "google-tiles", rasterBaseMap: null, terrainSource: null, lastError: null });
+    expect(warning.hidden).toBe(true);
+    expect(warning.textContent).toBe("");
+    panel.destroy();
+  });
 });

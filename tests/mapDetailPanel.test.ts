@@ -142,12 +142,47 @@ describe("Map tab detail editor", () => {
   it("explains each limit the renderer reports with its values, and the rest in general words", () => {
     const { controller, panel } = mountRaster();
     const status = panel.element.querySelector<HTMLElement>(".map-detail-panel__status")!;
+    controller.settings.set("map.imagery.gpuBudget", 32);
     controller.reportDelivery("raster:usgs-imagery", { pending: true, limits: ["source", "loading"], constraints: [MISSING] });
     expect(status.textContent).toBe(`Still loading. ${describeImageryConstraint(MISSING)}`);
     controller.reportDelivery("raster:usgs-imagery", { pending: false, limits: ["source", "frame-time"], constraints: [MISSING] });
     expect(status.textContent).toBe(`Coarsened to hold the frame time. ${describeImageryConstraint(MISSING)}`);
     controller.reportDelivery("raster:usgs-imagery", { pending: false, limits: [], constraints: [] });
     expect(status.hidden).toBe(true);
+  });
+
+  it("renders constraint values on fixed-width widgets in a paragraph grid whose widths do not change as variables change", () => {
+    const { controller, panel } = mountRaster();
+    controller.settings.register(MAP_LOADING_PARAMETERS);
+    const status = panel.element.querySelector<HTMLElement>(".map-detail-panel__status")!;
+    controller.reportDelivery("raster:usgs-imagery", {
+      pending: false, limits: ["memory"], constraints: [{
+        cause: "gpu-budget", parameter: "map.imagery.gpuBudget", configuredMiB: 32,
+        atlasMiB: 32, atlasPages: 36, rendererCapped: false,
+        selectablePages: 16, selectedPages: 6, morePagesAtLeast: 3, regions: 1, reducedRegions: 1,
+      }],
+    });
+    const clausesBefore = [...status.querySelectorAll(".map-detail-panel__status-clause")];
+    expect(clausesBefore.length).toBeGreaterThanOrEqual(4);
+    const widthsBefore = [...status.querySelectorAll<HTMLElement>(".map-detail-panel__status-widget")].map(
+      widget => widget.style.getPropertyValue("--widget-chars"),
+    );
+    expect(widthsBefore.length).toBeGreaterThanOrEqual(8);
+
+    controller.settings.set("map.imagery.gpuBudget", 64);
+    controller.reportDelivery("raster:usgs-imagery", {
+      pending: false, limits: ["memory"], constraints: [{
+        cause: "gpu-budget", parameter: "map.imagery.gpuBudget", configuredMiB: 64,
+        atlasMiB: 64, atlasPages: 100, rendererCapped: false,
+        selectablePages: 70, selectedPages: 70, morePagesAtLeast: 50, regions: 25, reducedRegions: 12,
+      }],
+    });
+    const widthsAfter = [...status.querySelectorAll<HTMLElement>(".map-detail-panel__status-widget")].map(
+      widget => widget.style.getPropertyValue("--widget-chars"),
+    );
+    expect(widthsAfter).toEqual(widthsBefore);
+    panel.destroy();
+    controller.dispose();
   });
 
   it("keeps the panel and rail's budget explanation current when the origin changes at the same value", () => {

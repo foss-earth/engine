@@ -232,6 +232,14 @@ export function createImageryResidency<TSignal extends NavigationAbortSignal>(op
   const now = options.now;
   let limits = options.limits;
   const entries = new Map<string, Entry<TSignal>>();
+  // Only queued identities: counting them or finding an empty queue must not
+  // walk thousands of resident images. Nonempty dispatch still uses Map order.
+  const queuedEntries = new Set<Entry<TSignal>>();
+  const deleteEntry = (key: string): void => {
+    const entry = entries.get(key);
+    if (entry) { queueComplete = false; queuedEntries.delete(entry); }
+    entries.delete(key);
+  };
   const missing = new Map<string, number>();
   let demand = new Map<string, ImageryRequest>();
   let orderedDemand: ImageryRequest[] | null = null;
@@ -260,8 +268,13 @@ export function createImageryResidency<TSignal extends NavigationAbortSignal>(op
   // is treated as a change because expiry alters the missing count.
   let statsEpoch = 0;
   let statsCache: ImageryResidencyStats | null = null;
+  // A fill with every demand present, no failed entries and no missing
+  // records has nothing left to do until residency changes. Never cache a
+  // pass that reads a retry clock or can expire/reenter through missing state.
+  let queueComplete = false;
   const invalidateStats = (): void => {
     statsCache = null;
+    queueComplete = false;
     statsEpoch += 1;
   };
   const copyStats = (stats: ImageryResidencyStats): ImageryResidencyStats => ({ ...stats, limits: stats.limits.slice() });
@@ -325,7 +338,7 @@ export function createImageryResidency<TSignal extends NavigationAbortSignal>(op
     const abort = entry.abort, prepared = entry.prepared, owned = entry.owned; entry.abort = null; entry.prepared = null; entry.reservedBytes = 0;
     const pending = [...pendingUploads].find(value => value.entry === entry && value.job === owned);
     if (pending && prepared === pending.image) pending.ownerClosed = true;
-    if (entries.get(key) === entry) entries.delete(key);
+    if (entries.get(key) === entry) deleteEntry(key);
     if (abort) counters.aborted += 1;
     invalidateStats();
     const failures: unknown[] = [];
@@ -342,7 +355,7 @@ export function createImageryResidency<TSignal extends NavigationAbortSignal>(op
   }
 
   function dropAll(): void {
-    const retiring = [...entries]; entries.clear();
+    const retiring = [...entries]; entries.clear(); queuedEntries.clear();
     invalidateStats();
     const failures: unknown[] = [];
     for (const [key, entry] of retiring) try { drop(key, entry); } catch (error) { failures.push(error); }
@@ -351,7 +364,9 @@ export function createImageryResidency<TSignal extends NavigationAbortSignal>(op
   }
 
   function inFlight(): Entry<TSignal>[] {
-    return [...entries.values()].filter(entry => entry.state === "loading");
+    const loading: Entry<TSignal>[] = [];
+    for (const entry of entries.values()) if (entry.state === "loading") loading.push(entry);
+    return loading;
   }
 
   function reservedBytes(): number {
@@ -364,6 +379,7 @@ export function createImageryResidency<TSignal extends NavigationAbortSignal>(op
   function start(entry: Entry<TSignal>): void {
     const { request } = entry;
     const controller = options.createAbortController();
+    queuedEntries.delete(entry);
     entry.state = "loading";
     entry.abort = controller;
     entry.reservedBytes = decodedBytes(request.width, request.height) * 2;
@@ -385,7 +401,7 @@ export function createImageryResidency<TSignal extends NavigationAbortSignal>(op
       if (image.compressedBytes) counters.compressedBytes += image.compressedBytes;
       if (image.width !== request.width || image.height !== request.height) {
         // A variant that is not the size it was declared is not that variant.
-        entries.delete(request.imageKey);
+        deleteEntry(request.imageKey);
         entry.prepared = null; entry.reservedBytes = 0;
         invalidateStats();
         const failures: unknown[] = [];
@@ -397,7 +413,7 @@ export function createImageryResidency<TSignal extends NavigationAbortSignal>(op
       }
       if (!demand.has(request.imageKey)) {
         // Stale work is not kept outside the bounded cache.
-        entries.delete(request.imageKey);
+        deleteEntry(request.imageKey);
         entry.prepared = null; entry.reservedBytes = 0;
         invalidateStats();
         const failures: unknown[] = [];
@@ -423,17 +439,18 @@ export function createImageryResidency<TSignal extends NavigationAbortSignal>(op
       try { prepared?.close?.(); } catch (cleanup) { failures.push(cleanup); }
       const reported = cleanupFailure(failures);
       if (controller.signal.aborted) {
-        entries.delete(request.imageKey);
+        deleteEntry(request.imageKey);
         invalidateStats();
         return;
       }
       if (error instanceof ImageryMissingError && failures.length === 1) {
-        entries.delete(request.imageKey);
+        deleteEntry(request.imageKey);
         recordMissing(request.imageKey);
         changed();
         return;
       }
       // Rate limits, timeouts and network errors back off; they never mark a level missing.
+      queueComplete = false;
       entry.state = "failed";
       entry.failures += 1;
       entry.retryAt = now() + retryDelayMs(entry.failures, limits.retryDelayMs);
@@ -472,6 +489,7 @@ export function createImageryResidency<TSignal extends NavigationAbortSignal>(op
     pending.failed = true;
     const errors: unknown[] = [error];
     if (ownsEntry(pending)) {
+      queueComplete = false;
       pending.entry.state = "failed"; pending.entry.failures += 1;
       pending.entry.retryAt = now() + retryDelayMs(pending.entry.failures, limits.retryDelayMs);
     }
@@ -547,7 +565,7 @@ export function createImageryResidency<TSignal extends NavigationAbortSignal>(op
     }
     if (!best) return false;
     freeSlots(best);
-    entries.delete(best.request.imageKey);
+    deleteEntry(best.request.imageKey);
     counters.evictions += 1;
     invalidateStats();
     return true;
@@ -587,14 +605,15 @@ export function createImageryResidency<TSignal extends NavigationAbortSignal>(op
 
   /** Queues the most important demand not yet loading or resident, within the queue bound. */
   function fillQueue(): void {
+    if (queueComplete) return;
+    let cacheable = missing.size === 0;
     // Missing images are asked about in demand order, before anything is queued.
     let skipped: Set<string> | null = null;
     if (missing.size > 0) {
       for (const request of demand.values()) if (isMissing(request.imageKey)) (skipped ??= new Set()).add(request.imageKey);
     }
     const ordered = queueingOrder(skipped);
-    let queued = 0;
-    for (const entry of entries.values()) if (entry.state === "queued") queued += 1;
+    let queued = queuedEntries.size;
     const overflowBefore = overflow;
     overflow = 0;
     let entriesChanged = false;
@@ -602,10 +621,15 @@ export function createImageryResidency<TSignal extends NavigationAbortSignal>(op
       if (skipped?.has(request.imageKey)) continue;
       const entry = entries.get(request.imageKey);
       if (entry) {
-        if (entry.state === "failed" && !entry.owned && now() >= entry.retryAt) {
-          entry.state = "queued";
-          entriesChanged = true;
-          queued += 1;
+        if (entry.state === "failed") {
+          cacheable = false;
+          if (!entry.owned && now() >= entry.retryAt) {
+            entry.state = "queued";
+            // now() can reenter and retire this identity before returning.
+            if (entries.get(request.imageKey) === entry) queuedEntries.add(entry);
+            entriesChanged = true;
+            queued += 1;
+          }
         }
         continue;
       }
@@ -613,14 +637,17 @@ export function createImageryResidency<TSignal extends NavigationAbortSignal>(op
         overflow += 1;
         continue;
       }
-      entries.set(request.imageKey, {
+      const queuedEntry: Entry<TSignal> = {
         request, state: "queued", prepared: null, slots: null, owned: null, abort: null,
         failures: 0, retryAt: 0, lastUsed: tick, reservedBytes: 0,
-      });
+      };
+      entries.set(request.imageKey, queuedEntry);
+      queuedEntries.add(queuedEntry);
       entriesChanged = true;
       queued += 1;
     }
     if (entriesChanged || overflow !== overflowBefore) invalidateStats();
+    queueComplete = cacheable && overflow === 0;
   }
 
   function collectStats(): ImageryResidencyStats {
@@ -691,7 +718,7 @@ export function createImageryResidency<TSignal extends NavigationAbortSignal>(op
       }
       // Retire identities before supplied abort/close callbacks can reenter;
       // one failing disposer must not strand the rest of the obsolete demand.
-      for (const [key, entry] of retiring) if (entries.get(key) === entry) entries.delete(key);
+      for (const [key, entry] of retiring) if (entries.get(key) === entry) deleteEntry(key);
       invalidateStats();
       const failures: unknown[] = [];
       for (const [key, entry] of retiring) try { drop(key, entry); } catch (error) { failures.push(error); }
@@ -719,8 +746,8 @@ export function createImageryResidency<TSignal extends NavigationAbortSignal>(op
       const perSource = new Map<string, number>();
       for (const entry of loading) perSource.set(entry.request.sourceKey, (perSource.get(entry.request.sourceKey) ?? 0) + 1);
       let reserved = reservedBytes();
-      const queued = [...entries.values()]
-        .filter(entry => entry.state === "queued")
+      const queued = (queuedEntries.size === 0 ? [] : [...entries.values()]
+        .filter(entry => entry.state === "queued"))
         .sort((a, b) => Number(b.request.coverage) - Number(a.request.coverage) || b.request.priority - a.request.priority || (a.request.imageKey < b.request.imageKey ? -1 : 1));
       for (const entry of queued) {
         if (active >= limits.concurrentRequests) break;
@@ -769,6 +796,7 @@ export function createImageryResidency<TSignal extends NavigationAbortSignal>(op
             continue;
           } catch (error) { failures.push(error); }
           entry.prepared = null; entry.reservedBytes = 0;
+          queueComplete = false;
           entry.state = "failed"; entry.failures += 1;
           entry.retryAt = now() + retryDelayMs(entry.failures, limits.retryDelayMs);
           invalidateStats();

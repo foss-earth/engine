@@ -111,10 +111,10 @@ class PageTree {
     return node;
   }
 
-  /** Fills `into` with the nodes from the root down to a tree position's parent, by level, making them when absent. */
-  ancestorsOf(z: number, x: number, y: number, into: Int32Array): void {
-    let node = 0;
-    for (let level = 0; level < z; level++) {
+  /** Completes a path to a position's parent after an already known prefix. */
+  ancestorsOf(z: number, x: number, y: number, into: Int32Array, common: number): void {
+    let node = into[common];
+    for (let level = common; level < z; level++) {
       into[level] = node;
       if (level === z - 1) break;
       const shift = z - level - 1;
@@ -220,6 +220,7 @@ export function buildImageryDisplay(input: ImageryDisplayInput): ImageryDisplay 
     if (slots) showImage(root, slots, 1, key);
   }
   const path = new Int32Array(TREE_LEVELS);
+  let lastX = 0, lastY = 0, lastDepth = 0;
   for (const leaf of input.leaves) {
     const own = input.slotsFor(leaf.imageKey);
     if (own) {
@@ -232,7 +233,12 @@ export function buildImageryDisplay(input: ImageryDisplayInput): ImageryDisplay 
       // Search up from the parent for the nearest resident ancestor. A search
       // reaching a node an earlier leaf searched stops there: the rest of its
       // path, and the page it would show again, are the same.
-      tree.ancestorsOf(z, x, y, path);
+      // Align coordinates at level 30. The leading equal bits name the
+      // shared ancestors; those entries in path still name the same nodes.
+      const alignedX = x << (TREE_LEVELS - z), alignedY = y << (TREE_LEVELS - z);
+      const common = Math.min(z, lastDepth, Math.clz32((alignedX ^ lastX) | (alignedY ^ lastY)) - 2);
+      tree.ancestorsOf(z, x, y, path, common);
+      lastX = alignedX; lastY = alignedY; lastDepth = Math.max(0, z - 1);
       for (let level = z - 1; level >= 0; level--) {
         const node = path[level];
         if (tree.flags[node] & SEARCHED) break;

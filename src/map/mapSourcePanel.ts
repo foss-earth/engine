@@ -37,7 +37,12 @@ export interface MapSourcePanelOptions {
   settings: SettingsRegistry;
 }
 
-export interface MapSourceStatus { mode: "google-tiles" | "raster-basemap" | "fallback"; rasterBaseMap: RasterBaseMapSource | null; terrainSource: TerrainSource | null }
+export interface MapSourceStatus {
+  mode: "google-tiles" | "raster-basemap" | "fallback";
+  rasterBaseMap: RasterBaseMapSource | null;
+  terrainSource: TerrainSource | null;
+  lastError?: string | null;
+}
 
 export interface MapSourcePanelHandle {
   element: HTMLElement;
@@ -49,6 +54,21 @@ export interface MapSourcePanelHandle {
 /** The Map tab's own sections; hosts' sections for the tab follow them. */
 const MAP_SECTIONS = ["source", "detail", "auto", "loading", "selection", "terrain-selection"] as const;
 
+function formatBasemapWarning(status: MapSourceStatus): string | null {
+  const raw = status.lastError?.trim();
+  if (!raw) return null;
+  const normalized = /[.!?]$/.test(raw) ? raw : `${raw}.`;
+  const isGoogleFailure = /google|tile\.googleapis\.com/i.test(normalized);
+  const vpnHint = isGoogleFailure && !/vpn|firewall|blocker/i.test(normalized)
+    ? " A VPN, firewall, or content blocker blocking tile.googleapis.com can also cause this."
+    : "";
+  const basemapName = status.rasterBaseMap?.label ?? (status.rasterBaseMap as { name?: string } | null)?.name;
+  const fallbackNote = status.mode === "raster-basemap" && basemapName && isGoogleFailure
+    ? ` Showing ${basemapName} instead.`
+    : "";
+  return `${normalized}${vpnHint}${fallbackNote}`;
+}
+
 /**
  * The contents of the Map tab, one collapsible section per group: Source (a
  * 3D basemap, which brings its own terrain, or a 2D basemap draped over the
@@ -58,7 +78,7 @@ const MAP_SECTIONS = ["source", "detail", "auto", "loading", "selection", "terra
 export function createMapSourcePanel(options: MapSourcePanelOptions): MapSourcePanelHandle {
   const settings = options.settings;
   const document = options.document;
-  const { checkChoice, createChoiceGroup, appendHostSections, createParameterSection, createSectionsElement, createHelpTooltip, createIconButton } = options.ui;
+  const { checkChoice, createChoiceGroup, createChoiceNote, appendHostSections, createParameterSection, createSectionsElement, createHelpTooltip, createIconButton } = options.ui;
   const sourceChoices = document.createElement("div");
   sourceChoices.className = "foss-earth-choice-panel";
 
@@ -83,6 +103,11 @@ export function createMapSourcePanel(options: MapSourcePanelOptions): MapSourceP
     })
     : null;
   if (elevation) sourceChoices.append(elevation);
+  const warning = createChoiceNote("", document);
+  warning.classList.add("foss-earth-map-source__warning");
+  warning.setAttribute("role", "alert");
+  warning.hidden = true;
+  sourceChoices.append(warning);
   const element = sourceChoices;
   const sourceSection = createParameterSection(settings, { document, refresh: options.refresh, panelStorage: options.panelStorage, tab: "map", section: "source", main: sourceChoices, covers: ["map.source.basemap", "map.source.elevation"] });
   const detail: MapDetailPanelHandle | null = options.detail ? createMapDetailPanel(options.detail, { ...options.detailPanel, document, heading: false, createChoiceGroup, createHelpTooltip, createIconButton }) : null;
@@ -116,13 +141,17 @@ export function createMapSourcePanel(options: MapSourcePanelOptions): MapSourceP
   const update = (status: MapSourceStatus): void => {
     const source = status.mode === "google-tiles" ? "google" : status.mode === "raster-basemap" ? status.rasterBaseMap?.id ?? null : null;
     const terrain = status.terrainSource?.id ?? null;
-    const key = `${status.mode}|${source}|${terrain}`;
+    const error = status.lastError ?? "";
+    const key = `${status.mode}|${source}|${terrain}|${error}`;
     if (key === shown) return;
     shown = key;
     checkChoice(element, MAP_SOURCE_CHOICE_NAME, source);
     checkChoice(element, ELEVATION_CHOICE_NAME, terrain);
     terrainIncluded.hidden = status.mode !== "google-tiles";
     if (elevation) elevation.hidden = status.mode !== "raster-basemap";
+    const warningMessage = formatBasemapWarning(status);
+    warning.hidden = warningMessage === null;
+    warning.textContent = warningMessage ?? "";
   };
 
   const onChange = (event: Event): void => {

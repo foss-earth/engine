@@ -1097,7 +1097,7 @@ export function createRasterTilesRuntime(options: RasterTilesRuntimeOptions): Se
       return tiles.length <= MAX_IMAGERY_CHANGED_TILES ? tiles : null;
     } }),
     boundsFor(tile: TileCoord): { min: number; max: number } {
-      const bounds = coveringVisibleRecord(tile)?.heightBounds;
+      const bounds = knownHeightBounds(tile) ?? coveringVisibleRecord(tile)?.heightBounds;
       return bounds ? { min: bounds.min - 50, max: bounds.max + 50 } : { min: -500, max: 9000 };
     },
     maxLevelFor(tile: TileCoord): number {

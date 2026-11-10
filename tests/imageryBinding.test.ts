@@ -8,6 +8,7 @@ import {
   IMAGERY_TABLE_BLOCK,
   encodeTableEntry,
   planAtlasLayout,
+  slotOrigin,
 } from "../src/terrain/imagery/imageryAtlasLayout.js";
 import { buildImageryDisplay, buildPatchTable, patchTableDepth, samePatchTableCells, shownPage, loadedImageryPages, measureLoadedImagery, measureLoadedImageryDistribution, type DisplayLeaf, type ImageryDisplay, type LoadedImageryBinding, type LoadedImageryRegion } from "../src/terrain/imagery/imageryBinding.js";
 
@@ -203,11 +204,27 @@ describe("imagery atlas layout", () => {
       const layout = planAtlasLayout({ maxBytes, maxTextureSize: 8192, powerOfTwo: false, maxPatches: 256 })!;
       expect(layout.estimatedBytes).toBeLessThanOrEqual(maxBytes);
       expect(layout.width).toBeLessThanOrEqual(8192);
+      expect(layout.layers).toBe(1);
       expect(layout.capacity).toBeGreaterThanOrEqual(100);
       // Slots stay aligned at every sampled level.
       expect(layout.width % (IMAGERY_SLOT_SIZE)).toBe(0);
       expect((IMAGERY_SLOT_SIZE >> IMAGERY_MAX_SAMPLED_LOD) << IMAGERY_MAX_SAMPLED_LOD).toBe(IMAGERY_SLOT_SIZE);
     }
+  });
+
+  it("scales across 2D texture array layers when the byte budget exceeds a single texture", () => {
+    const singleMax = planAtlasLayout({ maxBytes: 334 * MiB, maxTextureSize: 8192, powerOfTwo: false, maxPatches: 256 })!;
+    expect(singleMax.layers).toBe(1);
+    const multiLayer = planAtlasLayout({ maxBytes: 1024 * MiB, maxTextureSize: 8192, powerOfTwo: false, maxPatches: 256 })!;
+    expect(multiLayer.layers).toBeGreaterThan(1);
+    expect(multiLayer.width).toBeLessThanOrEqual(8192);
+    expect(multiLayer.height).toBeLessThanOrEqual(8192);
+    expect(multiLayer.estimatedBytes).toBeLessThanOrEqual(1024 * MiB);
+    expect(multiLayer.capacity).toBeGreaterThan(singleMax.capacity * 2);
+    const slotsPerLayer = multiLayer.slotsPerRow * multiLayer.rows;
+    expect(slotOrigin(multiLayer, 0)).toEqual({ x: 0, y: 0, layer: 0 });
+    expect(slotOrigin(multiLayer, slotsPerLayer)).toEqual({ x: 0, y: 0, layer: 1 });
+    expect(slotOrigin(multiLayer, slotsPerLayer + 1)).toEqual({ x: IMAGERY_SLOT_SIZE, y: 0, layer: 1 });
   });
 
   it("uses a smaller power-of-two atlas where the backend needs one", () => {

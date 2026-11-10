@@ -55,6 +55,100 @@ function makeReadout(document: Document, label: string, className: string): Read
   return { element, output };
 }
 
+const PHRASE_WIDTHS: ReadonlyArray< readonly [RegExp, number] > = [
+  [/^visible regions? (?:needs?|stops?|keeps?)$/, 20],
+  [/^visible regions?$/, 15],
+  [/^regions? shown finer before (?:is|are)$/, 30],
+  [/^downloaded images? waits?$/, 22],
+  [/^patches? draws?$/, 12],
+  [/^patches? shows? coarser pages than (?:it holds|they hold)$/, 41],
+  [/^regions?$/, 7],
+];
+
+function fixedPhraseChars(phrase: string): number {
+  for (const [pattern, chars] of PHRASE_WIDTHS) {
+    if (pattern.test(phrase)) return chars;
+  }
+  return phrase.length;
+}
+
+const STATUS_TOKEN_PATTERN =
+  /^(2D imagery (?:detail was reduced by|is still limited by|is limited by))|(\b\d+(?:\.\d+)? (?:MiB|GiB)\b)|(\b\d+-page\b)|\b(\d+) (visible regions? (?:needs?|stops?|keeps?)|visible regions?|regions? shown finer before (?:is|are)|downloaded images? waits?|patches? (?:draws?|shows? coarser pages than (?:it holds|they hold))|regions?)\b|(?<!WebGL )(?<![A-Za-z])(\d+(?:\.\d+)?)(?!D\b)/g;
+
+function makeNumberWidget(document: Document, text: string, chars: number): HTMLOutputElement {
+  const widget = document.createElement("output");
+  widget.className = "map-detail-panel__value map-detail-panel__status-widget";
+  widget.style.setProperty("--widget-chars", String(Math.max(chars, text.length)));
+  widget.textContent = text;
+  return widget;
+}
+
+function makeTextWidget(document: Document, text: string, chars: number): HTMLSpanElement {
+  const widget = document.createElement("span");
+  widget.className = "map-detail-panel__status-widget map-detail-panel__status-widget--text";
+  widget.style.setProperty("--widget-chars", String(Math.max(chars, text.length)));
+  widget.textContent = text;
+  return widget;
+}
+
+function appendClauseTokens(document: Document, target: HTMLElement, clause: string): void {
+  STATUS_TOKEN_PATTERN.lastIndex = 0;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = STATUS_TOKEN_PATTERN.exec(clause)) !== null) {
+    if (match.index > lastIndex) {
+      target.append(document.createTextNode(clause.slice(lastIndex, match.index)));
+    }
+    const [full, lead, memory, hyphenPage, countedNum, countedPhrase, plainNum] = match;
+    if (lead !== undefined) {
+      target.append(makeTextWidget(document, lead, 32));
+    } else if (memory !== undefined) {
+      target.append(makeNumberWidget(document, memory, 8));
+    } else if (hyphenPage !== undefined) {
+      target.append(makeNumberWidget(document, hyphenPage, 9));
+    } else if (countedNum !== undefined && countedPhrase !== undefined) {
+      target.append(
+        makeNumberWidget(document, countedNum, 4),
+        document.createTextNode(" "),
+        makeTextWidget(document, countedPhrase, fixedPhraseChars(countedPhrase)),
+      );
+    } else if (plainNum !== undefined) {
+      target.append(makeNumberWidget(document, plainNum, 4));
+    } else {
+      target.append(document.createTextNode(full));
+    }
+    lastIndex = match.index + full.length;
+  }
+  if (lastIndex < clause.length) {
+    target.append(document.createTextNode(clause.slice(lastIndex)));
+  }
+}
+
+/**
+ * Renders the detail status into a paragraph grid of clause cards with
+ * fixed-width numeric and state widgets so changing counts never reflow the
+ * paragraph, while preserving the exact `textContent` sentence.
+ */
+function renderDetailStatusGrid(document: Document, container: HTMLElement, sentence: string | null): void {
+  container.hidden = sentence === null;
+  if (sentence === null) {
+    container.replaceChildren();
+    return;
+  }
+  // Split into clauses after sentence-ending periods or ", and " while keeping
+  // punctuation on each clause and single space text nodes between flex items.
+  const clauses = sentence.split(/(?<=\.) |(?<=,) (?=and \d)/g);
+  const nodes: Node[] = [];
+  clauses.forEach((clause, index) => {
+    if (index > 0) nodes.push(document.createTextNode(" "));
+    const item = document.createElement("span");
+    item.className = "map-detail-panel__status-clause";
+    appendClauseTokens(document, item, clause);
+    nodes.push(item);
+  });
+  container.replaceChildren(...nodes);
+}
+
 /**
  * What the range's two handles write, in one width across the whole scale:
  * a 2D basemap's offset with its sign, "+1.00" to "−3.00", or a Google
@@ -256,8 +350,7 @@ export function createMapDetailPanel(controller: MapDetailController, options: M
       ? "Sharper or softer imagery than Normal, which shows each image pixel at about one screen pixel. Elevation is not affected."
       : "The screen-space error Google 3D Tiles may leave, in pixels. Smaller is finer and loads more."} The saved default is the detail each visit starts with, inside the range. Restore saved detail returns to it from this visit's own choice; Reset detail settings restores the range and default.`;
     const sentence = ready ? describeDetailStatus(state, controller.settings) : null;
-    status.hidden = sentence === null;
-    status.textContent = sentence ?? "";
+    renderDetailStatusGrid(document, status, sentence);
     const storageError = controller.getStorageError();
     storage.hidden = storageError === null;
     storage.textContent = storageError ?? "";

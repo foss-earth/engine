@@ -98,8 +98,26 @@
 .map-source-hud__logo[hidden],
 .map-source-hud__credit[hidden],
 .map-source-hud__wordmark[hidden],
-.map-source-hud__warning[hidden] {
+.map-source-hud__warning[hidden],
+.foss-earth-map-source__warning[hidden] {
   display: none;
+}
+
+.foss-earth-map-source__warning {
+  flex-basis: 100%;
+  box-sizing: border-box;
+  padding: 5px 8px;
+  border: 1px solid rgba(251, 191, 36, 0.45);
+  border-radius: 8px;
+  background: rgba(69, 39, 9, 0.45);
+  color: #fde68a;
+  opacity: 1;
+}
+
+:root[data-theme="light"] .foss-earth-map-source__warning {
+  border-color: rgba(217, 119, 6, 0.45);
+  background: rgba(254, 243, 199, 0.85);
+  color: #92400e;
 }
 
 .map-source-hud__provider:focus-visible,
@@ -452,6 +470,59 @@ html[data-world-edges="flush"] .map-source-hud :is(.map-source-hud__provider, .m
 .map-detail-panel__storage[hidden],
 .map-detail-panel .foss-earth-choice-group[hidden] {
   display: none;
+}
+
+.map-detail-panel__status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  opacity: 0.92;
+}
+
+.map-detail-panel__status-clause {
+  display: inline-block;
+  box-sizing: border-box;
+  max-width: 100%;
+  padding: 2px 6px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 8px;
+  background: rgba(148, 163, 184, 0.06);
+  line-height: 1.45;
+}
+
+.map-detail-panel__status-widget {
+  display: inline-block;
+  box-sizing: border-box;
+  min-width: calc(var(--widget-chars, 4) * 1ch + 8px);
+  padding: 0 4px;
+  border: 1px solid rgba(148, 163, 184, 0.32);
+  border-radius: 5px;
+  background: rgba(15, 23, 42, 0.28);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  text-align: right;
+  white-space: nowrap;
+  opacity: 1;
+}
+
+.map-detail-panel__status-widget--text {
+  min-width: calc(var(--widget-chars, 12) * 1ch);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-weight: inherit;
+  text-align: left;
+}
+
+:root[data-theme="light"] .map-detail-panel__status-clause {
+  border-color: rgba(71, 85, 105, 0.25);
+  background: rgba(255, 255, 255, 0.65);
+}
+
+:root[data-theme="light"] .map-detail-panel__status-widget:not(.map-detail-panel__status-widget--text) {
+  border-color: rgba(71, 85, 105, 0.3);
+  background: rgba(15, 23, 42, 0.05);
 }
 
 .map-detail-panel__readouts,

@@ -15,6 +15,10 @@ export const IMAGERY_MAX_SAMPLED_LOD = 4;
 /** Page-table cells per terrain patch side: up to 2^6 = 64 cells, one block per patch. */
 export const IMAGERY_TABLE_BLOCK = 64;
 export const IMAGERY_TABLE_MAX_CELLS_LOG2 = 6;
+/** Maximum 2D texture array layers guaranteed by WebGL 2 and WebGPU. */
+export const IMAGERY_MAX_ARRAY_LAYERS = 256;
+/** Maximum page slots addressable by a 16-bit RG page-table entry. */
+export const IMAGERY_MAX_SLOTS = 65536;
 const BYTES_PER_TEXEL = 4;
 /** A full mip chain adds a third to level 0. */
 const MIP_CHAIN_FACTOR = 4 / 3;
@@ -22,6 +26,8 @@ const MIP_CHAIN_FACTOR = 4 / 3;
 export interface ImageryAtlasLayout {
   slotsPerRow: number;
   rows: number;
+  /** Array layers in the atlas texture (1 for a 2D texture, >1 for a 2D texture array). */
+  layers: number;
   /** Pages the atlas can hold. */
   capacity: number;
   width: number;
@@ -46,6 +52,8 @@ export interface AtlasLayoutRequest {
   powerOfTwo: boolean;
   /** Terrain patches that may need a page-table block at once. */
   maxPatches: number;
+  /** Optional cap on 2D texture array layers when powerOfTwo is false. */
+  maxArrayLayers?: number;
 }
 
 function floorPowerOfTwo(value: number): number {
@@ -70,7 +78,12 @@ export function pageUploadBytes(): number {
  */
 export function planAtlasLayout(request: AtlasLayoutRequest): ImageryAtlasLayout | null {
   const blocksPerRow = Math.ceil(Math.sqrt(Math.max(1, request.maxPatches)));
-  const tableSize = Math.min(request.maxTextureSize, floorPowerOfTwo(blocksPerRow * IMAGERY_TABLE_BLOCK * 2 - 1));
+  let tableSize = Math.min(request.maxTextureSize, floorPowerOfTwo(blocksPerRow * IMAGERY_TABLE_BLOCK * 2 - 1));
+  // Keep the page table within a quarter of the GPU budget so small budgets
+  // (e.g. 32 MiB) do not spend half their memory on empty page-table blocks.
+  while (tableSize > IMAGERY_TABLE_BLOCK && tableSize * tableSize * BYTES_PER_TEXEL > request.maxBytes * 0.25) {
+    tableSize >>= 1;
+  }
   const tableBlocks = Math.floor(tableSize / IMAGERY_TABLE_BLOCK) ** 2;
   const tableBytes = tableSize * tableSize * BYTES_PER_TEXEL;
   const atlasBudget = request.maxBytes - tableBytes;
@@ -79,39 +92,52 @@ export function planAtlasLayout(request: AtlasLayoutRequest): ImageryAtlasLayout
   let height: number;
   let slotsPerRow: number;
   let rows: number;
+  let layers = 1;
   if (request.powerOfTwo) {
     const side = Math.min(floorPowerOfTwo(maxSide), floorPowerOfTwo(Math.sqrt(atlasBudget / (BYTES_PER_TEXEL * MIP_CHAIN_FACTOR))));
     width = height = side;
     slotsPerRow = rows = Math.floor(side / IMAGERY_SLOT_SIZE);
   } else {
-    const pages = Math.floor(atlasBudget / slotBytes());
+    const pages = Math.min(IMAGERY_MAX_SLOTS, Math.floor(atlasBudget / slotBytes()));
     const maxSlots = Math.floor(maxSide / IMAGERY_SLOT_SIZE);
-    slotsPerRow = Math.min(maxSlots, Math.floor(Math.sqrt(pages)));
-    rows = Math.min(maxSlots, Math.floor(pages / Math.max(1, slotsPerRow)));
+    const maxSlotsPerLayer = maxSlots * maxSlots;
+    const maxLayers = Math.max(1, request.maxArrayLayers ?? IMAGERY_MAX_ARRAY_LAYERS);
+    layers = Math.min(maxLayers, Math.max(1, Math.ceil(pages / Math.max(1, maxSlotsPerLayer))));
+    const pagesPerLayer = Math.floor(pages / layers);
+    slotsPerRow = Math.min(maxSlots, Math.floor(Math.sqrt(pagesPerLayer)));
+    rows = Math.min(maxSlots, Math.floor(pagesPerLayer / Math.max(1, slotsPerRow)));
     width = slotsPerRow * IMAGERY_SLOT_SIZE;
     height = rows * IMAGERY_SLOT_SIZE;
   }
-  const capacity = slotsPerRow * rows;
+  const capacity = slotsPerRow * rows * layers;
   // The 16 root pages of coverage and a little room to replace them must fit.
   if (capacity < 24 || tableBlocks < 1) return null;
   const mipLevels = Math.floor(Math.log2(Math.max(width, height))) + 1;
   return {
     slotsPerRow,
     rows,
+    layers,
     capacity,
     width,
     height,
     mipLevels,
     tableSize,
     tableBlocks,
-    estimatedBytes: width * height * BYTES_PER_TEXEL * MIP_CHAIN_FACTOR + tableBytes,
+    estimatedBytes: width * height * layers * BYTES_PER_TEXEL * MIP_CHAIN_FACTOR + tableBytes,
     pageUploadBytes: pageUploadBytes(),
   };
 }
 
-/** Top-left pixel of a slot at level 0. */
-export function slotOrigin(layout: Pick<ImageryAtlasLayout, "slotsPerRow">, slot: number): { x: number; y: number } {
-  return { x: (slot % layout.slotsPerRow) * IMAGERY_SLOT_SIZE, y: Math.floor(slot / layout.slotsPerRow) * IMAGERY_SLOT_SIZE };
+/** Top-left pixel and array layer of a slot at level 0. */
+export function slotOrigin(layout: Pick<ImageryAtlasLayout, "slotsPerRow"> & { rows?: number }, slot: number): { x: number; y: number; layer: number } {
+  const slotsPerLayer = layout.rows !== undefined ? layout.slotsPerRow * layout.rows : 0;
+  const layer = slotsPerLayer > 0 ? Math.floor(slot / slotsPerLayer) : 0;
+  const indexInLayer = slotsPerLayer > 0 ? slot % slotsPerLayer : slot;
+  return {
+    x: (indexInLayer % layout.slotsPerRow) * IMAGERY_SLOT_SIZE,
+    y: Math.floor(indexInLayer / layout.slotsPerRow) * IMAGERY_SLOT_SIZE,
+    layer,
+  };
 }
 
 /**

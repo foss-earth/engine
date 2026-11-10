@@ -12,6 +12,7 @@ import type { ImageryAtlas } from "./imageryAtlas.js";
 
 class ImageryAtlasDefines extends MaterialDefines {
   IMAGERY_ATLAS = false;
+  IMAGERY_ATLAS_ARRAY = false;
   /** 2: textureGrad; 1: WebGL 1 with EXT_shader_texture_lod; 0: implicit derivatives only. */
   IMAGERY_GRAD_MODE = 2;
 }
@@ -29,7 +30,11 @@ const CONSTANTS = {
 // disturb the mip level, and precision stays per patch at any zoom.
 const GLSL_FRAGMENT_DEFINITIONS = `
 #ifdef IMAGERY_ATLAS
+#ifdef IMAGERY_ATLAS_ARRAY
+uniform sampler2DArray imageryAtlas;
+#else
 uniform sampler2D imageryAtlas;
+#endif
 uniform sampler2D imageryPageTable;
 varying vec2 vImageryUV;
 vec4 imageryEntry(vec2 uv, out vec2 node, out float cellsLog2) {
@@ -61,7 +66,13 @@ vec4 imagerySample(vec2 uv, vec2 dx, vec2 dy) {
     float n = exp2(-dz);
     local = (mod(imageryPatch.yz, vec2(n)) + uv) / n;
   }
+#ifdef IMAGERY_ATLAS_ARRAY
+  float atlasLayer = floor(slot / imageryAtlasInfo.w);
+  float slotInLayer = mod(slot, imageryAtlasInfo.w);
+  vec2 slotXY = vec2(mod(slotInLayer, imageryAtlasInfo.z), floor(slotInLayer / imageryAtlasInfo.z));
+#else
   vec2 slotXY = vec2(mod(slot, imageryAtlasInfo.z), floor(slot / imageryAtlasInfo.z));
+#endif
   vec2 atlasUV = (slotXY * ${CONSTANTS.slot} + ${CONSTANTS.gutter} + local * ${CONSTANTS.page}) / imageryAtlasInfo.xy;
   float texelsPerUV = exp2(dz) * ${CONSTANTS.page};
   vec2 gx = dx * texelsPerUV;
@@ -70,7 +81,9 @@ vec4 imagerySample(vec2 uv, vec2 dx, vec2 dy) {
   float clampToLod = widest > ${CONSTANTS.maxTexels} ? ${CONSTANTS.maxTexels} / widest : 1.0;
   gx = gx * clampToLod / imageryAtlasInfo.xy;
   gy = gy * clampToLod / imageryAtlasInfo.xy;
-#if IMAGERY_GRAD_MODE == 2
+#ifdef IMAGERY_ATLAS_ARRAY
+  return textureGrad(imageryAtlas, vec3(atlasUV, atlasLayer), gx, gy);
+#elif IMAGERY_GRAD_MODE == 2
   return textureGrad(imageryAtlas, atlasUV, gx, gy);
 #elif IMAGERY_GRAD_MODE == 1
   return texture2DGradEXT(imageryAtlas, atlasUV, gx, gy);
@@ -84,7 +97,11 @@ vec4 imagerySample(vec2 uv, vec2 dx, vec2 dy) {
 const WGSL_FRAGMENT_DEFINITIONS = `
 #ifdef IMAGERY_ATLAS
 var imageryAtlasSampler: sampler;
+#ifdef IMAGERY_ATLAS_ARRAY
+var imageryAtlas: texture_2d_array<f32>;
+#else
 var imageryAtlas: texture_2d<f32>;
+#endif
 var imageryPageTableSampler: sampler;
 var imageryPageTable: texture_2d<f32>;
 varying vImageryUV: vec2f;
@@ -124,7 +141,14 @@ fn imagerySample(uv: vec2f, dx: vec2f, dy: vec2f) -> vec4f {
     local = (imageryModulo(uniforms.imageryPatch.yz, n) + uv) / n;
   }
   let perRow = uniforms.imageryAtlasInfo.z;
+#ifdef IMAGERY_ATLAS_ARRAY
+  let perLayer = uniforms.imageryAtlasInfo.w;
+  let atlasLayer = i32(floor(slot / perLayer));
+  let slotInLayer = slot - perLayer * floor(slot / perLayer);
+  let slotXY = vec2f(slotInLayer - perRow * floor(slotInLayer / perRow), floor(slotInLayer / perRow));
+#else
   let slotXY = vec2f(slot - perRow * floor(slot / perRow), floor(slot / perRow));
+#endif
   let atlasUV = (slotXY * ${CONSTANTS.slot} + vec2f(${CONSTANTS.gutter}) + local * ${CONSTANTS.page}) / uniforms.imageryAtlasInfo.xy;
   let texelsPerUV = exp2(dz) * ${CONSTANTS.page};
   var gx = dx * texelsPerUV;
@@ -133,7 +157,11 @@ fn imagerySample(uv: vec2f, dx: vec2f, dy: vec2f) -> vec4f {
   let clampToLod = select(1.0, ${CONSTANTS.maxTexels} / widest, widest > ${CONSTANTS.maxTexels});
   gx = gx * clampToLod / uniforms.imageryAtlasInfo.xy;
   gy = gy * clampToLod / uniforms.imageryAtlasInfo.xy;
+#ifdef IMAGERY_ATLAS_ARRAY
+  return textureSampleGrad(imageryAtlas, imageryAtlasSampler, atlasUV, atlasLayer, gx, gy);
+#else
   return textureSampleGrad(imageryAtlas, imageryAtlasSampler, atlasUV, gx, gy);
+#endif
 }
 #endif
 `;
@@ -159,14 +187,16 @@ export class ImageryAtlasMaterialPlugin extends MaterialPluginBase {
   }
 
   setAtlas(atlas: ImageryAtlas | null): void {
-    const changed = (this.atlas === null) !== (atlas === null);
+    const changed = (this.atlas === null) !== (atlas === null)
+      || ((this.atlas?.layout.layers ?? 1) > 1) !== ((atlas?.layout.layers ?? 1) > 1);
     this.atlas = atlas;
     if (changed) this.markAllDefinesAsDirty();
   }
 
   /** Adopt one already-ready managed binding in one synchronous task. */
   setBinding(atlas: ImageryAtlas | null, block: { x: number; y: number; cellsLog2: number } | null, fallback: { slot: number; level: number } | null): void {
-    const changed = (this.atlas === null) !== (atlas === null);
+    const changed = (this.atlas === null) !== (atlas === null)
+      || ((this.atlas?.layout.layers ?? 1) > 1) !== ((atlas?.layout.layers ?? 1) > 1);
     // Perform the potentially throwing dirty callback before committing the
     // three binding fields, so failure keeps the outgoing binding intact.
     if (changed) this.markAllDefinesAsDirty();
@@ -189,6 +219,7 @@ export class ImageryAtlasMaterialPlugin extends MaterialPluginBase {
   override prepareDefines(defines: ImageryAtlasDefines, scene: Scene): void {
     const engine = scene.getEngine() as unknown as { isWebGPU?: boolean; webGLVersion?: number; getCaps(): { textureLOD?: boolean; standardDerivatives?: boolean } };
     defines.IMAGERY_ATLAS = this.atlas !== null;
+    defines.IMAGERY_ATLAS_ARRAY = (this.atlas?.layout.layers ?? 1) > 1;
     const caps = engine.getCaps();
     defines.IMAGERY_GRAD_MODE = engine.isWebGPU || engine.webGLVersion !== 1 ? 2 : caps.textureLOD && caps.standardDerivatives ? 1 : 0;
   }
@@ -231,7 +262,7 @@ uniform vec4 imageryFallback;
     const { layout } = atlas;
     uniformBuffer.updateFloat4("imageryPatch", this.patch[0], this.patch[1], this.patch[2], 0);
     uniformBuffer.updateFloat4("imageryTable", this.tableBlock[0], this.tableBlock[1], this.tableBlock[2], layout.tableSize);
-    uniformBuffer.updateFloat4("imageryAtlasInfo", layout.width, layout.height, layout.slotsPerRow, 0);
+    uniformBuffer.updateFloat4("imageryAtlasInfo", layout.width, layout.height, layout.slotsPerRow, layout.slotsPerRow * layout.rows);
     uniformBuffer.updateFloat4("imageryFallback", this.fallback[0], this.fallback[1], this.fallback[2], 0);
     uniformBuffer.setTexture("imageryAtlas", atlas.texture);
     uniformBuffer.setTexture("imageryPageTable", atlas.table);

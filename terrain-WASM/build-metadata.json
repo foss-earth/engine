@@ -33,7 +33,7 @@
     "Cargo.toml": "1f8c5265192fd9a1932cfff0230ab9a98602c114c75bfe00c60a3a201ec66996",
     "core.js": "c92471323ea61fa98364dd14174165cf92540d03fb100657f9e3889698458f9e",
     "crates/earth-terrain/Cargo.toml": "be4863bc75bc39df721cf4bc8ee68aa1b7ff91970a616c376382aa2a4b2ee760",
-    "crates/earth-terrain/src/lib.rs": "1b4a4217bec18188302c43b57945ae7c372149849e18f375d81108867284748b",
+    "crates/earth-terrain/src/lib.rs": "296b2ec4f546531e64245bc0da2718eaf9538a911c48b4047fc512b29247dc18",
     "heightSampler.js": "ae91d251256580db20c75f474b4158bb2798396686d8e5f754cdcdac3c00fb07",
     "index.d.ts": "bd0d93166a4f3e90fd2844bbe7f650b00a001c590399e136bcbfb48f6f7ccdef",
     "index.js": "b0cd0c313e0bdabd1330a88539d170c741f2822654a9244ddaf2cd2d89fe061b",
@@ -43,8 +43,8 @@
   },
   "outputs": {
     "single/terrain.wasm": {
-      "sha256": "ef33651b60e21da65ea366b89b60e5c70cc50fb8d21f045048473923123d6779",
-      "bytes": 34510
+      "sha256": "38ef1704d796426b8c2ed1317145b3bf6ac5da3f832727add02518e6b0574b5f",
+      "bytes": 35010
     }
   },
   "threaded": false,
